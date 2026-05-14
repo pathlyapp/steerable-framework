@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import type { SSEEvent } from '@steerable/agent-protocol';
-import { cn } from './cn';
+import { cn } from './cn.js';
 
 export interface SSEStreamViewProps {
   events: SSEEvent[];

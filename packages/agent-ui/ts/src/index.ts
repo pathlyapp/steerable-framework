@@ -8,5 +8,5 @@
  * runtime bundle. See `tsconfig.json` `exports` map.
  */
 
-export * from './hooks/index';
-export * from './components/index';
+export * from './hooks/index.js';
+export * from './components/index.js';

@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import type { ChatMessage } from '@steerable/agent-protocol';
-import { cn } from './cn';
+import { cn } from './cn.js';
 
 export interface MessageRendererProps {
   message: ChatMessage;

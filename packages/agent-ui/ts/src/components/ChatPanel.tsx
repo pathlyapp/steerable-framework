@@ -14,9 +14,9 @@
 
 import { useCallback, useState } from 'react';
 import type { ChatMessage, ToolCall, ToolResult } from '@steerable/agent-protocol';
-import { MessageList, type MessageRendererProps } from './MessageList';
-import { ToolCallRenderer } from './ToolCallRenderer';
-import { cn } from './cn';
+import { MessageList, type MessageRendererProps } from './MessageList.js';
+import { ToolCallRenderer } from './ToolCallRenderer.js';
+import { cn } from './cn.js';
 
 export interface ChatPanelProps {
   messages: ChatMessage[];

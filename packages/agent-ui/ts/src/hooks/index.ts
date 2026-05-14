@@ -1,21 +1,21 @@
-export { useChatStream } from './useChatStream';
+export { useChatStream } from './useChatStream.js';
 export type {
   UseChatStreamOptions,
   UseChatStreamReturn,
   ChatStreamTransport,
   ChatStreamSendInput,
-} from './useChatStream';
+} from './useChatStream.js';
 
-export { useToolCallStatus } from './useToolCallStatus';
+export { useToolCallStatus } from './useToolCallStatus.js';
 export type {
   ToolCallStatus,
   UseToolCallStatusOptions,
   UseToolCallStatusReturn,
-} from './useToolCallStatus';
+} from './useToolCallStatus.js';
 
-export { useAgentSession } from './useAgentSession';
+export { useAgentSession } from './useAgentSession.js';
 export type {
   UseAgentSessionOptions,
   UseAgentSessionReturn,
   AgentSessionTransport,
-} from './useAgentSession';
+} from './useAgentSession.js';

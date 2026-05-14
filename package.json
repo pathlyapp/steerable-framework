@@ -12,7 +12,8 @@
     "check:drift": "pnpm -r run check:drift"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.7"
+    "@changesets/cli": "^2.29.7",
+    "json-schema-to-typescript": "^15.0.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

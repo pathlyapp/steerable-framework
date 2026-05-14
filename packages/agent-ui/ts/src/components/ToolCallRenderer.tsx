@@ -17,8 +17,8 @@
 
 import { useState } from 'react';
 import type { ToolCall, ToolResult } from '@steerable/agent-protocol';
-import { useToolCallStatus, type ToolCallMode } from '../hooks/useToolCallStatus';
-import { cn } from './cn';
+import { useToolCallStatus, type ToolCallMode } from '../hooks/useToolCallStatus.js';
+import { cn } from './cn.js';
 
 export interface ToolCallRendererProps {
   call: ToolCall;
