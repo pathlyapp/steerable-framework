@@ -1,0 +1,22 @@
+[project]
+name = "steerable-example-py-minimal"
+version = "0.0.0"
+description = "Minimal Steerable Python example: protocol + harness + tool dispatch."
+requires-python = ">=3.10"
+dependencies = [
+  "steerable-agent-protocol",
+  "steerable-agent-harness",
+  "steerable-agent-runtime",
+]
+
+[tool.uv.sources]
+steerable-agent-protocol = { workspace = true }
+steerable-agent-harness = { workspace = true }
+steerable-agent-runtime = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steerable_example_py_minimal"]

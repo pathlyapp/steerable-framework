@@ -11,6 +11,8 @@ members = [
     "steerable-agent-harness",
     "steerable-agent-protocol",
     "steerable-agent-runtime",
+    "steerable-example-py-minimal",
+    "steerable-example-sidecar-roundtrip",
     "steerable-framework-monorepo",
     "steerable-sidecar",
 ]
@@ -1062,6 +1064,34 @@ requires-dist = [
     { name = "steerable-agent-protocol", editable = "packages/agent-protocol/py" },
 ]
 provides-extras = ["sqlalchemy", "fastapi", "openai", "anthropic", "all"]
+
+[[package]]
+name = "steerable-example-py-minimal"
+version = "0.0.0"
+source = { editable = "examples/py-minimal" }
+dependencies = [
+    { name = "steerable-agent-harness" },
+    { name = "steerable-agent-protocol" },
+    { name = "steerable-agent-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "steerable-agent-harness", editable = "packages/agent-harness/py" },
+    { name = "steerable-agent-protocol", editable = "packages/agent-protocol/py" },
+    { name = "steerable-agent-runtime", editable = "packages/agent-runtime/py" },
+]
+
+[[package]]
+name = "steerable-example-sidecar-roundtrip"
+version = "0.0.0"
+source = { editable = "examples/sidecar-roundtrip" }
+dependencies = [
+    { name = "steerable-sidecar" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "steerable-sidecar", editable = "packages/sidecar/py" }]
 
 [[package]]
 name = "steerable-framework-monorepo"

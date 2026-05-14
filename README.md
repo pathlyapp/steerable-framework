@@ -2,6 +2,10 @@
 
 Open-source agent framework extracted from DeepPath ecosystem.
 
+→ **Documentation: <https://steerable-org.github.io/steerable-framework/>**
+([source in `docs/`](./docs/index.md), build with `mkdocs build` or follow the
+[Getting Started guide](./docs/getting-started.md))
+
 ## Monorepo packages
 
 | Package | Language | Tier | Purpose |
@@ -24,10 +28,28 @@ Open-source agent framework extracted from DeepPath ecosystem.
 
 ```bash
 pnpm install
-uv sync
+uv sync --all-packages
 pnpm gen
 pnpm test
+uv run pytest
 ```
+
+## Examples
+
+Runnable end-to-end smoke tests live under [`examples/`](./examples):
+
+- [`examples/py-minimal`](./examples/py-minimal) — Python protocol + harness + tool dispatch
+  ```bash
+  uv run --package steerable-example-py-minimal python -m steerable_example_py_minimal.main
+  ```
+- [`examples/ts-minimal`](./examples/ts-minimal) — TypeScript protocol + harness facade
+  ```bash
+  pnpm --filter steerable-example-ts-minimal start
+  ```
+- [`examples/sidecar-roundtrip`](./examples/sidecar-roundtrip) — spawn the sidecar binary and complete a JSON-RPC roundtrip
+  ```bash
+  uv run --package steerable-example-sidecar-roundtrip python -m steerable_example_sidecar_roundtrip.main
+  ```
 
 ## End-to-end validation
 

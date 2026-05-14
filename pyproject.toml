@@ -12,6 +12,8 @@ members = [
   "packages/agent-harness/py",
   "packages/agent-runtime/py",
   "packages/sidecar/py",
+  "examples/py-minimal",
+  "examples/sidecar-roundtrip",
 ]
 
 [dependency-groups]
@@ -28,3 +30,14 @@ steerable-agent-protocol = { workspace = true }
 steerable-agent-harness = { workspace = true }
 steerable-agent-runtime = { workspace = true }
 steerable-sidecar = { workspace = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
+testpaths = [
+  "packages/agent-protocol/py/tests",
+  "packages/agent-harness/py/tests",
+  "packages/agent-runtime/py/tests",
+  "packages/sidecar/py/tests",
+  "tests/conformance/py",
+]

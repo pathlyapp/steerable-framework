@@ -9,7 +9,7 @@ from steerable_agent_harness.retry import RetryPolicy, next_retry_delay_ms
 
 def test_retry_conformance_case() -> None:
     case_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
         / "cases"
         / "retry"
         / "basic.yaml"

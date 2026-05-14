@@ -1,48 +1,30 @@
 # Python Minimal Example
 
-Small example showing protocol + harness usage together.
+End-to-end smoke test that exercises all three Python tiers:
 
-## Install
+- Tier 1 — `SSEEvent`, `ToolCall`, `ToolResult` types
+- Tier 2 — `decide_tool_mode`, `consume_budget`, `is_terminal_result`
+- Tier 3 — `@tool` registration + `ToolRouter.dispatch`
+
+## Run
+
+From the framework monorepo root:
 
 ```bash
-uv add steerable-agent-protocol steerable-agent-harness
+uv sync
+uv run --package steerable-example-py-minimal python -m steerable_example_py_minimal.main
 ```
 
-## Example
+Expected output:
 
-```python
-from steerable_agent_protocol import ToolCall, ToolResult, SSEEvent
-from steerable_agent_harness import BudgetLimit, BudgetState, consume_budget, decide_tool_mode
-from steerable_agent_harness.completion import is_terminal_result
-
-call = ToolCall(
-    id="call_1",
-    name="read_file",
-    arguments={"path": "README.md"},
-)
-
-mode = decide_tool_mode(call.name)  # "read"
-
-state, exhausted = consume_budget(
-    BudgetState(),
-    BudgetLimit(max_tokens=5000, max_steps=30, max_tool_calls=10),
-    tokens=120,
-    step=True,
-    tool_call=True,
-)
-
-result = ToolResult(
-    success=True,
-    message=f"mode={mode}, exhausted={exhausted}",
-    data={"tokens_used": state.tokens_used},
-)
-
-done = is_terminal_result(result.model_dump())
-
-event = SSEEvent(
-    type="done" if done else "tool_result",
-    payload={"callId": call.id, "result": result.model_dump()},
-)
+```
+[harness] mode='read'  budget_exhausted=False  state=BudgetState(tokens_used=120, steps_used=1, tool_calls_used=1)
+[runtime] success=True  data={'value': {'path': 'README.md', 'content': '<contents of README.md>'}, 'durationMs': 0}
+[wire]    {"type":"tool_result", ... ,"payload":{"callId":"call_1","result":{...}}}
 ```
 
-Use this as a minimal baseline before integrating your own agent loop.
+## What to look at next
+
+- [Tools spec](../../docs/spec/tools.md) — what `decide_tool_mode` is doing
+- [Runtime spec](../../docs/spec/runtime.md) — how `ToolRouter` plugs into the wider runtime
+- [`examples/sidecar-roundtrip/`](../sidecar-roundtrip/) — the same flow, but going through the JSON-RPC sidecar

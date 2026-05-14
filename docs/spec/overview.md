@@ -3,25 +3,55 @@
 Steerable follows a **single schema, multi-language** workflow:
 
 1. Define JSON Schemas in `spec/`
-2. Generate TypeScript interfaces and Python models
-3. Verify behavior parity with conformance tests
+2. Generate TypeScript interfaces (+ Zod) and Python Pydantic models
+3. Verify behavior parity with conformance tests against
+   `tests/conformance/cases/`
 
-## Spec folders
+## Schema folders
 
-- `spec/events/`: streaming event envelope (`SSEEvent`)
-- `spec/tools/`: tool call + tool result (`ToolCall`, `ToolResult`)
-- `spec/chat/`: chat and agent metadata (`ChatMessage`, `ChatAgent`)
-- `spec/safety/`: command safety rule model (`CommandSafetyPattern`)
+| Folder              | Models                                                                   |
+| ------------------- | ------------------------------------------------------------------------ |
+| `spec/events/`      | `SSEEvent` (streaming envelope, see [Events](events.md))                 |
+| `spec/tools/`       | `ToolCall`, `ToolResult` (see [Tools](tools.md))                         |
+| `spec/chat/`        | `ChatMessage`, `ChatAgent` (see [Chat](chat.md))                         |
+| `spec/safety/`      | `CommandSafetyPattern` (see [Safety](safety.md))                         |
+| `spec/runtime/`     | `AgentSession`, `HarnessTrace`, `TraceSpan`, `TraceEvent` ([Runtime](runtime.md)) |
+| `spec/sidecar/`     | `SidecarRequest`, `SidecarResponse`, `SidecarNotification`, `SidecarHealth`, `SidecarError` ([Sidecar](sidecar.md)) |
 
 ## Generation pipeline
 
-- TS generation script: `scripts/generate_ts.mjs`
-- PY generation script: `scripts/generate_py.py`
-- Drift checks: `scripts/check_ts_drift.mjs`, `scripts/check_drift.py`
+```bash
+pnpm gen          # writes packages/agent-protocol/ts/src/generated/*.ts
+uv run python scripts/generate_py.py
+                  # writes packages/agent-protocol/py/src/steerable_agent_protocol/generated.py
+```
 
-Run from repo root:
+## Drift detection
 
 ```bash
-pnpm gen
-pnpm check:drift
+pnpm check:drift           # TypeScript: re-runs generator and diffs output
+uv run python scripts/check_drift.py    # Python equivalent
 ```
+
+Both run in CI on every PR; a hand-edited generated file fails the build.
+
+## Lock-step versioning
+
+`packages/agent-protocol/ts/package.json` and
+`packages/agent-protocol/py/pyproject.toml` are kept at the **same**
+version by `scripts/check_lockstep_versions.py` (also CI-enforced). The
+release-please pipeline bumps both atomically when a `feat:` or `fix:`
+commit lands that touches `spec/`.
+
+## Forward / backward compatibility rules
+
+- Adding a new optional field is **non-breaking** — bump patch.
+- Adding a new value to a typed enum (e.g. a new `SSEEvent.type`) is
+  **minor** — old consumers should ignore unknown variants.
+- Removing a field, or making an optional field required, is
+  **breaking** — major bump only.
+- New schemas (entire new model files) are minor.
+
+The TypeScript codegen treats every event payload as having
+`additionalProperties: true` so future event types in the wire stream
+won't crash a stale consumer.

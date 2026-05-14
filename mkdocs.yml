@@ -1,17 +1,77 @@
 site_name: Steerable Framework
-site_description: Spec-first cross-language agent protocol and harness docs
+site_description: Spec-first agent framework for TypeScript + Python.
+site_url: https://steerable-org.github.io/steerable-framework/
+repo_url: https://github.com/steerable-org/steerable-framework
+repo_name: steerable-org/steerable-framework
+edit_uri: edit/main/docs/
+
 theme:
   name: material
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+    - search.suggest
+    - search.share
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
 nav:
   - Home: index.md
+  - Getting Started: getting-started.md
   - Spec:
       - Overview: spec/overview.md
+      - Architecture: spec/architecture.md
       - Events: spec/events.md
       - Tools: spec/tools.md
       - Chat: spec/chat.md
       - Safety: spec/safety.md
+      - Runtime: spec/runtime.md
+      - Sidecar: spec/sidecar.md
   - Migration:
-      - DeepPath to Steerable: migration/deeppath.md
-markdown_extensions:
-  - admonition
-  - codehilite
+      - From DeepPath: migration/deeppath.md
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/steerable-org/steerable-framework

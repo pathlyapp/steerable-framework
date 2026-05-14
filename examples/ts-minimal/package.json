@@ -1,0 +1,19 @@
+{
+  "name": "steerable-example-ts-minimal",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal Steerable TypeScript example: protocol + harness types.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-harness": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}
