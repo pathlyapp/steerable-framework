@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/chat/ChatMessage.schema.json",
+  "title": "ChatMessage",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "role", "content", "createdAt"],
+  "properties": {
+    "id": { "type": "string" },
+    "chatId": { "type": "string" },
+    "role": { "type": "string", "enum": ["user", "assistant", "tool", "system"] },
+    "content": { "type": "string" },
+    "agentId": { "type": "string" },
+    "toolCalls": {
+      "type": "array",
+      "items": { "$ref": "../tools/ToolCall.schema.json" }
+    },
+    "toolResult": { "$ref": "../tools/ToolResult.schema.json" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

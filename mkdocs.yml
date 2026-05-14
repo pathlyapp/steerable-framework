@@ -1,0 +1,17 @@
+site_name: Steerable Framework
+site_description: Spec-first cross-language agent protocol and harness docs
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Spec:
+      - Overview: spec/overview.md
+      - Events: spec/events.md
+      - Tools: spec/tools.md
+      - Chat: spec/chat.md
+      - Safety: spec/safety.md
+  - Migration:
+      - DeepPath to Steerable: migration/deeppath.md
+markdown_extensions:
+  - admonition
+  - codehilite

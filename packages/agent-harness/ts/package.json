@@ -1,0 +1,24 @@
+{
+  "name": "@steerable/agent-harness",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "gen": "node ../../../scripts/generate_ts.mjs",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "node ../../../scripts/check_ts_drift.mjs"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

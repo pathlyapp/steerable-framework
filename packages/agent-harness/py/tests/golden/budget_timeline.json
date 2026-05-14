@@ -1,0 +1,23 @@
+[
+  {
+    "exhausted": false,
+    "step": 1,
+    "steps_used": 1,
+    "tokens_used": 150,
+    "tool_calls_used": 1
+  },
+  {
+    "exhausted": false,
+    "step": 2,
+    "steps_used": 2,
+    "tokens_used": 300,
+    "tool_calls_used": 1
+  },
+  {
+    "exhausted": true,
+    "step": 3,
+    "steps_used": 3,
+    "tokens_used": 450,
+    "tool_calls_used": 2
+  }
+]

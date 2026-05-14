@@ -1,0 +1,47 @@
+name: Sidecar build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["sidecar-v*"]
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+          - os: macos-13
+            target: darwin-x64
+          - os: ubuntu-22.04
+            target: linux-x64
+          - os: windows-2022
+            target: win32-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sidecar bundle
+        # 300 MB per-target size budget. Strip + aggressive removes unused stdlib,
+        # __pycache__, dist-info metadata, pip/setuptools, and third-party
+        # tests/examples/docs trees. The build fails fast if any bundle exceeds
+        # the budget so size regressions can't silently land.
+        run: |
+          python packages/sidecar/build/build_sidecar.py \
+            --target ${{ matrix.target }} \
+            --strip-stdlib \
+            --aggressive \
+            --budget-mb 300
+      - name: Report bundle size
+        run: |
+          python -c "import json,pathlib; m=json.loads(pathlib.Path('packages/sidecar/dist/python-runtime/${{ matrix.target }}/manifest.json').read_text()); mb=m['totalBytes']/1024/1024; print(f'::notice title=Sidecar bundle size::${{ matrix.target }}: {mb:.1f} MB')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: steerable-sidecar-${{ matrix.target }}
+          path: packages/sidecar/dist/python-runtime/${{ matrix.target }}
+          if-no-files-found: error

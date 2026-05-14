@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/sidecar/SidecarResponse.schema.json",
+  "title": "SidecarResponse",
+  "description": "JSON-RPC 2.0 response frame. Exactly one of `result` or `error` MUST be present.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "id"],
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ]
+    },
+    "result": {
+      "description": "Method-specific success payload."
+    },
+    "error": {
+      "$ref": "https://steerable.dev/spec/sidecar/SidecarError.schema.json"
+    }
+  }
+}

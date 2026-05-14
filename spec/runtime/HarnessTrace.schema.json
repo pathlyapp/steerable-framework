@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/runtime/HarnessTrace.schema.json",
+  "title": "HarnessTrace",
+  "description": "Run-scoped trace summary for one harness execution (one user turn). Pairs with TraceSpan and TraceEvent records.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["traceId", "status", "createdAt", "updatedAt", "eventCount", "spanCount", "hadError"],
+  "properties": {
+    "traceId": {
+      "type": "string",
+      "description": "Unique trace identifier (e.g. 'tr_<hex>'). Stable across the lifetime of a single run."
+    },
+    "userId": {
+      "type": ["string", "null"]
+    },
+    "chatId": {
+      "type": ["string", "null"]
+    },
+    "sessionId": {
+      "type": ["string", "null"]
+    },
+    "assistantMessageId": {
+      "type": ["string", "null"],
+      "description": "The chat message id this trace was attached to once persisted."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "error", "cancelled", "budget_exhausted"]
+    },
+    "durationMs": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "hadError": {
+      "type": "boolean",
+      "default": false
+    },
+    "errorMessage": {
+      "type": ["string", "null"],
+      "maxLength": 2048
+    },
+    "eventCount": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "spanCount": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    },
+    "totalTokens": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "modelId": {
+      "type": ["string", "null"],
+      "description": "Primary LLM model identifier used during this trace."
+    },
+    "startedAtMs": {
+      "type": ["integer", "null"],
+      "description": "Epoch milliseconds when the run started."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/sidecar/SidecarRequest.schema.json",
+  "title": "SidecarRequest",
+  "description": "JSON-RPC 2.0 request frame for the steerable-sidecar stdio transport.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "id", "method"],
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ],
+      "description": "Request id; null is reserved for notifications."
+    },
+    "method": {
+      "type": "string",
+      "description": "Method name. Reserved namespaces: 'system.*' (lifecycle), 'agent.*' (sessions/turns), 'tool.*' (tool router), 'stream.*' (incremental SSE chunks)."
+    },
+    "params": {
+      "type": ["object", "array", "null"],
+      "description": "Method-specific arguments. Object form preferred."
+    }
+  }
+}

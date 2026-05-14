@@ -1,0 +1,22 @@
+{
+  "name": "@steerable/conformance-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen": "echo conformance-ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "dependencies": {
+    "@steerable/agent-harness": "workspace:*",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

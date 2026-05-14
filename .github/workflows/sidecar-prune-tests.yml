@@ -1,0 +1,27 @@
+name: Sidecar prune helpers
+
+on:
+  pull_request:
+    paths:
+      - "packages/sidecar/build/**"
+  push:
+    branches: [main]
+    paths:
+      - "packages/sidecar/build/**"
+
+jobs:
+  prune-tests:
+    name: prune-helpers / py3.12
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest==9.0.3
+      - name: Run build_sidecar prune unit tests
+        # Fast, network-free unit tests. They exercise every prune path on a
+        # fake runtime tree, so PRs that change the prune logic get verified
+        # before the (slow, network-bound) full build runs on tag pushes.
+        run: pytest packages/sidecar/build/tests/test_prune.py -v

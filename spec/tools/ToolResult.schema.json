@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/tools/ToolResult.schema.json",
+  "title": "ToolResult",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["success"],
+  "properties": {
+    "success": { "type": "boolean" },
+    "terminal": { "type": "boolean" },
+    "needsFollowup": { "type": "boolean" },
+    "nextAction": { "type": "string" },
+    "message": { "type": "string" },
+    "error": { "type": "string" },
+    "data": { "type": "object", "additionalProperties": true }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "include-component-in-tag": false
+    },
+    "packages/agent-protocol/ts": {
+      "release-type": "node"
+    },
+    "packages/agent-harness/ts": {
+      "release-type": "node"
+    },
+    "packages/agent-ui/ts": {
+      "release-type": "node"
+    },
+    "packages/agent-protocol/py": {
+      "release-type": "python"
+    },
+    "packages/agent-harness/py": {
+      "release-type": "python"
+    },
+    "packages/agent-runtime/py": {
+      "release-type": "python"
+    },
+    "packages/sidecar/py": {
+      "release-type": "python"
+    }
+  }
+}

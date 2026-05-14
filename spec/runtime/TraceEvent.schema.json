@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/runtime/TraceEvent.schema.json",
+  "title": "TraceEvent",
+  "description": "A point-in-time event inside a HarnessTrace. Use this for things that have no measurable duration (notifications, decisions, lifecycle markers).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["traceId", "kind", "name", "sequence", "timestampMs"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Optional storage primary key (cuid)."
+    },
+    "traceId": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Coarse classification used for filtering/UI grouping.",
+      "enum": [
+        "lifecycle",
+        "policy",
+        "budget",
+        "retry",
+        "tool_call",
+        "tool_result",
+        "llm_request",
+        "llm_response",
+        "completion",
+        "error",
+        "log",
+        "custom"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "description": "Event name (e.g. 'tool.invoked', 'budget.tokens.exhausted')."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic per-trace ordering value. Stored uniquely with traceId."
+    },
+    "timestampMs": {
+      "type": "integer",
+      "description": "Epoch milliseconds when the event was recorded."
+    },
+    "durationMs": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Optional duration when an event spans a brief work unit."
+    },
+    "status": {
+      "type": ["string", "null"],
+      "enum": ["ok", "warning", "error", null]
+    },
+    "payload": {
+      "type": ["object", "null"],
+      "description": "JSON-serializable payload, secret-redacted.",
+      "additionalProperties": true
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

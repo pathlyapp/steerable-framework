@@ -1,0 +1,15 @@
+{
+  "delays": [
+    100,
+    200,
+    400,
+    800,
+    1600
+  ],
+  "policy": {
+    "base_delay_ms": 100,
+    "jitter": false,
+    "max_attempts": 3,
+    "max_delay_ms": 2000
+  }
+}

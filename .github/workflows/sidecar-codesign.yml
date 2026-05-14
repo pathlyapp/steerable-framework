@@ -1,0 +1,86 @@
+name: Sidecar codesign
+
+on:
+  workflow_run:
+    workflows: ["Sidecar build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  sign:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+            os_kind: macos
+          - os: macos-13
+            target: darwin-x64
+            os_kind: macos
+          - os: windows-2022
+            target: win32-x64
+            os_kind: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: steerable-sidecar-${{ matrix.target }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist/python-runtime/${{ matrix.target }}
+
+      - name: macOS — import signing certificate
+        if: matrix.os_kind == 'macos'
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN=ci.keychain
+          security create-keychain -p ci-pass $KEYCHAIN
+          security set-keychain-settings -lut 21600 $KEYCHAIN
+          security unlock-keychain -p ci-pass $KEYCHAIN
+          security default-keychain -s $KEYCHAIN
+          echo "$MACOS_CERT_BASE64" | base64 --decode > cert.p12
+          security import cert.p12 -k $KEYCHAIN -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci-pass $KEYCHAIN
+
+      - name: macOS — sign + notarize
+        if: matrix.os_kind == 'macos'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          chmod +x packages/sidecar/build/codesign/sign_macos.sh
+          chmod +x packages/sidecar/build/codesign/notarize_macos.sh
+          ./packages/sidecar/build/codesign/sign_macos.sh dist/python-runtime/${{ matrix.target }}
+          ./packages/sidecar/build/codesign/notarize_macos.sh dist/python-runtime/${{ matrix.target }}
+
+      - name: Windows — write PFX and sign
+        if: matrix.os_kind == 'windows'
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        shell: pwsh
+        run: |
+          $bytes = [System.Convert]::FromBase64String($env:WINDOWS_PFX_BASE64)
+          $env:WINDOWS_PFX_PATH = "$PWD\cert.pfx"
+          [System.IO.File]::WriteAllBytes($env:WINDOWS_PFX_PATH, $bytes)
+          & "$PWD\packages\sidecar\build\codesign\sign_windows.ps1" -RuntimeRoot "dist/python-runtime/${{ matrix.target }}"
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steerable-sidecar-${{ matrix.target }}-signed
+          path: dist/python-runtime/${{ matrix.target }}
+          if-no-files-found: error

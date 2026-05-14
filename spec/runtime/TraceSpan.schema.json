@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/runtime/TraceSpan.schema.json",
+  "title": "TraceSpan",
+  "description": "A timed span within a HarnessTrace. Each span captures a logical step (LLM call, tool call, planning step, etc.).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spanId", "name", "startMs", "status"],
+  "properties": {
+    "spanId": {
+      "type": "string",
+      "description": "Span identifier, unique within its parent trace (e.g. 'step_3')."
+    },
+    "traceId": {
+      "type": ["string", "null"],
+      "description": "Parent HarnessTrace id. Optional for in-flight spans before flush."
+    },
+    "parentSpanId": {
+      "type": ["string", "null"],
+      "description": "Optional parent span for nested execution graphs."
+    },
+    "name": {
+      "type": "string",
+      "description": "Logical operation name (e.g. 'llm.generate', 'tool.shell.exec', 'policy.decide')."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["llm", "tool", "policy", "budget", "retry", "completion", "transport", "storage", "custom"],
+      "default": "custom"
+    },
+    "startMs": {
+      "type": "integer",
+      "description": "Epoch milliseconds when the span opened."
+    },
+    "endMs": {
+      "type": ["integer", "null"],
+      "description": "Epoch milliseconds when the span closed. Null while still in flight."
+    },
+    "durationMs": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "error", "timeout", "cancelled", "running"],
+      "default": "running"
+    },
+    "attrs": {
+      "type": "object",
+      "description": "Free-form, JSON-serializable, secret-redacted attributes.",
+      "additionalProperties": true
+    }
+  }
+}

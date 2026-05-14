@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/events/SSEEvent.schema.json",
+  "title": "SSEEvent",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["content", "error", "agent", "orchestration", "loader-hint", "keepalive", "done", "budget_exhausted", "tool_call", "tool_result"]
+    },
+    "event": { "type": "string" },
+    "content": { "type": "string" },
+    "hint": { "type": "string" },
+    "message": { "type": "string" },
+    "code": { "type": "string" },
+    "orchestrationGroupId": { "type": "string" },
+    "taskId": { "type": "string" },
+    "messageId": { "type": "string" },
+    "payload": { "type": "object", "additionalProperties": true }
+  }
+}

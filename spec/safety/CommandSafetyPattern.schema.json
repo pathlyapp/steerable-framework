@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/safety/CommandSafetyPattern.schema.json",
+  "title": "CommandSafetyPattern",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "label", "description", "pattern", "category", "severity", "platform"],
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "description": { "type": "string" },
+    "pattern": { "type": "string" },
+    "category": { "type": "string" },
+    "severity": { "type": "string", "enum": ["critical", "warning"] },
+    "platform": { "type": "string", "enum": ["all", "unix", "windows"] }
+  }
+}

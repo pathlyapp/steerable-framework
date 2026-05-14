@@ -1,0 +1,3 @@
+packages:
+  - "packages/*/ts"
+  - "tests/conformance/ts"

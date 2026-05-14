@@ -1,0 +1,14 @@
+name: retry-basic
+policy:
+  maxAttempts: 3
+  baseDelayMs: 200
+  maxDelayMs: 2000
+  jitter: false
+attempts:
+  - 1
+  - 2
+  - 3
+expected:
+  - 200
+  - 400
+  - 800

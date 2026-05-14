@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/tools/ToolCall.schema.json",
+  "title": "ToolCall",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "arguments"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

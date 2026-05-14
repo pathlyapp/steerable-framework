@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/chat/ChatAgent.schema.json",
+  "title": "ChatAgent",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "name", "createdAt", "updatedAt"],
+  "properties": {
+    "id": { "type": "string" },
+    "slug": { "type": "string" },
+    "name": { "type": "string" },
+    "icon": { "type": "string" },
+    "color": { "type": "string" },
+    "description": { "type": "string" },
+    "rolePrompt": { "type": "string" },
+    "forbiddenPrompt": { "type": "string" },
+    "skillIds": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowExternalSkills": { "type": "boolean" },
+    "isBuiltin": { "type": "boolean" },
+    "isArchived": { "type": "boolean" },
+    "sortOrder": { "type": "integer" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

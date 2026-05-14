@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/sidecar/SidecarHealth.schema.json",
+  "title": "SidecarHealth",
+  "description": "Result payload for the `system.ping` health-check method.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "version", "uptimeMs"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "degraded", "starting", "shutting_down"]
+    },
+    "version": {
+      "type": "string",
+      "description": "Sidecar package version (steerable-agent-runtime)."
+    },
+    "protocolVersion": {
+      "type": "string",
+      "description": "Highest spec/sidecar protocol version this sidecar speaks (semver).",
+      "default": "0.1.0"
+    },
+    "uptimeMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pythonVersion": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string",
+      "description": "OS/arch tag (e.g. 'darwin-arm64', 'linux-x64', 'win32-x64')."
+    },
+    "loadedProviders": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "LLM provider ids currently registered."
+    },
+    "loadedTools": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "activeTraces": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "checks": {
+      "type": "object",
+      "description": "Per-subsystem health snapshot.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["ok", "warn", "error"]
+          },
+          "message": { "type": "string" },
+          "latencyMs": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

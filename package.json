@@ -1,0 +1,17 @@
+{
+  "name": "@steerable/monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.23.0",
+  "scripts": {
+    "gen": "pnpm -r run gen",
+    "build": "pnpm -r run build",
+    "test": "pnpm -r run test",
+    "lint": "pnpm -r run lint",
+    "check:drift": "pnpm -r run check:drift"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.7"
+  }
+}

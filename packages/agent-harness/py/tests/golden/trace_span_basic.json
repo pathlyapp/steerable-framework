@@ -1,0 +1,9 @@
+{
+  "attrs": {
+    "model": "gpt-4o"
+  },
+  "end_at": "2026-01-01T00:00:01+00:00",
+  "name": "llm.generate",
+  "span_id": "step_1",
+  "start_at": "2026-01-01T00:00:00+00:00"
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/sidecar/SidecarNotification.schema.json",
+  "title": "SidecarNotification",
+  "description": "JSON-RPC 2.0 notification frame (no id, no response). Used by the sidecar to push streaming SSE chunks, lifecycle events, and trace updates back to the host.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "method"],
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "method": {
+      "type": "string",
+      "description": "Notification namespace. Reserved: 'stream.chunk', 'stream.done', 'lifecycle.ready', 'lifecycle.shutdown', 'trace.event', 'log.line'."
+    },
+    "params": {
+      "type": ["object", "array", "null"]
+    }
+  }
+}

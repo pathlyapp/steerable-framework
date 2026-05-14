@@ -1,0 +1,42 @@
+[
+  {
+    "input": {
+      "success": true
+    },
+    "is_terminal": false
+  },
+  {
+    "input": {
+      "success": false
+    },
+    "is_terminal": true
+  },
+  {
+    "input": {
+      "needsFollowup": true,
+      "success": false
+    },
+    "is_terminal": false
+  },
+  {
+    "input": {
+      "terminal": true
+    },
+    "is_terminal": true
+  },
+  {
+    "input": {
+      "success": false,
+      "terminal": true
+    },
+    "is_terminal": true
+  },
+  {
+    "input": {},
+    "is_terminal": false
+  },
+  {
+    "input": null,
+    "is_terminal": false
+  }
+]
