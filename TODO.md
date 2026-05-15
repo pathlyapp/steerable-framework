@@ -159,11 +159,22 @@ phase closes or a new follow-up surfaces.
       `steerable-agent-harness`, `steerable-agent-runtime`,
       `steerable-sidecar` (or wire Trusted Publisher).
 - [ ] **GitHub Actions secrets** `NPM_TOKEN`, `PYPI_API_TOKEN`.
-- [ ] **Push framework repo to GitHub remote** (`git remote add origin …`,
-      `git push -u origin main`); release-please then opens its first
-      release PR automatically.
+- [x] **Push framework repo to GitHub remote** — pushed to
+      `git@github.com:pathlyapp/steerable-framework.git`; release-please
+      will open its first release PR once `NPM_TOKEN`/`PYPI_API_TOKEN` land.
 - [ ] **Cut & publish `0.1.0` on the public registries** (or `0.2.0` if any
       breaking change shipped between now and the push).
+
+### Public docs site
+
+- [x] **GitHub Pages enabled** (workflow source) → docs site live at
+      <https://pathlyapp.github.io/steerable-framework/>.
+- [x] **Storybook embedded under `/storybook/`** → live at
+      <https://pathlyapp.github.io/steerable-framework/storybook/>.
+- [ ] **Bump GitHub Actions to Node.js 24-compatible versions** before
+      2026-09-16 (`actions/checkout`, `actions/setup-node`,
+      `actions/setup-python`, `actions/upload-artifact`,
+      `pnpm/action-setup` all surface a Node 20 deprecation warning).
 
 ### Toward a real 1.0.0
 
