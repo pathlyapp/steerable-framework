@@ -190,18 +190,35 @@ phase closes or a new follow-up surfaces.
       block in `packages/agent-harness/py/pyproject.toml`. Lockstep
       across `protocol↔harness` is still enforced by
       `scripts/check_lockstep_versions.py`.
-- [ ] **Reserve PyPI projects** `steerable-agent-protocol`,
-      `steerable-agent-harness`, `steerable-agent-runtime`,
-      `steerable-sidecar` (block PyPI publish).
-- [ ] **Configure PyPI auth** — Trusted Publishing (recommended; bind
-      to environment `pypi` already created) **or** `PYPI_API_TOKEN`
-      GitHub secret.
-- [ ] **Bump remaining Py packages (`runtime`, `sidecar`) to 0.2.0** so
-      the four-package PyPI publish goes out as a coherent 0.2.0 wave.
-      release-please left them at 0.1.0 because no `feat(runtime):` /
-      `feat(sidecar):` commits landed in this cycle. Either edit
-      `.release-please-manifest.json` directly (fastest) or wait for the
-      next genuine feature commit per package.
+- [x] **First public PyPI publish landed** (May 2026):
+      `steerable-agent-protocol==0.2.0`, `steerable-agent-harness==0.2.0`,
+      `steerable-agent-runtime==0.1.0`, `steerable-sidecar==0.1.0` all
+      live on pypi.org. Used Mode B (account-scoped `PYPI_API_TOKEN`
+      GH secret) for the first push; PyPI annotations recommend migrating
+      to Trusted Publishing for ongoing releases — see follow-up below.
+      Project names auto-reserved on first upload (no manual reserve
+      needed because the publishing account owned no prior projects).
+- [ ] **Migrate PyPI auth to Trusted Publishing** (security hygiene).
+      Today `PYPI_API_TOKEN` is account-scoped and lives indefinitely as
+      a GH secret; Trusted Publishing replaces it with short-lived OIDC
+      tokens minted per-build. Steps:
+      1. https://pypi.org/manage/account/publishing/ → "Add a new pending
+         publisher" × 4 (one per project). Repository=`pathlyapp/steerable-framework`,
+         Workflow=`publish-pypi.yml`, Environment=`pypi`. (For existing
+         projects that already have a release, the form is at
+         `https://pypi.org/manage/project/<name>/settings/publishing/`
+         instead — the current account is the project owner now.)
+      2. Once all four are bound, `gh secret delete PYPI_API_TOKEN
+         --repo pathlyapp/steerable-framework`. Workflow already prefers
+         OIDC when `PYPI_API_TOKEN` is unset.
+      3. Also revoke the old token at
+         <https://pypi.org/manage/account/token/> (it was briefly visible
+         in chat before being saved to GH secret).
+- [ ] **Bump `runtime` + `sidecar` Py packages to 0.2.0** to align with
+      `protocol` + `harness`. release-please left them at 0.1.0 because
+      no `feat(runtime):` / `feat(sidecar):` commits landed in the
+      bug-fix cycle. Edit `.release-please-manifest.json` directly
+      (fastest) or wait for the next genuine feature commit per package.
 
 ### Public docs site
 
