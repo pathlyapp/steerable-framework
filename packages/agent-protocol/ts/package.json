@@ -1,6 +1,6 @@
 {
   "name": "@steerable/agent-protocol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Steerable framework Tier 1 — wire-format types (SSEEvent, ChatMessage, ToolCall, ToolResult, AgentSession, HarnessTrace, sidecar JSON-RPC) shared by every Steerable client and server.",
   "license": "Apache-2.0",
   "homepage": "https://pathlyapp.github.io/steerable-framework/",
