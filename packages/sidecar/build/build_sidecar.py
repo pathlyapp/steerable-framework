@@ -41,8 +41,14 @@ ROOT = Path(__file__).resolve().parents[3]
 SIDECAR_PKG_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = SIDECAR_PKG_DIR / "dist" / "python-runtime"
 
-PYTHON_BUILD_STANDALONE_RELEASE = "20251105"
-DEFAULT_PYTHON_VERSION = "3.12.7"
+# Pinned for byte-reproducible builds. When this 404s in CI it means the
+# release has been deleted upstream — bump both constants in lockstep
+# (the asset filename embeds the date), then re-run sidecar-budget locally
+# to verify the new pin still fits the 320 MB PR budget. Discover the
+# current latest with:
+#   gh api repos/astral-sh/python-build-standalone/releases/latest --jq .tag_name
+PYTHON_BUILD_STANDALONE_RELEASE = "20260510"
+DEFAULT_PYTHON_VERSION = "3.12.13"
 
 # Modules typically unused by the sidecar — safe to strip.
 # CONSERVATIVE list: definitely unused by us, no third-party module pulls them in.
