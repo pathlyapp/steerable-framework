@@ -4,7 +4,7 @@ from .retry import RetryPolicy, next_retry_delay_ms
 from .completion import is_terminal_result
 from .tracing import TraceSpan
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",

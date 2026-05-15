@@ -4,6 +4,15 @@ All notable changes to this package will be documented in this file. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the package adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/pathlyapp/steerable-framework/compare/agent-ui-v0.1.0...agent-ui-v0.2.0) (2026-05-15)
+
+
+### Features
+
+* add json-schema-to-typescript dependency and enhance agent protocol models ([7c20f4f](https://github.com/pathlyapp/steerable-framework/commit/7c20f4fea4f777583789c867653c8e9e5524d266))
+* integrate Storybook for UI components and enhance documentation ([512eaed](https://github.com/pathlyapp/steerable-framework/commit/512eaed453d7e8da67138a917212b126d3823804))
+* **release:** wire autonomous publish pipeline (npm + PyPI) ([d245304](https://github.com/pathlyapp/steerable-framework/commit/d24530439ae56dbdc8f0d4c27fc58136117b2d06))
+
 ## [0.1.0] — 2026-05-14
 
 ### Added
