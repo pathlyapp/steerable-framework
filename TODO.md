@@ -224,6 +224,22 @@ phase closes or a new follow-up surfaces.
       API is only just being exercised by the three repos.
 - [ ] **Decide: shared `1.0.0` for protocol + harness?** Lock-step is enforced,
       but Tier 2/3/4 packages can independently version once 1.0 lands.
+- [ ] **Reconcile release-please component bumps with the ts↔py lockstep
+      validator.** Today `scripts/check_lockstep_versions.py` requires
+      `protocol_ts == protocol_py` AND `harness_ts == harness_py`, but
+      release-please bumps each component (e.g. `packages/agent-harness/py`)
+      independently based on which files a commit touched. A py-only fix
+      therefore opens a release PR that, if merged, fails CI on the
+      lockstep check (this happened with PR #2, which was closed
+      manually). Pick one:
+      - **(a)** Add release-please's `linked-versions` plugin pairing
+        `protocol/ts`+`protocol/py` and `harness/ts`+`harness/py`. Forces
+        co-bumps but changes the tag scheme.
+      - **(b)** Soften the validator: keep exact-match for `protocol`
+        (codegen pair) but allow patch-level drift for `harness`
+        (parallel implementations).
+      - **(c)** Drop the lockstep gate entirely and rely on docs/cultural
+        convention.
 
 ### Quality / DevX gaps
 
