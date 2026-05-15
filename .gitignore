@@ -13,6 +13,16 @@ dist/
 build/
 *.tsbuildinfo
 
+# `build/` above intentionally catches incidental Python build trees
+# (setuptools / hatchling temp output) that bubble up under any package.
+# But the sidecar's *build toolchain* (build_sidecar.py, codesign scripts,
+# prune unit tests) also lives under packages/sidecar/build/ and is
+# real source — un-ignore it so CI can actually invoke it. Output bytes
+# from that toolchain land in packages/sidecar/dist/, which IS still
+# ignored further down.
+!packages/sidecar/build/
+!packages/sidecar/build/**
+
 # Python
 __pycache__/
 *.py[cod]
