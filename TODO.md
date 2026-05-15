@@ -154,14 +154,28 @@ phase closes or a new follow-up surfaces.
 
 ### Publish & registry (needs credentials)
 
-- [ ] **Reserve npm scope `@steerable`** (`npm org create steerable`).
+- [x] **Reserve npm scope `@steerable`** — done (May 2026); all four
+      `@steerable/*` names return HTTP 404 confirming the slot is free.
+- [x] **publish-npm.yml + publish-pypi.yml in repo** — both workflows live
+      under `.github/workflows/` and trigger on `release: published`. They
+      are idempotent (probe registry, skip versions already up). See
+      [`RELEASING.md`](./RELEASING.md) for the wiring.
+- [x] **release.yml on push trigger** — release-please now runs on every
+      push to `main` (was workflow_dispatch only) and opens release PRs
+      autonomously.
+- [x] **3 npm package.json files publish-ready** — added
+      `publishConfig.access: "public"`, `publishConfig.provenance: true`,
+      and standard metadata (`license`, `repository`, `homepage`,
+      `keywords`) to `agent-protocol`, `agent-harness`, `agent-ui`.
+- [ ] **Set `NPM_TOKEN` GitHub secret** —
+      `gh secret set NPM_TOKEN --repo pathlyapp/steerable-framework --body "<token>"`.
+      Generate token at <https://www.npmjs.com/settings/~/tokens>:
+      Granular Access Token, Read+Write, scoped to `@steerable`.
 - [ ] **Reserve PyPI projects** `steerable-agent-protocol`,
       `steerable-agent-harness`, `steerable-agent-runtime`,
-      `steerable-sidecar` (or wire Trusted Publisher).
-- [ ] **GitHub Actions secrets** `NPM_TOKEN`, `PYPI_API_TOKEN`.
-- [x] **Push framework repo to GitHub remote** — pushed to
-      `git@github.com:pathlyapp/steerable-framework.git`; release-please
-      will open its first release PR once `NPM_TOKEN`/`PYPI_API_TOKEN` land.
+      `steerable-sidecar`.
+- [ ] **Configure PyPI auth** — Trusted Publishing (recommended; bind
+      to environment `pypi`) **or** `PYPI_API_TOKEN` GitHub secret.
 - [ ] **Cut & publish `0.1.0` on the public registries** (or `0.2.0` if any
       breaking change shipped between now and the push).
 

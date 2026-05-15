@@ -1,7 +1,22 @@
 name: Release
 
+# release-please reads conventional-commit history on `main` and either:
+#   * opens / updates a "release PR" that bumps versions and rewrites
+#     CHANGELOGs, or
+#   * if the previous release PR was just merged, cuts the per-package git
+#     tags + GitHub Releases (which then trigger publish-{npm,pypi}.yml).
+#
+# `workflow_dispatch` is kept so a maintainer can force a re-run without
+# pushing.
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   release-please:

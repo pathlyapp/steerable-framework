@@ -1,0 +1,98 @@
+name: Publish to npm
+
+# Triggered after release-please cuts a GitHub Release. We don't try to parse
+# release-please's per-component tag scheme; instead we walk the three
+# `@steerable/*` TypeScript packages and publish whichever ones declare a
+# version that isn't already on the registry. This is robust to:
+#   * release-please tag naming changes
+#   * partial / re-run releases (the "already at version X" check makes the
+#     workflow idempotent — safe to re-dispatch on a botched run)
+#   * a manual version bump landing without going through release-please
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the actual `npm publish` step (still builds + diffs registry)."
+        type: boolean
+        default: false
+
+# Allow only one publish run per ref at a time so two near-simultaneous merges
+# can't race each other into a half-published state.
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # `id-token: write` is required for `npm publish --provenance`, which signs
+  # the published tarball with a sigstore attestation tied to this workflow
+  # run. Consumers can verify the chain via `npm audit signatures`.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          # Setup the .npmrc to point at npmjs.org and read the auth token
+          # from `NODE_AUTH_TOKEN` (set in the publish step's `env:` below).
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install + build workspace
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm gen
+          pnpm build
+
+      - name: Publish each @steerable/* TS package whose version is new
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN secret is not configured. See RELEASING.md → 'Configuring NPM_TOKEN'."
+            exit 1
+          fi
+
+          published_any=0
+          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts; do
+            name=$(node -p "require('./${dir}/package.json').name")
+            local_version=$(node -p "require('./${dir}/package.json').version")
+
+            # `npm view <pkg>@<version>` exits 0 if the exact version exists,
+            # non-zero (E404 or empty) otherwise. We treat any non-zero as
+            # "not yet published".
+            if npm view "${name}@${local_version}" version >/dev/null 2>&1; then
+              echo "::notice title=skip::${name}@${local_version} is already on the registry."
+              continue
+            fi
+
+            echo "::group::publish ${name}@${local_version}"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY_RUN=true; would run: pnpm --filter ${name} publish --no-git-checks --access public --provenance"
+              ( cd "${dir}" && npm pack --dry-run )
+            else
+              # `pnpm publish` rewrites `workspace:*` ranges to the resolved
+              # version, runs the package's `prepublishOnly` script, and
+              # honours `publishConfig.access` + `publishConfig.provenance`.
+              pnpm --filter "${name}" publish --no-git-checks
+            fi
+            echo "::endgroup::"
+            published_any=1
+          done
+
+          if [ "${published_any}" = "0" ]; then
+            echo "::notice title=nothing to publish::All @steerable/* TS packages were already at the latest published version."
+          fi

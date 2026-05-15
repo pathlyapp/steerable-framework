@@ -1,11 +1,32 @@
 {
   "name": "@steerable/agent-protocol",
   "version": "0.1.0",
+  "description": "Steerable framework Tier 1 — wire-format types (SSEEvent, ChatMessage, ToolCall, ToolResult, AgentSession, HarnessTrace, sidecar JSON-RPC) shared by every Steerable client and server.",
+  "license": "Apache-2.0",
+  "homepage": "https://pathlyapp.github.io/steerable-framework/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/agent-protocol/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "keywords": [
+    "steerable",
+    "agent",
+    "protocol",
+    "sse",
+    "json-rpc",
+    "schema",
+    "typescript"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "gen": "node ../../../scripts/generate_ts.mjs",
@@ -21,5 +42,9 @@
     "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

@@ -1,11 +1,32 @@
 {
   "name": "@steerable/agent-harness",
   "version": "0.1.0",
+  "description": "Steerable framework Tier 2 — TypeScript facade over the Python harness (policy, budget, retry, completion, tracing) used for cross-language conformance tests. Production code should depend on the Python harness.",
+  "license": "Apache-2.0",
+  "homepage": "https://pathlyapp.github.io/steerable-framework/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/agent-harness/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "keywords": [
+    "steerable",
+    "agent",
+    "harness",
+    "policy",
+    "budget",
+    "tracing",
+    "typescript"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "gen": "node ../../../scripts/generate_ts.mjs",
@@ -20,5 +41,9 @@
   "devDependencies": {
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

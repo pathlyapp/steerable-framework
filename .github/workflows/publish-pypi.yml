@@ -1,0 +1,125 @@
+name: Publish to PyPI
+
+# Mirror image of publish-npm.yml. Triggered after release-please publishes a
+# GitHub Release. We walk the four publishable Python packages and upload
+# whichever ones declare a version that isn't already on PyPI.
+#
+# To activate this workflow:
+#   1. Reserve the project names on PyPI:
+#        steerable-agent-protocol
+#        steerable-agent-harness
+#        steerable-agent-runtime
+#        steerable-sidecar
+#   2. Pick ONE of the two auth modes below and configure it:
+#        (A) Trusted Publishing (recommended): bind this workflow to each
+#            project on https://pypi.org/manage/project/<name>/settings/publishing/
+#            with workflow `publish-pypi.yml` and environment `pypi`.
+#            Then drop `password:` from the upload step.
+#        (B) API token: create one umbrella token at
+#            https://pypi.org/manage/account/token/ scoped to the four
+#            projects, and set it as the `PYPI_API_TOKEN` GitHub secret.
+#
+# Until either is configured the workflow short-circuits with a clear notice
+# instead of failing — so the npm publish path still works on its own.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the actual upload step (still builds + diffs PyPI)."
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Required for Trusted Publishing (mode A above). Harmless if mode B is in
+  # use.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install + build wheels for all four publishable packages
+        run: |
+          uv sync
+          # `--all-packages` builds every workspace member into dist/py/.
+          uv build --all-packages --out-dir dist/py
+          # Examples are workspace members but must never reach PyPI.
+          rm -f dist/py/steerable_example_*.{whl,tar.gz} 2>/dev/null || true
+          ls dist/py/
+
+      - name: Filter to versions not yet on PyPI
+        id: pending
+        run: |
+          set -euo pipefail
+          mkdir -p dist/upload
+          published_any=0
+          for project in steerable-agent-protocol steerable-agent-harness steerable-agent-runtime steerable-sidecar; do
+            # Local artefact filename uses underscores (PEP 427).
+            wheel_glob="dist/py/${project//-/_}-*.whl"
+            sdist_glob="dist/py/${project//-/_}-*.tar.gz"
+            wheel=$(ls $wheel_glob 2>/dev/null | head -1 || true)
+            sdist=$(ls $sdist_glob 2>/dev/null | head -1 || true)
+            if [ -z "${wheel}" ] || [ -z "${sdist}" ]; then
+              echo "::warning::No built artefact found for ${project}; skipping."
+              continue
+            fi
+            local_version=$(python -c "import re,sys; print(re.search(r'-([^-]+)-py3', sys.argv[1]).group(1))" "${wheel}")
+            # Probe PyPI JSON API. 404 == new project; 200 + version match == already up.
+            response=$(curl -s -o /tmp/pypi.json -w "%{http_code}" "https://pypi.org/pypi/${project}/${local_version}/json")
+            if [ "${response}" = "200" ]; then
+              echo "::notice title=skip::${project}==${local_version} is already on PyPI."
+              continue
+            fi
+            cp "${wheel}" "${sdist}" dist/upload/
+            published_any=1
+            echo "  pending: ${project}==${local_version}"
+          done
+          echo "pending=${published_any}" >> "$GITHUB_OUTPUT"
+          ls dist/upload/ 2>/dev/null || true
+
+      - name: Short-circuit if nothing to publish
+        if: steps.pending.outputs.pending != '1'
+        run: |
+          echo "::notice title=nothing to publish::All steerable-* Python packages were already at the latest published version (or no built artefacts matched)."
+
+      # ---------------- Auth mode A: Trusted Publishing ----------------
+      # Active when `PYPI_API_TOKEN` is NOT set. Requires PyPI-side wiring;
+      # see the comment block at the top of this file.
+      - name: Upload to PyPI (Trusted Publishing)
+        if: steps.pending.outputs.pending == '1' && env.HAS_API_TOKEN != 'true' && (inputs.dry_run != true)
+        env:
+          HAS_API_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/upload/
+          # No `password:` — pypa/gh-action-pypi-publish auto-detects OIDC.
+
+      # ---------------- Auth mode B: API token ----------------
+      # Active when `PYPI_API_TOKEN` IS set. Single umbrella token covers all
+      # four projects.
+      - name: Upload to PyPI (API token)
+        if: steps.pending.outputs.pending == '1' && env.HAS_API_TOKEN == 'true' && (inputs.dry_run != true)
+        env:
+          HAS_API_TOKEN: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/upload/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Dry-run summary
+        if: steps.pending.outputs.pending == '1' && inputs.dry_run == true
+        run: |
+          echo "::notice title=dry-run::Skipping actual upload. Pending artefacts:"
+          ls -la dist/upload/

@@ -162,28 +162,91 @@ without a registry.
 
 ### Prerequisites (one-time)
 
-1. **Reserve the names** on npm and PyPI:
-   - npm scope `@steerable` (claim with `npm org create steerable`)
-   - PyPI project names `steerable-agent-protocol`, `steerable-agent-harness`, `steerable-agent-runtime`, `steerable-sidecar`
-2. **Configure GitHub Actions secrets**:
-   - `NPM_TOKEN` — automation token from npm with publish access to `@steerable/*`
-   - `PYPI_API_TOKEN` — scoped PyPI token; one per package or one umbrella token via `pypi-publish` Trusted Publisher
-3. **Wire `release-please`**: already configured in
-   [`release-please-config.json`](./release-please-config.json) +
-   [`.release-please-manifest.json`](./.release-please-manifest.json). Each
-   `feat:` / `fix:` commit on `main` opens a release PR; merging that PR cuts
-   tags and triggers the publish workflow.
+1. **Reserve the names**:
+   - [x] npm scope `@steerable` — already registered (May 2026). All four
+         publishable names (`agent-protocol`, `agent-harness`, `agent-ui`)
+         return HTTP 404 on the registry, confirming the slot is free.
+   - [ ] PyPI project names `steerable-agent-protocol`,
+         `steerable-agent-harness`, `steerable-agent-runtime`,
+         `steerable-sidecar`. See "Configuring PyPI publish" below.
 
-### Publish workflow (manual fallback)
+2. **Configure `NPM_TOKEN`**:
+   - Generate a **Granular Access Token** (recommended over the legacy
+     "automation" type) at
+     <https://www.npmjs.com/settings/~/tokens>:
+     - **Permissions** → "Read and write"
+     - **Packages and scopes** → restrict to the `@steerable` scope
+     - Expiry: pick something ≥1 year so release-please doesn't break on
+       silent expiry; rotate by setting a new token before the old expires.
+   - Drop it into the repo:
 
-If the automated release-please pipeline isn't available, you can publish from a
+     ```bash
+     gh secret set NPM_TOKEN \
+       --repo pathlyapp/steerable-framework \
+       --body "<paste-the-token>"
+     ```
+
+3. **Configure PyPI publish (pick one)**:
+
+   - **(A — recommended) Trusted Publishing**, no long-lived secret:
+     - Go to <https://pypi.org/manage/account/publishing/> for each
+       project (or the umbrella account if all four projects share an
+       owner).
+     - Add a publisher: owner `pathlyapp`, repo `steerable-framework`,
+       workflow `publish-pypi.yml`, environment `pypi`.
+     - In the GitHub repo, create an Environment named `pypi`
+       (Settings → Environments → New environment) and (optionally) gate
+       it on a maintainer-approval rule.
+   - **(B) API token**:
+
+     ```bash
+     # On https://pypi.org/manage/account/token/, scope it to all four
+     # `steerable-*` projects.
+     gh secret set PYPI_API_TOKEN \
+       --repo pathlyapp/steerable-framework \
+       --body "pypi-XXXX..."
+     ```
+
+   `publish-pypi.yml` auto-detects which mode is active (presence of
+   `PYPI_API_TOKEN` selects mode B, otherwise OIDC / Trusted Publishing).
+   Until either is configured the workflow short-circuits with a clear
+   notice — it will not fail the release.
+
+4. **Pipeline (already wired, no action needed)**:
+
+   ```text
+   push to main (with conventional-commit messages)
+        │
+        ▼
+   release.yml  ── release-please opens / updates a "release PR"
+        │
+        │ (maintainer reviews + merges the release PR)
+        ▼
+   release.yml  ── release-please cuts per-package tags + GitHub Releases
+        │
+        ├─► publish-npm.yml   triggered by `release: published`
+        │       └─ skips packages whose version is already on registry
+        │
+        └─► publish-pypi.yml  triggered by `release: published`
+                └─ same idempotent skip logic against PyPI's JSON API
+   ```
+
+   `publish-{npm,pypi}.yml` are idempotent: re-dispatching them after a
+   partial failure only re-publishes packages whose local version is still
+   missing upstream.
+
+### Manual publish (escape hatch)
+
+If the automated release-please pipeline is broken, you can publish from a
 clean checkout of the tagged commit:
 
 ```bash
 # TS — npm
 pnpm install --frozen-lockfile
+pnpm gen
 pnpm -r --filter '@steerable/*' build
-pnpm -r --filter '@steerable/*' publish --access public --no-git-checks
+NODE_AUTH_TOKEN="$NPM_TOKEN" \
+  pnpm -r --filter '@steerable/*' publish --no-git-checks
 
 # Py — PyPI
 uv build --all-packages --out-dir dist/py
