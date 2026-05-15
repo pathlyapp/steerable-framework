@@ -39,11 +39,11 @@ jobs:
     name: regenerate baselines on ubuntu-22.04
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -74,7 +74,7 @@ jobs:
           echo "Total: $(ls *-chromium-desktop-linux.png | wc -l)"
 
       - name: Upload baselines artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: vrt-baselines-linux
           path: packages/agent-ui/ts/tests/visual/stories.spec.ts-snapshots/*-chromium-desktop-linux.png

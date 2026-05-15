@@ -9,9 +9,9 @@ jobs:
   ts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -20,19 +20,117 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: pnpm check:drift
+      # D1 (codegen idempotency): rerun the generator and assert the working
+      # tree is still clean. Catches non-deterministic codegen (random hashes,
+      # unstable map ordering, locale-dependent sort) the moment it sneaks in,
+      # rather than years later when a contributor finally regenerates locally.
+      - name: codegen idempotency
+        run: |
+          pnpm gen
+          if ! git diff --quiet -- packages; then
+            echo "::error::pnpm gen produced a non-empty diff on second run — codegen is not idempotent."
+            git --no-pager diff -- packages
+            exit 1
+          fi
 
   py:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - run: uv run python scripts/generate_py.py
       - run: uv run pytest
       - run: uv run python scripts/check_drift.py
+      # D1 (codegen idempotency): same as the TS job, scoped to the Py
+      # generated tree.
+      - name: codegen idempotency
+        run: |
+          uv run python scripts/generate_py.py
+          if ! git diff --quiet -- packages; then
+            echo "::error::generate_py.py produced a non-empty diff on second run — codegen is not idempotent."
+            git --no-pager diff -- packages
+            exit 1
+          fi
 
   lockstep:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: python scripts/check_lockstep_versions.py
+
+  examples:
+    # D2 (examples-in-CI): runs every published example end-to-end so the
+    # README claims about the framework's surface stay honest. Each run
+    # asserts a marker line that the example is supposed to print, otherwise
+    # a refactor that silently breaks an example would still pass CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen          # ts examples consume generated types
+      - run: pnpm build        # so the workspace deps resolve to dist/
+      - run: uv sync           # py examples consume editable workspace pkgs
+
+      - name: example / py-minimal
+        run: |
+          out=$(uv run --package steerable-example-py-minimal \
+                python -m steerable_example_py_minimal.main)
+          echo "$out"
+          echo "$out" | grep -q "^\[wire\]"   || { echo "::error::py-minimal missing [wire] marker"; exit 1; }
+          echo "$out" | grep -q "^\[harness\]" || { echo "::error::py-minimal missing [harness] marker"; exit 1; }
+
+      - name: example / ts-minimal
+        run: |
+          out=$(pnpm --filter steerable-example-ts-minimal start 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "\[wire\]"    || { echo "::error::ts-minimal missing [wire] marker"; exit 1; }
+          echo "$out" | grep -q "\[harness\]" || { echo "::error::ts-minimal missing [harness] marker"; exit 1; }
+
+      - name: example / sidecar-roundtrip
+        run: |
+          out=$(uv run --package steerable-example-sidecar-roundtrip \
+                python -m steerable_example_sidecar_roundtrip.main)
+          echo "$out"
+          echo "$out" | grep -q "^\[ready\]" || { echo "::error::sidecar-roundtrip missing [ready] marker"; exit 1; }
+          echo "$out" | grep -q "^\[ping\]"  || { echo "::error::sidecar-roundtrip missing [ping] marker"; exit 1; }
+          echo "$out" | grep -q "^\[bye\]"   || { echo "::error::sidecar-roundtrip missing [bye] marker"; exit 1; }
+
+  sidecar-budget:
+    # D3 (sidecar bundle size budget): enforces the production size budget on
+    # every PR so a future dependency bump can't quietly inflate the bundle
+    # past 320 MB. We run the host (Linux x64) build only — it is enough to
+    # catch dep-size regressions, and the full cross-platform matrix already
+    # runs on `tags: [sidecar-v*]` via .github/workflows/sidecar-build.yml.
+    #
+    # Budget rationale:
+    # * Production tag-build budget = 300 MB (sidecar-build.yml).
+    # * PR budget = 320 MB to give branches a small, principled head-room
+    #   before they hit prod (e.g. when a dep bump lands first and the
+    #   release follow-up trims).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build sidecar (host) under PR budget
+        run: |
+          python packages/sidecar/build/build_sidecar.py \
+            --target host \
+            --strip-stdlib \
+            --aggressive \
+            --budget-mb 320
+      - name: Report bundle size
+        run: |
+          python -c "import json,glob,pathlib; \
+m=json.loads(pathlib.Path(glob.glob('packages/sidecar/dist/python-runtime/*/manifest.json')[0]).read_text()); \
+mb=m['totalBytes']/1024/1024; \
+print(f'::notice title=Sidecar bundle size (host)::{mb:.1f} MB / 320 MB budget')"

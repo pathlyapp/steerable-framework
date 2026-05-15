@@ -27,10 +27,10 @@ jobs:
             os_kind: windows
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: steerable-sidecar-${{ matrix.target }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -79,7 +79,7 @@ jobs:
           & "$PWD\packages\sidecar\build\codesign\sign_windows.ps1" -RuntimeRoot "dist/python-runtime/${{ matrix.target }}"
 
       - name: Upload signed artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: steerable-sidecar-${{ matrix.target }}-signed
           path: dist/python-runtime/${{ matrix.target }}

@@ -22,8 +22,8 @@ jobs:
             target: win32-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Build sidecar bundle
@@ -40,7 +40,7 @@ jobs:
       - name: Report bundle size
         run: |
           python -c "import json,pathlib; m=json.loads(pathlib.Path('packages/sidecar/dist/python-runtime/${{ matrix.target }}/manifest.json').read_text()); mb=m['totalBytes']/1024/1024; print(f'::notice title=Sidecar bundle size::${{ matrix.target }}: {mb:.1f} MB')"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: steerable-sidecar-${{ matrix.target }}
           path: packages/sidecar/dist/python-runtime/${{ matrix.target }}
