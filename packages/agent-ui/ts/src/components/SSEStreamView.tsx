@@ -99,10 +99,13 @@ export function SSEStreamView(props: SSEStreamViewProps) {
       ref={containerRef}
       className={cn(
         'h-full overflow-y-auto rounded-agent-md border border-agent-border bg-agent-canvas font-mono text-[11px] leading-relaxed',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-agent-accent',
         className,
       )}
       role="log"
       aria-live="polite"
+      aria-label="SSE event log"
+      tabIndex={0}
     >
       {visible.length === 0 ? (
         <div className="flex h-full items-center justify-center text-agent-muted-foreground">

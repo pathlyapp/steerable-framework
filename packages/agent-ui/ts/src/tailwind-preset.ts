@@ -67,6 +67,10 @@ const preset = {
     },
   },
   // Default token values; consumers can override in their own CSS.
+  // The defaults below satisfy WCAG 2 AA color-contrast (≥ 4.5:1 for normal
+  // text) against `--agent-canvas` (light) and `--agent-muted`. Override at
+  // your own risk — the framework's Storybook a11y suite will start failing
+  // if a regression is introduced.
   plugins: [
     function injectDefaultTokens(api: { addBase: (rules: Record<string, unknown>) => void }) {
       api.addBase({
@@ -74,28 +78,28 @@ const preset = {
           '--agent-canvas': '0 0% 100%',
           '--agent-foreground': '240 10% 3.9%',
           '--agent-muted': '240 4.8% 95.9%',
-          '--agent-muted-foreground': '240 3.8% 46.1%',
+          '--agent-muted-foreground': '240 5% 32%',
           '--agent-border': '240 5.9% 90%',
-          '--agent-accent': '217 91% 60%',
+          '--agent-accent': '217 91% 42%',
           '--agent-accent-foreground': '0 0% 100%',
-          '--agent-destructive': '0 84% 60%',
-          '--agent-tool-read': '142 71% 45%',
-          '--agent-tool-write': '38 92% 50%',
-          '--agent-tool-destructive': '0 84% 60%',
+          '--agent-destructive': '0 75% 42%',
+          '--agent-tool-read': '142 71% 22%',
+          '--agent-tool-write': '28 90% 28%',
+          '--agent-tool-destructive': '0 75% 42%',
           '--agent-radius': '0.75rem',
         },
         '.dark': {
           '--agent-canvas': '240 10% 3.9%',
           '--agent-foreground': '0 0% 98%',
           '--agent-muted': '240 3.7% 15.9%',
-          '--agent-muted-foreground': '240 5% 64.9%',
+          '--agent-muted-foreground': '240 5% 75%',
           '--agent-border': '240 3.7% 15.9%',
-          '--agent-accent': '217 91% 60%',
-          '--agent-accent-foreground': '0 0% 100%',
-          '--agent-destructive': '0 62.8% 30.6%',
-          '--agent-tool-read': '142 71% 45%',
-          '--agent-tool-write': '38 92% 50%',
-          '--agent-tool-destructive': '0 62.8% 30.6%',
+          '--agent-accent': '217 91% 65%',
+          '--agent-accent-foreground': '240 10% 3.9%',
+          '--agent-destructive': '0 75% 60%',
+          '--agent-tool-read': '142 71% 60%',
+          '--agent-tool-write': '38 92% 60%',
+          '--agent-tool-destructive': '0 75% 60%',
         },
       });
     },

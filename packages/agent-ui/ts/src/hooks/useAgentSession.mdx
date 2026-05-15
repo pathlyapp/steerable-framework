@@ -1,0 +1,115 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Hooks/useAgentSession" />
+
+# `useAgentSession`
+
+> Light-weight wrapper around the agent-session lifecycle. Wraps `create` / `resume` / `list` against any storage adapter and gives you a stable `current` + `sessions` view.
+
+In most production setups, sessions are created lazily on the first user message — but the desktop and web shells still need a deterministic handle to fetch a session, resume an existing one, or render a "your active sessions" picker. `useAgentSession` exposes that surface in a transport-agnostic shape that maps 1:1 onto the framework's storage adapters (`InMemoryStorage`, `SqlAlchemyStorage`).
+
+## Signature
+
+```ts
+import { useAgentSession } from '@steerable/agent-ui';
+
+const {
+  sessions,    // AgentSession[]  — active sessions for the current filter
+  current,     // AgentSession | null
+  isLoading,
+  error,
+  create,      // (input) => Promise<AgentSession>
+  resume,      // (sessionId) => Promise<AgentSession>
+  refresh,     // () => Promise<void>
+  setCurrent,  // (session) => void
+} = useAgentSession({
+  transport,   // AgentSessionTransport (required)
+  autoLoad,    // { userId?, chatId?, activeOnly? } (optional)
+});
+```
+
+## The transport
+
+```ts
+interface AgentSessionTransport {
+  create: (input: {
+    chatId: string;
+    userId: string;
+    projectId?: string | null;
+    scenario?: string;
+    stageData?: Record<string, unknown> | null;
+  }) => Promise<AgentSession>;
+  resume: (sessionId: string) => Promise<AgentSession>;
+  list: (filter: {
+    userId?: string;
+    chatId?: string;
+    activeOnly?: boolean;
+  }) => Promise<AgentSession[]>;
+}
+```
+
+You can plug in:
+
+* a thin REST client (`fetch('/api/sessions/...')`),
+* an IPC bridge (`window.electron.session.list(...)`),
+* a sidecar JSON-RPC client (`sidecar.call('session.list', filter)`),
+* an in-memory mock for Storybook / tests.
+
+## Stability contract
+
+Two subtle but important behaviours:
+
+1. **`autoLoad` may be a fresh object every render.** The hook keys the `list` effect on the **values** in `autoLoad` (`userId` / `chatId` / `activeOnly`), not the object identity. Inline literals like `{ userId, activeOnly: true }` are safe.
+2. **`transport` is held by ref.** Swapping the transport implementation mid-session does **not** trigger a refetch. If you want one, call `refresh()` explicitly. This avoids surprise refetches when the parent re-renders and creates a new transport closure.
+
+## Example — REST-backed session picker
+
+```tsx
+import { useAgentSession } from '@steerable/agent-ui';
+
+function SessionPicker({ userId }: { userId: string }) {
+  const { sessions, current, isLoading, resume, setCurrent } = useAgentSession({
+    transport: {
+      create: (input) =>
+        fetch('/api/sessions', { method: 'POST', body: JSON.stringify(input) })
+          .then((r) => r.json()),
+      resume: (sessionId) =>
+        fetch(`/api/sessions/${sessionId}`).then((r) => r.json()),
+      list: (filter) => {
+        const qs = new URLSearchParams();
+        if (filter.userId) qs.set('userId', filter.userId);
+        if (filter.chatId) qs.set('chatId', filter.chatId);
+        if (filter.activeOnly) qs.set('activeOnly', 'true');
+        return fetch(`/api/sessions?${qs}`).then((r) => r.json());
+      },
+    },
+    autoLoad: { userId, activeOnly: true },
+  });
+
+  if (isLoading && sessions.length === 0) return <p>Loading sessions…</p>;
+
+  return (
+    <ul>
+      {sessions.map((s) => (
+        <li key={s.sessionId} aria-current={current?.sessionId === s.sessionId}>
+          <button
+            type="button"
+            onClick={async () => {
+              const fresh = await resume(s.sessionId);
+              setCurrent(fresh);
+            }}
+          >
+            {s.sessionId} — {s.scenario}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+## Caveats
+
+* `current` is **the session created or resumed via this hook**, not whatever your global app state thinks is current. Mirror it into your store with `setCurrent` if you need cross-component access.
+* Errors from `create` are re-thrown after being captured into `error` state, so you can `await create(...)` in a try/catch **and** still render a banner from `error`.
+* `refresh` is a no-op when `autoLoad` is undefined. Pass an explicit filter to enable polling-style refetches.

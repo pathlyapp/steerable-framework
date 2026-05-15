@@ -1,0 +1,71 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Introduction" />
+
+# @steerable/agent-ui
+
+> Headless React building blocks for Steerable agent UIs — chat shells, tool-call cards, orchestration plans, raw SSE inspectors, plus the hooks that wire them to any transport.
+
+This package ships the visual surface area you need to drop a Steerable agent into a React app, plus the lifecycle hooks that own message state and tool-call status. Components are intentionally **headless**: they render through Tailwind utility classes built on a small set of `--agent-*` design tokens, so consuming apps can theme them, replace any subtree, or compose them into bespoke layouts without forking.
+
+## What's in this Storybook
+
+* **Components** — visual primitives:
+  * [`ChatPanel`](?path=/docs/components-chatpanel--docs) — the foundational chat shell (`MessageList` + composer + stop button).
+  * [`MessageList`](?path=/docs/components-messagelist--docs) — auto-scrolling list with a render-prop bubble.
+  * [`OrchestrationPlanCard`](?path=/docs/components-orchestrationplancard--docs) — multi-step plan with per-step status.
+  * [`ToolCallRenderer`](?path=/docs/components-toolcallrenderer--docs) — tool-call card with mode badges, approval, expandable args/result.
+  * [`SSEStreamView`](?path=/docs/components-ssestreamview--docs) — append-only SSE event log, useful in trace tabs and dev consoles.
+* **Hooks** — transport-agnostic state:
+  * [`useChatStream`](?path=/docs/hooks-usechatstream--docs) — owns message state and translates `SSEEvent` into `ChatMessage` mutations.
+  * [`useToolCallStatus`](?path=/docs/hooks-usetoolcallstatus--docs) — derives status + mode + approval requirements for a single tool call.
+  * [`useAgentSession`](?path=/docs/hooks-useagentsession--docs) — wraps create / resume / list against any session storage adapter.
+
+## Installation (consuming app)
+
+```bash
+pnpm add @steerable/agent-ui @steerable/agent-protocol react react-dom
+```
+
+If you use Tailwind v3, register the preset:
+
+```ts
+// tailwind.config.ts
+import preset from '@steerable/agent-ui/tailwind-preset';
+export default {
+  presets: [preset],
+  content: [
+    './src/**/*.{ts,tsx}',
+    './node_modules/@steerable/agent-ui/dist/**/*.{js,mjs}',
+  ],
+};
+```
+
+For Tailwind v4 callers, mirror the design tokens with `@theme` (see `apps/web/src/app/globals.css` in `deeppath` for an in-tree example, and `packages/agent-ui/ts/.storybook/preview.css` here for a minimal copy you can paste).
+
+## Design philosophy
+
+1. **Headless first.** Every component takes a render prop or accepts `children` for the parts a real app wants to customise (markdown rendering, mention chips, search-source pills, …). Defaults are dumb on purpose so you don't end up forking the whole component to swap one row.
+2. **One token vocabulary.** All colors, radii, and animations come from `--agent-*` variables. Themes ship as CSS overrides, never as React props.
+3. **Transport-agnostic hooks.** `useChatStream` and friends never speak HTTP or know which provider serves the events — they call into a transport you pass in. This is what lets `deeppath/apps/web` and `deeppath-agent` share the same chat surface while one talks to FastAPI/SSE and the other talks to the embedded sidecar over IPC.
+4. **Mirror the framework spec.** `ChatMessage`, `ToolCall`, `ToolResult`, `SSEEvent`, `AgentSession` are imported from `@steerable/agent-protocol`, which is generated from the JSON schemas in `spec/`. The TS and Py worlds stay lock-step.
+
+## Working with this Storybook locally
+
+```bash
+cd packages/agent-ui/ts
+pnpm storybook        # http://localhost:6006
+pnpm storybook:build  # static bundle in storybook-static/
+```
+
+To regenerate visual snapshots (Phase 6, Playwright VRT):
+
+```bash
+pnpm storybook:vrt --update-snapshots
+```
+
+To run the headless mount + a11y test suite:
+
+```bash
+pnpm storybook:test   # expects pnpm storybook to be running on :6006
+```

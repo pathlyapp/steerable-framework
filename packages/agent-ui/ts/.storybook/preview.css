@@ -1,0 +1,64 @@
+/*
+ * Tailwind v4 entry for Storybook only. We let the @tailwindcss/vite plugin
+ * scan all source + story files and emit utility classes that the components
+ * reference via `cn()`. This file is imported once from preview.ts so every
+ * story gets the same atomic stylesheet.
+ *
+ * The token values mirror `src/tailwind-preset.ts` (which targets Tailwind v3
+ * consumers). Keep the two in sync — when you add a new token to the preset,
+ * mirror it here so Storybook keeps rendering correctly.
+ */
+@import "tailwindcss";
+
+@source "../src/**/*.{ts,tsx}";
+@source "./**/*.{ts,tsx,mdx}";
+
+/* Tailwind v4 design tokens — register `bg-agent-canvas`, `text-agent-foreground`, …
+ *
+ * Token defaults satisfy WCAG 2 AA color-contrast (≥ 4.5:1 normal, ≥ 3:1 large)
+ * against `--color-agent-canvas` and `--color-agent-muted`. If you override any
+ * of them in your own consumer app, re-verify contrast or your stories' axe
+ * checks will start failing. */
+@theme {
+  --color-agent-canvas: hsl(0 0% 100%);
+  --color-agent-foreground: hsl(240 10% 3.9%);
+  --color-agent-muted: hsl(240 4.8% 95.9%);
+  --color-agent-muted-foreground: hsl(240 5% 32%);
+  --color-agent-border: hsl(240 5.9% 90%);
+  --color-agent-accent: hsl(217 91% 42%);
+  --color-agent-accent-foreground: hsl(0 0% 100%);
+  --color-agent-destructive: hsl(0 75% 42%);
+  --color-agent-tool-read: hsl(142 71% 22%);
+  --color-agent-tool-write: hsl(28 90% 28%);
+  --color-agent-tool-destructive: hsl(0 75% 42%);
+
+  --radius-agent-sm: calc(0.75rem - 4px);
+  --radius-agent-md: calc(0.75rem - 2px);
+  --radius-agent-lg: 0.75rem;
+
+  --animate-agent-cursor-blink: agent-cursor-blink 1s steps(1) infinite;
+  --animate-agent-shimmer: agent-shimmer 2s linear infinite;
+}
+
+@keyframes agent-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes agent-shimmer {
+  0%   { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+/* Story canvas defaults — keep visuals readable in both light and dark backgrounds. */
+:root {
+  color-scheme: light;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #18181b;
+}

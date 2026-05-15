@@ -6,11 +6,13 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "packages/agent-ui/ts/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "packages/agent-ui/ts/**"
       - ".github/workflows/docs.yml"
 
 permissions:
@@ -27,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # --- mkdocs site (Python) -------------------------------------------------
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -34,6 +38,26 @@ jobs:
           cache-dependency-path: docs/requirements.txt
       - run: pip install -r docs/requirements.txt
       - run: mkdocs build --strict --site-dir _site
+
+      # --- Storybook (Node) ----------------------------------------------------
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Storybook is generated *into* the mkdocs site so a single Pages
+      # deployment serves both `/` (docs) and `/storybook/` (UI).
+      - name: Build Storybook
+        env:
+          STORYBOOK_DISABLE_TELEMETRY: "1"
+          CI: "1"
+        run: pnpm --filter @steerable/agent-ui storybook:build
+      - name: Embed Storybook into mkdocs site
+        run: |
+          mkdir -p _site/storybook
+          cp -R packages/agent-ui/ts/storybook-static/. _site/storybook/
+
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:

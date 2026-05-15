@@ -1,0 +1,101 @@
+name: Storybook quality
+
+on:
+  pull_request:
+    paths:
+      - "packages/agent-ui/ts/**"
+      - ".github/workflows/storybook-quality.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/agent-ui/ts/**"
+      - ".github/workflows/storybook-quality.yml"
+
+# Ensures stories stay accessible (axe) and visually stable (Playwright VRT).
+# We deliberately keep this separate from the Pages deploy in `docs.yml` so a
+# regression here blocks the PR without rolling back the public site.
+jobs:
+  a11y:
+    name: a11y (axe via @storybook/test-runner)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (chromium only)
+        run: pnpm --filter @steerable/agent-ui exec playwright install --with-deps chromium
+
+      - name: Build Storybook
+        env:
+          STORYBOOK_DISABLE_TELEMETRY: "1"
+          CI: "1"
+        run: pnpm --filter @steerable/agent-ui storybook:build
+
+      - name: Serve Storybook + run axe
+        working-directory: packages/agent-ui/ts
+        env:
+          CI: "1"
+        run: |
+          python3 -m http.server 6006 --bind 127.0.0.1 --directory storybook-static &
+          SERVER_PID=$!
+          # Wait until the index is reachable (10s ceiling).
+          for i in {1..20}; do
+            if curl -sf http://127.0.0.1:6006/index.json >/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          set +e
+          pnpm storybook:test
+          STATUS=$?
+          kill -9 $SERVER_PID 2>/dev/null || true
+          exit $STATUS
+
+  vrt:
+    # VRT snapshots are platform-sensitive (font hinting / antialiasing). We
+    # lock the runner to ubuntu-22.04 and expect committed Linux baselines under
+    # `tests/visual/__screenshots__/*-chromium-desktop-linux.png`. Generate them
+    # locally with `scripts/generate-vrt-baselines-linux.sh` (uses the official
+    # Playwright Docker image so darwin/Windows contributors can produce them).
+    #
+    # The job is currently `continue-on-error: true` so the very first
+    # contributor PR doesn't fail before any Linux baseline is committed.
+    # Once `tests/visual/__screenshots__/*-linux.png` exists, flip this to
+    # `false` to make the gate enforcing.
+    name: visual regression (Playwright)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (chromium only)
+        run: pnpm --filter @steerable/agent-ui exec playwright install --with-deps chromium
+
+      - name: Build Storybook
+        env:
+          STORYBOOK_DISABLE_TELEMETRY: "1"
+          CI: "1"
+        run: pnpm --filter @steerable/agent-ui storybook:build
+
+      - name: Run visual regression
+        working-directory: packages/agent-ui/ts
+        run: pnpm storybook:vrt
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: packages/agent-ui/ts/playwright-report/
+          retention-days: 7

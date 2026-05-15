@@ -1,0 +1,129 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Hooks/useChatStream" />
+
+# `useChatStream`
+
+> Owns the in-flight chat lifecycle. Translates an `SSEEvent` stream into `ChatMessage[]` mutations, exposes a `sendUserMessage` / `cancel` API, and stays unaware of HTTP / IPC / sidecar.
+
+## When to use
+
+Reach for `useChatStream` when you need to hold the message list **and** drive a streaming reply. If you just need to render messages owned somewhere else, drop `<MessageList>` directly and skip the hook.
+
+The hook does:
+
+* Append the user message + a placeholder assistant message on `sendUserMessage`.
+* Append `content` deltas onto the latest assistant turn.
+* Attach `tool_call` / `tool_result` events inline on the assistant message.
+* Surface `error` and `budget_exhausted` as the assistant content (so the UI shows the failure inline rather than crashing).
+* Forward every other event type (`agent`, `orchestration`, `loader-hint`, `keepalive`, …) to `onUnknownEvent` so callers can stash them into their own state.
+
+It does **not**:
+
+* Speak HTTP. You give it a `transport.stream()` function and it consumes whatever events you yield.
+* Persist messages. `initialMessages` seeds the buffer; `setMessages` replaces it. Persistence is the caller's job.
+* Know which provider you use. The framework spec defines the `SSEEvent` envelope — pick whichever LLM/agent backend you want as long as it speaks that envelope.
+
+## Signature
+
+```ts
+import { useChatStream } from '@steerable/agent-ui';
+
+const {
+  messages,            // ChatMessage[]
+  isStreaming,         // boolean
+  sendUserMessage,     // ({ content }) => Promise<void>
+  cancel,              // () => void
+  setMessages,         // (messages) => void
+  appendMessage,       // (message) => void
+} = useChatStream({
+  transport,           // ChatStreamTransport (required)
+  initialMessages,     // ChatMessage[] (optional)
+  toolResultToMessage, // (result) => ChatMessage | null (optional)
+  onUnknownEvent,      // (event) => void (optional)
+});
+```
+
+## Minimal example — fetch-based SSE transport
+
+```tsx
+import { ChatPanel, useChatStream } from '@steerable/agent-ui';
+import type { SSEEvent } from '@steerable/agent-protocol';
+
+function Chat({ chatId }: { chatId: string }) {
+  const { messages, isStreaming, sendUserMessage, cancel } = useChatStream({
+    transport: {
+      stream: async ({ content }, onEvent) => {
+        const ctrl = new AbortController();
+        const res = await fetch(`/api/chats/${chatId}/send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+          signal: ctrl.signal,
+        });
+        if (!res.body) throw new Error('no SSE body');
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          for (const chunk of buffer.split('\n\n')) {
+            if (!chunk.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(chunk.slice('data: '.length)) as SSEEvent;
+              onEvent(event);
+            } catch {
+              // ignore partial / heartbeat lines
+            }
+          }
+          buffer = '';
+        }
+        return () => ctrl.abort();
+      },
+    },
+  });
+
+  return (
+    <ChatPanel
+      messages={messages}
+      isStreaming={isStreaming}
+      onSubmit={sendUserMessage}
+      onCancel={cancel}
+    />
+  );
+}
+```
+
+## Custom event handling
+
+The default routing covers `content` / `tool_call` / `tool_result` / `done` / `error` / `budget_exhausted`. Everything else is forwarded to `onUnknownEvent`. Stash those in your own state for things like loader hints, agent-switch banners, or orchestration plan updates:
+
+```tsx
+const [hint, setHint] = useState<string | null>(null);
+const [plan, setPlan] = useState<OrchestrationStep[]>([]);
+
+const { ... } = useChatStream({
+  transport,
+  onUnknownEvent: (event) => {
+    if (event.type === 'loader-hint') setHint(event.hint ?? null);
+    if (event.type === 'orchestration') setPlan(parsePlan(event));
+  },
+});
+```
+
+## Cancellation
+
+`transport.stream` may return a `() => void` cancel handle. The hook stores it and calls it when:
+
+* the consumer calls `cancel()` (e.g. user taps "Stop"),
+* the component unmounts mid-stream.
+
+If your transport can't cancel, return `void` — the hook will simply mark `isStreaming` as `false` when the promise settles.
+
+## Caveats
+
+* `sendUserMessage` is a no-op while `isStreaming` is true. Wire your composer's send button to `disabled={isStreaming}` to mirror this in the UI.
+* Tool results are attached to the **latest assistant message**. If you need per-call lookup, override `renderToolCall` on `ChatPanel` and pull the result from your own map.
+* Setting `toolResultToMessage` to a non-null returner switches to a "tool result lives in its own message" model — useful if you want to render tool results as standalone bubbles. Otherwise the result rides inline on the assistant turn.

@@ -1,0 +1,102 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Hooks/useToolCallStatus" />
+
+# `useToolCallStatus`
+
+> Derives the rendering state for a single tool call — `status` (pending/running/done/error), `mode` (read/safe_write/destructive/local/…), and whether the UI must prompt for approval.
+
+`<ToolCallRenderer>` uses this hook internally. You only need to call it directly if you're building a **custom** tool-call surface (a sidebar timeline, an audit log, a compact pill inside a markdown body, etc.) and want to share the framework's classification logic.
+
+## Signature
+
+```ts
+import { useToolCallStatus, type ToolCallMode } from '@steerable/agent-ui';
+
+const { status, mode, requiresApproval, isDestructive } = useToolCallStatus({
+  call,            // ToolCall (required)
+  result,          // ToolResult (optional; absence ⇒ pending/running)
+  mode,            // ToolCallMode (optional; auto-inferred from name)
+  runningHint,     // boolean (optional; flips pending → running)
+});
+```
+
+## Mode inference
+
+When `mode` is omitted, the hook classifies the tool by **name pattern**, mirroring the framework's harness `decide_tool_mode`:
+
+| Pattern | Inferred mode |
+|---|---|
+| `get_*` `list_*` `read_*` `search_*` | `read` |
+| `local_*` `shell_*` `exec_*` | `local` |
+| `delete_*` `remove_*` `archive_*` `purge_*` `drop_*` | `destructive` |
+| `create_*` `update_*` `add_*` `set_*` | `safe_write` |
+| anything else | `unknown` |
+
+In production the runtime ships a pre-classified mode alongside the call, so most consumers should pass `mode` explicitly to avoid drift between client and server. The hook's inference exists as a sane default for prototypes and hand-written demos.
+
+## Status state machine
+
+```
+            ┌──────────────────┐
+            │     pending      │
+            │ (no result yet)  │
+            └────────┬─────────┘
+                     │  runningHint
+                     ▼
+            ┌──────────────────┐
+            │     running      │
+            │ (sidecar emits   │
+            │  tool.running)   │
+            └────────┬─────────┘
+                     │  result attached
+        ┌────────────┴────────────┐
+        ▼                         ▼
+┌──────────────┐          ┌──────────────┐
+│     done     │          │    error     │
+│ success=true │          │ success=false│
+└──────────────┘          └──────────────┘
+```
+
+`runningHint` exists because not every transport emits a separate "running" notification. If you only have `pending` → `done`/`error`, leave it `false` and let the UI flip directly.
+
+## Example — compact tool pill
+
+```tsx
+import { useToolCallStatus } from '@steerable/agent-ui';
+import type { ToolCall, ToolResult } from '@steerable/agent-protocol';
+
+function ToolPill({ call, result }: { call: ToolCall; result?: ToolResult }) {
+  const { status, mode, isDestructive } = useToolCallStatus({ call, result });
+  return (
+    <span
+      data-status={status}
+      data-mode={mode}
+      className={
+        'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ' +
+        (isDestructive ? 'border-agent-destructive/40 text-agent-destructive' : 'border-agent-border')
+      }
+    >
+      <span
+        className={
+          'h-1.5 w-1.5 rounded-full ' +
+          (status === 'done' ? 'bg-agent-tool-read'
+           : status === 'error' ? 'bg-agent-destructive'
+           : 'bg-agent-muted-foreground animate-pulse')
+        }
+      />
+      <span className="font-mono">{call.name}</span>
+      <span className="uppercase tracking-wide text-agent-muted-foreground">{mode}</span>
+    </span>
+  );
+}
+```
+
+## Approval contract
+
+When `mode === 'local'`, `requiresApproval` is `true`. The convention is:
+
+* If the parent component supplies `onApprove` / `onReject`, render approval buttons.
+* If neither is supplied, the call should remain in `pending` and **not** be auto-executed — the user must approve via some other mechanism (a system-level prompt, a settings toggle, …).
+
+`<ToolCallRenderer>` already implements this; the hook just exposes the `requiresApproval` boolean for callers who want to enforce it themselves.

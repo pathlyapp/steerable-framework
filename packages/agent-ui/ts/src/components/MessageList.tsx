@@ -113,10 +113,13 @@ export function MessageList(props: MessageListProps) {
       ref={containerRef}
       className={cn(
         'flex h-full w-full flex-col gap-3 overflow-y-auto bg-agent-canvas px-4 py-3',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-agent-accent',
         className,
       )}
       role="log"
       aria-live="polite"
+      aria-label="Conversation"
+      tabIndex={0}
     >
       {header}
       {messages.length === 0 ? (

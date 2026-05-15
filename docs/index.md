@@ -86,6 +86,14 @@ codegen or is rejected by drift checks before it ships.
 
 → [**Getting Started**](getting-started.md)
 
+## UI Storybook
+
+The full `@steerable/agent-ui` component library — every variant, every state, with copy-paste hook examples — is published as a live Storybook alongside this site:
+
+→ <a href="storybook/index.html" target="_blank"><strong>Browse the Storybook</strong></a>
+
+The Storybook ships an a11y panel (axe-core) and includes per-story snapshots; pull-requests that regress visual or accessibility quality are blocked by the CI gates in `.github/workflows/storybook-quality.yml`.
+
 ## Specs
 
 - [Spec Overview](spec/overview.md)
