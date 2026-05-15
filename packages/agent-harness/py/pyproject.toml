@@ -4,9 +4,13 @@ version = "0.2.0"
 description = "Steerable harness helpers for Python"
 readme = "README.md"
 requires-python = ">=3.10"
+# Pre-1.0 inter-package pin uses a `>=X,<1.0.0` range so release-please can
+# bump any single Steerable package without breaking installs of the others.
+# Lockstep across protocol↔harness is enforced separately by
+# scripts/check_lockstep_versions.py (CI gate). Tighten to `~=1.0` post-GA.
 dependencies = [
   "pydantic>=2.10.0",
-  "steerable-agent-protocol==0.1.0",
+  "steerable-agent-protocol>=0.1.0,<1.0.0",
 ]
 
 [build-system]

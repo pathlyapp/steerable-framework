@@ -23,6 +23,7 @@ name: Publish to PyPI
 # instead of failing — so the npm publish path still works on its own.
 
 on:
+  # See publish-npm.yml for why `workflow_call` is the canonical trigger.
   release:
     types: [published]
   workflow_dispatch:
@@ -30,6 +31,12 @@ on:
       dry_run:
         description: "Skip the actual upload step (still builds + diffs PyPI)."
         type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        required: false
         default: false
 
 concurrency:

@@ -991,7 +991,7 @@ wheels = [
 
 [[package]]
 name = "steerable-agent-harness"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/agent-harness/py" }
 dependencies = [
     { name = "pydantic" },
@@ -1006,7 +1006,7 @@ requires-dist = [
 
 [[package]]
 name = "steerable-agent-protocol"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/agent-protocol/py" }
 dependencies = [
     { name = "pydantic" },

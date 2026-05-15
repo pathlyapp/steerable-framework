@@ -10,6 +10,11 @@ name: Publish to npm
 #   * a manual version bump landing without going through release-please
 
 on:
+  # `release: published` is kept as a fallback for releases that ARE allowed
+  # to fan out automatically (e.g. created via the GitHub UI). Note that
+  # release-please cuts releases with `GITHUB_TOKEN`, which by design cannot
+  # trigger downstream workflows — so the canonical trigger is the
+  # `workflow_call` from release.yml (see below).
   release:
     types: [published]
   workflow_dispatch:
@@ -17,6 +22,13 @@ on:
       dry_run:
         description: "Skip the actual `npm publish` step (still builds + diffs registry)."
         type: boolean
+        default: false
+  # Chained call from release.yml after release-please cuts tags.
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        required: false
         default: false
 
 # Allow only one publish run per ref at a time so two near-simultaneous merges

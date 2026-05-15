@@ -4,7 +4,12 @@ name: Release
 #   * opens / updates a "release PR" that bumps versions and rewrites
 #     CHANGELOGs, or
 #   * if the previous release PR was just merged, cuts the per-package git
-#     tags + GitHub Releases (which then trigger publish-{npm,pypi}.yml).
+#     tags + GitHub Releases.
+#
+# CRITICAL: a Release created with the workflow's `GITHUB_TOKEN` does NOT
+# trigger downstream `release: published` workflows (GitHub anti-recursion
+# guard). So we explicitly fan out to publish-npm.yml and publish-pypi.yml
+# as `workflow_call` chained jobs gated on `releases_created`.
 #
 # `workflow_dispatch` is kept so a maintainer can force a re-run without
 # pushing.
@@ -21,8 +26,30 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.rp.outputs.releases_created }}
+      paths_released: ${{ steps.rp.outputs.paths_released }}
     steps:
-      - uses: googleapis/release-please-action@v5
+      - id: rp
+        uses: googleapis/release-please-action@v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  publish-npm:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    uses: ./.github/workflows/publish-npm.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  publish-pypi:
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
+    uses: ./.github/workflows/publish-pypi.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write

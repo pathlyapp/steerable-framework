@@ -4,11 +4,14 @@ version = "0.1.0"
 description = "Steerable agent runtime sidecar — JSON-RPC over stdio."
 readme = "README.md"
 requires-python = ">=3.10"
+# Pre-1.0 inter-package pins use `>=X,<1.0.0` ranges so release-please can
+# bump individual packages without forcing a coordinated re-pin here.
+# See packages/agent-harness/py/pyproject.toml for the rationale.
 dependencies = [
   "pydantic>=2.10.0",
-  "steerable-agent-protocol==0.1.0",
-  "steerable-agent-harness==0.1.0",
-  "steerable-agent-runtime==0.1.0",
+  "steerable-agent-protocol>=0.1.0,<1.0.0",
+  "steerable-agent-harness>=0.1.0,<1.0.0",
+  "steerable-agent-runtime>=0.1.0,<1.0.0",
 ]
 
 [project.scripts]

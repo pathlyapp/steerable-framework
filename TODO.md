@@ -32,9 +32,9 @@ phase closes or a new follow-up surfaces.
 - [x] **p1-spec-runtime** `spec/runtime/{AgentSession,HarnessTrace,TraceSpan,TraceEvent}.schema.json`.
 - [x] **p1-spec-sidecar** `spec/sidecar/{SidecarRequest,SidecarResponse,SidecarError,SidecarNotification,SidecarHealth}.schema.json`
       (JSON-RPC over stdio).
-- [x] **p1-publish-protocol** `@steerable/agent-protocol@0.1.0` (npm) +
-      `steerable-agent-protocol==0.1.0` (PyPI) artefacts built; publishing
-      blocked on credentials (see below).
+- [x] **p1-publish-protocol** `@steerable/agent-protocol@0.2.0` live on
+      npmjs.org with sigstore provenance (May 2026). PyPI publish still
+      pending project name reservation — see "Open follow-ups".
 - [x] **p1-import-three-repos** `deeppath`, `deeppath-api`, `deeppath-agent`
       all importing the protocol types in production code paths.
 
@@ -167,17 +167,41 @@ phase closes or a new follow-up surfaces.
       `publishConfig.access: "public"`, `publishConfig.provenance: true`,
       and standard metadata (`license`, `repository`, `homepage`,
       `keywords`) to `agent-protocol`, `agent-harness`, `agent-ui`.
-- [ ] **Set `NPM_TOKEN` GitHub secret** —
-      `gh secret set NPM_TOKEN --repo pathlyapp/steerable-framework --body "<token>"`.
-      Generate token at <https://www.npmjs.com/settings/~/tokens>:
-      Granular Access Token, Read+Write, scoped to `@steerable`.
+- [x] **Set `NPM_TOKEN` GitHub secret** — done. The granular-access token
+      first attempt failed with `EOTP` (token-level 2FA on); rotated to a
+      classic Automation token (bypasses 2FA per npm spec). Account-level
+      2FA also dropped from "auth + writes" to "auth only" so future
+      granular tokens work too.
+- [x] **First public npm publish landed** — `@steerable/agent-protocol@0.2.0`,
+      `@steerable/agent-harness@0.2.0`, `@steerable/agent-ui@0.2.0` live on
+      npmjs.org with sigstore provenance (`npm audit signatures`).
+      Triggered manually via `gh workflow run publish-npm.yml` because
+      release-please's `GITHUB_TOKEN`-created releases don't fan out
+      `release: published` events. **Fix landed in same commit** (release.yml
+      now chains `publish-{npm,pypi}.yml` via `workflow_call` on the
+      release-please job's `releases_created` output, so the next release
+      publishes itself).
+- [x] **Py inter-package pin lockstep bug** — release-please bumped
+      `protocol`/`harness` to 0.2.0 but the four `pyproject.toml` files
+      still pinned each other at `==0.1.0`, breaking `pip install` of any
+      framework package against the resolved-source siblings (caught by
+      `sidecar-budget` CI). Relaxed all inter-package pins to
+      `>=0.1.0,<1.0.0` (pre-1.0 compatible-release range) — see comment
+      block in `packages/agent-harness/py/pyproject.toml`. Lockstep
+      across `protocol↔harness` is still enforced by
+      `scripts/check_lockstep_versions.py`.
 - [ ] **Reserve PyPI projects** `steerable-agent-protocol`,
       `steerable-agent-harness`, `steerable-agent-runtime`,
-      `steerable-sidecar`.
+      `steerable-sidecar` (block PyPI publish).
 - [ ] **Configure PyPI auth** — Trusted Publishing (recommended; bind
-      to environment `pypi`) **or** `PYPI_API_TOKEN` GitHub secret.
-- [ ] **Cut & publish `0.1.0` on the public registries** (or `0.2.0` if any
-      breaking change shipped between now and the push).
+      to environment `pypi` already created) **or** `PYPI_API_TOKEN`
+      GitHub secret.
+- [ ] **Bump remaining Py packages (`runtime`, `sidecar`) to 0.2.0** so
+      the four-package PyPI publish goes out as a coherent 0.2.0 wave.
+      release-please left them at 0.1.0 because no `feat(runtime):` /
+      `feat(sidecar):` commits landed in this cycle. Either edit
+      `.release-please-manifest.json` directly (fastest) or wait for the
+      next genuine feature commit per package.
 
 ### Public docs site
 
