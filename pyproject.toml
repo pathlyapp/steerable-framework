@@ -23,6 +23,15 @@ dev = [
   "pytest>=8.3.0",
   "pytest-asyncio>=1.3.0",
   "pyyaml>=6.0.2",
+  # Workspace members — declared so `uv sync` installs them as editable
+  # into the dev environment. Without these `uv sync` would leave the
+  # local packages off `sys.path` and `pytest` collection would fail
+  # with `ModuleNotFoundError: No module named 'steerable_*'`.
+  # `[tool.uv.sources]` below maps each name to its workspace path.
+  "steerable-agent-protocol",
+  "steerable-agent-harness",
+  "steerable-agent-runtime",
+  "steerable-sidecar",
 ]
 
 [tool.uv.sources]

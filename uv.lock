@@ -1105,6 +1105,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pyyaml" },
+    { name = "steerable-agent-harness" },
+    { name = "steerable-agent-protocol" },
+    { name = "steerable-agent-runtime" },
+    { name = "steerable-sidecar" },
 ]
 
 [package.metadata]
@@ -1116,6 +1120,10 @@ dev = [
     { name = "pytest", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "steerable-agent-harness", editable = "packages/agent-harness/py" },
+    { name = "steerable-agent-protocol", editable = "packages/agent-protocol/py" },
+    { name = "steerable-agent-runtime", editable = "packages/agent-runtime/py" },
+    { name = "steerable-sidecar", editable = "packages/sidecar/py" },
 ]
 
 [[package]]
