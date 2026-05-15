@@ -37,11 +37,9 @@ Both run in CI on every PR; a hand-edited generated file fails the build.
 
 ## Lock-step versioning
 
-`packages/agent-protocol/ts/package.json` and
-`packages/agent-protocol/py/pyproject.toml` are kept at the **same**
-version by `scripts/check_lockstep_versions.py` (also CI-enforced). The
-release-please pipeline bumps both atomically when a `feat:` or `fix:`
-commit lands that touches `spec/`.
+**All 7 publishable packages** (TS protocol/harness/ui + Py protocol/harness/runtime/sidecar) are kept at the same version by `scripts/check_lockstep_versions.py` (CI-enforced on every tag push). Releases are operator-driven: `./scripts/release/bump_to.sh X.Y.Z` is the only writer of versions, and the lockstep gate in `.github/workflows/release.yml` refuses any tag whose source tree disagrees with the tag.
+
+This is stricter than the original protocol-only lockstep — TS and Py implementations of `agent-protocol` (the codegen pair) plus the four other packages all move together. The cost is a few extra registry versions on no-op packages per release; the benefit is partial-bump corruption is structurally impossible.
 
 ## Forward / backward compatibility rules
 

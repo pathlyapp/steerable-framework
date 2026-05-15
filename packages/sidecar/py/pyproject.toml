@@ -4,8 +4,10 @@ version = "0.2.2"
 description = "Steerable agent runtime sidecar — JSON-RPC over stdio."
 readme = "README.md"
 requires-python = ">=3.10"
-# Pre-1.0 inter-package pins use `>=X,<1.0.0` ranges so release-please can
-# bump individual packages without forcing a coordinated re-pin here.
+# Pre-1.0 inter-package pins use `>=X,<1.0.0` ranges — flexible enough
+# that any 0.x lockstep version installs cleanly. `bump_to.sh` keeps
+# all 7 Steerable packages at the same X.Y.Z, enforced by the
+# release.yml lockstep gate. Tighten to `~=1.0` post-GA.
 # See packages/agent-harness/py/pyproject.toml for the rationale.
 dependencies = [
   "pydantic>=2.10.0",

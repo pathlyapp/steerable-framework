@@ -60,8 +60,8 @@ for d in ts_pkgs:
     data = json.loads(p.read_text())
     old = data["version"]
     data["version"] = version
-    # `json.dumps` with indent=2 + trailing newline mirrors the format
-    # release-please used to write, so diffs stay minimal.
+    # `json.dumps` with indent=2 + trailing newline matches what pnpm /
+    # most npm tooling writes, so commits don't churn whitespace.
     p.write_text(json.dumps(data, indent=2) + "\n")
     print(f"  {data['name']:<32}  {old:<10} -> {version}")
 

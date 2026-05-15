@@ -7,7 +7,7 @@ downstream consumer repos:
 - **[`deeppath-api`](https://github.com/deeppath/deeppath-api)** — FastAPI / uv backend (uses `steerable-agent-{protocol,harness,runtime}`)
 - **[`deeppath-agent`](https://github.com/deeppath/deeppath-agent)** — Electron / pnpm desktop shell with embedded Python sidecar (uses `@steerable/agent-{protocol,harness}` + `steerable-sidecar` runtime)
 
-> Companion document: [`RELEASING.md`](./RELEASING.md) covers the actual `release-please → publish-{npm,pypi}.yml` pipeline. This document is about everything **before** that — local development, integration testing, and CI.
+> Companion document: [`RELEASING.md`](./RELEASING.md) covers the actual `bump_to.sh → tag → publish-{npm,pypi}.yml` pipeline. This document is about everything **before** that — local development, integration testing, and CI.
 
 ---
 
@@ -132,32 +132,43 @@ The same flow works for TS via `use_framework_local.sh` in deeppath / deeppath-a
 
 ### Scenario 3 — Cutting a new framework version
 
-Hands-off after the first push. See [`RELEASING.md`](./RELEASING.md) for the full pipeline; the short version:
+Operator-driven, lockstep, single command. See [`RELEASING.md`](./RELEASING.md) for the full pipeline; the short version:
 
 ```bash
 cd steerable-framework
-git push origin main                   # if your feat: commit isn't already on main
+git switch main && git pull           # clean main, ahead-of-remote = 0
 
-# 1. release.yml runs → release-please opens PR #N
-gh pr list --repo pathlyapp/steerable-framework
+# 1. Bump all 7 packages + workspace root in one shot
+./scripts/release/bump_to.sh 0.3.0    # script refreshes lockfiles + runs lockstep gate
 
-# 2. Merge it (squash, keep title)
-gh pr merge <N> --squash --subject "chore: release main"
+# 2. Review + commit + tag
+git diff
+git add -A && git commit -m "chore(release): v0.3.0"
+git tag v0.3.0
 
-# 3. release.yml re-runs → cuts tags + chains publish-{npm,pypi}.yml automatically
-gh run watch <release-run-id>
+# 3. Push (this is the only step that can't be undone trivially)
+git push origin main v0.3.0
 
-# 4. ~3 minutes later, both registries have the new version
-npm view @steerable/agent-ui version
-curl -s https://pypi.org/pypi/steerable-sidecar/json | jq -r '.info.version'
+# 4. Watch CI: validate (lockstep gate) → publish-npm → publish-pypi
+gh run watch $(gh run list --workflow release.yml --limit 1 --json databaseId -q '.[0].databaseId')
 
-# 5. In each consumer repo, refresh the lock to pick up the new minor
-cd ../deeppath-api    && uv lock --upgrade-package steerable-agent-harness && uv sync
-cd ../deeppath        && pnpm update @steerable/agent-ui
+# 5. Confirm registries (~3 minutes after push)
+npm view @steerable/agent-ui@0.3.0 version
+curl -s https://pypi.org/pypi/steerable-sidecar/0.3.0/json | jq -r '.info.version'
+
+# 6. Bump the three downstream repos' lockfiles
+cd ../deeppath        && pnpm update @steerable/agent-protocol @steerable/agent-ui
 cd ../deeppath-agent  && pnpm update @steerable/agent-harness @steerable/agent-protocol
+cd ../deeppath-api    && uv lock --upgrade-package steerable-agent-protocol \
+                                 --upgrade-package steerable-agent-harness \
+                                 --upgrade-package steerable-agent-runtime \
+                                 --upgrade-package steerable-sidecar \
+                       && uv sync
 ```
 
-(`^0.2.0` style ranges in lockfiles auto-accept new 0.x minors, so `pnpm update` / `uv lock --upgrade-package` is enough — no `package.json` edit needed.)
+(`^0.2.0` / `>=0.2.0,<1.0.0` ranges in lockfiles auto-accept new 0.x minors, so `pnpm update` / `uv lock --upgrade-package` is enough — no `package.json` / `pyproject.toml` edit needed.)
+
+**If the lockstep gate rejects the tag** (it will if `bump_to.sh` was skipped or partially applied — first happened with `v0.2.1`): nothing was published, no GitHub Release was created. Fix locally with `bump_to.sh`, commit, and tag a higher version (e.g. `v0.3.1`). The dead tag is harmless to leave in place as a historical marker.
 
 ---
 
@@ -179,39 +190,36 @@ The `deeppath-api` scripts also have a third mode `./scripts/use_framework_wheel
 ### `steerable-framework` (the producer)
 
 ```
-                                  push to main
-                                       │
-                                       ▼
-            ┌────────────────────────────────────────────────┐
-            │  ci.yml          │  docs.yml       │  storybook │
-            │  (ts/py/sidecar/ │  (mkdocs build  │  -quality  │
-            │   examples/      │   + smoke + GH  │  (a11y +   │
-            │   codegen-idem)  │   Pages deploy) │   VRT)     │
-            └────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-                                  release.yml
-                                       │
-                                       ▼
-                              release-please job
-                                       │
-                          ┌────────────┴────────────┐
-                          │  releases_created       │
-                          ▼                         ▼
-                   publish-npm.yml           publish-pypi.yml
-                   (sigstore provenance)     (PyPI API token)
-                          │                         │
-                          ▼                         ▼
-              @steerable/agent-{protocol,    steerable-{agent-protocol,
-              harness,ui}@x.y.z              agent-harness,agent-runtime,
-                                             sidecar}==x.y.z
+            push to main                       push tag vX.Y.Z
+                  │                                    │
+                  ▼                                    ▼
+   ┌──────────────────────────────┐           ┌────────────────┐
+   │ ci.yml │ docs.yml │ storybook│           │   release.yml  │
+   │ (ts/py │ (mkdocs  │ -quality │           │                │
+   │ /side- │  + smoke │ (a11y +  │           │  validate job: │
+   │ car/   │  + GH    │  VRT)    │           │   1. resolve   │
+   │ examp- │  Pages)  │          │           │      version   │
+   │ les/   │          │          │           │   2. lockstep  │
+   │ codegen│          │          │           │      gate      │
+   │ -idem) │          │          │           │   3. create    │
+   └──────────────────────────────┘           │      Release   │
+                                              └────────┬───────┘
+                                                       │
+                                          ┌────────────┴────────────┐
+                                          ▼                         ▼
+                                   publish-npm.yml           publish-pypi.yml
+                                   (sigstore provenance)     (PyPI API token)
+                                          │                         │
+                                          ▼                         ▼
+                              @steerable/agent-{protocol,    steerable-{agent-protocol,
+                              harness,ui}@x.y.z              agent-harness,agent-runtime,
+                                                             sidecar}==x.y.z
 ```
 
 Triggers:
-- `push: main` → ci, docs, storybook-quality, release
-- `release: published` → publish-npm + publish-pypi (fallback path; main path is the chained jobs from release.yml)
-- `workflow_dispatch` → manual override on each
-- Tag `v*` → no-op currently (release-please handles tagging itself)
+- `push: main` → ci, docs, storybook-quality
+- `push: tags ['v*']` → release.yml (which chains publish-{npm,pypi}.yml via `workflow_call`)
+- `workflow_dispatch` → manual override on every workflow (release.yml takes a `version:` input for re-runs against an existing tag)
 
 ### `deeppath` (consumer)
 
@@ -256,9 +264,13 @@ Run `pnpm build` once inside `../steerable-framework/packages/agent-ui/ts/` so `
 
 Your `pyproject.toml` has a `[tool.uv.sources]` override pointing at a sibling repo that's not there (e.g. you ran `use_framework_source.sh` then deleted `../steerable-framework`). Fix: `./scripts/use_framework_pypi.sh`.
 
-### "release-please opened a PR but merging it would break CI"
+### "I tagged `v0.3.0` but `release.yml` failed at the lockstep gate"
 
-Known issue, tracked under `TODO.md → release-please ↔ lockstep validator`. A fix-only commit (Py-only, say) bumps `agent-harness/py` but not `agent-harness/ts`, which trips `scripts/check_lockstep_versions.py`. Workaround: close the PR; let the next genuine `feat:` commit (which touches both ts and py) drive the next coherent release.
+You forgot to run `./scripts/release/bump_to.sh 0.3.0` first, or only some packages got bumped. The gate refuses to publish unless **all 7 publishable packages** report exactly the tag version. Fix: `bump_to.sh 0.3.0` properly, commit, then either:
+- re-tag the same version: `git tag -d v0.3.0 && git push --delete origin v0.3.0 && git tag v0.3.0 && git push origin main v0.3.0`, or
+- bump to the next version (`v0.3.1`) and leave the dead tag in place.
+
+Nothing was published from the failed tag (no GitHub Release was created either) — the gate runs **before** the release-creation step.
 
 ### "npm publish fails with `EOTP`"
 
@@ -299,5 +311,5 @@ Tracked in [`TODO.md`](./TODO.md):
 - Cross-platform sidecar build matrix (currently desktop release builds are local-only)
 - `build_sidecar.py` should support pip-installing `steerable-*` from PyPI directly, removing the last "needs sibling checkout" step in `deeppath-agent`
 - Migrate PyPI auth to Trusted Publishing
-- Reconcile release-please component bumps with the ts↔py lockstep validator
+- ~~Reconcile release-please component bumps with the ts↔py lockstep validator~~ (done — release-please replaced with tag-driven lockstep flow, May 2026)
 - `deeppath-api/Dockerfile` should `COPY uv.lock` and use `uv sync --frozen` for full lock-fidelity in production images
