@@ -59,60 +59,57 @@ jobs:
           cp -R packages/agent-ui/ts/storybook-static/. _site/storybook/
 
       # D4 (docs render smoke test): mkdocs build --strict already passes when
-      # markdown is *parseable*, but historically that wasn't enough — pinning
+      # markdown is *parseable*, but that is not enough. Pinning
       # `pymdown-extensions==10.12` produced fully-built HTML where every
       # fenced code block was rendered as a literal `<p>` containing the
-      # backticks (commit 91fb79d). This step grep-asserts the rendered HTML
+      # backticks (commit 91fb79d). The probes below grep the rendered HTML
       # for known signal patterns so the same class of "build green, output
       # broken" regression fails fast in CI.
-      - name: smoke-test rendered HTML
+      #
+      # Each probe is its own `run:` step so:
+      #   1. The failing step name in the GitHub UI tells you exactly which
+      #      invariant broke.
+      #   2. Each script body is small enough that a stray bash quote / paren
+      #      in an error message can't take down the whole gate (which bit us
+      #      once with a one-shot multi-probe script).
+      - name: D4 probe 1 — no literal triple-backtick leaked into a <p>
         run: |
-          set -euo pipefail
-          fail=0
-
-          echo "== probe 1: no literal '```' leaked into <p> tags =="
-          # Match  <p>``` or <p>`` (in case some renderer escaped one tick).
-          if grep -RElh '<p>```' _site --include='*.html' | head -3 ; then
-            echo "::error::Literal triple-backtick fence leaked into a <p> — fenced-code parsing is broken."
-            grep -REn '<p>```' _site --include='*.html' | head -10
-            fail=1
-          fi
-
-          echo "== probe 2: home page tier diagram is a Mermaid SVG =="
-          if ! grep -q '<pre class="mermaid"><code>graph BT' _site/index.html ; then
-            echo "::error::Home page Tier 1→4 diagram is no longer a Mermaid pre.mermaid block."
-            fail=1
-          fi
-
-          echo "== probe 3: sidecar boot sequence is a Mermaid sequenceDiagram =="
-          if ! grep -q '<pre class="mermaid"><code>sequenceDiagram' _site/spec/sidecar/index.html ; then
-            echo "::error::Sidecar boot sequence is no longer a Mermaid sequenceDiagram block."
-            fail=1
-          fi
-
-          echo "== probe 4: sidecar JSON examples have syntax-highlighted fenced blocks =="
-          highlight_blocks=$(grep -c '<div class="highlight">' _site/spec/sidecar/index.html || echo 0)
-          if [ "${highlight_blocks}" -lt 5 ] ; then
-            echo "::error::Sidecar page has only ${highlight_blocks} highlighted code blocks (expected ≥5)."
-            fail=1
-          fi
-
-          echo "== probe 5: ui index page bash block is a fenced code block =="
-          if ! grep -q '<h2 id="working-on-it-locally">' _site/ui/index.html ; then
-            echo "::warning::ui/index.html missing the 'Working on it locally' heading; skipping fence check."
-          else
-            # The next sibling after the <h2> must be a <div class="highlight">,
-            # not a <p>``` (which is the buggy unparsed form).
-            if ! grep -A1 '<h2 id="working-on-it-locally">' _site/ui/index.html | grep -q '<div class="highlight">' ; then
-              echo "::error::ui/index.html 'Working on it locally' bash block is not rendered as a fenced highlight div."
-              fail=1
-            fi
-          fi
-
-          if [ "${fail}" -ne 0 ] ; then
+          if grep -RE '<p>```' _site --include='*.html' >/tmp/probe1.txt ; then
+            echo "::error::Fenced-code parsing is broken: triple-backtick fence leaked into a paragraph tag."
+            cat /tmp/probe1.txt | head -10
             exit 1
           fi
-          echo "All docs render smoke probes passed."
+      - name: D4 probe 2 — home page Tier diagram is a Mermaid graph BT block
+        run: |
+          if ! grep -q '<pre class="mermaid"><code>graph BT' _site/index.html ; then
+            echo "::error::Home page Tier diagram is no longer a Mermaid pre.mermaid block."
+            exit 1
+          fi
+      - name: D4 probe 3 — sidecar boot sequence is a Mermaid sequenceDiagram
+        run: |
+          if ! grep -q '<pre class="mermaid"><code>sequenceDiagram' _site/spec/sidecar/index.html ; then
+            echo "::error::Sidecar boot sequence is no longer a Mermaid sequenceDiagram block."
+            exit 1
+          fi
+      - name: D4 probe 4 — sidecar page has at least 5 highlighted code blocks
+        run: |
+          n=$(grep -c '<div class="highlight">' _site/spec/sidecar/index.html || true)
+          : "${n:=0}"
+          echo "found $n highlight blocks, minimum required is 5"
+          if [ "$n" -lt 5 ]; then
+            echo "::error::Sidecar page has fewer than 5 highlight blocks - JSON fences are not rendering."
+            exit 1
+          fi
+      - name: D4 probe 5 — UI index 'Working on it locally' bash block is fenced
+        run: |
+          if ! grep -q '<h2 id="working-on-it-locally">' _site/ui/index.html ; then
+            echo "::warning::ui/index.html is missing the heading; skipping fence check."
+            exit 0
+          fi
+          if ! grep -A1 '<h2 id="working-on-it-locally">' _site/ui/index.html | grep -q '<div class="highlight">' ; then
+            echo "::error::UI 'Working on it locally' bash block is not rendered as a fenced highlight div."
+            exit 1
+          fi
 
       - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/main'

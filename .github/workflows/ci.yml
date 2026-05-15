@@ -130,7 +130,9 @@ jobs:
             --budget-mb 320
       - name: Report bundle size
         run: |
-          python -c "import json,glob,pathlib; \
-m=json.loads(pathlib.Path(glob.glob('packages/sidecar/dist/python-runtime/*/manifest.json')[0]).read_text()); \
-mb=m['totalBytes']/1024/1024; \
-print(f'::notice title=Sidecar bundle size (host)::{mb:.1f} MB / 320 MB budget')"
+          python <<'PY'
+          import glob, json, pathlib
+          manifest_path = glob.glob("packages/sidecar/dist/python-runtime/*/manifest.json")[0]
+          mb = json.loads(pathlib.Path(manifest_path).read_text())["totalBytes"] / 1024 / 1024
+          print(f"::notice title=Sidecar bundle size (host)::{mb:.1f} MB / 320 MB budget")
+          PY
