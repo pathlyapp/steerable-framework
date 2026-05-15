@@ -53,7 +53,7 @@ py_pkgs = [
     "packages/sidecar/py",
 ]
 
-print(f"\nBumping all 7 packages to {version}:\n")
+print(f"\nBumping all 7 publishable packages to {version}:\n")
 
 for d in ts_pkgs:
     p = Path(d) / "package.json"
@@ -85,6 +85,18 @@ for d in py_pkgs:
     p.write_text(text)
     name = project_name_re.search(text).group(1)
     print(f"  {name:<32}  {old:<10} -> {version}")
+
+# Also bump the workspace-root package.json so its `version` tracks the
+# release. It's `private: true` and never published, but keeping it in
+# sync removes a footgun where someone hand-edits it (as happened
+# pre-v0.2.1) and gets a half-bump that the lockstep gate catches but
+# only after a CI round-trip.
+root = Path("package.json")
+root_data = json.loads(root.read_text())
+old = root_data.get("version", "(none)")
+root_data["version"] = version
+root.write_text(json.dumps(root_data, indent=2) + "\n")
+print(f"\n  {root_data['name']:<32}  {old:<10} -> {version}  (workspace root, not published)")
 PY
 
 echo
