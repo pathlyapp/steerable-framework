@@ -34,6 +34,12 @@ pnpm test
 uv run pytest
 ```
 
+For integration testing against the downstream consumer repos
+(`deeppath`, `deeppath-api`, `deeppath-agent`) — including how to flip
+each repo between published-registry mode and sibling-source mode for
+active framework dev — see [`INTEGRATION-TESTING.md`](./INTEGRATION-TESTING.md).
+Release pipeline lives in [`RELEASING.md`](./RELEASING.md).
+
 ## Examples
 
 Runnable end-to-end smoke tests live under [`examples/`](./examples):
