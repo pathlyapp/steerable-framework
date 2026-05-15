@@ -1,3 +1,8 @@
 mkdocs==1.6.1
 mkdocs-material==9.5.49
-pymdown-extensions==10.12
+# pymdown-extensions <10.13 has a regression where ALL fenced code blocks
+# (```bash, ```json, ``` …) get parsed as paragraphs under MkDocs ≥ 1.6 +
+# mkdocs-material 9.5, leading to ``` text leaking into <p> and the next
+# `# heading-like` line being promoted to <h1>. 10.13 fixed it; we pin a
+# floor + cap to keep the build reproducible.
+pymdown-extensions>=10.13,<11

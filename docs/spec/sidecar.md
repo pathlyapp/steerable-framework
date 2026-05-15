@@ -14,19 +14,17 @@ log + ready markers on stderr.
 
 ## Boot sequence
 
-```
-parent                                sidecar (python -m steerable_sidecar)
-  │                                      │
-  │  spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
-  ├─────────────────────────────────────►│
-  │                                      │  bootstrap …
-  │                                      │  print to stderr:
-  │  ◄───────────  stderr  ──────────────┤  __SIDECAR_READY__:{"status":"ok","version":"0.1.0","protocolVersion":"0.1.0",…}
-  │                                      │
-  │                                      │  emit on stdout (no id):
-  │  ◄───────────  stdout  ──────────────┤  {"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
-  │                                      │
-  │  Now safe to send JSON-RPC frames.   │
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as parent
+    participant S as sidecar<br/>(python -m steerable_sidecar)
+
+    P->>S: spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
+    Note over S: bootstrap …
+    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.1.0","protocolVersion":"0.1.0", …}
+    S-->>P: stdout (no id):<br/>{"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
+    Note over P: Now safe to send JSON-RPC frames.
 ```
 
 The parent **must wait** for the `__SIDECAR_READY__:` marker on stderr
