@@ -1,8 +1,8 @@
 site_name: Steerable Framework
 site_description: Spec-first agent framework for TypeScript + Python.
-site_url: https://steerable-org.github.io/steerable-framework/
-repo_url: https://github.com/steerable-org/steerable-framework
-repo_name: steerable-org/steerable-framework
+site_url: https://pathlyapp.github.io/steerable-framework/
+repo_url: https://github.com/pathlyapp/steerable-framework
+repo_name: pathlyapp/steerable-framework
 edit_uri: edit/main/docs/
 
 theme:
@@ -49,7 +49,16 @@ markdown_extensions:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  # `pymdownx.superfences` powers fenced code blocks. The `custom_fences`
+  # entry routes ```mermaid``` blocks through Material for MkDocs' built-in
+  # Mermaid integration so diagrams render as SVG instead of as preformatted
+  # text (which depends on box-drawing glyphs being present in the user's
+  # font and on no horizontal-wrap CSS being applied).
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
 
@@ -75,4 +84,4 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/steerable-org/steerable-framework
+      link: https://github.com/pathlyapp/steerable-framework

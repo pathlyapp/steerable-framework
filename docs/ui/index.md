@@ -18,8 +18,8 @@ What you'll find inside:
 ## How it stays in sync
 
 * Stories live next to the components they document (`packages/agent-ui/ts/src/components/*.stories.tsx`).
-* The Storybook static bundle is rebuilt by [`.github/workflows/docs.yml`](https://github.com/steerable-org/steerable-framework/blob/main/.github/workflows/docs.yml) on every push to `main` and embedded under `/storybook/` of this docs site.
-* Visual snapshots + a11y checks run on every PR via [`.github/workflows/storybook-quality.yml`](https://github.com/steerable-org/steerable-framework/blob/main/.github/workflows/storybook-quality.yml).
+* The Storybook static bundle is rebuilt by [`.github/workflows/docs.yml`](https://github.com/pathlyapp/steerable-framework/blob/main/.github/workflows/docs.yml) on every push to `main` and embedded under `/storybook/` of this docs site.
+* Visual snapshots + a11y checks run on every PR via [`.github/workflows/storybook-quality.yml`](https://github.com/pathlyapp/steerable-framework/blob/main/.github/workflows/storybook-quality.yml).
 
 ## Working on it locally
 

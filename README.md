@@ -2,7 +2,7 @@
 
 Open-source agent framework extracted from DeepPath ecosystem.
 
-→ **Documentation: <https://steerable-org.github.io/steerable-framework/>**
+→ **Documentation: <https://pathlyapp.github.io/steerable-framework/>**
 ([source in `docs/`](./docs/index.md), build with `mkdocs build` or follow the
 [Getting Started guide](./docs/getting-started.md))
 

@@ -181,5 +181,5 @@ open http://localhost:3000/dev/framework-preview
 
 - Read the [Spec Overview](spec/overview.md) to understand the cross-language contract pipeline
 - Read the [Architecture](spec/architecture.md) page to understand the Tier 1–4 boundary
-- Browse [`examples/`](https://github.com/steerable-org/steerable-framework/tree/main/examples) for runnable starter projects
+- Browse [`examples/`](https://github.com/pathlyapp/steerable-framework/tree/main/examples) for runnable starter projects
 - Migrating an existing DeepPath-internal agent? See the [migration guide](migration/deeppath.md)
