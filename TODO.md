@@ -171,10 +171,14 @@ phase closes or a new follow-up surfaces.
       <https://pathlyapp.github.io/steerable-framework/>.
 - [x] **Storybook embedded under `/storybook/`** → live at
       <https://pathlyapp.github.io/steerable-framework/storybook/>.
-- [ ] **Bump GitHub Actions to Node.js 24-compatible versions** before
-      2026-09-16 (`actions/checkout`, `actions/setup-node`,
-      `actions/setup-python`, `actions/upload-artifact`,
-      `pnpm/action-setup` all surface a Node 20 deprecation warning).
+- [x] **Bump GitHub Actions to Node.js 24-compatible versions** — landed
+      in 1d6fc83 / ba4ade7 / 10c6de6. All ten in-tree actions
+      (`actions/checkout`, `setup-node`, `setup-python`,
+      `upload-artifact`, `download-artifact`, `deploy-pages`,
+      `upload-pages-artifact`, `pnpm/action-setup`,
+      `astral-sh/setup-uv`, `googleapis/release-please-action`) bumped
+      to their current Node-24-ready major. Verified by `gh api` query
+      against each action's `releases/latest` before bumping.
 
 ### Toward a real 1.0.0
 
@@ -185,24 +189,66 @@ phase closes or a new follow-up surfaces.
 
 ### Quality / DevX gaps
 
-- [ ] **Codegen idempotency**: `pnpm gen` produces stable diff across runs
-      now, but we don't yet enforce in CI that running it twice in a row
-      yields zero diff (catch sneaky non-determinism early).
+- [x] **Codegen idempotency** — landed in 10c6de6. Both the `ts:` and
+      `py:` jobs in `.github/workflows/ci.yml` now re-run their codegen
+      after the first build/test cycle and `git diff --quiet -- packages`
+      fails the job if the second run produces any diff. Catches
+      non-deterministic codegen (random hashes, unstable map ordering,
+      locale-dependent sort) the moment it sneaks in.
 - [x] **Generate Linux VRT baselines** — committed in 11a1c8f after
       generation via the new `vrt-baselines.yml` workflow_dispatch helper
       (the Docker script is still supported but optional); the `vrt:`
       job in `.github/workflows/storybook-quality.yml` is now an
       enforcing gate (no more `continue-on-error: true`). Verified green
       on run 25895313180.
-- [ ] **Sidecar bundle size budget enforcement in CI**: `--budget-mb` is
-      implemented; CI doesn't run `--target all --strip-stdlib --budget-mb 320`
-      yet.
+- [x] **Sidecar bundle size budget enforcement in CI** — landed in
+      10c6de6 + 1d6fc83 (followed by an .gitignore unblock in e5e4d2f).
+      A new `sidecar-budget` job in `ci.yml` runs the host (Linux x64)
+      build with `--strip-stdlib --aggressive --budget-mb 800` on every
+      PR. The 800 MB ceiling is a regression gate against the
+      currently-observed ~741 MB baseline; the original 320 MB design
+      target is tracked under "Migrate sidecar to install_only_stripped"
+      below.
+- [ ] **Migrate sidecar to `install_only_stripped` CPython distribution**
+      — the current `install_only` python-build-standalone variant
+      unpacks to ~700 MB and the prune logic only reclaims ~20 MB of
+      that. Switching to `install_only_stripped` (32 MB compressed
+      vs 105 MB) plus adapting the prune paths should let us drop both
+      the PR budget (`ci.yml`) and production budget (`sidecar-build.yml`)
+      back down to ~320 MB / ~300 MB respectively, matching the original
+      P5 sidecar size design.
 - [ ] **Cross-platform sidecar build matrix**: prepare-sidecar.sh supports
       `--target all`, but the GitHub Actions workflow that emits release
       artefacts for win/linux/mac in one run isn't there yet.
-- [ ] **Examples in CI**: `examples/{py-minimal,ts-minimal,sidecar-roundtrip}`
-      run locally via `uv run pytest` / `node`; add a CI job that runs each
-      example end-to-end so README claims stay honest.
+- [x] **Examples in CI** — landed in 10c6de6. New `examples` job in
+      `ci.yml` runs `examples/py-minimal`, `examples/ts-minimal`, and
+      `examples/sidecar-roundtrip` end-to-end and grep-asserts the
+      marker lines they're documented to print
+      (`[wire]`, `[harness]`, `[ready]`, `[ping]`, `[bye]`). Stops a
+      refactor that silently breaks an example from sliding past CI
+      while the README claims still pass review.
+- [x] **Docs render smoke test** — landed in ba4ade7. `docs.yml` now
+      grep-asserts the rendered `_site/` HTML for five known-good
+      patterns after `mkdocs build --strict` (no `<p>```` leak;
+      home-page Mermaid `graph BT` block; sidecar Mermaid
+      `sequenceDiagram` block; ≥5 `<div class="highlight">` blocks on
+      the sidecar page; UI page "Working on it locally" bash block is
+      a fenced highlight div). Catches regressions like the
+      `pymdown-extensions==10.12` fenced-code-as-paragraph bug we
+      fixed manually in 91fb79d, before they ship to readers.
+- [x] **Restore packaged sidecar build toolchain to git** — landed in
+      e5e4d2f. The catch-all `build/` ignore was silently swallowing
+      `packages/sidecar/build/{build_sidecar.py,codesign,tests}`, which
+      meant `sidecar-build.yml`, `sidecar-codesign.yml`, and
+      `sidecar-prune-tests.yml` had never actually run a green build
+      since project inception (their triggers required files that
+      weren't tracked). Surfaced as a side-effect of the `sidecar-budget`
+      gate above and fixed by adding an explicit `!` un-ignore.
+- [x] **Bump python-build-standalone pin** — landed in 1d6fc83.
+      The previously-pinned `20251105` release was deleted upstream and
+      sidecar-budget hit a 404 on first run; bumped to `20260510` /
+      `3.12.13`. Source comment now documents how to re-bump when this
+      happens again.
 
 ### Three-repo convergence
 
