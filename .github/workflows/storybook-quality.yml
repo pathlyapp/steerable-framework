@@ -58,18 +58,20 @@ jobs:
 
   vrt:
     # VRT snapshots are platform-sensitive (font hinting / antialiasing). We
-    # lock the runner to ubuntu-22.04 and expect committed Linux baselines under
-    # `tests/visual/__screenshots__/*-chromium-desktop-linux.png`. Generate them
-    # locally with `scripts/generate-vrt-baselines-linux.sh` (uses the official
-    # Playwright Docker image so darwin/Windows contributors can produce them).
+    # lock the runner to ubuntu-22.04 and require committed Linux baselines
+    # under `packages/agent-ui/ts/tests/visual/stories.spec.ts-snapshots/*-chromium-desktop-linux.png`.
     #
-    # The job is currently `continue-on-error: true` so the very first
-    # contributor PR doesn't fail before any Linux baseline is committed.
-    # Once `tests/visual/__screenshots__/*-linux.png` exists, flip this to
-    # `false` to make the gate enforcing.
+    # Refresh them after intentional UI changes via either:
+    #   * `scripts/generate-vrt-baselines-linux.sh` (Docker, produces the
+    #     same image the runner uses), or
+    #   * the `VRT baselines (manual)` workflow (workflow_dispatch — no
+    #     local Docker required, runs on the same `ubuntu-22.04` runner this
+    #     gate uses, then publishes the new baselines as an artifact).
+    #
+    # This job is now an enforcing gate: any unintended visual diff fails
+    # the PR.
     name: visual regression (Playwright)
     runs-on: ubuntu-22.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

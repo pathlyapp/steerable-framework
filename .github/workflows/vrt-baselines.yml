@@ -5,22 +5,23 @@ name: VRT baselines (manual)
 # `Storybook quality` workflow uses for enforcement, then uploads the
 # resulting `*-chromium-desktop-linux.png` files as a single artifact.
 #
-# Why a separate workflow:
-#   * `scripts/generate-vrt-baselines-linux.sh` requires Docker and a
-#     reliable pull of the ~1.5GB `mcr.microsoft.com/playwright` image,
-#     which is unreliable from some networks. This workflow side-steps
-#     the local Docker dependency entirely and uses *exactly* the OS image
-#     the gating job runs on, eliminating the cross-runner drift class.
-#   * It is `workflow_dispatch` only so it never runs automatically; once
-#     the baselines have been committed and the gating job is green, this
-#     workflow can be removed (it is intended as a one-shot bootstrapper).
+# Why this exists alongside `scripts/generate-vrt-baselines-linux.sh`:
+#   * The shell script needs Docker locally and a reliable pull of the
+#     ~1.5GB `mcr.microsoft.com/playwright` image — historically flaky from
+#     some networks. This workflow side-steps the local Docker dependency
+#     entirely and uses *exactly* the OS image the gating job runs on,
+#     eliminating cross-runner drift as a class of bug.
+#   * It is `workflow_dispatch` only so it never runs on its own and adds
+#     no recurring CI cost.
 #
 # Workflow:
-#   1. Trigger from the Actions UI (or via `gh workflow run`).
-#   2. Wait for the run to finish (~5 minutes).
-#   3. Download the `vrt-baselines-linux` artifact.
-#   4. Unzip into `packages/agent-ui/ts/tests/visual/stories.spec.ts-snapshots/`
-#      and commit alongside the corresponding source change.
+#   1. Trigger from the Actions UI, or via `gh workflow run vrt-baselines.yml`.
+#   2. Wait for the run to finish (~90s on `ubuntu-22.04`).
+#   3. Download the `vrt-baselines-linux` artifact:
+#        gh run download <run-id> -n vrt-baselines-linux \
+#          -D packages/agent-ui/ts/tests/visual/stories.spec.ts-snapshots
+#   4. Commit the refreshed `*-chromium-desktop-linux.png` files alongside
+#      the source change that motivated the refresh.
 
 on:
   workflow_dispatch:
@@ -28,7 +29,7 @@ on:
       reason:
         description: "Why are you regenerating baselines? (free text)"
         required: false
-        default: "initial Linux baseline bootstrap"
+        default: "intentional UI change requires baseline refresh"
 
 permissions:
   contents: read
@@ -60,8 +61,8 @@ jobs:
 
       - name: Generate snapshots
         working-directory: packages/agent-ui/ts
-        # Note: vrt:update never fails on a missing baseline — it always
-        # writes the screenshots out as the new source-of-truth.
+        # `vrt:update` always writes the screenshots out — it never fails on
+        # a missing baseline.
         run: pnpm storybook:vrt:update
 
       - name: Show what was produced
@@ -78,4 +79,4 @@ jobs:
           name: vrt-baselines-linux
           path: packages/agent-ui/ts/tests/visual/stories.spec.ts-snapshots/*-chromium-desktop-linux.png
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
