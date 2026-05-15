@@ -1,44 +1,109 @@
 name: Release
 
-# release-please reads conventional-commit history on `main` and either:
-#   * opens / updates a "release PR" that bumps versions and rewrites
-#     CHANGELOGs, or
-#   * if the previous release PR was just merged, cuts the per-package git
-#     tags + GitHub Releases.
+# Tag-driven, lockstep release. NO release-please.
 #
-# CRITICAL: a Release created with the workflow's `GITHUB_TOKEN` does NOT
-# trigger downstream `release: published` workflows (GitHub anti-recursion
-# guard). So we explicitly fan out to publish-npm.yml and publish-pypi.yml
-# as `workflow_call` chained jobs gated on `releases_created`.
+# Operator flow (single human step):
+#   ./scripts/release/bump_to.sh 0.3.0
+#   git add -A && git commit -m "chore(release): v0.3.0"
+#   git tag v0.3.0
+#   git push origin main v0.3.0     <-- this triggers us
 #
-# `workflow_dispatch` is kept so a maintainer can force a re-run without
-# pushing.
+# This workflow then:
+#   1. Resolves the version from the pushed tag (or `inputs.version` for
+#      `workflow_dispatch` re-runs).
+#   2. Validates that ALL 7 publishable packages report exactly that
+#      version — `scripts/check_lockstep_versions.py --expected X.Y.Z`.
+#      Refuses to proceed if even one is out of sync.
+#   3. Creates a GitHub Release for the tag (auto-generated notes).
+#   4. Chains publish-npm.yml + publish-pypi.yml. Those workflows are
+#      idempotent — they skip any package whose version is already on
+#      the registry — so re-tagging after a partial failure is safe.
+#
+# Why tag-driven instead of release-please?
+#   * release-please opens per-component release PRs, which can
+#     desynchronise TS and Py copies of the same logical package and
+#     break the lockstep validator (see TODO.md history).
+#   * Tag-driven lockstep means publishing a release is one explicit
+#     `git tag v0.X.Y && git push --tags` — easy to reason about,
+#     easy to rollback (delete the tag + Release before a publish
+#     completes), no automated PRs to review.
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to (re-)release, e.g. 0.3.0 (no leading v). The workflow will check out tag v<version> and proceed."
+        required: true
+        type: string
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
-  release-please:
+  validate:
     runs-on: ubuntu-latest
     outputs:
-      releases_created: ${{ steps.rp.outputs.releases_created }}
-      paths_released: ${{ steps.rp.outputs.paths_released }}
+      version: ${{ steps.version.outputs.value }}
     steps:
-      - id: rp
-        uses: googleapis/release-please-action@v5
+      - uses: actions/checkout@v5
         with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          # For workflow_dispatch we explicitly check out the tag the
+          # operator named, so the version-validation step compares
+          # against the source tree at that tag (not the default branch).
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.ref }}
 
+      - id: version
+        name: Resolve version from tag or input
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
+          # Loose semver — same regex bump_to.sh uses.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?(\+[A-Za-z0-9.-]+)?$'; then
+            echo "::error::Tag/input '$VERSION' is not a valid semver string."
+            exit 1
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lockstep gate (all 7 packages must equal the tag version)
+        env:
+          EXPECTED: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          # Use system python here (no uv install) for speed — the
+          # checker only needs stdlib (json, tomllib in 3.11+, argparse).
+          python scripts/check_lockstep_versions.py --expected "$EXPECTED"
+
+      - name: Create GitHub Release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice title=skip::Release $TAG already exists; not recreating."
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --generate-notes
+          fi
+
+  # Chained publish jobs. `if: success()` is implicit on `needs:`. Both
+  # workflows are idempotent — re-running them on a partially-published
+  # tag only uploads what's missing.
   publish-npm:
-    needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
+    needs: validate
     uses: ./.github/workflows/publish-npm.yml
     secrets: inherit
     permissions:
@@ -46,8 +111,7 @@ jobs:
       id-token: write
 
   publish-pypi:
-    needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
+    needs: validate
     uses: ./.github/workflows/publish-pypi.yml
     secrets: inherit
     permissions:
