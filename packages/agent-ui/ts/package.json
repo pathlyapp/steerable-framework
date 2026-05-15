@@ -1,7 +1,7 @@
 {
   "name": "@steerable/agent-ui",
-  "version": "0.2.0",
-  "description": "Steerable framework Tier 4 — headless React hooks (useAgentSession, useChatStream, useToolCallStatus) and Tailwind-themed components (ChatPanel, MessageList, OrchestrationPlanCard, ToolCallRenderer, SSEStreamView) for embedding Steerable agents in any React app.",
+  "version": "0.2.2",
+  "description": "Steerable framework Tier 4 \u2014 headless React hooks (useAgentSession, useChatStream, useToolCallStatus) and Tailwind-themed components (ChatPanel, MessageList, OrchestrationPlanCard, ToolCallRenderer, SSEStreamView) for embedding Steerable agents in any React app.",
   "license": "Apache-2.0",
   "homepage": "https://pathlyapp.github.io/steerable-framework/storybook/",
   "repository": {

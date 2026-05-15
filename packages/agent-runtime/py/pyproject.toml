@@ -1,6 +1,6 @@
 [project]
 name = "steerable-agent-runtime"
-version = "0.1.0"
+version = "0.2.2"
 description = "Steerable agent runtime: LLM, tool, storage, and transport adapters."
 readme = "README.md"
 requires-python = ">=3.10"
