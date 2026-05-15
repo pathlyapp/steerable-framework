@@ -188,11 +188,12 @@ phase closes or a new follow-up surfaces.
 - [ ] **Codegen idempotency**: `pnpm gen` produces stable diff across runs
       now, but we don't yet enforce in CI that running it twice in a row
       yields zero diff (catch sneaky non-determinism early).
-- [ ] **Generate Linux VRT baselines**: run
-      `scripts/generate-vrt-baselines-linux.sh` (Docker) and commit the
-      `*-chromium-desktop-linux.png` files, then flip the `vrt:` job in
-      `.github/workflows/storybook-quality.yml` from `continue-on-error: true`
-      to a hard gate.
+- [x] **Generate Linux VRT baselines** — committed in 11a1c8f after
+      generation via the new `vrt-baselines.yml` workflow_dispatch helper
+      (the Docker script is still supported but optional); the `vrt:`
+      job in `.github/workflows/storybook-quality.yml` is now an
+      enforcing gate (no more `continue-on-error: true`). Verified green
+      on run 25895313180.
 - [ ] **Sidecar bundle size budget enforcement in CI**: `--budget-mb` is
       implemented; CI doesn't run `--target all --strip-stdlib --budget-mb 320`
       yet.
