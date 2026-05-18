@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/ActionSegmentPayload.schema.json",
+  "title": "ActionSegmentPayload",
+  "description": "Payload of an action-segment card -- a strip of tool / action invocations the agent ran inline within an assistant message. Each segment carries a kind (the action type), a status, and arbitrary args/output payload that downstream renderers pretty-print.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["segments"],
+  "properties": {
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "kind", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string", "description": "Action / tool name, e.g. 'create_task' or 'search.web'." },
+          "status": { "type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+          "label": { "type": ["string", "null"] },
+          "args": {},
+          "output": {},
+          "error": { "type": ["string", "null"] },
+          "startedAt": { "type": ["string", "null"], "format": "date-time" },
+          "finishedAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    }
+  }
+}

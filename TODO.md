@@ -157,12 +157,24 @@ phase closes or a new follow-up surfaces.
 - [x] **Reserve npm scope `@steerable`** — done (May 2026); all four
       `@steerable/*` names return HTTP 404 confirming the slot is free.
 - [x] **publish-npm.yml + publish-pypi.yml in repo** — both workflows live
-      under `.github/workflows/` and trigger on `release: published`. They
-      are idempotent (probe registry, skip versions already up). See
-      [`RELEASING.md`](./RELEASING.md) for the wiring.
-- [x] **release.yml on push trigger** — release-please now runs on every
-      push to `main` (was workflow_dispatch only) and opens release PRs
-      autonomously.
+      under `.github/workflows/` as reusable workflows
+      (`workflow_call` + `workflow_dispatch`), chained from `release.yml`
+      after the lockstep gate passes. They are idempotent (probe
+      registry, skip versions already up). See [`RELEASING.md`](./RELEASING.md)
+      for the wiring.
+- [x] **release.yml — replaced release-please with tag-driven lockstep**
+      (May 2026, post-v0.2.1 incident). Old flow was: every push to
+      `main` triggered release-please → opened a release PR per package
+      → merge cut per-component tags → chained publish workflows. That
+      tripped the lockstep validator whenever a fix touched only one
+      side of a TS↔Py pair (see "Reconcile release-please ↔ lockstep"
+      below — closed by this same change). New flow: operator runs
+      `./scripts/release/bump_to.sh X.Y.Z` locally → commit → tag
+      `vX.Y.Z` → push. `release.yml` triggers on the tag, validates
+      that all 7 publishable packages report exactly the tag version
+      (`scripts/check_lockstep_versions.py --expected`), creates the
+      GitHub Release, then chains `publish-{npm,pypi}.yml`. release-please
+      config + manifest deleted in the same commit.
 - [x] **3 npm package.json files publish-ready** — added
       `publishConfig.access: "public"`, `publishConfig.provenance: true`,
       and standard metadata (`license`, `repository`, `homepage`,
@@ -177,10 +189,10 @@ phase closes or a new follow-up surfaces.
       npmjs.org with sigstore provenance (`npm audit signatures`).
       Triggered manually via `gh workflow run publish-npm.yml` because
       release-please's `GITHUB_TOKEN`-created releases don't fan out
-      `release: published` events. **Fix landed in same commit** (release.yml
-      now chains `publish-{npm,pypi}.yml` via `workflow_call` on the
-      release-please job's `releases_created` output, so the next release
-      publishes itself).
+      `release: published` events. Self-fan-out fix landed in a
+      follow-up (release.yml chained `publish-{npm,pypi}.yml` via
+      `workflow_call` on `releases_created`); that fix was later
+      superseded entirely by the tag-driven release flow above.
 - [x] **Py inter-package pin lockstep bug** — release-please bumped
       `protocol`/`harness` to 0.2.0 but the four `pyproject.toml` files
       still pinned each other at `==0.1.0`, breaking `pip install` of any
@@ -214,11 +226,19 @@ phase closes or a new follow-up surfaces.
       3. Also revoke the old token at
          <https://pypi.org/manage/account/token/> (it was briefly visible
          in chat before being saved to GH secret).
-- [ ] **Bump `runtime` + `sidecar` Py packages to 0.2.0** to align with
-      `protocol` + `harness`. release-please left them at 0.1.0 because
-      no `feat(runtime):` / `feat(sidecar):` commits landed in the
-      bug-fix cycle. Edit `.release-please-manifest.json` directly
-      (fastest) or wait for the next genuine feature commit per package.
+- [x] **Bump `runtime` + `sidecar` Py packages to align with the rest** —
+      done as a side-effect of the v0.2.2 lockstep release: all 7
+      packages are now at 0.2.2 (runtime + sidecar jumped 0.1.0 → 0.2.2,
+      skipping 0.2.0 / 0.2.1). Lockstep is now a structural property of
+      the release flow, not a manual reconciliation step.
+- [x] **First public release via tag-driven pipeline** — `v0.2.2`
+      (May 2026). Pre-release dry run was `v0.2.1`, which the lockstep
+      gate correctly rejected because only the workspace-root
+      package.json had been hand-bumped (validation worked exactly as
+      intended). Re-tried via `./scripts/release/bump_to.sh 0.2.2`,
+      tagged + pushed, full chain (`validate` → `publish-npm` →
+      `publish-pypi`) green. The dead `v0.2.1` tag is left in place as
+      a historical marker of the validation-caught miss.
 
 ### Public docs site
 
@@ -241,22 +261,16 @@ phase closes or a new follow-up surfaces.
       API is only just being exercised by the three repos.
 - [ ] **Decide: shared `1.0.0` for protocol + harness?** Lock-step is enforced,
       but Tier 2/3/4 packages can independently version once 1.0 lands.
-- [ ] **Reconcile release-please component bumps with the ts↔py lockstep
-      validator.** Today `scripts/check_lockstep_versions.py` requires
-      `protocol_ts == protocol_py` AND `harness_ts == harness_py`, but
-      release-please bumps each component (e.g. `packages/agent-harness/py`)
-      independently based on which files a commit touched. A py-only fix
-      therefore opens a release PR that, if merged, fails CI on the
-      lockstep check (this happened with PR #2, which was closed
-      manually). Pick one:
-      - **(a)** Add release-please's `linked-versions` plugin pairing
-        `protocol/ts`+`protocol/py` and `harness/ts`+`harness/py`. Forces
-        co-bumps but changes the tag scheme.
-      - **(b)** Soften the validator: keep exact-match for `protocol`
-        (codegen pair) but allow patch-level drift for `harness`
-        (parallel implementations).
-      - **(c)** Drop the lockstep gate entirely and rely on docs/cultural
-        convention.
+- [x] **Reconcile release-please component bumps with the ts↔py lockstep
+      validator** — resolved by option **(d)**: drop release-please
+      altogether and switch to tag-driven lockstep releases (see
+      "release.yml — replaced release-please" above). The lockstep
+      validator was also expanded from "protocol pair + harness pair
+      must match" to "all 7 publishable packages must report the
+      identical version", because tag-driven releases are
+      lockstep-by-construction so partial-bump states are no longer
+      possible to commit (the validator runs as a CI gate on the tag
+      push).
 
 ### Quality / DevX gaps
 

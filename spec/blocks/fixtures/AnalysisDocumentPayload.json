@@ -1,0 +1,6 @@
+{
+  "title": "向量数据库选型分析",
+  "body": "# 向量数据库选型分析\n\n## TL;DR\n\n- **pgvector** 适合已有 PostgreSQL 的团队，运维门槛最低。\n- **Qdrant** / **Weaviate** 在 1B+ 规模下查询延迟更可控。\n- **Pinecone** 适合不想自运维、可付费的中型团队。\n\n## 评分表\n\n| 维度 | pgvector | Qdrant | Weaviate | Pinecone |\n| --- | --- | --- | --- | --- |\n| 运维成本 | 低 | 中 | 中 | 极低（托管）|\n| 单机性能 | 中 | 高 | 高 | 高 |\n| 多租户 | 弱 | 强 | 强 | 中 |\n\n## 推荐\n\n以本团队当前 (PostgreSQL + 100 万级文档) 的情况，**先用 pgvector 起步**，到 5000 万文档/日均 500 QPS 时再迁移到 Qdrant。",
+  "createdAt": "2026-05-18T08:00:00Z",
+  "modelId": "claude-4.6-sonnet"
+}

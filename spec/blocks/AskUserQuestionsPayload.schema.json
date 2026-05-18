@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/AskUserQuestionsPayload.schema.json",
+  "title": "AskUserQuestionsPayload",
+  "description": "Payload of an ask-user-questions card. The agent has paused mid-run and needs structured input from the user before continuing. Each question is one of: option buttons (select), free-form text, or password. After the user answers, the backend re-emits the same card with answers filled in to switch the UI to read-only.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["intro", "questions"],
+  "properties": {
+    "intro": { "type": "string" },
+    "outro": { "type": ["string", "null"] },
+    "answers": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "type": { "type": "string", "enum": ["select", "text", "password"], "default": "select" },
+          "options": { "type": "array", "items": { "type": "string" } },
+          "placeholder": { "type": ["string", "null"] },
+          "multiSelect": { "type": "boolean", "default": false }
+        }
+      }
+    }
+  }
+}

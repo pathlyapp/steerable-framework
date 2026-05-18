@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/SearchSourcesPayload.schema.json",
+  "title": "SearchSourcesPayload",
+  "description": "Payload of a search-sources card. Lists the web pages that an agent consulted while answering. Rendered as a row of stacked favicons with an expandable detail list.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["sources"],
+  "properties": {
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string", "format": "uri" },
+          "title": { "type": ["string", "null"] },
+          "snippet": { "type": ["string", "null"] },
+          "favicon": { "type": ["string", "null"] },
+          "publishedAt": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

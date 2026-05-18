@@ -1,0 +1,46 @@
+@import 'tailwindcss';
+
+@source "../../packages/agent-ui/ts/src";
+@source "../../packages/agent-ui/ts/dist";
+@source "./src";
+
+/*
+ * The rich cards in `@steerable/agent-ui/cards` use raw CSS variables via
+ * arbitrary Tailwind values (`bg-[var(--agent-muted, #fallback)]`). They
+ * expect direct colors -- not HSL components -- so we declare hex values
+ * here. (The legacy preset's HSL-components form is still kept available
+ * via `tailwind-preset.ts` for consumers using Tailwind v3 themed classes.)
+ */
+:root {
+  --agent-background: #ffffff;
+  --agent-canvas: #ffffff;
+  --agent-card-bg: #ffffff;
+  --agent-foreground: #09090b;
+  --agent-muted: #f4f4f5;
+  --agent-muted-foreground: #71717a;
+  --agent-border: #e4e4e7;
+  --agent-accent: #2563eb;
+  --agent-accent-foreground: #ffffff;
+  --agent-primary: #18181b;
+  --agent-primary-foreground: #fafafa;
+  --agent-destructive: #ef4444;
+}
+
+.dark {
+  --agent-background: #09090b;
+  --agent-canvas: #09090b;
+  --agent-card-bg: #09090b;
+  --agent-foreground: #fafafa;
+  --agent-muted: #27272a;
+  --agent-muted-foreground: #a1a1aa;
+  --agent-border: #27272a;
+  --agent-accent: #3b82f6;
+  --agent-accent-foreground: #ffffff;
+  --agent-primary: #fafafa;
+  --agent-primary-foreground: #18181b;
+  --agent-destructive: #7f1d1d;
+}
+
+html, body, #root {
+  height: 100%;
+}

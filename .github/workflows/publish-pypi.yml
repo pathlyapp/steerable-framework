@@ -1,42 +1,31 @@
 name: Publish to PyPI
 
-# Mirror image of publish-npm.yml. Triggered after release-please publishes a
-# GitHub Release. We walk the four publishable Python packages and upload
-# whichever ones declare a version that isn't already on PyPI.
+# Chained from release.yml after the lockstep gate passes. Mirror image
+# of publish-npm.yml: walks the four publishable Python packages and
+# uploads whichever ones declare a version that isn't already on PyPI.
+# Idempotent — safe to re-dispatch after a partial failure.
 #
-# To activate this workflow:
-#   1. Reserve the project names on PyPI:
-#        steerable-agent-protocol
-#        steerable-agent-harness
-#        steerable-agent-runtime
-#        steerable-sidecar
-#   2. Pick ONE of the two auth modes below and configure it:
-#        (A) Trusted Publishing (recommended): bind this workflow to each
-#            project on https://pypi.org/manage/project/<name>/settings/publishing/
-#            with workflow `publish-pypi.yml` and environment `pypi`.
-#            Then drop `password:` from the upload step.
-#        (B) API token: create one umbrella token at
-#            https://pypi.org/manage/account/token/ scoped to the four
-#            projects, and set it as the `PYPI_API_TOKEN` GitHub secret.
-#
-# Until either is configured the workflow short-circuits with a clear notice
-# instead of failing — so the npm publish path still works on its own.
+# Auth modes (auto-detected by presence of `PYPI_API_TOKEN` secret):
+#   (A) Trusted Publishing (recommended) — no long-lived secret. Bind
+#       this workflow to each project on
+#       https://pypi.org/manage/project/<name>/settings/publishing/ with
+#       workflow `publish-pypi.yml` and environment `pypi`.
+#   (B) API token — single umbrella token at
+#       https://pypi.org/manage/account/token/ scoped to all four
+#       projects, set as `PYPI_API_TOKEN` GitHub secret.
 
 on:
-  # See publish-npm.yml for why `workflow_call` is the canonical trigger.
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Skip the actual upload step (still builds + diffs PyPI)."
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       dry_run:
         type: boolean
         required: false
+        default: false
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the actual upload step (still builds + diffs PyPI)."
+        type: boolean
         default: false
 
 concurrency:

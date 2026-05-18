@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/PlanSelectorPayload.schema.json",
+  "title": "PlanSelectorPayload",
+  "description": "Payload of a plan-selector card. The agent has drafted multiple candidate plans and is asking the user to pick one. Each plan carries effort / risk metrics and a pros/cons list. After selection the backend re-emits with selectedPlan filled in.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["plans", "comparison", "goalAttribution"],
+  "properties": {
+    "comparison": { "type": "string", "description": "Short prose summarising how the candidate plans differ." },
+    "selectedPlan": { "type": ["string", "null"], "description": "Id of the user-chosen plan once decided." },
+    "goalAttribution": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["existing", "new"] },
+        "existingGoalId": { "type": ["string", "null"] },
+        "existingGoalTitle": { "type": ["string", "null"] },
+        "newGoalTitle": { "type": ["string", "null"] }
+      }
+    },
+    "plans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "name", "summary", "approach", "metrics", "pros", "cons", "bestFor"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "summary": { "type": "string" },
+          "approach": { "type": "string" },
+          "bestFor": { "type": "string" },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["duration", "effortLevel", "riskLevel"],
+            "properties": {
+              "duration": { "type": "string" },
+              "effortLevel": { "type": "string", "enum": ["low", "medium", "high"] },
+              "riskLevel": { "type": "string", "enum": ["low", "medium", "high"] }
+            }
+          },
+          "pros": { "type": "array", "items": { "type": "string" } },
+          "cons": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

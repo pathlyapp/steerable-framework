@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/ThinkingProcessPayload.schema.json",
+  "title": "ThinkingProcessPayload",
+  "description": "Payload of a thinking-process card. Renders the agent's chain-of-thought (markdown) in a collapsible panel. UI clients are responsible for redacting / disabling this card if the deployment policy forbids exposing raw reasoning to end users.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["body"],
+  "properties": {
+    "body": { "type": "string", "description": "Markdown chain-of-thought text." },
+    "defaultExpanded": { "type": "boolean", "default": false }
+  }
+}

@@ -2,7 +2,19 @@ export { MessageList } from './MessageList.js';
 export type { MessageListProps, MessageRendererProps } from './MessageList.js';
 
 export { ChatPanel } from './ChatPanel.js';
-export type { ChatPanelProps } from './ChatPanel.js';
+export type {
+  ChatPanelProps,
+  ChatPanelRootProps,
+  ChatPanelHeaderProps,
+  ChatPanelMessagesProps,
+  ChatPanelInputProps,
+  ChatPanelInputHandle,
+  ChatPanelEmptyProps,
+  ChatPanelStreamingStatusProps,
+} from './ChatPanel.js';
+
+export { AgentSelector } from './AgentSelector.js';
+export type { AgentSelectorProps } from './AgentSelector.js';
 
 export { OrchestrationPlanCard } from './OrchestrationPlanCard.js';
 export type {

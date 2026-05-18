@@ -1,0 +1,29 @@
+{
+  "name": "steerable-example-web-shell",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Steerable framework reference web app: ChatPanel + 14 rich cards + canned fixtures + (optional) sidecar transport. Zero external deps in mock mode.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview --port 5180",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "echo no-tests"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-ui": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.21"
+  }
+}

@@ -21,8 +21,10 @@ This document covers two release modes:
 | 3 | `steerable-sidecar` (Py) | `dist/py/steerable_sidecar-X.Y.Z-*.whl` + sdist |
 | 4 | `@steerable/agent-ui` | `dist/npm/steerable-agent-ui-X.Y.Z.tgz` |
 
-The protocol packages use **lock-step versioning** (npm + PyPI must agree),
-enforced by `scripts/check_lockstep_versions.py` in CI.
+**All 7 packages release in lock-step** (every release publishes the same
+`X.Y.Z` for everything, even no-op bumps). Enforced by
+`scripts/check_lockstep_versions.py` in CI as a gate on every tag push.
+See "Mode C" below for the operator workflow.
 
 ---
 
@@ -176,8 +178,9 @@ without a registry.
      <https://www.npmjs.com/settings/~/tokens>:
      - **Permissions** → "Read and write"
      - **Packages and scopes** → restrict to the `@steerable` scope
-     - Expiry: pick something ≥1 year so release-please doesn't break on
-       silent expiry; rotate by setting a new token before the old expires.
+     - Expiry: pick something ≥1 year so a release tag push doesn't fail
+       on silent token expiry; rotate by setting a new token before the
+       old expires.
    - Drop it into the repo:
 
      ```bash
@@ -212,35 +215,68 @@ without a registry.
    Until either is configured the workflow short-circuits with a clear
    notice — it will not fail the release.
 
-4. **Pipeline (already wired, no action needed)**:
+4. **Pipeline (already wired)** — tag-driven, lockstep, single operator
+   command per release:
 
    ```text
-   push to main (with conventional-commit messages)
+   ./scripts/release/bump_to.sh X.Y.Z       (operator runs locally)
+        │  bumps all 7 publishable packages + workspace root to X.Y.Z
+        │  refreshes pnpm-lock.yaml + uv.lock
+        ▼
+   git add -A && git commit -m "chore(release): vX.Y.Z"
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z              (this triggers CI)
         │
         ▼
-   release.yml  ── release-please opens / updates a "release PR"
+   release.yml on tag push
         │
-        │ (maintainer reviews + merges the release PR)
-        ▼
-   release.yml  ── release-please cuts per-package tags + GitHub Releases
+        │  validate job:
+        │    1. resolves version from tag
+        │    2. lockstep gate — refuses release unless all 7 packages
+        │       report exactly X.Y.Z (`check_lockstep_versions.py
+        │       --expected X.Y.Z`)
+        │    3. creates GitHub Release vX.Y.Z (auto-generated notes)
         │
-        ├─► publish-npm.yml   triggered by `release: published`
+        ├─► publish-npm.yml   (workflow_call from validate)
         │       └─ skips packages whose version is already on registry
         │
-        └─► publish-pypi.yml  triggered by `release: published`
+        └─► publish-pypi.yml  (workflow_call from validate)
                 └─ same idempotent skip logic against PyPI's JSON API
    ```
 
-   `publish-{npm,pypi}.yml` are idempotent: re-dispatching them after a
-   partial failure only re-publishes packages whose local version is still
-   missing upstream.
+   `publish-{npm,pypi}.yml` are idempotent: a half-published tag can be
+   recovered by `gh workflow run release.yml -f version=X.Y.Z`, which
+   re-runs the chain and only uploads what's missing upstream.
+
+   **Why no release-please?** Per-component release PRs (release-please's
+   default) repeatedly desynced TS↔Py copies of the same logical
+   package, breaking the lockstep validator. Tag-driven releases are
+   lockstep-by-construction — `bump_to.sh` is the only writer of
+   versions, and the gate refuses anything else.
+
+### Re-running a publish after a partial failure
+
+The publish workflows skip packages already on the registry, so the
+canonical recovery is just to re-trigger the chain:
+
+```bash
+# Re-run release.yml for a specific version (re-validates lockstep,
+# re-creates the GH Release if missing, re-chains publish-{npm,pypi}.yml).
+gh workflow run release.yml --ref main -f version=X.Y.Z
+
+# Or re-trigger a single publish workflow directly:
+gh workflow run publish-npm.yml --ref vX.Y.Z
+gh workflow run publish-pypi.yml --ref vX.Y.Z
+```
 
 ### Manual publish (escape hatch)
 
-If the automated release-please pipeline is broken, you can publish from a
+If the GitHub Actions runner is unreachable entirely, publish from a
 clean checkout of the tagged commit:
 
 ```bash
+git checkout vX.Y.Z
+
 # TS — npm
 pnpm install --frozen-lockfile
 pnpm gen
@@ -256,12 +292,17 @@ uv publish --token "$PYPI_API_TOKEN" dist/py/steerable_*.whl dist/py/steerable_*
 
 ### Versioning rules
 
-- **Lock-step** for `agent-protocol` (TS+Py): a `feat:` touching `spec/` bumps
-  both SDKs together. Enforced by `scripts/check_lockstep_versions.py`.
-- **Independent** for `agent-harness`, `agent-runtime`, `agent-ui`, `sidecar`:
-  release-please tracks each per its own conventional-commit subdirectory.
-- Pre-1.0: minor (`0.X`) is the breaking-change axis. **Don't ship 1.0 until
-  the public API is stable for at least one minor release cycle.**
+- **Lockstep**: every release publishes the same `X.Y.Z` for **all 7**
+  packages — `agent-protocol` (TS+Py), `agent-harness` (TS+Py),
+  `agent-ui` (TS), `agent-runtime` (Py), `sidecar` (Py). No-op packages
+  (no source change since the previous release) still bump; the cost is
+  a few extra registry versions per release, the benefit is lockstep
+  is structurally enforced — not a manual reconciliation step.
+- **Bump granularity** is operator-chosen: `bump_to.sh 0.2.3` for a
+  patch, `bump_to.sh 0.3.0` for a minor, etc. There's no automated
+  conventional-commit-driven version inference.
+- Pre-1.0: minor (`0.X`) is the breaking-change axis. **Don't ship 1.0
+  until the public API is stable for at least one minor release cycle.**
 
 ---
 
@@ -286,16 +327,27 @@ uv publish --token "$PYPI_API_TOKEN" dist/py/steerable_*.whl dist/py/steerable_*
 
 ## Release checklist
 
-Copy this into the release PR description:
+Run locally before tagging `vX.Y.Z`:
 
 - [ ] `pnpm install --frozen-lockfile` ✓
 - [ ] `uv sync --all-packages` ✓
 - [ ] `pnpm gen && pnpm check:drift` ✓
 - [ ] `uv run python scripts/generate_py.py && uv run python scripts/check_drift.py` ✓
-- [ ] `python scripts/check_lockstep_versions.py` ✓ (Python ≥ 3.11)
-- [ ] `pnpm -r test` ✓ (44 + 2 = 46 passing)
-- [ ] `uv run pytest -q` ✓ (105 passing)
+- [ ] `pnpm -r test` ✓
+- [ ] `uv run pytest -q` ✓
 - [ ] `examples/py-minimal`, `examples/ts-minimal`, `examples/sidecar-roundtrip` all run
 - [ ] Mode B verification (`./scripts/release/verify-local-artifacts.sh`) ✓
-- [ ] CHANGELOG entries via Changesets / release-please ✓
-- [ ] Lockfiles refreshed in three downstream repos ✓ (see [`docs/migration/deeppath.md`](./docs/migration/deeppath.md))
+- [ ] `./scripts/release/bump_to.sh X.Y.Z` ✓ (refreshes lockfiles, runs lockstep gate)
+- [ ] `git diff` reviewed ✓
+- [ ] `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z` ✓
+- [ ] `git push origin main vX.Y.Z` ✓ (CI takes over from here)
+
+Post-release (after CI is green and registries show the new version):
+
+- [ ] Lockfiles refreshed in three downstream repos:
+  - `cd deeppath        && pnpm update @steerable/agent-protocol @steerable/agent-ui`
+  - `cd deeppath-agent  && pnpm update @steerable/agent-harness @steerable/agent-protocol`
+  - `cd deeppath-api    && uv lock --upgrade-package steerable-agent-protocol \
+                                   --upgrade-package steerable-agent-harness \
+                                   --upgrade-package steerable-agent-runtime \
+                                   --upgrade-package steerable-sidecar && uv sync`

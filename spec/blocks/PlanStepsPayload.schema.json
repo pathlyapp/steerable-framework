@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/PlanStepsPayload.schema.json",
+  "title": "PlanStepsPayload",
+  "description": "Payload of a plan-steps card -- a compact horizontal checklist of skill names the agent intends to execute. Rendered as 'step1 / step2 / step3 ...' inline.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["steps"],
+  "properties": {
+    "steps": { "type": "array", "items": { "type": "string" } }
+  }
+}

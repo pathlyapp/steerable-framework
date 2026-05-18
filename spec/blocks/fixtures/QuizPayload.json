@@ -1,0 +1,52 @@
+{
+  "quizId": "quiz-2026-prime-numbers",
+  "title": "素数小测",
+  "description": "5 题，3 道单选、1 道判断、1 道简答。可重做。",
+  "submitActionLabel": "提交",
+  "questions": [
+    {
+      "id": "q1",
+      "type": "choice",
+      "stem": "下列哪个数是素数？",
+      "options": ["1", "9", "11", "15"],
+      "allowMultiple": false,
+      "placeholder": null,
+      "points": 2,
+      "knowledgePointId": "kp-prime-def",
+      "difficulty": 1
+    },
+    {
+      "id": "q2",
+      "type": "choice",
+      "stem": "下列哪些数是素数？（多选）",
+      "options": ["2", "4", "5", "9"],
+      "allowMultiple": true,
+      "placeholder": null,
+      "points": 4,
+      "knowledgePointId": "kp-prime-def",
+      "difficulty": 2
+    },
+    {
+      "id": "q3",
+      "type": "judge",
+      "stem": "0 是素数。",
+      "options": null,
+      "allowMultiple": null,
+      "placeholder": null,
+      "points": 1,
+      "knowledgePointId": "kp-prime-def",
+      "difficulty": 1
+    },
+    {
+      "id": "q4",
+      "type": "short_answer",
+      "stem": "用一句话解释什么是素数。",
+      "options": null,
+      "allowMultiple": null,
+      "placeholder": "请用不超过 30 字回答",
+      "points": 3,
+      "knowledgePointId": "kp-prime-def",
+      "difficulty": 2
+    }
+  ]
+}

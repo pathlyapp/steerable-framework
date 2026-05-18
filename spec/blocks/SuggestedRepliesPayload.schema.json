@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/SuggestedRepliesPayload.schema.json",
+  "title": "SuggestedRepliesPayload",
+  "description": "Payload of a suggested-replies card. A small set of single-shot quick-reply texts shown below the composer; clicking one sends that text as the next user message.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["suggestions"],
+  "properties": {
+    "suggestions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Quick-reply texts. Clients typically render the first ~6; backend should keep the list short."
+    }
+  }
+}

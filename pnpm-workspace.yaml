@@ -2,3 +2,4 @@ packages:
   - "packages/*/ts"
   - "tests/conformance/ts"
   - "examples/ts-minimal"
+  - "examples/web-shell"

@@ -1,0 +1,44 @@
+{
+  "reportId": "report-2026-w20",
+  "title": "本周覆盖度报告",
+  "overallCoverage": 0.72,
+  "overallMastery": 0.58,
+  "summary": "覆盖整体良好，但因式分解相关知识点掌握度较弱，建议下周加练。",
+  "sections": [
+    {
+      "id": "sec-basic",
+      "name": "整数基础",
+      "coverage": 0.9,
+      "mastery": 0.8,
+      "totalCount": 20,
+      "learnedCount": 18,
+      "testedCount": 18,
+      "masteredCount": 16,
+      "weakKpIds": []
+    },
+    {
+      "id": "sec-factor",
+      "name": "因式分解",
+      "coverage": 0.6,
+      "mastery": 0.35,
+      "totalCount": 15,
+      "learnedCount": 9,
+      "testedCount": 9,
+      "masteredCount": 5,
+      "weakKpIds": ["kp-factor-3"]
+    }
+  ],
+  "weakPoints": [
+    {
+      "id": "kp-factor-3",
+      "name": "二次三项式因式分解",
+      "sectionName": "因式分解",
+      "accuracy": 0.42,
+      "recommendation": "建议先复习提取公因式与十字相乘，再做 5 道针对性题。"
+    }
+  ],
+  "actions": {
+    "allowRemediateQuiz": true,
+    "remediateActionLabel": "生成针对性练习"
+  }
+}

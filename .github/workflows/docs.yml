@@ -7,12 +7,16 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"
+      - "examples/web-shell/**"
+      - "spec/blocks/**"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"
+      - "examples/web-shell/**"
+      - "spec/blocks/**"
       - ".github/workflows/docs.yml"
 
 permissions:
@@ -57,6 +61,17 @@ jobs:
         run: |
           mkdir -p _site/storybook
           cp -R packages/agent-ui/ts/storybook-static/. _site/storybook/
+
+      # --- Web-shell reference app (Vite) -------------------------------------
+      # Build the framework's runnable reference app and embed it at /demo/.
+      # The web-shell uses `base: './'` in vite.config so all assets are
+      # relative -- the same dist works under any deploy prefix.
+      - name: Build web-shell
+        run: pnpm --filter steerable-example-web-shell build
+      - name: Embed web-shell into mkdocs site
+        run: |
+          mkdir -p _site/demo
+          cp -R examples/web-shell/dist/. _site/demo/
 
       # D4 (docs render smoke test): mkdocs build --strict already passes when
       # markdown is *parseable*, but that is not enough. Pinning

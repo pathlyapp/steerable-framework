@@ -1,0 +1,29 @@
+{
+  "title": "三种学习方案",
+  "rationale": "用户希望并行评估速成、稳健、深耕三条路径，并行 mode 让前端可以同时展示进度。",
+  "mode": "parallel",
+  "coordinator": {
+    "agentId": "coordinator.default",
+    "name": "时踪助手"
+  },
+  "tasks": [
+    {
+      "id": "task-speed",
+      "agentId": "researcher.fast",
+      "prompt": "在 1 周内能完成的最少必要训练计划",
+      "dependsOn": []
+    },
+    {
+      "id": "task-stable",
+      "agentId": "researcher.balanced",
+      "prompt": "兼顾基础与速度的 1 个月计划",
+      "dependsOn": []
+    },
+    {
+      "id": "task-deep",
+      "agentId": "researcher.deep",
+      "prompt": "深耕基础的 3 个月计划",
+      "dependsOn": []
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "topic": "GPT-5 在医学影像分类任务上的表现",
+  "round": 2,
+  "final": false,
+  "subQuestions": [
+    {
+      "id": "sq-1",
+      "question": "GPT-5 在 RSNA 2024 上的胸片分类基线如何？",
+      "kind": "fact",
+      "status": "evidenced_strong",
+      "evidenceCount": 4,
+      "note": "OpenAI 与 Stanford CCN 各有一份对比报告。"
+    },
+    {
+      "id": "sq-2",
+      "question": "与专科放射科医师相比有哪些代表性失败模式？",
+      "kind": "compare",
+      "status": "evidenced_medium",
+      "evidenceCount": 2,
+      "note": "两份案例研究指向边界形态识别。"
+    },
+    {
+      "id": "sq-3",
+      "question": "在多模态输入下推理延迟是否仍可接受？",
+      "kind": "fact",
+      "status": "searching",
+      "evidenceCount": 0,
+      "note": null
+    },
+    {
+      "id": "sq-4",
+      "question": "是否存在已落地的临床部署案例？",
+      "kind": "risk",
+      "status": "conflicted",
+      "evidenceCount": 3,
+      "note": "三方报告结论分歧较大，需要再扩展信息源。"
+    }
+  ],
+  "decision": {
+    "next": "expand",
+    "reason": "延迟和部署案例两个子问题信息不足，下一轮扩展两个新角度。"
+  }
+}

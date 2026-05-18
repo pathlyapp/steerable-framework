@@ -1,34 +1,28 @@
 name: Publish to npm
 
-# Triggered after release-please cuts a GitHub Release. We don't try to parse
-# release-please's per-component tag scheme; instead we walk the three
-# `@steerable/*` TypeScript packages and publish whichever ones declare a
-# version that isn't already on the registry. This is robust to:
-#   * release-please tag naming changes
-#   * partial / re-run releases (the "already at version X" check makes the
-#     workflow idempotent — safe to re-dispatch on a botched run)
-#   * a manual version bump landing without going through release-please
+# Chained from release.yml after the lockstep gate passes. We walk the
+# three `@steerable/*` TypeScript packages and publish whichever ones
+# declare a version that isn't already on the registry. Idempotent by
+# design — safe to re-dispatch after a partial failure; only missing
+# versions get pushed.
 
 on:
-  # `release: published` is kept as a fallback for releases that ARE allowed
-  # to fan out automatically (e.g. created via the GitHub UI). Note that
-  # release-please cuts releases with `GITHUB_TOKEN`, which by design cannot
-  # trigger downstream workflows — so the canonical trigger is the
-  # `workflow_call` from release.yml (see below).
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Skip the actual `npm publish` step (still builds + diffs registry)."
-        type: boolean
-        default: false
-  # Chained call from release.yml after release-please cuts tags.
+  # Canonical trigger: chained from release.yml's `validate` job after the
+  # lockstep gate passes.
   workflow_call:
     inputs:
       dry_run:
         type: boolean
         required: false
+        default: false
+  # Manual override for re-running after a transient publish failure
+  # (e.g. npm registry 5xx). Re-running is safe because of the
+  # registry-skip logic below.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip the actual `npm publish` step (still builds + diffs registry)."
+        type: boolean
         default: false
 
 # Allow only one publish run per ref at a time so two near-simultaneous merges
