@@ -103,6 +103,17 @@ jobs:
           echo "$out" | grep -q "^\[ping\]"  || { echo "::error::sidecar-roundtrip missing [ping] marker"; exit 1; }
           echo "$out" | grep -q "^\[bye\]"   || { echo "::error::sidecar-roundtrip missing [bye] marker"; exit 1; }
 
+      - name: example / web-shell (vite build smoke)
+        # The framework's runnable reference app. We don't run it (no headless
+        # browser here), but a clean Vite build is enough to catch any
+        # framework export / type / fixture-schema regression that would
+        # otherwise only surface when an external user clones the repo.
+        run: |
+          pnpm --filter steerable-example-web-shell build
+          test -f examples/web-shell/dist/index.html || {
+            echo "::error::web-shell build did not produce dist/index.html"; exit 1;
+          }
+
   sidecar-budget:
     # D3 (sidecar bundle size budget): enforces a hard upper bound on the
     # sidecar bundle size on every PR so a future dependency bump can't

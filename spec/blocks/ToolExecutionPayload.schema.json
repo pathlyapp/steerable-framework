@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/ToolExecutionPayload.schema.json",
+  "title": "ToolExecutionPayload",
+  "description": "Payload of a tool-execution card. Unified representation of a single tool / MCP / local action invocation: name, status, args (input), output, and an optional human-readable summary. Both deeppath's ActionSegment and deeppath-agent's ExecutedActionsCard render off this same shape.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "name", "status"],
+  "properties": {
+    "id": { "type": "string", "description": "Stable id of this invocation." },
+    "name": { "type": "string", "description": "Tool name as exposed to the agent." },
+    "status": { "type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"] },
+    "summary": { "type": ["string", "null"], "description": "One-line human summary for the row header." },
+    "args": {},
+    "output": {},
+    "error": { "type": ["string", "null"] },
+    "durationMs": { "type": ["integer", "null"], "minimum": 0 },
+    "icon": { "type": ["string", "null"], "description": "Optional icon hint (lucide name or url)." },
+    "expandable": { "type": "boolean", "default": true }
+  }
+}

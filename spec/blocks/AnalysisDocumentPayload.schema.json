@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/AnalysisDocumentPayload.schema.json",
+  "title": "AnalysisDocumentPayload",
+  "description": "Payload of an analysis-document card. Renders as a long-form markdown document (research write-up, design memo, etc.). The body string can include GFM markdown, mermaid blocks, and inline references. The optional metadata block carries model / timestamp info shown in the document header.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["body"],
+  "properties": {
+    "title": { "type": ["string", "null"], "description": "Optional document title; defaults to a generic 'Analysis' label client-side." },
+    "body": { "type": "string", "description": "Markdown body. May include mermaid code-fences." },
+    "createdAt": { "type": ["string", "null"], "format": "date-time" },
+    "modelId": { "type": ["string", "null"], "description": "Display model badge id (resolved to model option client-side)." }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/SummaryMessagePayload.schema.json",
+  "title": "SummaryMessagePayload",
+  "description": "Payload of a summary-message card. Used when the chat history was condensed: the card shows a markdown summary along with a count of how many original messages it replaces. Collapsed by default.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["body"],
+  "properties": {
+    "body": { "type": "string", "description": "Markdown summary text." },
+    "summarizedCount": { "type": ["integer", "null"], "minimum": 0 },
+    "status": { "type": ["string", "null"], "enum": ["pending", "complete", "failed", null] },
+    "type": { "type": ["string", "null"], "description": "Free-form summary kind label (e.g. 'history_compaction')." }
+  }
+}

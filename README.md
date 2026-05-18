@@ -11,6 +11,7 @@ Pick any subset, skip the rest.
 [![CI](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-success)](https://pathlyapp.github.io/steerable-framework/)
 [![Storybook](https://img.shields.io/badge/storybook-live-ff4785)](https://pathlyapp.github.io/steerable-framework/storybook/)
+[![Live demo](https://img.shields.io/badge/live%20demo-web--shell-22c55e)](https://pathlyapp.github.io/steerable-framework/demo/)
 
 [![npm: agent-protocol](https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-protocol)
 [![npm: agent-ui](https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-ui)
@@ -21,7 +22,11 @@ Pick any subset, skip the rest.
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-green?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Sigstore](https://img.shields.io/badge/npm%20provenance-sigstore-orange)](https://docs.npmjs.com/generating-provenance-statements)
 
-[Docs](https://pathlyapp.github.io/steerable-framework/) · [Storybook](https://pathlyapp.github.io/steerable-framework/storybook/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable-framework/releases) · [Discussions](https://github.com/pathlyapp/steerable-framework/discussions)
+[Docs](https://pathlyapp.github.io/steerable-framework/) · [Storybook](https://pathlyapp.github.io/steerable-framework/storybook/) · [Live demo](https://pathlyapp.github.io/steerable-framework/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable-framework/releases) · [Discussions](https://github.com/pathlyapp/steerable-framework/discussions)
+
+> **Want to see it running before reading anything?**
+> `git clone … && pnpm install && pnpm shell:dev` (or open the [hosted live demo](https://pathlyapp.github.io/steerable-framework/demo/)).
+> Zero external services required — the default mock transport replays the 14 rich chat cards out of the box.
 
 </div>
 

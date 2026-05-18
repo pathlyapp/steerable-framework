@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/OrchestrationPlanPayload.schema.json",
+  "title": "OrchestrationPlanPayload",
+  "description": "Payload of an orchestration-plan card emitted by the Coordinator agent. Lists every worker task (id + agent + prompt + dependencies). The UI renders one row per task with a live status dot driven by sibling assistant messages tagged with the same orchestrationGroupId + orchestrationTaskId.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["tasks"],
+  "properties": {
+    "rationale": {
+      "type": "string",
+      "description": "Short prose explanation of why the coordinator picked this plan shape."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["parallel", "sequential", "dag"],
+      "description": "How the workers run with respect to each other."
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "agentId"],
+        "properties": {
+          "id": { "type": "string", "description": "Stable id for this task within the orchestration group." },
+          "agentId": { "type": "string", "description": "Which agent runs this task." },
+          "prompt": { "type": "string", "description": "Per-task prompt the coordinator drafted." },
+          "dependsOn": { "type": "array", "items": { "type": "string" }, "description": "Task ids that must finish before this one starts." },
+          "readOutputsFrom": { "type": "array", "items": { "type": "string" }, "description": "Task ids whose outputs this task is allowed to read." }
+        }
+      }
+    },
+    "coordinator": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "agentId": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" }
+      }
+    }
+  }
+}

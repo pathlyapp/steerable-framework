@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/QuizPayload.schema.json",
+  "title": "QuizPayload",
+  "description": "Payload of a quiz card. Carries one or more questions (choice / fill / judge / short_answer) and a submit button label. After the learner submits, the backend re-emits the same quizId with submittedAnswers filled in to switch the UI to read-only review mode.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["quizId", "title", "questions", "submitActionLabel"],
+  "properties": {
+    "quizId": { "type": "string", "description": "Stable id, used for resubmit and review continuity." },
+    "title": { "type": "string" },
+    "description": { "type": ["string", "null"] },
+    "submitActionLabel": { "type": "string", "default": "提交" },
+    "submittedAnswers": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "type", "stem"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["choice", "fill", "judge", "short_answer"] },
+          "stem": { "type": "string" },
+          "options": { "type": ["array", "null"], "items": { "type": "string" } },
+          "allowMultiple": { "type": ["boolean", "null"] },
+          "placeholder": { "type": ["string", "null"] },
+          "points": { "type": ["number", "null"] },
+          "knowledgePointId": { "type": ["string", "null"] },
+          "difficulty": { "type": ["number", "null"] }
+        }
+      }
+    }
+  }
+}

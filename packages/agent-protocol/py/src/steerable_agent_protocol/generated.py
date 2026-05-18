@@ -3,6 +3,89 @@ from __future__ import annotations
 from typing import Any
 from pydantic import BaseModel
 
+class ActionSegmentPayload(BaseModel):
+    segments: list[Any]
+
+class AnalysisDocumentPayload(BaseModel):
+    title: Any | None = None
+    body: str
+    createdAt: Any | None = None
+    modelId: Any | None = None
+
+class AskUserQuestionsPayload(BaseModel):
+    intro: str
+    outro: Any | None = None
+    answers: Any | None = None
+    questions: list[Any]
+
+class CoverageReportPayload(BaseModel):
+    reportId: str
+    title: str
+    overallCoverage: float
+    overallMastery: float
+    summary: Any | None = None
+    sections: list[Any]
+    weakPoints: list[Any]
+    actions: dict[str, Any]
+
+class OrchestrationPlanPayload(BaseModel):
+    rationale: str | None = None
+    mode: str | None = None
+    tasks: list[Any]
+    coordinator: dict[str, Any] | None = None
+
+class PlanSelectorPayload(BaseModel):
+    comparison: str
+    selectedPlan: Any | None = None
+    goalAttribution: dict[str, Any]
+    plans: list[Any]
+
+class PlanStepsPayload(BaseModel):
+    steps: list[Any]
+
+class QuizPayload(BaseModel):
+    quizId: str
+    title: str
+    description: Any | None = None
+    submitActionLabel: str
+    submittedAnswers: Any | None = None
+    questions: list[Any]
+
+class ResearchPlanPayload(BaseModel):
+    topic: str
+    round: int
+    final: bool
+    subQuestions: list[Any]
+    decision: dict[str, Any]
+
+class SearchSourcesPayload(BaseModel):
+    sources: list[Any]
+
+class SuggestedRepliesPayload(BaseModel):
+    suggestions: list[Any]
+
+class SummaryMessagePayload(BaseModel):
+    body: str
+    summarizedCount: Any | None = None
+    status: Any | None = None
+    type: Any | None = None
+
+class ThinkingProcessPayload(BaseModel):
+    body: str
+    defaultExpanded: bool | None = None
+
+class ToolExecutionPayload(BaseModel):
+    id: str
+    name: str
+    status: str
+    summary: Any | None = None
+    args: Any | None = None
+    output: Any | None = None
+    error: Any | None = None
+    durationMs: Any | None = None
+    icon: Any | None = None
+    expandable: bool | None = None
+
 class ChatAgent(BaseModel):
     id: str
     slug: str | None = None

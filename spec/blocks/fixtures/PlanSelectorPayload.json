@@ -1,0 +1,52 @@
+{
+  "comparison": "速成方案适合需要快速看到效果的同学，但稳健和深耕方案的长期结果更好。",
+  "selectedPlan": null,
+  "goalAttribution": {
+    "type": "new",
+    "newGoalTitle": "六月期末数学冲刺"
+  },
+  "plans": [
+    {
+      "id": "plan-speed",
+      "name": "1 周速成",
+      "summary": "聚焦考试高频题型 + 错题回顾，最短时间内拿到 10 分提升。",
+      "approach": "每天 90 分钟，5 个高频题型轮训",
+      "bestFor": "时间紧 / 已有基础",
+      "metrics": {
+        "duration": "1 周",
+        "effortLevel": "high",
+        "riskLevel": "medium"
+      },
+      "pros": ["立竿见影", "强针对性"],
+      "cons": ["对基础薄弱者风险大", "提升幅度封顶"]
+    },
+    {
+      "id": "plan-balanced",
+      "name": "1 个月稳健",
+      "summary": "覆盖薄弱知识点 + 高频题型，每周一次小测复盘。",
+      "approach": "周一至周四主题学习，周五小测，周末错题回顾",
+      "bestFor": "想要稳步提升的大多数同学",
+      "metrics": {
+        "duration": "1 个月",
+        "effortLevel": "medium",
+        "riskLevel": "low"
+      },
+      "pros": ["节奏适中", "覆盖全面"],
+      "cons": ["短期内分数提升不如速成显著"]
+    },
+    {
+      "id": "plan-deep",
+      "name": "3 个月深耕",
+      "summary": "重建基础 + 系统性专项，目标拿到稳定高分。",
+      "approach": "按章节走，每章 1-2 周，配建模型化的测评回放",
+      "bestFor": "基础较弱 / 时间充裕",
+      "metrics": {
+        "duration": "3 个月",
+        "effortLevel": "medium",
+        "riskLevel": "low"
+      },
+      "pros": ["真正打牢基础", "可迁移到下一学期"],
+      "cons": ["短期感受较弱", "对自律要求高"]
+    }
+  ]
+}

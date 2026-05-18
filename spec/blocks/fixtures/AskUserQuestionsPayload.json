@@ -1,0 +1,30 @@
+{
+  "intro": "为了给你制定更准确的训练计划，请回答以下几个问题：",
+  "outro": "回答完后我会立刻基于你的情况调整方案。",
+  "questions": [
+    {
+      "id": "q-level",
+      "text": "你目前最接近哪个水平？",
+      "type": "select",
+      "options": ["完全零基础", "学过一些但已忘", "有一定基础"],
+      "placeholder": null,
+      "multiSelect": false
+    },
+    {
+      "id": "q-focus",
+      "text": "你最希望优先提升哪些方向？（可多选）",
+      "type": "select",
+      "options": ["计算速度", "概念理解", "应用题", "推理能力"],
+      "placeholder": null,
+      "multiSelect": true
+    },
+    {
+      "id": "q-time",
+      "text": "工作日每天可投入的时间（小时）：",
+      "type": "text",
+      "options": [],
+      "placeholder": "例如 1.5",
+      "multiSelect": false
+    }
+  ]
+}

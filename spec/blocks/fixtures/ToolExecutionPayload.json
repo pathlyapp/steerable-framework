@@ -1,0 +1,20 @@
+{
+  "id": "tool-call-94",
+  "name": "search.web",
+  "status": "succeeded",
+  "summary": "用 'pgvector benchmarks' 在搜索引擎检索",
+  "args": {
+    "query": "pgvector benchmarks 2025",
+    "recencyDays": 180
+  },
+  "output": {
+    "hits": [
+      { "title": "pgvector 0.7 perf", "url": "https://supabase.com/blog/pgvector-2-performance" },
+      { "title": "Vector DB shootout", "url": "https://arxiv.org/abs/2403.09611" }
+    ]
+  },
+  "error": null,
+  "durationMs": 1234,
+  "icon": null,
+  "expandable": true
+}

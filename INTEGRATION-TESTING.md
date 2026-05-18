@@ -179,7 +179,7 @@ cd ../deeppath-api    && uv lock --upgrade-package steerable-agent-protocol \
 | `deeppath` | `./scripts/use_framework_local.sh` | `./scripts/use_framework_npm.sh` | `cd apps/web && pnpm type-check && pnpm test` |
 | `deeppath-api` | `./scripts/use_framework_source.sh` | `./scripts/use_framework_pypi.sh` | `uv run pytest` |
 | `deeppath-agent` | `./scripts/use_framework_local.sh` | `./scripts/use_framework_npm.sh` | `pnpm test` (vitest) |
-| `steerable-framework` | n/a (it IS the source) | n/a | `pnpm test && uv run pytest` |
+| `steerable-framework` | n/a (it IS the source) | n/a | `pnpm test && uv run pytest && pnpm shell:build` |
 
 The `deeppath-api` scripts also have a third mode `./scripts/use_framework_wheels.sh` for installing from locally-built `.whl` files — useful for RC validation before PyPI publish.
 
@@ -301,6 +301,35 @@ uv run python -c 'import steerable_agent_harness as m; print(m.__file__)'
 # expect either ".venv/site-packages/..." (PyPI/wheel mode)
 # or "../steerable-framework/packages/agent-harness/py/src/..." (source mode)
 ```
+
+---
+
+## Reference app (web-shell)
+
+The framework ships its own runnable reference app at `examples/web-shell/`.
+It's the canonical answer to "show me what the framework looks like assembled".
+
+```bash
+# zero external deps; mock transport replays canned fixtures
+pnpm shell:dev
+
+# OR — talk to a real sidecar
+pnpm --filter steerable-example-sidecar-roundtrip dev  # terminal 1
+VITE_TRANSPORT=sidecar pnpm shell:dev                  # terminal 2
+
+# static build (used by docs.yml to publish to GitHub Pages /demo/)
+pnpm shell:build
+```
+
+`ci.yml` runs `pnpm shell:build` on every PR so any framework export / type /
+fixture drift fails fast. `docs.yml` ships the same build to GH Pages on
+every push to `main`, giving us the badge-linked "Live demo" URL at
+`https://pathlyapp.github.io/steerable-framework/demo/`.
+
+Fixtures the web-shell consumes live at `spec/blocks/fixtures/*.json` and
+are kept honest by the Ajv conformance test
+(`tests/conformance/ts/blocks.test.ts`) — schemas evolve, fixtures must keep
+matching.
 
 ---
 

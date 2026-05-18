@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
   }

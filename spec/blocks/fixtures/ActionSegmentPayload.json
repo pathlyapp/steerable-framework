@@ -1,0 +1,34 @@
+{
+  "segments": [
+    {
+      "id": "seg-1",
+      "kind": "create_task",
+      "status": "succeeded",
+      "label": "为目标新建 4 个任务",
+      "args": {
+        "goalId": "goal-2026-math-final",
+        "items": [
+          { "title": "因式分解专项", "dueDate": "2026-06-02" },
+          { "title": "10 题小测", "dueDate": "2026-06-06" }
+        ]
+      },
+      "output": {
+        "taskIds": ["task-aa", "task-bb"]
+      },
+      "error": null,
+      "startedAt": "2026-05-18T09:00:00Z",
+      "finishedAt": "2026-05-18T09:00:01.4Z"
+    },
+    {
+      "id": "seg-2",
+      "kind": "schedule_reminder",
+      "status": "succeeded",
+      "label": "每天 20:00 提醒",
+      "args": { "time": "20:00", "repeat": "FREQ=DAILY" },
+      "output": { "reminderId": "rem-77" },
+      "error": null,
+      "startedAt": "2026-05-18T09:00:01.5Z",
+      "finishedAt": "2026-05-18T09:00:01.7Z"
+    }
+  ]
+}

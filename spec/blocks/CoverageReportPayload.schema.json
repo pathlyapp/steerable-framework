@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/CoverageReportPayload.schema.json",
+  "title": "CoverageReportPayload",
+  "description": "Payload of a coverage-report card. Summarises mastery of a knowledge graph: section-level coverage / mastery and a list of weak knowledge points the learner should remediate. The actions block tells the UI whether a 'practice weak points' button should be offered.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["reportId", "title", "overallCoverage", "overallMastery", "sections", "weakPoints", "actions"],
+  "properties": {
+    "reportId": { "type": "string" },
+    "title": { "type": "string" },
+    "overallCoverage": { "type": "number", "minimum": 0, "maximum": 1, "description": "0..1 fraction of nodes covered." },
+    "overallMastery": { "type": "number", "minimum": 0, "maximum": 1, "description": "0..1 fraction of nodes mastered." },
+    "summary": { "type": ["string", "null"] },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "name", "coverage", "mastery", "totalCount", "learnedCount", "testedCount", "masteredCount", "weakKpIds"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+          "mastery": { "type": "number", "minimum": 0, "maximum": 1 },
+          "totalCount": { "type": "integer", "minimum": 0 },
+          "learnedCount": { "type": "integer", "minimum": 0 },
+          "testedCount": { "type": "integer", "minimum": 0 },
+          "masteredCount": { "type": "integer", "minimum": 0 },
+          "weakKpIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "weakPoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "name", "accuracy", "recommendation"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "sectionName": { "type": ["string", "null"] },
+          "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+          "recommendation": { "type": "string" }
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["allowRemediateQuiz", "remediateActionLabel"],
+      "properties": {
+        "allowRemediateQuiz": { "type": "boolean" },
+        "remediateActionLabel": { "type": "string" }
+      }
+    }
+  }
+}

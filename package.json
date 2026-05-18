@@ -9,7 +9,10 @@
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
-    "check:drift": "pnpm -r run check:drift"
+    "check:drift": "pnpm -r run check:drift",
+    "shell:dev": "pnpm --filter steerable-example-web-shell dev",
+    "shell:build": "pnpm --filter steerable-example-web-shell build",
+    "shell:preview": "pnpm --filter steerable-example-web-shell preview"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",

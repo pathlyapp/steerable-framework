@@ -1,0 +1,32 @@
+{
+  "sources": [
+    {
+      "url": "https://arxiv.org/abs/2403.09611",
+      "title": "Scaling Vector Search: pgvector vs Qdrant vs Weaviate",
+      "snippet": "我们对比了三种向量数据库在 1B 文档规模下的查询延迟与召回率，结论是 ……",
+      "favicon": null,
+      "publishedAt": "2024-03-14"
+    },
+    {
+      "url": "https://qdrant.tech/articles/serverless-benchmarks/",
+      "title": "Qdrant 1.10 Serverless Benchmarks",
+      "snippet": "在云原生场景下 Qdrant 的 P99 延迟保持在 8ms ……",
+      "favicon": null,
+      "publishedAt": "2025-02-02"
+    },
+    {
+      "url": "https://supabase.com/blog/pgvector-2-performance",
+      "title": "pgvector 0.7 性能升级",
+      "snippet": "我们将 IVF 改为 HNSW 后查询性能提升 4 倍 ……",
+      "favicon": null,
+      "publishedAt": "2024-09-18"
+    },
+    {
+      "url": "https://weaviate.io/blog/multi-tenancy-benchmark",
+      "title": "Weaviate 多租户基准测试",
+      "snippet": "在 1000 个租户共享一个集群时，每个租户的 P95 维持在 ……",
+      "favicon": null,
+      "publishedAt": "2025-01-10"
+    }
+  ]
+}
