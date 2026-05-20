@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import random
 
 from steerable_agent_harness import retry
+from steerable_agent_harness.retry import is_retryable_error
 
 
 def test_default_policy_attempts() -> None:
@@ -60,3 +62,54 @@ def test_retry_golden_no_jitter(assert_golden) -> None:
         "delays": [retry.next_retry_delay_ms(policy, a) for a in range(1, 6)],
     }
     assert_golden("retry_no_jitter", payload)
+
+
+# ---------------------------------------------------------------------------
+# is_retryable_error
+# ---------------------------------------------------------------------------
+
+
+def test_is_retryable_default_network_types() -> None:
+    assert is_retryable_error(asyncio.TimeoutError()) is True
+    assert is_retryable_error(TimeoutError()) is True
+    assert is_retryable_error(ConnectionError("reset")) is True
+    assert is_retryable_error(ConnectionResetError("reset")) is True
+    assert is_retryable_error(OSError("broken pipe")) is True
+
+
+def test_is_retryable_value_error_not_retryable() -> None:
+    assert is_retryable_error(ValueError("bad arg")) is False
+    assert is_retryable_error(RuntimeError("logic")) is False
+    assert is_retryable_error(KeyError("missing")) is False
+
+
+def test_is_retryable_cancellation_never_retried() -> None:
+    assert is_retryable_error(asyncio.CancelledError()) is False
+    assert is_retryable_error(KeyboardInterrupt()) is False
+    assert is_retryable_error(SystemExit(0)) is False
+
+
+def test_is_retryable_should_retry_true_overrides_type() -> None:
+    class CustomBusinessError(Exception):
+        should_retry = True
+
+    assert is_retryable_error(CustomBusinessError("hi")) is True
+
+
+def test_is_retryable_should_retry_false_overrides_default_retryable() -> None:
+    class FatalTimeout(asyncio.TimeoutError):
+        should_retry = False
+
+    assert is_retryable_error(FatalTimeout()) is False
+
+
+def test_is_retryable_should_retry_none_falls_back_to_type_check() -> None:
+    class WithExplicitNone(asyncio.TimeoutError):
+        should_retry = None
+
+    assert is_retryable_error(WithExplicitNone()) is True
+
+    class PlainBusinessError(Exception):
+        should_retry = None
+
+    assert is_retryable_error(PlainBusinessError()) is False

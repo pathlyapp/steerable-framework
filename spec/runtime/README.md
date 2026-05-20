@@ -11,6 +11,15 @@ TransportAdapters that ship trace data to a UI.
 | `TraceSpan.schema.json` | A timed step inside a HarnessTrace (LLM call, tool call, …). | Per-step |
 | `TraceEvent.schema.json` | A point-in-time event inside a HarnessTrace. | Per-event |
 
+## RFCs
+
+Design documents that drive the runtime's evolution. RFCs land here as Markdown before
+any schema or code lands.
+
+| RFC | Status | Topic |
+| --- | --- | --- |
+| [`chat-loop.md`](./chat-loop.md) | Draft (2026-05-20) | The framework's canonical Think-Act-Observe loop — 8 responsibilities, 11 hooks, SSE event sequence contract. Drives Phase 1 (A1/A2/A3) of the agent-app extraction. |
+
 ## Identity rules
 
 - `AgentSession.sessionId` is **visible to clients** and used for resume. `id` is the

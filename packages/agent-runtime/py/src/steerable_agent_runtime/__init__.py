@@ -1,5 +1,35 @@
 """Steerable agent runtime — Tier 3 adapter package."""
 
+from .chat_loop import (
+    HOOK_SKIP,
+    AssistantMessageCtx,
+    BudgetExhaustedCtx,
+    BudgetLimit,
+    BudgetState,
+    ChatLoop,
+    CompletionDecision,
+    CompletionStatus,
+    EmitCtx,
+    ErrorCtx,
+    HookCallback,
+    HookContext,
+    HookError,
+    HookName,
+    LoopConfig,
+    LoopEndCtx,
+    LoopStartCtx,
+    ProviderKind,
+    RetryPolicy,
+    RoundEndCtx,
+    RoundStartCtx,
+    SendMessagesCtx,
+    ToolCallCtx,
+    ToolResultCtx,
+    consume_budget,
+    decide_completion,
+    is_retryable_error,
+    next_retry_delay_ms,
+)
 from .errors import (
     BudgetExhaustedError,
     PolicyDeniedError,
@@ -9,7 +39,9 @@ from .errors import (
     TransportError,
 )
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
-from .storage import StorageAdapter
+from .llm.anthropic_native import AnthropicProvider
+from .llm.openai_compat import OpenAICompatProvider
+from .storage import InMemoryStorage, StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
 from .transport import TransportAdapter
 
@@ -24,11 +56,44 @@ __all__ = [
     "LLMProvider",
     "LLMStreamChunk",
     "LLMUsage",
+    "OpenAICompatProvider",
+    "AnthropicProvider",
     "RegisteredTool",
     "ToolRouter",
     "tool",
     "StorageAdapter",
+    "InMemoryStorage",
     "TransportAdapter",
+    # ChatLoop (A1.1 — see spec/runtime/chat-loop.md)
+    "ChatLoop",
+    "LoopConfig",
+    "ProviderKind",
+    "CompletionStatus",
+    "HookName",
+    "HookCallback",
+    "HOOK_SKIP",
+    "HookError",
+    "HookContext",
+    "LoopStartCtx",
+    "LoopEndCtx",
+    "RoundStartCtx",
+    "RoundEndCtx",
+    "SendMessagesCtx",
+    "AssistantMessageCtx",
+    "ToolCallCtx",
+    "ToolResultCtx",
+    "EmitCtx",
+    "BudgetExhaustedCtx",
+    "ErrorCtx",
+    # Re-exported from steerable_agent_harness for convenience.
+    "BudgetLimit",
+    "BudgetState",
+    "CompletionDecision",
+    "RetryPolicy",
+    "consume_budget",
+    "decide_completion",
+    "is_retryable_error",
+    "next_retry_delay_ms",
 ]
 
 __version__ = "0.1.0"

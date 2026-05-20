@@ -148,6 +148,193 @@ def test_openai_parse_stream_chunk_tool_call_delta() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A1.5d.1 — partial-args streaming reassembly
+#
+# OpenAI streams ``function.arguments`` as a JSON object split across many
+# chunks (e.g. ``{"loc``, ``ation":``, ``"NYC"}``). Without a cross-chunk
+# accumulator the args dictionary ends up empty (or whatever the last
+# parsable fragment was). These tests pin the new contract:
+#
+# 1. ``tool_buf`` is the cross-chunk state.
+# 2. Each parsed chunk carries the **best-effort** parse of *all* args
+#    received so far for that ``index``. The accumulator never shrinks.
+# 3. ``id`` and ``function.name`` arrive on the first chunk only — every
+#    subsequent emit must still carry them.
+# 4. The final chunk (where args_str closes the JSON object) yields the
+#    complete parse.
+# ---------------------------------------------------------------------------
+
+
+def _tc_delta_chunk(
+    *,
+    index: int = 0,
+    id: str | None = None,
+    name: str | None = None,
+    args_fragment: str | None = None,
+    finish_reason: str | None = None,
+) -> dict:
+    delta_tc: dict = {"index": index}
+    if id is not None:
+        delta_tc["id"] = id
+    func: dict = {}
+    if name is not None:
+        func["name"] = name
+    if args_fragment is not None:
+        func["arguments"] = args_fragment
+    if func:
+        delta_tc["function"] = func
+    return {
+        "choices": [
+            {
+                "delta": {"tool_calls": [delta_tc]},
+                "finish_reason": finish_reason,
+            }
+        ]
+    }
+
+
+def test_partial_args_reassemble_across_three_chunks() -> None:
+    """Classic OpenAI bug repro: args JSON split across 3 chunks."""
+    tool_buf: dict[int, dict] = {}
+
+    # Chunk 1: id + name + empty args.
+    p1 = _parse_stream_chunk(
+        _tc_delta_chunk(id="call_x", name="get_weather", args_fragment=""),
+        tool_buf,
+    )
+    # Chunk 2: partial args, not yet parseable.
+    p2 = _parse_stream_chunk(
+        _tc_delta_chunk(args_fragment='{"loc'),
+        tool_buf,
+    )
+    # Chunk 3: more partial args, still not parseable.
+    p3 = _parse_stream_chunk(
+        _tc_delta_chunk(args_fragment='ation": "'),
+        tool_buf,
+    )
+    # Chunk 4: final fragment closes the JSON; finish_reason fires.
+    p4 = _parse_stream_chunk(
+        _tc_delta_chunk(args_fragment='NYC"}', finish_reason="tool_calls"),
+        tool_buf,
+    )
+
+    assert p1 is not None and p1.tool_call_delta is not None
+    assert p4 is not None and p4.tool_call_delta is not None
+
+    # The CRITICAL assertion: by the final chunk the accumulator has the
+    # full args dict. Before A1.5d.1 this would have been {} because every
+    # intermediate fragment was an isolated json.loads attempt.
+    assert p4.tool_call_delta.arguments == {"location": "NYC"}
+    # id + name carried through despite only being on chunk 1.
+    assert p4.tool_call_delta.id == "call_x"
+    assert p4.tool_call_delta.name == "get_weather"
+    assert p4.finish_reason == "tool_calls"
+
+    # Intermediate emits never "lose" what they had.
+    assert p1.tool_call_delta.arguments == {}
+    assert p2.tool_call_delta.arguments == {}  # not parseable yet
+    assert p3.tool_call_delta.arguments == {}  # still not parseable
+
+
+def test_partial_args_accumulator_never_shrinks_on_invalid_fragment() -> None:
+    """If a chunk arrives that makes the buffer temporarily invalid, the
+    exposed ``arguments`` dict must hold onto the last successful parse
+    rather than regressing to ``{}``.
+
+    This guards against the worst-case anti-pattern where a downstream
+    consumer relies on ``arguments`` being monotonic and we silently
+    leak a transient blank state.
+    """
+    tool_buf: dict[int, dict] = {}
+    # Send a single chunk with a fully-formed JSON object — happens with
+    # some providers that don't actually fragment.
+    _parse_stream_chunk(
+        _tc_delta_chunk(id="c1", name="f", args_fragment='{"x":1}'),
+        tool_buf,
+    )
+    assert tool_buf[0]["last_args"] == {"x": 1}
+
+    # Now simulate a corrupt/extra fragment (defensive — should not
+    # happen with real OpenAI but a misbehaving proxy might).
+    p_mid = _parse_stream_chunk(_tc_delta_chunk(args_fragment="garbage"), tool_buf)
+    assert p_mid is not None and p_mid.tool_call_delta is not None
+    # Last good parse preserved — we did NOT regress to {}.
+    assert p_mid.tool_call_delta.arguments == {"x": 1}
+
+
+def test_partial_args_two_tool_calls_with_interleaved_indexes() -> None:
+    """Multi-tool streams interleave chunks by ``index``. The accumulator
+    must track each index independently."""
+    tool_buf: dict[int, dict] = {}
+
+    # Open tool 0 and tool 1.
+    _parse_stream_chunk(
+        _tc_delta_chunk(index=0, id="c0", name="get_weather", args_fragment=""),
+        tool_buf,
+    )
+    _parse_stream_chunk(
+        _tc_delta_chunk(index=1, id="c1", name="list_files", args_fragment=""),
+        tool_buf,
+    )
+    # Interleave fragments.
+    _parse_stream_chunk(_tc_delta_chunk(index=0, args_fragment='{"city":'), tool_buf)
+    _parse_stream_chunk(_tc_delta_chunk(index=1, args_fragment='{"path":'), tool_buf)
+    _parse_stream_chunk(_tc_delta_chunk(index=0, args_fragment='"NYC"}'), tool_buf)
+    p_last = _parse_stream_chunk(
+        _tc_delta_chunk(index=1, args_fragment='"/tmp"}', finish_reason="tool_calls"),
+        tool_buf,
+    )
+
+    # Both indices fully assembled in the buffer.
+    assert tool_buf[0]["last_args"] == {"city": "NYC"}
+    assert tool_buf[1]["last_args"] == {"path": "/tmp"}
+    # The last emit reflects index 1 (the chunk we just sent).
+    assert p_last is not None and p_last.tool_call_delta is not None
+    assert p_last.tool_call_delta.id == "c1"
+    assert p_last.tool_call_delta.name == "list_files"
+    assert p_last.tool_call_delta.arguments == {"path": "/tmp"}
+
+
+def test_legacy_mode_without_tool_buf_still_handles_complete_args() -> None:
+    """``tool_buf=None`` keeps the pre-A1.5d.1 single-shot behaviour for
+    callers that haven't switched yet. Arguments arriving in a single
+    chunk parse correctly; spanning chunks is documented as lossy."""
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "function": {"name": "f", "arguments": '{"x":1}'},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    parsed = _parse_stream_chunk(chunk)  # no tool_buf
+    assert parsed is not None and parsed.tool_call_delta is not None
+    assert parsed.tool_call_delta.arguments == {"x": 1}
+
+
+def test_empty_args_fragment_does_not_break_accumulator() -> None:
+    """Many providers send an opening chunk with ``arguments=""``.
+    That must not corrupt the buffer or accidentally parse to {}."""
+    tool_buf: dict[int, dict] = {}
+    p = _parse_stream_chunk(
+        _tc_delta_chunk(id="c", name="f", args_fragment=""),
+        tool_buf,
+    )
+    assert p is not None and p.tool_call_delta is not None
+    # args_str is "" — empty string is *not* a valid JSON object, so the
+    # accumulator stays at its initial empty dict (not "{}" mistakenly
+    # accepted as {}).
+    assert p.tool_call_delta.arguments == {}
+    assert tool_buf[0]["args_str"] == ""
+
+
+# ---------------------------------------------------------------------------
 # Anthropic
 # ---------------------------------------------------------------------------
 

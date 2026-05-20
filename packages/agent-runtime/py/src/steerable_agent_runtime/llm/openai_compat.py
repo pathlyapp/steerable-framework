@@ -16,6 +16,7 @@ not need to install the heavyweight `openai` SDK.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -23,6 +24,8 @@ from typing import Any
 from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -104,6 +107,17 @@ class OpenAICompatProvider:
             stream=True,
             extra=kwargs,
         )
+        # Tool-call accumulator keyed by the OpenAI ``tool_calls[].index``.
+        # OpenAI sends tool-call ``id`` + ``function.name`` only on the
+        # first chunk for that index, then a tail of ``function.arguments``
+        # string fragments (a JSON object split across packets). We must
+        # therefore accumulate fragments across chunks and json-decode on
+        # every emit; downstream ``_accumulate_tool_call`` in ChatLoop
+        # overwrites ``arguments`` per chunk, so each yielded
+        # ``tool_call_delta`` must already carry the *full* best-effort
+        # parse of everything received so far. See ``spec/runtime/chat-loop.md``
+        # §11 for the rationale.
+        tool_buf: dict[int, dict[str, Any]] = {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
             async with client.stream(
                 "POST",
@@ -125,7 +139,7 @@ class OpenAICompatProvider:
                         chunk = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    parsed = _parse_stream_chunk(chunk)
+                    parsed = _parse_stream_chunk(chunk, tool_buf)
                     if parsed is not None:
                         yield parsed
 
@@ -213,7 +227,22 @@ def _decode_tool_calls(value: Any) -> list[ToolCall] | None:
     return out or None
 
 
-def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
+def _parse_stream_chunk(
+    chunk: dict[str, Any],
+    tool_buf: dict[int, dict[str, Any]] | None = None,
+) -> LLMStreamChunk | None:
+    """Parse one streamed SSE chunk from a chat-completions endpoint.
+
+    ``tool_buf`` is the cross-chunk accumulator keyed by the OpenAI
+    ``tool_calls[].index``. Each entry holds ``id``, ``name``,
+    ``args_str`` (raw concatenation of arguments fragments) and
+    ``last_args`` (last successful parse). The same instance must be
+    passed across all chunks of a single stream so partial JSON
+    fragments can be re-assembled. Pass ``None`` for the legacy
+    "parse this chunk in isolation" mode kept for backward-compat;
+    that mode is **lossy** when arguments span more than one chunk
+    and exists only so older callers don't break.
+    """
     choices = chunk.get("choices") or []
     if not choices:
         usage = chunk.get("usage")
@@ -236,17 +265,62 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     tool_call_delta: ToolCall | None = None
     raw_tool_calls = delta.get("tool_calls")
     if raw_tool_calls:
+        # OpenAI streams one tool-call delta per chunk in practice; the
+        # protocol allows >1 but no in-the-wild provider does it.
+        # If/when this fires we'll learn about it and revisit.
+        if len(raw_tool_calls) > 1:
+            logger.warning(
+                "openai_compat: chunk carried %d tool_calls deltas; "
+                "only the first is processed. raw=%r",
+                len(raw_tool_calls),
+                raw_tool_calls,
+            )
         first = raw_tool_calls[0]
+        index = int(first.get("index", 0) or 0)
         function = first.get("function") or {}
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except (TypeError, json.JSONDecodeError):
-            arguments = {}
-        tool_call_delta = ToolCall(
-            id=first.get("id") or "",
-            name=function.get("name") or "",
-            arguments=arguments,
-        )
+
+        if tool_buf is None:
+            # Legacy / isolated-parse path. Lossy for multi-chunk
+            # arguments — preserved only to not break old callers.
+            try:
+                arguments = json.loads(function.get("arguments") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                arguments = {}
+            tool_call_delta = ToolCall(
+                id=first.get("id") or "",
+                name=function.get("name") or "",
+                arguments=arguments,
+            )
+        else:
+            slot = tool_buf.setdefault(
+                index,
+                {"id": "", "name": "", "args_str": "", "last_args": {}},
+            )
+            if first.get("id"):
+                slot["id"] = first["id"]
+            if function.get("name"):
+                slot["name"] = function["name"]
+            args_fragment = function.get("arguments")
+            if args_fragment is not None:
+                slot["args_str"] += args_fragment
+            # Best-effort decode. Fragments may form an invalid JSON
+            # prefix mid-stream; in that case we *keep* the last
+            # successful parse so downstream sees monotonically
+            # growing (never-shrinking) arguments. The last fragment
+            # is guaranteed by OpenAI to close the JSON object, so
+            # ``last_args`` converges to the full payload by the
+            # ``finish_reason="tool_calls"`` chunk.
+            args_str = slot["args_str"]
+            if args_str:
+                try:
+                    slot["last_args"] = json.loads(args_str)
+                except (TypeError, json.JSONDecodeError):
+                    pass  # keep last successful parse
+            tool_call_delta = ToolCall(
+                id=slot["id"],
+                name=slot["name"],
+                arguments=dict(slot["last_args"]),
+            )
     return LLMStreamChunk(
         content_delta=content,
         reasoning_delta=reasoning,
