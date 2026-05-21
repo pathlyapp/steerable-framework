@@ -155,17 +155,22 @@ class ToolRouter:
     ) -> Any:
         signature = inspect.signature(tool.handler)
         kwargs: dict[str, Any] = {}
+        has_var_keyword = False
         for parameter in signature.parameters.values():
             if parameter.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
             ):
+                continue
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                has_var_keyword = True
                 continue
             name = parameter.name
             if name in arguments:
                 kwargs[name] = arguments[name]
             elif name == "context":
                 kwargs[name] = context
+        if has_var_keyword:
+            kwargs.update(arguments)
         result = tool.handler(**kwargs)
         if inspect.isawaitable(result):
             return await result

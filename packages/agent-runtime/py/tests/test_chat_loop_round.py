@@ -30,6 +30,7 @@ from steerable_agent_runtime import (
     HOOK_SKIP,
     AssistantMessageCtx,
     ChatLoop,
+    ContentDeltaCtx,
     LLMMessage,
     LLMStreamChunk,
     LLMUsage,
@@ -602,10 +603,11 @@ async def test_session_envelope_unchanged_with_round_body() -> None:
     loop = ChatLoop(_make_config(provider, router))
 
     events = [e async for e in loop.run()]
-    # A1.4 will add round-level SSE events; A1.2 still emits only the
-    # session envelope: session.start → done → session.end
+    # A1.6 emits per-delta ``content`` events in addition to the
+    # session envelope.
     assert [(e.type, e.event) for e in events] == [
         ("agent", "session.start"),
+        ("content", None),
         ("done", None),
         ("agent", "session.end"),
     ]
@@ -808,3 +810,129 @@ async def test_loop_end_ctx_final_decision_populated_for_natural_stop() -> None:
     assert seen["final_decision"]["reason"] == "no_tool_calls"
     assert seen["final_decision"]["limit_kind"] is None
     assert seen["final_decision"]["terminal_index"] is None
+
+
+@pytest.mark.asyncio
+async def test_content_delta_hook_can_rewrite_and_skip_streamed_text() -> None:
+    router, _ = _make_router_with_tools()
+    provider = ScriptedProvider(
+        rounds=[
+            [_text_chunk("he"), _text_chunk("llo"), _finish_chunk("stop")],
+        ]
+    )
+    loop = ChatLoop(_make_config(provider, router))
+
+    async def rewrite_and_skip(ctx: ContentDeltaCtx) -> Any:
+        if ctx.delta == "llo":
+            return HOOK_SKIP
+        return ctx.delta.upper()
+
+    loop.on("content_delta", rewrite_and_skip)
+
+    events = [e async for e in loop.run()]
+    content_payloads = [
+        e.payload for e in events if e.type == "content" and isinstance(e.payload, dict)
+    ]
+    assert content_payloads == [{"text": "HE", "roundIndex": 0}]
+
+
+@pytest.mark.asyncio
+async def test_budget_tracker_receives_round_usage_and_finish() -> None:
+    router, _ = _make_router_with_tools()
+    provider = ScriptedProvider(
+        rounds=[
+            [
+                _text_chunk("hello"),
+                _finish_chunk(
+                    "stop",
+                    usage=LLMUsage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+                ),
+            ],
+        ]
+    )
+
+    class _Tracker:
+        def __init__(self) -> None:
+            self.usage_calls: list[tuple[int, int]] = []
+            self.finish: tuple[str, int, int] | None = None
+
+        async def on_usage(
+            self,
+            *,
+            loop_id: str,
+            session_id: str,
+            trace_id: str,
+            round_index: int,
+            usage: LLMUsage,
+            aggregate_usage: LLMUsage,
+        ) -> None:
+            _ = (loop_id, session_id, trace_id)
+            self.usage_calls.append((round_index, usage.total_tokens))
+            assert aggregate_usage.total_tokens >= usage.total_tokens
+
+        async def on_finish(
+            self,
+            *,
+            loop_id: str,
+            session_id: str,
+            trace_id: str,
+            final_status: str,
+            rounds_completed: int,
+            aggregate_usage: LLMUsage,
+        ) -> None:
+            _ = (loop_id, session_id, trace_id)
+            self.finish = (final_status, rounds_completed, aggregate_usage.total_tokens)
+
+    tracker = _Tracker()
+    # pyright/mypy protocol check happens at runtime through duck typing.
+    loop = ChatLoop(
+        LoopConfig(
+            provider=provider,
+            provider_kind="openai_compat",
+            tool_router=router,
+            initial_messages=[LLMMessage(role="user", content="hi")],
+            budget_tracker=tracker,  # type: ignore[arg-type]
+        )
+    )
+
+    async for _ in loop.run():
+        pass
+
+    assert tracker.usage_calls == [(0, 8)]
+    assert tracker.finish == ("completed", 1, 8)
+
+
+@pytest.mark.asyncio
+async def test_message_boundary_strategy_selects_window_before_send() -> None:
+    router, _ = _make_router_with_tools()
+    provider = ScriptedProvider(rounds=[[_finish_chunk("stop")]])
+
+    class _Boundary:
+        def select_messages(self, messages: Sequence[LLMMessage]) -> list[LLMMessage]:
+            # Keep only system + latest user message.
+            kept = [m for m in messages if m.role == "system"]
+            if messages:
+                kept.append(messages[-1])
+            return kept
+
+    loop = ChatLoop(
+        LoopConfig(
+            provider=provider,
+            provider_kind="openai_compat",
+            tool_router=router,
+            initial_messages=[
+                LLMMessage(role="system", content="s"),
+                LLMMessage(role="user", content="u1"),
+                LLMMessage(role="assistant", content="a1"),
+                LLMMessage(role="user", content="u2"),
+            ],
+            message_boundary_strategy=_Boundary(),  # type: ignore[arg-type]
+        )
+    )
+
+    async for _ in loop.run():
+        pass
+
+    sent_roles = [m.role for m in provider.calls[0]["messages"]]
+    assert sent_roles == ["system", "user"]
+    assert provider.calls[0]["messages"][-1].content == "u2"

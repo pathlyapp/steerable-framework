@@ -22,7 +22,14 @@ class TransportAdapter(Protocol):
     async def aclose(self) -> None: ...
 
 
-from .fastapi_sse import FastAPISseTransport, sse_response  # noqa: E402
+from .fastapi_sse import (  # noqa: E402
+    FastAPISseTransport,
+    RuntimeSSEType,
+    encode_legacy_compat_payload,
+    encode_sse_event,
+    encode_sse_event_bytes,
+    sse_response,
+)
 from .stdio_jsonrpc import (  # noqa: E402
     StdioJsonRpcTransport,
     JsonRpcMethodHandler,
@@ -32,6 +39,10 @@ from .stdio_jsonrpc import (  # noqa: E402
 __all__ = [
     "TransportAdapter",
     "FastAPISseTransport",
+    "RuntimeSSEType",
+    "encode_sse_event",
+    "encode_sse_event_bytes",
+    "encode_legacy_compat_payload",
     "sse_response",
     "StdioJsonRpcTransport",
     "JsonRpcMethodHandler",

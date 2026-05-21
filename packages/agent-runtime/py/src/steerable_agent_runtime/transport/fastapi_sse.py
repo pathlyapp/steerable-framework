@@ -5,11 +5,21 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from enum import Enum
 from typing import Any
 
 from steerable_agent_protocol.generated import SSEEvent
 
 from ..errors import TransportError
+
+
+class RuntimeSSEType(str, Enum):
+    AGENT = "agent"
+    CONTENT = "content"
+    DONE = "done"
+    TOOL_CALL = "tool_call"
+    MESSAGE_ID = "message_id"
+    ERROR = "error"
 
 
 class FastAPISseTransport:
@@ -92,6 +102,16 @@ def encode_sse_event(event: SSEEvent) -> str:
         lines.append(f"event: {event.event}")
     lines.append(f"data: {payload}")
     return "\n".join(lines) + "\n\n"
+
+
+def encode_sse_event_bytes(event: SSEEvent) -> bytes:
+    """Byte-oriented companion of `encode_sse_event`."""
+    return encode_sse_event(event).encode("utf-8")
+
+
+def encode_legacy_compat_payload(data: dict[str, Any]) -> bytes:
+    """Encode a legacy frontend-compatible `data: {...}` SSE frame."""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 def decode_sse_event(raw: str) -> SSEEvent | None:

@@ -5,10 +5,12 @@ from .chat_loop import (
     AssistantMessageCtx,
     BudgetExhaustedCtx,
     BudgetLimit,
+    BudgetTracker,
     BudgetState,
     ChatLoop,
     CompletionDecision,
     CompletionStatus,
+    ContentDeltaCtx,
     EmitCtx,
     ErrorCtx,
     HookCallback,
@@ -18,6 +20,7 @@ from .chat_loop import (
     LoopConfig,
     LoopEndCtx,
     LoopStartCtx,
+    MessageBoundaryStrategy,
     ProviderKind,
     RetryPolicy,
     RoundEndCtx,
@@ -43,7 +46,13 @@ from .llm.anthropic_native import AnthropicProvider
 from .llm.openai_compat import OpenAICompatProvider
 from .storage import InMemoryStorage, StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
-from .transport import TransportAdapter
+from .transport import (
+    RuntimeSSEType,
+    TransportAdapter,
+    encode_legacy_compat_payload,
+    encode_sse_event,
+    encode_sse_event_bytes,
+)
 
 __all__ = [
     "BudgetExhaustedError",
@@ -64,6 +73,10 @@ __all__ = [
     "StorageAdapter",
     "InMemoryStorage",
     "TransportAdapter",
+    "RuntimeSSEType",
+    "encode_sse_event",
+    "encode_sse_event_bytes",
+    "encode_legacy_compat_payload",
     # ChatLoop (A1.1 — see spec/runtime/chat-loop.md)
     "ChatLoop",
     "LoopConfig",
@@ -75,10 +88,12 @@ __all__ = [
     "HookError",
     "HookContext",
     "LoopStartCtx",
+    "MessageBoundaryStrategy",
     "LoopEndCtx",
     "RoundStartCtx",
     "RoundEndCtx",
     "SendMessagesCtx",
+    "ContentDeltaCtx",
     "AssistantMessageCtx",
     "ToolCallCtx",
     "ToolResultCtx",
@@ -87,6 +102,7 @@ __all__ = [
     "ErrorCtx",
     # Re-exported from steerable_agent_harness for convenience.
     "BudgetLimit",
+    "BudgetTracker",
     "BudgetState",
     "CompletionDecision",
     "RetryPolicy",

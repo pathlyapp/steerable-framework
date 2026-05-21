@@ -165,3 +165,19 @@ async def test_handler_can_request_context() -> None:
     assert result.data is not None
     assert result.data["value"] == {"who": "tai"}
     assert seen == [{"user": "tai"}]
+
+
+@pytest.mark.asyncio
+async def test_handler_accepting_var_kwargs_receives_all_arguments() -> None:
+    router = ToolRouter()
+
+    async def passthrough(**kwargs: object) -> dict:
+        return {"args": kwargs}
+
+    router.register(passthrough, name="passthrough")
+    result = await router.dispatch(
+        ToolCall(id="9", name="passthrough", arguments={"a": 1, "b": "x"}),
+    )
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["value"] == {"args": {"a": 1, "b": "x"}}

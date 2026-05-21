@@ -77,7 +77,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from steerable_agent_harness import (
     BudgetLimit,
@@ -135,6 +135,7 @@ HookName = Literal[
     "before_round",
     "after_round",
     "before_send_messages",
+    "content_delta",
     "after_assistant_message",
     "before_tool_call",
     "after_tool_result",
@@ -148,6 +149,47 @@ CompletionStatus = Literal["completed", "failed", "budget_exhausted", "cancelled
 
 
 ProviderKind = Literal["openai_compat", "anthropic_native"]
+
+
+@runtime_checkable
+class BudgetTracker(Protocol):
+    """Optional external budget/accounting hook interface.
+
+    This is intentionally orthogonal to `BudgetLimit`:
+
+    - `BudgetLimit` controls loop-internal stopping conditions.
+    - `BudgetTracker` lets callers mirror usage to external systems
+      (billing, quota ledgers, analytics).
+    """
+
+    async def on_usage(
+        self,
+        *,
+        loop_id: str,
+        session_id: str,
+        trace_id: str,
+        round_index: int,
+        usage: LLMUsage,
+        aggregate_usage: LLMUsage,
+    ) -> None: ...
+
+    async def on_finish(
+        self,
+        *,
+        loop_id: str,
+        session_id: str,
+        trace_id: str,
+        final_status: str,
+        rounds_completed: int,
+        aggregate_usage: LLMUsage,
+    ) -> None: ...
+
+
+@runtime_checkable
+class MessageBoundaryStrategy(Protocol):
+    """Optional message-window selector before each LLM call."""
+
+    def select_messages(self, messages: Sequence[LLMMessage]) -> list[LLMMessage]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +227,10 @@ class LoopConfig:
     # Retry policy is plumbed onto every hook ctx but not consumed by the
     # loop yet; A1.4 wraps LLM calls and A1.5 wraps tool dispatch in retries.
     retry_policy: RetryPolicy | None = None
+    # Optional external billing/quota tracker.
+    budget_tracker: BudgetTracker | None = None
+    # Optional message boundary/compaction selector.
+    message_boundary_strategy: MessageBoundaryStrategy | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     # If None, the loop calls ``tool_router.describe()`` to obtain the
@@ -284,6 +330,12 @@ class AssistantMessageCtx(HookContext):
 
 
 @dataclass(slots=True)
+class ContentDeltaCtx(HookContext):
+    round_index: int = 0
+    delta: str = ""
+
+
+@dataclass(slots=True)
 class ToolCallCtx(HookContext):
     tool_call: Any = None  # protocol.generated.ToolCall — typed in A1.2
     round_index: int = 0
@@ -329,6 +381,7 @@ _ALL_HOOK_NAMES: frozenset[str] = frozenset(
         "before_round",
         "after_round",
         "before_send_messages",
+        "content_delta",
         "after_assistant_message",
         "before_tool_call",
         "after_tool_result",
@@ -340,7 +393,7 @@ _ALL_HOOK_NAMES: frozenset[str] = frozenset(
 
 
 _SKIP_ALLOWED: frozenset[str] = frozenset(
-    ["before_round", "emit", "before_tool_call"]
+    ["before_round", "emit", "before_tool_call", "content_delta"]
 )
 
 
@@ -694,9 +747,14 @@ class ChatLoop:
                 # callbacks can tweak the payload for this single API call
                 # (system prompt, context window trimming, temperature override)
                 # without affecting the loop-wide buffers.
+                round_messages = list(messages)
+                if self._config.message_boundary_strategy is not None:
+                    round_messages = self._config.message_boundary_strategy.select_messages(
+                        round_messages
+                    )
                 send_ctx = SendMessagesCtx(
                     **self._make_ctx_base(),
-                    messages=list(messages),
+                    messages=round_messages,
                     tools=list(tools),
                     model=self._config.provider.model,
                     provider_kind=self._config.provider_kind,
@@ -728,7 +786,32 @@ class ChatLoop:
                         round_idx=round_idx,
                     ):
                         if chunk.content_delta:
-                            content_parts.append(chunk.content_delta)
+                            delta_ctx = ContentDeltaCtx(
+                                **self._make_ctx_base(),
+                                round_index=round_idx,
+                                delta=chunk.content_delta,
+                            )
+                            delta_ret = await self._hooks.fire("content_delta", delta_ctx)
+                            if delta_ret is not HOOK_SKIP:
+                                delta_text = (
+                                    delta_ret
+                                    if isinstance(delta_ret, str)
+                                    else delta_ctx.delta
+                                )
+                                if delta_text:
+                                    content_parts.append(delta_text)
+                                    # A1.6: stream text deltas in-loop.
+                                    sse = await self._emit(
+                                        SSEEvent(
+                                            type="content",
+                                            payload={
+                                                "text": delta_text,
+                                                "roundIndex": round_idx,
+                                            },
+                                        )
+                                    )
+                                    if sse is not None:
+                                        yield sse
                         if chunk.reasoning_delta:
                             reasoning_parts.append(chunk.reasoning_delta)
                         if chunk.tool_call_delta is not None:
@@ -818,6 +901,15 @@ class ChatLoop:
                             budget_state,
                             self._config.budget,
                             tokens=round_usage.total_tokens,
+                        )
+                    if self._config.budget_tracker is not None:
+                        await self._config.budget_tracker.on_usage(
+                            loop_id=self._loop_id,
+                            session_id=self._session_id,
+                            trace_id=self._trace_id,
+                            round_index=round_idx,
+                            usage=round_usage,
+                            aggregate_usage=aggregated_usage,
                         )
 
                 # 6. after_assistant_message
@@ -1093,6 +1185,16 @@ class ChatLoop:
         # best-effort; storage failure here is logged and swallowed so it
         # never masks the loop's actual outcome.
         await recorder.end_loop(final_status=final_status)
+
+        if self._config.budget_tracker is not None:
+            await self._config.budget_tracker.on_finish(
+                loop_id=self._loop_id,
+                session_id=self._session_id,
+                trace_id=self._trace_id,
+                final_status=final_status,
+                rounds_completed=rounds_completed,
+                aggregate_usage=aggregated_usage,
+            )
 
         if failed_llm_exc is not None:
             # The LLM-stream failure path emitted ``agent.event=error``,
@@ -1385,24 +1487,34 @@ def _serialise_tool_result(result: ToolResult) -> str:
 
     Convention:
 
-    * If ``result.message`` is set, use it verbatim (covers human-readable
+    * If only ``result.message`` is set, use it verbatim (covers human-readable
       summaries from tool handlers).
-    * Otherwise dump a compact JSON object with ``success`` plus whichever of
-      ``error`` / ``data`` are populated.
+    * If only ``result.data`` / ``result.error`` are set, dump a compact JSON
+      object with ``success`` plus whichever of them are populated.
+    * If **both** ``message`` and ``data`` are set, embed the message as
+      ``"message"`` inside the JSON so the LLM sees both the summary and
+      the raw rows. The earlier "message-wins, data is dropped" behaviour
+      was a footgun: handlers that use ``message`` as a status string
+      ("查询成功") with the actual rows in ``data`` would silently feed an
+      empty-looking response to the LLM and trigger hallucinations.
 
     Truncation against ``LoopConfig.max_tool_result_bytes`` is applied
     separately by ``_truncate_oversized`` after serialisation; this lets
     ``after_tool_result`` hooks observe the original full ``ToolResult``
     while only the LLM-visible content is shrunk.
     """
-    if result.message:
+    has_data = result.data is not None and result.data != {}
+    has_error = bool(result.error)
+    if result.message and not has_data and not has_error:
         return result.message
     payload: dict[str, Any] = {"success": result.success}
+    if result.message:
+        payload["message"] = result.message
     if result.error:
         payload["error"] = result.error
-    if result.data:
+    if has_data:
         payload["data"] = result.data
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def _truncate_oversized(serialised: str, max_bytes: int) -> str:
@@ -1864,6 +1976,8 @@ __all__ = [
     "ChatLoop",
     "LoopConfig",
     "ProviderKind",
+    "BudgetTracker",
+    "MessageBoundaryStrategy",
     "CompletionStatus",
     "HookName",
     "HookCallback",
@@ -1875,6 +1989,7 @@ __all__ = [
     "RoundStartCtx",
     "RoundEndCtx",
     "SendMessagesCtx",
+    "ContentDeltaCtx",
     "AssistantMessageCtx",
     "ToolCallCtx",
     "ToolResultCtx",

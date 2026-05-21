@@ -8,7 +8,9 @@ from steerable_agent_protocol.generated import SSEEvent
 from steerable_agent_runtime.transport import FastAPISseTransport
 from steerable_agent_runtime.transport.fastapi_sse import (
     decode_sse_event,
+    encode_legacy_compat_payload,
     encode_sse_event,
+    encode_sse_event_bytes,
 )
 
 
@@ -26,6 +28,18 @@ def test_encode_decode_round_trip() -> None:
     assert decoded is not None
     assert decoded.type == "tool_call"
     assert decoded.payload == {"name": "list_events"}
+
+
+def test_encode_sse_event_bytes_matches_string_encoder() -> None:
+    event = SSEEvent(type="done")
+    encoded = encode_sse_event(event)
+    assert encode_sse_event_bytes(event) == encoded.encode("utf-8")
+
+
+def test_encode_legacy_compat_payload_shape() -> None:
+    payload = encode_legacy_compat_payload({"type": "message_id", "messageId": "m1"})
+    assert payload.startswith(b"data: {")
+    assert b"message_id" in payload
 
 
 def test_decode_handles_empty_payload() -> None:
