@@ -66,7 +66,7 @@ const STREAM_INTRO: Record<CardKind, string> = {
 
 function streamLetters(text: string): MockScript {
   return text.split('').map((ch) => ({
-    event: { type: 'message.delta', role: 'assistant', delta: ch } as any,
+    event: { type: 'content', content: ch } as any,
     delayMs: 18,
   }));
 }
@@ -78,14 +78,13 @@ export function buildCardScript(kind: CardKind): MockScript {
     ...streamLetters(intro),
     {
       event: {
-        type: 'message.delta',
-        role: 'assistant',
-        delta: '',
-        metadata: { card: kind, payload },
+        type: 'content',
+        content: '',
+        messageMetadata: { card: kind, payload },
       } as any,
       delayMs: 80,
     },
-    { event: { type: 'message.complete' } as any },
+    { event: { type: 'done' } as any },
   ];
 }
 

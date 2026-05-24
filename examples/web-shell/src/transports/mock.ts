@@ -14,8 +14,8 @@ import { buildCardScript, detectCardKind } from './cardScripts.js';
 const fallbackScript = [
   ...'我是 web-shell 中的 mock agent。试试问「测验」、「编排」、「方案」、「分析」、「研究」、「来源」、「思考」、「步骤」、「操作」、「工具」、「摘要」、「问我」、「建议」、「覆盖」中任意一个，就能看到对应卡片的 fixture。'
     .split('')
-    .map((ch) => ({ event: { type: 'message.delta' as const, role: 'assistant' as const, delta: ch } as any, delayMs: 18 })),
-  { event: { type: 'message.complete' as const } as any },
+    .map((ch) => ({ event: { type: 'content' as const, content: ch } as any, delayMs: 18 })),
+  { event: { type: 'done' as const } as any },
 ];
 
 export function createMockTransport(): ChatStreamTransport {

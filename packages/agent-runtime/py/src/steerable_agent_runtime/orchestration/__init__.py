@@ -12,6 +12,11 @@ from .coordinator import (
     CoordinatorResult,
     run_coordinator,
 )
+from .dispatch import (
+    GroupChatStatus,
+    OrchestrationDecision,
+    decide_orchestration,
+)
 from .executor import OrchestrationExecutor
 from .plan import (
     OrchestrationPlan,
@@ -31,6 +36,9 @@ __all__ = [
     "COORDINATOR_TOOL_NAME",
     "CoordinatorResult",
     "run_coordinator",
+    "GroupChatStatus",
+    "OrchestrationDecision",
+    "decide_orchestration",
     "OrchestrationExecutor",
     "OrchestrationPlan",
     "OrchestrationTask",

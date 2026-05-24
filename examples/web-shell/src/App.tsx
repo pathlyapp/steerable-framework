@@ -51,6 +51,7 @@ function App() {
     [],
   );
   const session = useChatSession({ transport });
+  (window as any).session = session;
   const [darkMode, setDarkMode] = React.useState(false);
 
   React.useEffect(() => {
@@ -58,8 +59,7 @@ function App() {
   }, [darkMode]);
 
   const onPrompt = (text: string) => {
-    session.composer.setValue(text);
-    void session.composer.submit();
+    void session.sendUserMessage({ content: text });
   };
 
   return (

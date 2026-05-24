@@ -40,9 +40,11 @@ function Host({ children }: { children: React.ReactNode }) {
   const transport = React.useMemo(
     () =>
       new MockChatStreamTransport({
-        script: [
-          { event: { type: 'message.delta', role: 'assistant', delta: 'hi' } },
-          { event: { type: 'message.complete' } },
+        scripts: [
+          [
+            { event: { type: 'content', content: 'hi' } },
+            { event: { type: 'done' } },
+          ],
         ],
       }),
     [],

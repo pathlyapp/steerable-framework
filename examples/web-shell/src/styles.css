@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import "@steerable/agent-ui/styles.css";
 
 @source "../../packages/agent-ui/ts/src";
 @source "../../packages/agent-ui/ts/dist";

@@ -74,7 +74,7 @@ type Action =
   | { type: 'reset'; messages: ChatMessage[] }
   | { type: 'append'; message: ChatMessage }
   | { type: 'patch-last-assistant'; patch: Partial<ChatMessage> }
-  | { type: 'append-content'; delta: string }
+  | { type: 'append-content'; delta: string; patch?: Partial<ChatMessage> }
   | { type: 'append-tool-call'; call: ToolCall }
   | { type: 'attach-tool-result'; result: ToolResult }
   | { type: 'finalize-assistant' };
@@ -107,6 +107,7 @@ function reducer(state: State, action: Action): State {
       const patched: ChatMessage = {
         ...target,
         content: (target.content ?? '') + action.delta,
+        ...action.patch,
       } as ChatMessage;
       const next = state.messages.slice();
       next[idx] = patched;
@@ -222,7 +223,14 @@ export function useChatStream(
       switch (event.type) {
         case 'content': {
           const delta = pickContentDelta(event);
-          if (delta) dispatch({ type: 'append-content', delta });
+          const patch: Partial<ChatMessage> = {};
+          const rawMeta = event.messageMetadata ?? event.metadata ?? event.payload?.messageMetadata ?? event.payload?.metadata;
+          if (rawMeta !== undefined) {
+            patch.messageMetadata = rawMeta;
+          }
+          if (delta !== null || Object.keys(patch).length > 0) {
+            dispatch({ type: 'append-content', delta: delta ?? '', patch });
+          }
           return;
         }
         case 'tool_call': {

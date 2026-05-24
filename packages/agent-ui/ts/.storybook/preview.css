@@ -9,6 +9,7 @@
  * mirror it here so Storybook keeps rendering correctly.
  */
 @import "tailwindcss";
+@import "../src/styles.css";
 
 @source "../src/**/*.{ts,tsx}";
 @source "./**/*.{ts,tsx,mdx}";

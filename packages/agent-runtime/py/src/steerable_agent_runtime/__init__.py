@@ -46,6 +46,9 @@ from .llm.anthropic_native import AnthropicProvider
 from .llm.openai_compat import OpenAICompatProvider
 from .storage import InMemoryStorage, StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
+from .tools.web_search import web_search, web_search_with_sources
+from .prompt import SystemPromptBuilder, SkillModule, load_skills
+from .token_calculator import count_tokens, count_messages_tokens
 from .transport import (
     RuntimeSSEType,
     TransportAdapter,
@@ -57,6 +60,9 @@ from .orchestration import (
     COORDINATOR_TOOL_NAME,
     CoordinatorResult,
     run_coordinator,
+    GroupChatStatus,
+    OrchestrationDecision,
+    decide_orchestration,
     OrchestrationExecutor,
     OrchestrationPlan,
     OrchestrationTask,
@@ -88,6 +94,13 @@ __all__ = [
     "StorageAdapter",
     "InMemoryStorage",
     "TransportAdapter",
+    "web_search",
+    "web_search_with_sources",
+    "SystemPromptBuilder",
+    "SkillModule",
+    "load_skills",
+    "count_tokens",
+    "count_messages_tokens",
     "RuntimeSSEType",
     "encode_sse_event",
     "encode_sse_event_bytes",
@@ -96,6 +109,9 @@ __all__ = [
     "COORDINATOR_TOOL_NAME",
     "CoordinatorResult",
     "run_coordinator",
+    "GroupChatStatus",
+    "OrchestrationDecision",
+    "decide_orchestration",
     "OrchestrationExecutor",
     "OrchestrationPlan",
     "OrchestrationTask",

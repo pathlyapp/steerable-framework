@@ -1,0 +1,492 @@
+/*
+ * Steerable framework core styles.
+ * This file contains downported global styles for rendering agent rich cards,
+ * markdown content, custom scrollbars, animations, and timer border-beams.
+ * It uses the standard --agent-* design tokens, allowing any embedding application
+ * to fully customize the visuals.
+ */
+
+/* ==========================================
+   Emoji Fallback
+   ========================================== */
+.emoji-fallback {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@supports not (font-family: emoji) {
+  .emoji-fallback .emoji-fallback-icon {
+    display: inline-block !important;
+  }
+  
+  .emoji-fallback {
+    font-size: 0 !important;
+  }
+}
+
+/* ==========================================
+   Markdown Styling (agent-card compatible)
+   ========================================== */
+.markdown-content {
+  width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.markdown-body {
+  background-color: transparent !important;
+  font-size: 0.875rem !important;
+  color: inherit !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Headings */
+.markdown-body h1 {
+  font-size: 2em !important;
+  font-weight: 700 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  padding-bottom: 0.3em !important;
+  border-bottom: 1px solid var(--agent-border, #e4e4e7) !important;
+  line-height: 1.25 !important;
+}
+
+.markdown-body h2 {
+  font-size: 1.5em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  padding-bottom: 0.3em !important;
+  border-bottom: 1px solid var(--agent-border, #e4e4e7) !important;
+  line-height: 1.25 !important;
+}
+
+.markdown-body h3 {
+  font-size: 1.25em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  line-height: 1.25 !important;
+}
+
+.markdown-body h4 {
+  font-size: 1em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  line-height: 1.25 !important;
+}
+
+.markdown-body h5 {
+  font-size: 0.875em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  line-height: 1.25 !important;
+}
+
+.markdown-body h6 {
+  font-size: 0.85em !important;
+  font-weight: 600 !important;
+  margin-top: 1.5em !important;
+  margin-bottom: 0.75em !important;
+  line-height: 1.25 !important;
+  color: var(--agent-muted-foreground, #71717a) !important;
+}
+
+.markdown-body h1:first-child,
+.markdown-body h2:first-child,
+.markdown-body h3:first-child,
+.markdown-body h4:first-child,
+.markdown-body h5:first-child,
+.markdown-body h6:first-child {
+  margin-top: 0 !important;
+}
+
+/* Lists */
+.markdown-body ol {
+  list-style-type: decimal !important;
+  margin-left: 1.5rem !important;
+  padding-left: 0.5rem !important;
+}
+
+.markdown-body ul {
+  list-style-type: disc !important;
+  margin-left: 1.5rem !important;
+  padding-left: 0.5rem !important;
+}
+
+.markdown-body li {
+  display: list-item !important;
+  margin-bottom: 0.25rem !important;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Github Markdown Bridge */
+.markdown-body {
+  --fgColor-default: var(--agent-foreground, #09090b);
+  --fgColor-muted: var(--agent-muted-foreground, #71717a);
+  --bgColor-default: var(--agent-background, var(--agent-canvas, #ffffff));
+  --bgColor-muted: var(--agent-muted, #f4f4f5);
+  --bgColor-neutral-muted: color-mix(in srgb, var(--agent-muted, #f4f4f5) 60%, transparent);
+  --borderColor-default: var(--agent-border, #e4e4e7);
+  --borderColor-muted: var(--agent-border, #e4e4e7);
+  --borderColor-neutral-muted: var(--agent-border, #e4e4e7);
+}
+
+.markdown-body pre {
+  background-color: var(--agent-muted, #f4f4f5) !important;
+  color: var(--agent-foreground, #09090b) !important;
+  padding: 0.5rem !important;
+  border-radius: 0.25rem !important;
+  overflow: auto !important;
+}
+
+.markdown-body pre code,
+.markdown-body pre tt {
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+.markdown-body code {
+  background-color: var(--agent-muted, #f4f4f5) !important;
+  color: var(--agent-foreground, #09090b) !important;
+  padding: 0.125rem 0.25rem !important;
+  border-radius: 0.25rem !important;
+  font-size: 0.75rem !important;
+}
+
+/* Tables */
+.markdown-body table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+  margin: 0.75rem 0 !important;
+  display: table !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.5 !important;
+}
+
+.markdown-body table th,
+.markdown-body table td {
+  padding: 0.5rem 0.75rem !important;
+  text-align: left !important;
+  color: var(--agent-foreground, #09090b) !important;
+  border: 1px solid var(--agent-border, #e4e4e7) !important;
+}
+
+.markdown-body table th {
+  font-weight: 600 !important;
+  font-size: 0.75rem !important;
+  color: var(--agent-muted-foreground, #71717a) !important;
+  background-color: color-mix(in srgb, var(--agent-muted, #f4f4f5) 60%, transparent) !important;
+}
+
+.markdown-body table tr {
+  background-color: transparent !important;
+  border-top: 1px solid var(--agent-border, #e4e4e7) !important;
+  transition: background-color 0.15s ease !important;
+}
+
+.markdown-body table tr:nth-child(2n) {
+  background-color: color-mix(in srgb, var(--agent-muted, #f4f4f5) 25%, transparent) !important;
+}
+
+.markdown-body table tr:hover {
+  background-color: color-mix(in srgb, var(--agent-muted, #f4f4f5) 50%, transparent) !important;
+}
+
+/* User Message (Dark/Colored Background) Markdown */
+.markdown-body-light {
+  background-color: transparent !important;
+  font-size: 0.875rem !important;
+  color: white !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.markdown-body-light a {
+  color: var(--agent-accent-foreground, #ffffff) !important;
+  text-decoration: underline !important;
+}
+
+.markdown-body-light pre {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  color: white !important;
+  padding: 0.5rem !important;
+  border-radius: 0.25rem !important;
+  overflow: auto !important;
+}
+
+.markdown-body-light code {
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  color: white !important;
+  padding: 0.125rem 0.25rem !important;
+  border-radius: 0.25rem !important;
+  font-size: 0.75rem !important;
+}
+
+.markdown-body-light blockquote {
+  border-left: 4px solid rgba(255, 255, 255, 0.4) !important;
+  padding-left: 0.5rem !important;
+  font-style: italic !important;
+}
+
+.markdown-body-light table {
+  border-collapse: collapse !important;
+}
+
+.markdown-body-light th,
+.markdown-body-light td {
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  padding: 0.25rem !important;
+}
+
+/* ==========================================
+   Utility Layout Classes
+   ========================================== */
+.line-clamp-3 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* ==========================================
+   Scrollbar Configurations
+   ========================================== */
+.scrollbar-hide {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.scrollbar-hide::-webkit-scrollbar-track {
+  display: none !important;
+}
+
+.scrollbar-hide::-webkit-scrollbar-thumb {
+  display: none !important;
+}
+
+.scrollbar-global-transparent {
+  scrollbar-color: color-mix(in srgb, var(--agent-muted-foreground, #71717a) 45%, transparent) transparent;
+}
+
+.scrollbar-hidden {
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hidden:hover {
+  scrollbar-width: thin;
+  scrollbar-color: var(--agent-border, #e4e4e7) transparent;
+}
+.scrollbar-hidden:hover::-webkit-scrollbar {
+  display: block;
+  width: 4px;
+}
+.scrollbar-hidden:hover::-webkit-scrollbar-thumb {
+  background-color: var(--agent-border, #e4e4e7);
+  border-radius: 9999px;
+}
+.scrollbar-hidden:hover::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ==========================================
+   Entity Flash & Highlighting
+   ========================================== */
+@keyframes entity-flash {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(37 99 235 / 0);
+  }
+  18% {
+    transform: scale(1.015);
+    box-shadow: 0 0 0 4px rgb(37 99 235 / 0.5);
+  }
+  55% {
+    transform: scale(1);
+    box-shadow: 0 0 0 4px rgb(37 99 235 / 0.35);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(37 99 235 / 0);
+  }
+}
+
+.entity-flash {
+  animation: entity-flash 1.8s cubic-bezier(0.22, 1, 0.36, 1);
+  border-radius: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entity-flash {
+    animation: entity-flash 0.6s ease-out;
+    transform: none !important;
+  }
+}
+
+/* ==========================================
+   Layout Animations & Transitions
+   ========================================== */
+@keyframes tab-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tab-content-in {
+  animation: tab-content-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-content-in {
+    animation: none;
+  }
+}
+
+@keyframes locate-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes locate-banner-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.locate-banner-in {
+  animation: locate-banner-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.locate-banner-out {
+  animation: locate-banner-out 280ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+/* ==========================================
+   Border Beam Timers
+   ========================================== */
+@keyframes border-beam-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes timer-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--timer-glow); }
+  50%      { box-shadow: 0 0 6px 1px var(--timer-glow); }
+}
+
+.timer-border-beam {
+  --timer-glow: rgb(37 99 235 / 0.4);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 9999px;
+  animation: timer-breathe 3s ease-in-out infinite;
+}
+
+.timer-border-beam::before {
+  content: '';
+  position: absolute;
+  inset: -150%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    transparent 55%,
+    var(--timer-beam) 75%,
+    var(--timer-beam) 85%,
+    transparent 100%
+  );
+  opacity: 0.85;
+  animation: border-beam-spin 1.8s linear infinite;
+  z-index: 0;
+}
+
+.timer-border-beam::after {
+  content: '';
+  position: absolute;
+  inset: 1.5px;
+  border-radius: 9999px;
+  z-index: 0;
+}
+
+.timer-border-beam > * {
+  position: relative;
+  z-index: 1;
+}
+
+.timer-border-beam.timer-blue {
+  --timer-beam: rgb(59 130 246);
+  --timer-glow: rgb(59 130 246 / 0.35);
+}
+.timer-border-beam.timer-blue::after {
+  background: rgb(239 246 255);
+}
+
+.timer-border-beam.timer-red {
+  --timer-beam: rgb(239 68 68);
+  --timer-glow: rgb(239 68 68 / 0.35);
+}
+.timer-border-beam.timer-red::after {
+  background: rgb(254 242 242);
+}
+
+:is(.dark .timer-border-beam.timer-blue) {
+  --timer-beam: rgb(96 165 250);
+  --timer-glow: rgb(96 165 250 / 0.3);
+}
+:is(.dark .timer-border-beam.timer-blue)::after {
+  background: rgb(30 58 138 / 0.3);
+}
+
+:is(.dark .timer-border-beam.timer-red) {
+  --timer-beam: rgb(248 113 113);
+  --timer-glow: rgb(248 113 113 / 0.3);
+}
+:is(.dark .timer-border-beam.timer-red)::after {
+  background: rgb(127 29 29 / 0.3);
+}
+
+button.timer-border-beam::after {
+  background: var(--agent-accent, #2563eb);
+}

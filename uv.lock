@@ -12,6 +12,7 @@ members = [
     "steerable-agent-protocol",
     "steerable-agent-runtime",
     "steerable-example-py-minimal",
+    "steerable-example-py-server",
     "steerable-example-sidecar-roundtrip",
     "steerable-framework-monorepo",
     "steerable-sidecar",
@@ -1083,6 +1084,29 @@ requires-dist = [
 ]
 
 [[package]]
+name = "steerable-example-py-server"
+version = "0.0.0"
+source = { editable = "examples/py-server" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "steerable-agent-harness" },
+    { name = "steerable-agent-protocol" },
+    { name = "steerable-agent-runtime" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.100.0" },
+    { name = "httpx", specifier = ">=0.24.0" },
+    { name = "steerable-agent-harness", editable = "packages/agent-harness/py" },
+    { name = "steerable-agent-protocol", editable = "packages/agent-protocol/py" },
+    { name = "steerable-agent-runtime", editable = "packages/agent-runtime/py" },
+    { name = "uvicorn", specifier = ">=0.20.0" },
+]
+
+[[package]]
 name = "steerable-example-sidecar-roundtrip"
 version = "0.0.0"
 source = { editable = "examples/sidecar-roundtrip" }
@@ -1230,4 +1254,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "uvicorn"
+version = "0.48.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "h11" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e6/bf/f6544ba992ddb9a6077343a576f9844f7f8f06ab819aefd00206e9255f18/uvicorn-0.48.0.tar.gz", hash = "sha256:a5504207195d08c2511bf9125ede5ac4a4b71725d519e758d01dcf0bc2d31c37", size = 91074, upload-time = "2026-05-24T12:08:41.925Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/be/72532be3da7acc5fdfbccdb95215cd04f995a0886532a5b423f929cda4cc/uvicorn-0.48.0-py3-none-any.whl", hash = "sha256:48097851328b87ec36117d3d575234519eb58c2b22d79666e9bbc6c49a761dad", size = 71410, upload-time = "2026-05-24T12:08:40.258Z" },
 ]

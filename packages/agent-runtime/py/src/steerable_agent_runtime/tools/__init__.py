@@ -26,7 +26,8 @@ from typing import Any
 from steerable_agent_harness.policy import ToolMode, decide_tool_mode
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .errors import PolicyDeniedError, ToolDispatchError
+from ..errors import PolicyDeniedError, ToolDispatchError
+from .web_search import web_search, web_search_with_sources
 
 logger = logging.getLogger(__name__)
 
@@ -254,3 +255,12 @@ def _coerce_to_tool_result(value: Any, *, duration_ms: int) -> ToolResult:
         success=True,
         data={"value": value, "durationMs": duration_ms},
     )
+
+
+__all__ = [
+    "RegisteredTool",
+    "ToolRouter",
+    "tool",
+    "web_search",
+    "web_search_with_sources",
+]

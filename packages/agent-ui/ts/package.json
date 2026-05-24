@@ -34,6 +34,7 @@
       "types": "./dist/tailwind-preset.d.ts",
       "import": "./dist/tailwind-preset.js"
     },
+    "./styles.css": "./src/styles.css",
     "./hooks": {
       "types": "./dist/hooks/index.d.ts",
       "import": "./dist/hooks/index.js"

@@ -11,6 +11,8 @@
     "lint": "pnpm -r run lint",
     "check:drift": "pnpm -r run check:drift",
     "shell:dev": "pnpm --filter steerable-example-web-shell dev",
+    "shell:online": "VITE_TRANSPORT=sidecar pnpm --filter steerable-example-web-shell dev",
+    "server:dev": "uv run --package steerable-example-py-server python -m steerable_example_py_server.main",
     "shell:build": "pnpm --filter steerable-example-web-shell build",
     "shell:preview": "pnpm --filter steerable-example-web-shell preview"
   },
