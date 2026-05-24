@@ -53,6 +53,21 @@ from .transport import (
     encode_sse_event,
     encode_sse_event_bytes,
 )
+from .orchestration import (
+    COORDINATOR_TOOL_NAME,
+    CoordinatorResult,
+    run_coordinator,
+    OrchestrationExecutor,
+    OrchestrationPlan,
+    OrchestrationTask,
+    PlanValidationError,
+    topological_layers,
+    validate_plan,
+    reframe_worker_event,
+    WorkerResult,
+    build_peer_outputs_block,
+    run_worker,
+)
 
 __all__ = [
     "BudgetExhaustedError",
@@ -77,6 +92,20 @@ __all__ = [
     "encode_sse_event",
     "encode_sse_event_bytes",
     "encode_legacy_compat_payload",
+    # Orchestration
+    "COORDINATOR_TOOL_NAME",
+    "CoordinatorResult",
+    "run_coordinator",
+    "OrchestrationExecutor",
+    "OrchestrationPlan",
+    "OrchestrationTask",
+    "PlanValidationError",
+    "topological_layers",
+    "validate_plan",
+    "reframe_worker_event",
+    "WorkerResult",
+    "build_peer_outputs_block",
+    "run_worker",
     # ChatLoop (A1.1 — see spec/runtime/chat-loop.md)
     "ChatLoop",
     "LoopConfig",

@@ -236,6 +236,32 @@ class LoopConfig:
     # If None, the loop calls ``tool_router.describe()`` to obtain the
     # OpenAI-function-shape tool descriptors sent to the model.
     tool_descriptors: list[dict[str, Any]] | None = None
+    # Forced tool-choice — opt-in steering of the LLM towards a specific
+    # tool (or any tool, or no tool). Accepts the OpenAI ``tool_choice``
+    # wire format as the framework-canonical shape:
+    #
+    # * ``None`` (default) — provider default (typically "auto"; model
+    #   decides whether to call any tool).
+    # * ``"auto"`` — explicitly auto; semantically equivalent to ``None``
+    #   but useful for hook layers that want to *reset* an upstream
+    #   ``required``.
+    # * ``"required"`` — model MUST call some tool from the available
+    #   set (any of them).
+    # * ``"none"`` — model MUST NOT call any tool.
+    # * ``{"type": "function", "function": {"name": "<name>"}}`` — model
+    #   MUST call this specific tool. The name must match one of the
+    #   tools in ``tool_descriptors`` (or ``tool_router.describe()``).
+    #
+    # Providers translate this into their native wire format
+    # internally (Anthropic's ``{"type": "tool", "name": "<x>"}``,
+    # OpenAI's ``{"type": "function", "function": {"name": "<x>"}}``,
+    # etc.). The choice is applied to **every** round by default; if
+    # callers want first-round-only enforcement (typical for an
+    # orchestration Coordinator that must emit a plan tool call once
+    # and then never again), they register a ``before_send_messages``
+    # hook that mutates ``ctx.tool_choice`` to ``None`` on
+    # ``ctx.round_index > 0``.
+    tool_choice: dict[str, Any] | str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +337,29 @@ class RoundEndCtx(HookContext):
 
 @dataclass(slots=True)
 class SendMessagesCtx(HookContext):
+    # 0-based index of the round whose API call is about to be made.
+    # Mirrors ``RoundStartCtx.round_index`` / ``RoundEndCtx.round_index`` —
+    # surfaced here so ``before_send_messages`` hooks can make
+    # round-conditional decisions (e.g. forced ``tool_choice`` on
+    # round 0 only) without piggy-backing on ``state``.
+    round_index: int = 0
     messages: list[LLMMessage] = field(default_factory=list)
     tools: list[dict[str, Any]] = field(default_factory=list)
     model: str = ""
     provider_kind: ProviderKind = "openai_compat"
     temperature: float | None = None
     max_tokens: int | None = None
+    # Per-round tool-choice override. Initialised from
+    # ``LoopConfig.tool_choice`` for every round; hooks may rewrite for
+    # the *next* round's call by assigning a different value. Accepts
+    # the same shape as ``LoopConfig.tool_choice`` (None / "auto" /
+    # "required" / "none" / ``{"type": "function", "function": {"name":
+    # ...}}``).
+    #
+    # Typical pattern: a forced-tool Coordinator registers a hook that
+    # clears the choice on round 1+ so the model isn't trapped calling
+    # the same tool in a loop while processing its own tool_result.
+    tool_choice: dict[str, Any] | str | None = None
 
 
 @dataclass(slots=True)
@@ -754,12 +797,14 @@ class ChatLoop:
                     )
                 send_ctx = SendMessagesCtx(
                     **self._make_ctx_base(),
+                    round_index=round_idx,
                     messages=round_messages,
                     tools=list(tools),
                     model=self._config.provider.model,
                     provider_kind=self._config.provider_kind,
                     temperature=self._config.temperature,
                     max_tokens=self._config.max_tokens,
+                    tool_choice=self._config.tool_choice,
                 )
                 await self._hooks.fire("before_send_messages", send_ctx)
 
@@ -783,6 +828,7 @@ class ChatLoop:
                         tools=send_ctx.tools,
                         temperature=send_ctx.temperature,
                         max_tokens=send_ctx.max_tokens,
+                        tool_choice=send_ctx.tool_choice,
                         round_idx=round_idx,
                     ):
                         if chunk.content_delta:
@@ -1313,6 +1359,7 @@ class ChatLoop:
         tools: Sequence[dict[str, Any]] | None,
         temperature: float | None,
         max_tokens: int | None,
+        tool_choice: dict[str, Any] | str | None = None,
         round_idx: int,
     ) -> AsyncIterator[LLMStreamChunk]:
         """Wrap ``provider.stream(...)`` with retry-on-startup.
@@ -1343,6 +1390,9 @@ class ChatLoop:
         max_attempts = max(1, policy.max_attempts) if policy is not None else 1
 
         tool_list = list(tools) if tools is not None else None
+        extra_kwargs: dict[str, Any] = {}
+        if tool_choice is not None:
+            extra_kwargs["tool_choice"] = tool_choice
         for attempt in range(1, max_attempts + 1):
             try:
                 stream = self._config.provider.stream(
@@ -1350,6 +1400,7 @@ class ChatLoop:
                     tools=tool_list,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **extra_kwargs,
                 )
                 stream_iter = stream.__aiter__()
                 try:

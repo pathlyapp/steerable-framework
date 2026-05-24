@@ -156,6 +156,15 @@ class AnthropicProvider:
             anth_tools = [_openai_tool_to_anthropic(t) for t in tools if isinstance(t, dict)]
             if anth_tools:
                 body["tools"] = anth_tools
+        # Map the framework-canonical (OpenAI-shaped) ``tool_choice`` to
+        # Anthropic's ``tool_choice`` shape. Only applied when tools are
+        # actually advertised; passing ``{"type": "any"}`` without
+        # ``tools`` is rejected by the API.
+        tool_choice = extra.pop("tool_choice", None)
+        if tool_choice is not None and body.get("tools"):
+            translated = _translate_tool_choice_to_anthropic(tool_choice)
+            if translated is not None:
+                body["tool_choice"] = translated
         body.update(extra)
         return body
 
@@ -218,6 +227,43 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
         "description": function.get("description") or tool.get("description") or "",
         "input_schema": function.get("parameters") or {"type": "object", "properties": {}},
     }
+
+
+def _translate_tool_choice_to_anthropic(
+    choice: dict[str, Any] | str,
+) -> dict[str, Any] | None:
+    """Map the framework-canonical (OpenAI-shaped) tool_choice to Anthropic.
+
+    Returns ``None`` for shapes Anthropic has no native equivalent for
+    (e.g. OpenAI's ``"none"``), in which case the caller should simply
+    omit ``tool_choice`` and rely on the prompt to discourage tool use.
+
+    Translation table:
+      ``"auto"``                                  → ``{"type": "auto"}``
+      ``"required"``                              → ``{"type": "any"}``
+      ``{"type": "function", "function": {...}}`` → ``{"type": "tool", "name": <name>}``
+      Already-Anthropic shape (``{"type": ...}``) → passed through verbatim
+      ``"none"``                                  → ``None`` (no native equivalent)
+    """
+    if isinstance(choice, str):
+        if choice == "auto":
+            return {"type": "auto"}
+        if choice == "required":
+            return {"type": "any"}
+        if choice == "none":
+            return None  # caller drops the field; prompt-only discouragement
+        return None
+    if not isinstance(choice, dict):
+        return None
+    inner_type = choice.get("type")
+    if inner_type in {"auto", "any", "tool"}:
+        return choice  # already in Anthropic shape — caller may forward verbatim
+    if inner_type == "function":
+        fn = choice.get("function") or {}
+        name = fn.get("name")
+        if name:
+            return {"type": "tool", "name": name}
+    return None
 
 
 def _parse_anthropic_event(event: Any) -> LLMStreamChunk | None:

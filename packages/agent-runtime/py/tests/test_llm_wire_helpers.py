@@ -8,10 +8,13 @@ from steerable_agent_protocol.generated import ToolCall
 
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.llm.anthropic_native import (
+    AnthropicProvider,
     _openai_tool_to_anthropic,
     _split_system_and_messages,
+    _translate_tool_choice_to_anthropic,
 )
 from steerable_agent_runtime.llm.openai_compat import (
+    OpenAICompatProvider,
     _decode_tool_calls,
     _encode_message,
     _parse_stream_chunk,
@@ -398,3 +401,168 @@ def test_openai_tool_to_anthropic_translates_function_form() -> None:
     assert converted["name"] == "create_event"
     assert converted["description"] == "make event"
     assert converted["input_schema"]["type"] == "object"
+
+
+# ---------------------------------------------------------------------------
+# tool_choice plumbing
+# ---------------------------------------------------------------------------
+
+
+def _sample_tools() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "make_orchestration_plan",
+                "description": "Emit the plan.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
+def _openai_provider() -> OpenAICompatProvider:
+    return OpenAICompatProvider(
+        name="test-openai",
+        model="gpt-test",
+        base_url="https://example.invalid/v1",
+        api_key="sk-test",
+    )
+
+
+def test_openai_build_body_propagates_tool_choice_required() -> None:
+    provider = _openai_provider()
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "required"
+    # Passthrough must not double-serialise into a non-canonical shape.
+    assert isinstance(body["tools"], list)
+
+
+def test_openai_build_body_propagates_specific_function_choice() -> None:
+    provider = _openai_provider()
+    choice = {"type": "function", "function": {"name": "make_orchestration_plan"}}
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": choice},
+    )
+    assert body["tool_choice"] == choice
+
+
+def test_openai_build_body_drops_tool_choice_when_no_tools() -> None:
+    """Servers reject ``tool_choice`` when ``tools`` is unset; guard against it."""
+    provider = _openai_provider()
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={"tool_choice": "required"},
+    )
+    assert "tool_choice" not in body
+
+
+def test_openai_build_body_default_omits_tool_choice() -> None:
+    provider = _openai_provider()
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="hi")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={},
+    )
+    assert "tool_choice" not in body
+
+
+def test_anthropic_translate_tool_choice_required() -> None:
+    assert _translate_tool_choice_to_anthropic("required") == {"type": "any"}
+
+
+def test_anthropic_translate_tool_choice_auto() -> None:
+    assert _translate_tool_choice_to_anthropic("auto") == {"type": "auto"}
+
+
+def test_anthropic_translate_tool_choice_none_returns_none() -> None:
+    """OpenAI ``"none"`` has no Anthropic equivalent — caller must drop it."""
+    assert _translate_tool_choice_to_anthropic("none") is None
+
+
+def test_anthropic_translate_tool_choice_specific_function() -> None:
+    out = _translate_tool_choice_to_anthropic(
+        {"type": "function", "function": {"name": "make_orchestration_plan"}}
+    )
+    assert out == {"type": "tool", "name": "make_orchestration_plan"}
+
+
+def test_anthropic_translate_tool_choice_already_native_passthrough() -> None:
+    native = {"type": "tool", "name": "make_orchestration_plan"}
+    assert _translate_tool_choice_to_anthropic(native) == native
+
+
+def test_anthropic_translate_tool_choice_unknown_returns_none() -> None:
+    assert _translate_tool_choice_to_anthropic({"type": "weird"}) is None
+
+
+def test_anthropic_build_body_translates_required_to_any() -> None:
+    provider = AnthropicProvider(name="test-anth", model="claude-test", api_key="x")
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == {"type": "any"}
+
+
+def test_anthropic_build_body_translates_specific_function() -> None:
+    provider = AnthropicProvider(name="test-anth", model="claude-test", api_key="x")
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        extra={
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "make_orchestration_plan"},
+            }
+        },
+    )
+    assert body["tool_choice"] == {"type": "tool", "name": "make_orchestration_plan"}
+
+
+def test_anthropic_build_body_drops_tool_choice_without_tools() -> None:
+    provider = AnthropicProvider(name="test-anth", model="claude-test", api_key="x")
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        extra={"tool_choice": "required"},
+    )
+    assert "tool_choice" not in body
+
+
+def test_anthropic_build_body_drops_tool_choice_none() -> None:
+    provider = AnthropicProvider(name="test-anth", model="claude-test", api_key="x")
+    body = provider._build_body(  # type: ignore[attr-defined]
+        messages=[LLMMessage(role="user", content="plan it")],
+        tools=_sample_tools(),
+        temperature=None,
+        max_tokens=None,
+        extra={"tool_choice": "none"},
+    )
+    assert "tool_choice" not in body

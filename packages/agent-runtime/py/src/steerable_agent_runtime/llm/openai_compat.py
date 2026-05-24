@@ -177,6 +177,17 @@ class OpenAICompatProvider:
             tools_list = list(tools)
             if tools_list:
                 body["tools"] = tools_list
+        # ``tool_choice`` is part of OpenAI's chat-completions wire format
+        # already, so we pass it through verbatim. The runtime canonicalises
+        # to this shape (see ``LoopConfig.tool_choice`` docstring) precisely
+        # so OpenAI-compatible providers need no translation.
+        tool_choice = extra.pop("tool_choice", None)
+        if tool_choice is not None:
+            # Drop ``tool_choice`` when no tools are advertised: passing
+            # ``"required"`` / a function selector with an empty tool set
+            # would surface as a 400 on most servers.
+            if body.get("tools"):
+                body["tool_choice"] = tool_choice
         body.update(extra)
         return body
 
