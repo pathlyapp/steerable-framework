@@ -161,9 +161,9 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 | P2.2 | 建立 `ContextProvider` / `SkillPack` 最小接口 | `context_system` / `skill_loader.py` → kit 接口 | **[已完成]** 抽象 `ContextProvider` 与 `SkillPack` / `SkillEngine` SPI 契约 |
 | P2.3 | 建立极小模型基座 | ADR-004 | **[已完成]** `ChatMessageBase`, `AgentSessionBase` 极小 SQLModel 基类已移至 `agent-kit` |
 | P2.4 | DeepPath `task` 工具作为业务插件接入 | `task_handlers.py` 留 `deeppath-api` | **[已完成]** 接入 `CreateTaskHandler` 进行 SPI 工具集成与 `test_steerable_task_plugin` 测试 |
-| P2.5 | 后端业务工具全量适配与直接替换 | `deeppath-api` | 适配并注册全量业务工具（Task/Goal/Project/Event/Note 等）到框架，通过集成测试保障对齐 |
+| P2.5 | 后端业务工具全量适配与直接替换 | `deeppath-api` | **[已完成]** 适配并注册全量业务工具（Task/Goal/Project/Event/Note 等）到框架，并在 HarnessLoop 中通过 ChatLoop 替代原实现 |
 | P2.6 | `steerable-agent-app` 最小 FastAPI 装配 | `deeppath-api/app/main.py` 通用部分 | **[已完成]** 新建 `steerable-agent-app` 模块并提供完整的 `create_app` 骨架及 `FastAPISseTransport` 路由及测试 |
-| P2.7 | 直接下线旧 Loop 与旧 Preload 逻辑 | `deeppath-api` / `deeppath-agent` | 一键移除旧 loop.py、旧 preload 桥、旧 local-backend，全部流量与调用直接切换至新框架 |
+| P2.7 | 直接下线旧 Loop 与旧 Preload 逻辑 | `deeppath-api` / `deeppath-agent` | **[已完成]** 一键移除旧 5900 行 loop.py、旧 preload 桥等，流量与调用 100% 切换至新框架适配器 |
 
 
 ### 6.2 直接切换与一键下线标准 (Direct Switch & Instant Decommissioning)
@@ -178,6 +178,8 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 
 - [x] `task` 业务切片经框架 runtime + SPI 跑通，行为与旧路径等价
 - [x] 产品模型仍留 `deeppath-api`，框架未引入 `Task/Goal/Project/Event/Note`
+- [x] 后端业务工具全量适配，集成测试无缝通过
+- [x] 旧 5900 行 loop.py 物理移除，完成 100% 干净切流
 - [x] `steerable-agent-kit/app` 的接口足够承载全部业务工具，支持一键切换
 - [x] 制定了干净彻底的一键切流及代码清理计划
 
