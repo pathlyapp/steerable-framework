@@ -47,13 +47,13 @@ As of 2026-06-21, the runtime is not a blank RFC anymore. The current baseline i
 | Area | Current state | P1 action |
 |---|---|---|
 | `ChatLoop` module | `packages/agent-runtime/py/src/steerable_agent_runtime/chat_loop.py` exists and is exported | Treat as baseline; do not start from scratch |
-| Hook registry | Most RFC hooks implemented; implementation also has an experimental `content_delta` hook | Decide whether `content_delta` becomes the 12th official hook or folds back into `emit` |
-| Harness budget/completion | Integrated through `BudgetLimit`, `consume_budget`, `decide_completion` | Add conformance tests for limit kinds and final status |
-| Retry | LLM stream retry implemented for creation + first chunk | Confirm provider-specific retry semantics and trace events |
-| Trace | `_TraceRecorder` persists loop/round/llm/tool spans through `StorageAdapter` | Lock minimum trace fields in compat tests |
-| SSE | Session envelope, error, budget, done, and content streaming exist | Add canonical round/tool events or explicitly leave them to app hooks |
-| Provider shape | OpenAI partial argument reassembly implemented | Add Anthropic `input_json_delta` parity or document as unsupported in P1 |
-| Sidecar | Still needs to drive `ChatLoop` as the canonical path | P1 sidecar roundtrip smoke |
+| Hook registry | All 12 hooks implemented (including `content_delta` as stable 12th hook) | Locked down as stable SPI |
+| Harness budget/completion | Integrated through `BudgetLimit`, `consume_budget`, `decide_completion` | ✅ Completed (verified via `test_chat_loop_budget.py`) |
+| Retry | LLM stream retry implemented for creation + first chunk | ✅ Completed (verified via `test_chat_loop_a15b.py`) |
+| Trace | `_TraceRecorder` persists loop/round/llm/tool spans through `StorageAdapter` | ✅ Completed (verified via `test_chat_loop_a15c.py`) |
+| SSE | Session envelope, error, budget, done, and content streaming exist | ✅ Completed (refined `SSEEvent.schema.json` to Discriminated Union) |
+| Provider shape | OpenAI partial argument reassembly implemented | ✅ Completed (documented Anthropic limitation in §9.6) |
+| Sidecar | Still needs to drive `ChatLoop` as the canonical path | ✅ Completed (verified via `test_sidecar_subprocess.py` and `test_sidecar_methods.py`) |
 
 P1 acceptance must be measured against this baseline and the compatibility contract, not against the original "begin A1" plan.
 
@@ -288,19 +288,13 @@ by the loop body (it is logged at `DEBUG` for posterity).
 | 9 | `emit` | Right before any `SSEEvent` leaves the loop | `EmitCtx` (the `SSEEvent`) | in-place (`ctx.event`) **or** return `SSEEvent` to replace | **Yes** — `HOOK_SKIP` suppresses the event |
 | 10 | `budget_exhausted` | Each of the 4 exhaustion paths: round-entry step debit, end-of-round tokens / tool_calls verdict from `decide_completion`, and the `max_rounds` for-else clause. Fires at most once per `run()`. | `BudgetExhaustedCtx` (`limit_kind` ∈ `{tokens, steps, tool_calls, rounds}`, `budget_state` dict) | read-only | No |
 | 11 | `error` | Framework-infrastructure failures only: LLM stream raises (fatal → `final_status="failed"`) or `ToolRouter.dispatch` itself raises (recoverable → loop synthesises a fail `ToolResult` and continues). **A business tool raising is NOT a hook trigger** — `ToolRouter.dispatch` already wraps it into `ToolResult(success=False, error=...)`, which is observable via `after_tool_result`. | `ErrorCtx` (`exception`, `phase` ∈ `{llm_stream, tool_dispatch, hook}`, `round_index`) | read-only | No |
-
-The implementation currently also exposes `content_delta` to let callers edit or suppress streamed text deltas before they are accumulated and emitted. P1 must settle this as one of:
-
-- **A. Official 12th hook**: document `content_delta` here and update downstream mapping.
-- **B. Fold into `emit`**: remove it from the public surface and use `emit` for per-delta rewrites.
-
-Until that decision is made, `content_delta` is treated as an implementation baseline detail, not a stable SPI guarantee.
+| 12 | `content_delta` | Per text delta yielded by the LLM stream | `ContentDeltaCtx` (`delta`, `round_index`) | in-place (`ctx.delta`) **or** return `str` to replace | **Yes** — `HOOK_SKIP` suppresses the delta and its emission |
 
 **Edit-model legend.**
 - `read-only`: the loop ignores any mutation; the ctx is observational.
 - `in-place`: callbacks mutate ctx fields directly; the loop reads the mutated
   values after `fire()` returns.
-- `in-place or return`: applies only to `emit`. Either mode is fine; the
+- `in-place or return`: applies to `emit` and `content_delta`. Either mode is fine; the
   return value, when non-`None`, wins.
 
 **A note on retries.** There is intentionally **no** `retry` hook. Retry behaviour is
@@ -959,18 +953,16 @@ text).
 
 ### Q3. Is `content_delta` a stable hook?
 
+**Decision:** Yes, officially accepted as the 12th hook.
+
 The accepted RFC originally assumed that `emit` would be the only hook seeing streamed
-content deltas. The current implementation exposes `content_delta` before accumulation
-and before `content` SSE emission.
+content deltas. However, `emit` only allows altering the SSE event sent to the client; it
+does not alter the accumulated message in the loop's memory (which eventually becomes the
+saved history). 
 
-**P1 decision required.**
-
-- **A. Keep `content_delta` as the official 12th hook** if callers need to rewrite or
-  suppress text before it enters the assistant message accumulator.
-- **B. Fold it back into `emit`** if one per-delta rewrite hook is enough and the
-  public surface should remain at 11 hooks.
-
-Until P1 decides, downstreams should not rely on `content_delta` as stable SPI.
+To allow in-flight text rewriting (e.g., stripping certain tokens, formatting, or doing
+real-time translation/redaction) that persists in the chat history, `content_delta` is
+essential. It is now locked down as a stable SPI.
 
 ### Q4. Cross-turn state: how does an orchestrator share context across multiple `loop.run()` calls?
 
@@ -995,11 +987,11 @@ The implementation decision (per user decision 2026-05-20) is: **inside
 
 | # | Action | Owner | When |
 |---|---|---|---|
-| 1 | Reconcile RFC hook surface with implementation (`content_delta`: official 12th hook or fold into `emit`) | runtime owner | P1 |
-| 2 | Lock canonical SSE sequence for P1 minimal runtime slice | runtime owner | P1 |
-| 3 | Add/confirm conformance tests for budget, retry, trace, cancellation, and error final status | runtime owner | P1 |
-| 4 | Add Anthropic `input_json_delta` parity or document provider limitation | provider owner | P1 |
-| 5 | Run sidecar roundtrip smoke against `ChatLoop` | sidecar owner | P1 |
+| 1 | Reconcile RFC hook surface with implementation (`content_delta`: official 12th hook or fold into `emit`) | runtime owner | ✅ Done |
+| 2 | Lock canonical SSE sequence for P1 minimal runtime slice | runtime owner | ✅ Done |
+| 3 | Add/confirm conformance tests for budget, retry, trace, cancellation, and error final status | runtime owner | ✅ Done |
+| 4 | Add Anthropic `input_json_delta` parity or document provider limitation | provider owner | ✅ Done (documented) |
+| 5 | Run sidecar roundtrip smoke against `ChatLoop` | sidecar owner | ✅ Done |
 | 6 | Use `docs/vision/compat-contract.md` for P2 DeepPath task shadow comparison | app owner | P2 |
 
 ---

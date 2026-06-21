@@ -250,8 +250,40 @@
 
 ---
 
+## ADR-007 · Orchestration (Multi-Agent) 边界裁定
+
+| 字段 | 值 |
+|---|---|
+| **状态** | Accepted |
+| **日期** | 2026-06-21 |
+| **关联** | target-architecture §10 Q4、refactor-plan P1.7 |
+
+### 背景
+
+`steerable-framework` 仓库中包含一个实验性的多智能体编排模块（`steerable_agent_runtime/orchestration/`），用于协调多个 `ChatLoop` 实例（如 Coordinator、Worker）来执行复杂的任务图。然而，多智能体编排属于高阶、产品特定（如任务如何拆解、如何调度、如何合并）的逻辑，而 `ChatLoop` 是单智能体核心。
+
+### 决策
+
+1. **多智能体编排（Orchestration）正式裁定为 Layer C（应用套件）的实验性/可选能力**，不作为 Layer B（核心逻辑）的稳定 SPI 承诺。
+2. 编排模块 `steerable_agent_runtime/orchestration/` 暂时保留在 `steerable-agent-runtime` 中以支持现有的多智能体实验，但明确标记为不稳定（Experimental）。
+3. 核心 `ChatLoop` 必须保持完全的单智能体纯净，不包含任何编排特定逻辑。`ChatLoop` 暴露的 12 个 hooks（如 `before_round`、`after_round`、`emit`）已足够任何外部编排器对其进行驱动和监控。
+
+### 理由
+
+1. 保持核心 `ChatLoop` 的简单和高内聚，确保其易于维护、测试并适配不同的单智能体产品。
+2. 编排逻辑与具体业务场景高度绑定（例如：如何表示 plan、如何处理 group chat）。如果将编排强行固化进核心运行时，会违反“基座从严（C7）”和“框架零业务（C3）”的原则。
+3. 保留现有编排代码作为实验性模块，既能支持多智能体探索，又不会对核心运行时的稳定性产生负担。
+
+### 影响
+
+- ✅ 核心 `ChatLoop` 保持纯净，不感知编排概念。
+- ✅ 编排模块继续作为可选的 Layer C Primitives 存在，不污染核心 SPI 契约。
+- ⚠️ 编排模块的代码（如 `OrchestrationExecutor`）在后续重构中如果需要依赖业务模型，应移出 `steerable-agent-runtime`，放入业务层或高阶 kit。
+
+---
+
 ## 待决策（后续补充 ADR）
 
 | 编号 | 议题 | 关联 |
 |---|---|---|
-| ADR-007 | Layer C/D 是否脱离 lockstep 独立版本线 | 架构 §10 Q4 |
+| ADR-008 | Layer C/D 是否脱离 lockstep 独立版本线 | 架构 §10 Q4 |

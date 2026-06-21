@@ -141,10 +141,10 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 
 ### 5.4 验收
 
-- [ ] 最小框架工具切片端到端跑通，产出 typed SSE + trace
-- [ ] sidecar 通过 ChatLoop roundtrip 冒烟，且无需 TS loop 参与
-- [ ] ChatLoop hook / provider / tool / trace 行为有 conformance 或 golden 测试
-- [ ] runtime 公共 surface 与 RFC / docs 一致，orchestration 边界已定
+- [x] 最小框架工具切片端到端跑通，产出 typed SSE + trace
+- [x] sidecar 通过 ChatLoop roundtrip 冒烟，且无需 TS loop 参与
+- [x] ChatLoop hook / provider / tool / trace 行为有 conformance 或 golden 测试
+- [x] runtime 公共 surface 与 RFC / docs 一致，orchestration 边界已定
 
 ---
 

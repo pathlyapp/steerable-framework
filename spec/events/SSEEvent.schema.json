@@ -3,8 +3,6 @@
   "$id": "https://steerable.dev/spec/events/SSEEvent.schema.json",
   "title": "SSEEvent",
   "type": "object",
-  "additionalProperties": true,
-  "required": ["type"],
   "properties": {
     "type": {
       "type": "string",
@@ -19,5 +17,102 @@
     "taskId": { "type": "string" },
     "messageId": { "type": "string" },
     "payload": { "type": "object", "additionalProperties": true }
-  }
+  },
+  "required": ["type"],
+  "additionalProperties": true,
+  "oneOf": [
+    {
+      "properties": {
+        "type": { "const": "content" },
+        "content": { "type": "string" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "roundIndex": { "type": "integer" }
+          },
+          "required": ["text", "roundIndex"]
+        }
+      },
+      "required": ["type"]
+    },
+    {
+      "properties": {
+        "type": { "const": "error" },
+        "message": { "type": "string" },
+        "code": { "type": "string" },
+        "payload": { "type": "object" }
+      },
+      "required": ["type"]
+    },
+    {
+      "properties": {
+        "type": { "const": "agent" },
+        "event": {
+          "type": "string",
+          "enum": ["session.start", "session.end", "round.start", "round.end", "assistant.done", "budget_exhausted", "error"]
+        },
+        "payload": { "type": "object" }
+      },
+      "required": ["type", "event"]
+    },
+    {
+      "properties": {
+        "type": { "const": "orchestration" },
+        "event": { "type": "string" },
+        "orchestrationGroupId": { "type": "string" },
+        "taskId": { "type": "string" },
+        "content": { "type": "string" },
+        "payload": { "type": "object" }
+      },
+      "required": ["type"]
+    },
+    {
+      "properties": {
+        "type": { "const": "loader-hint" },
+        "hint": { "type": "string" }
+      },
+      "required": ["type", "hint"]
+    },
+    {
+      "properties": {
+        "type": { "const": "keepalive" }
+      },
+      "required": ["type"]
+    },
+    {
+      "properties": {
+        "type": { "const": "done" }
+      },
+      "required": ["type"]
+    },
+    {
+      "properties": {
+        "type": { "const": "budget_exhausted" },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "limitKind": { "type": "string" },
+            "budgetState": { "type": "object" }
+          },
+          "required": ["limitKind", "budgetState"]
+        }
+      },
+      "required": ["type", "payload"]
+    },
+    {
+      "properties": {
+        "type": { "const": "tool_call" },
+        "payload": { "type": "object" }
+      },
+      "required": ["type", "payload"]
+    },
+    {
+      "properties": {
+        "type": { "const": "tool_result" },
+        "payload": { "type": "object" }
+      },
+      "required": ["type", "payload"]
+    }
+  ]
 }
