@@ -1,0 +1,4 @@
+# Accepted framework-boundary debt (ADR-002). Cleanup tracked in P4.
+# Signature format: <relpath>:<rule>. Regenerate with --update-baseline.
+packages/agent-harness/py/src/steerable_agent_harness/completion.py:forbidden-keyword:deeppath
+packages/agent-runtime/py/src/steerable_agent_runtime/tools/web_search.py:forbidden-keyword:deeppath

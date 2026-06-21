@@ -2,21 +2,22 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted · Implementation baseline in progress |
 | **Owner** | DeepPath / Steerable maintainers |
 | **Created** | 2026-05-20 |
-| **Last updated** | 2026-05-20 |
+| **Last updated** | 2026-06-21 |
 | **Targets** | `steerable-agent-runtime` (Py) + `steerable-agent-app` (Py, new) + downstream consumers |
 | **Supersedes** | (none) |
-| **Related** | `spec/events/SSEEvent.schema.json`, `spec/runtime/AgentSession.schema.json`, `spec/runtime/HarnessTrace.schema.json`, `spec/sidecar/README.md` |
+| **Related** | `spec/events/SSEEvent.schema.json`, `spec/runtime/AgentSession.schema.json`, `spec/runtime/HarnessTrace.schema.json`, `spec/sidecar/README.md`, `docs/vision/compat-contract.md` |
 
-> **TL;DR.** Today every downstream (deeppath-api, deeppath-agent, sidecar) re-implements
-> the Think-Act-Observe loop. This RFC defines a **single, minimal, ~500-line `ChatLoop`**
-> that lives in the framework and exposes **11 callback hooks** so business code (system
-> prompts, persistence, verifiers, orchestration, entity linking, …) plugs in without
-> ever needing to fork the loop body. Verified against deeppath-api's 5 004-line
-> `loop.py` and deeppath-agent's 1 763-line `local-backend/router.ts`: 11 hooks cover
-> every existing extension point in both downstreams.
+> **TL;DR.** This RFC is now the accepted contract for the framework-owned
+> Think-Act-Observe loop. `steerable-agent-runtime/chat_loop.py` already contains an
+> incremental implementation through the A1.5/A1.6 slices (hooks, harness budget,
+> retry, trace persistence, content streaming, and OpenAI partial-args reassembly).
+> P1 is no longer "start implementing ChatLoop"; it is **production hardening and
+> compatibility validation**: reconcile the public hook surface, lock typed SSE/trace,
+> run the minimal runtime slice, then use `docs/vision/compat-contract.md` for the
+> DeepPath shadow comparison.
 
 ---
 
@@ -36,6 +37,25 @@
 12. [Migration plan](#12-migration-plan)
 13. [Open questions](#13-open-questions)
 14. [Next steps](#14-next-steps)
+
+---
+
+## 0. Current implementation baseline
+
+As of 2026-06-21, the runtime is not a blank RFC anymore. The current baseline is:
+
+| Area | Current state | P1 action |
+|---|---|---|
+| `ChatLoop` module | `packages/agent-runtime/py/src/steerable_agent_runtime/chat_loop.py` exists and is exported | Treat as baseline; do not start from scratch |
+| Hook registry | Most RFC hooks implemented; implementation also has an experimental `content_delta` hook | Decide whether `content_delta` becomes the 12th official hook or folds back into `emit` |
+| Harness budget/completion | Integrated through `BudgetLimit`, `consume_budget`, `decide_completion` | Add conformance tests for limit kinds and final status |
+| Retry | LLM stream retry implemented for creation + first chunk | Confirm provider-specific retry semantics and trace events |
+| Trace | `_TraceRecorder` persists loop/round/llm/tool spans through `StorageAdapter` | Lock minimum trace fields in compat tests |
+| SSE | Session envelope, error, budget, done, and content streaming exist | Add canonical round/tool events or explicitly leave them to app hooks |
+| Provider shape | OpenAI partial argument reassembly implemented | Add Anthropic `input_json_delta` parity or document as unsupported in P1 |
+| Sidecar | Still needs to drive `ChatLoop` as the canonical path | P1 sidecar roundtrip smoke |
+
+P1 acceptance must be measured against this baseline and the compatibility contract, not against the original "begin A1" plan.
 
 ---
 
@@ -253,7 +273,7 @@ Hooks that document `(with edits)` in §5.2 use in-place mutation; any non-`None
 return value other than `HOOK_SKIP` or — for `emit` — an `SSEEvent` is ignored
 by the loop body (it is logged at `DEBUG` for posterity).
 
-### 5.2 The 11 hooks
+### 5.2 The hook surface
 
 | # | Hook | When fired | `ctx` payload | Edit model | Skip allowed? |
 |---|---|---|---|---|---|
@@ -268,6 +288,13 @@ by the loop body (it is logged at `DEBUG` for posterity).
 | 9 | `emit` | Right before any `SSEEvent` leaves the loop | `EmitCtx` (the `SSEEvent`) | in-place (`ctx.event`) **or** return `SSEEvent` to replace | **Yes** — `HOOK_SKIP` suppresses the event |
 | 10 | `budget_exhausted` | Each of the 4 exhaustion paths: round-entry step debit, end-of-round tokens / tool_calls verdict from `decide_completion`, and the `max_rounds` for-else clause. Fires at most once per `run()`. | `BudgetExhaustedCtx` (`limit_kind` ∈ `{tokens, steps, tool_calls, rounds}`, `budget_state` dict) | read-only | No |
 | 11 | `error` | Framework-infrastructure failures only: LLM stream raises (fatal → `final_status="failed"`) or `ToolRouter.dispatch` itself raises (recoverable → loop synthesises a fail `ToolResult` and continues). **A business tool raising is NOT a hook trigger** — `ToolRouter.dispatch` already wraps it into `ToolResult(success=False, error=...)`, which is observable via `after_tool_result`. | `ErrorCtx` (`exception`, `phase` ∈ `{llm_stream, tool_dispatch, hook}`, `round_index`) | read-only | No |
+
+The implementation currently also exposes `content_delta` to let callers edit or suppress streamed text deltas before they are accumulated and emitted. P1 must settle this as one of:
+
+- **A. Official 12th hook**: document `content_delta` here and update downstream mapping.
+- **B. Fold into `emit`**: remove it from the public surface and use `emit` for per-delta rewrites.
+
+Until that decision is made, `content_delta` is treated as an implementation baseline detail, not a stable SPI guarantee.
 
 **Edit-model legend.**
 - `read-only`: the loop ignores any mutation; the ctx is observational.
@@ -315,12 +342,12 @@ session.start
 session.end
 ```
 
-Future slices will add round-level events (`round.start`, `round.end`,
-`assistant.done`, `content_delta`, `tool_call`, `tool_result`, `reasoning`).
-For A1.4 the loop **does not emit** those itself — downstreams that need them
-plug into `after_assistant_message` / `after_tool_result` and emit via a
-custom hook (e.g. `loop.on("after_tool_result", emit_tool_result_event)`),
-or use the `emit` hook to rewrite the envelope.
+The current implementation emits the session envelope, `error`,
+`budget_exhausted`, `done`, and streamed content deltas. Round-level and
+tool-level canonical events are still a P1 decision: either the loop emits them
+directly, or app/runtime adapters emit them from hooks. The choice must be made
+before P2 shadow comparison, because `docs/vision/compat-contract.md` treats
+SSE structure as a compatibility surface.
 
 Every event the loop yields is funneled through `_emit()` → the `emit` hook,
 so a callback may rewrite (return new `SSEEvent`), mutate `ctx.event` in
@@ -328,21 +355,21 @@ place, or return `HOOK_SKIP` to drop the emission entirely.
 
 Mapped to `SSEEvent.type` values from `spec/events/SSEEvent.schema.json`:
 
-| Logical event | `SSEEvent.type` | Payload shape | Emitted by responsibility | A1.4 |
+| Logical event | `SSEEvent.type` | Payload shape | Emitted by responsibility | Baseline |
 |---|---|---|---|---|
 | `session.start` | `agent` | `{event: "session.start", sessionId, traceId}` | §4 #1 | ✅ |
 | `done` | `done` | `{}` | §4 #1 | ✅ |
 | `session.end` | `agent` | `{event: "session.end", finalStatus}` | §4 #1 | ✅ |
 | `error` | `agent` | `{event: "error", payload: {phase, roundIndex, errorType, message}}` | §4 #6 (infrastructure) | ✅ |
 | `budget_exhausted` | `agent` | `{event: "budget_exhausted", payload: {limitKind, budgetState}}` | §4 #6 | ✅ |
-| `round.start` | `agent` | `{event: "round.start", round}` | §4 #1 | A1.5+ |
-| `content_delta` | `content` | `{content: "<delta text>"}` | §4 #2 | A1.5+ |
-| `reasoning_delta` | `content` | `{content: "<delta text>", event: "reasoning"}` | §4 #2 | A1.5+ |
-| `tool_call_delta` | `tool_call` | `{payload: {callId, name, argumentsDelta}}` | §4 #2 | A1.5+ |
-| `assistant.done` | `agent` | `{event: "assistant.done", messageId, usage}` | §4 #2 | A1.5+ |
-| `tool_call` | `tool_call` | `{payload: ToolCall}` | §4 #4 | A1.5+ |
-| `tool_result` | `tool_result` | `{payload: ToolResult}` | §4 #4 | A1.5+ |
-| `round.end` | `agent` | `{event: "round.end", round, completionStatus}` | §4 #6 | A1.5+ |
+| `content_delta` | `content` | `{payload: {text, roundIndex}}` | §4 #2 | ✅ |
+| `round.start` | `agent` | `{event: "round.start", round}` | §4 #1 | P1 decision |
+| `reasoning_delta` | `content` | `{content: "<delta text>", event: "reasoning"}` | §4 #2 | P1 decision |
+| `tool_call_delta` | `tool_call` | `{payload: {callId, name, argumentsDelta}}` | §4 #2 | P1 decision |
+| `assistant.done` | `agent` | `{event: "assistant.done", messageId, usage}` | §4 #2 | P1 decision |
+| `tool_call` | `tool_call` | `{payload: ToolCall}` | §4 #4 | P1 decision |
+| `tool_result` | `tool_result` | `{payload: ToolResult}` | §4 #4 | P1 decision |
+| `round.end` | `agent` | `{event: "round.end", round, completionStatus}` | §4 #6 | P1 decision |
 
 ### 6.2 Implications for `SSEEvent.schema.json`
 
@@ -930,15 +957,20 @@ text).
 
 **Recommendation:** **A** for now. If multiple business cases emerge, revisit.
 
-### Q3. Streaming hooks vs end-of-event hooks?
+### Q3. Is `content_delta` a stable hook?
 
-The 11 hooks fire at *event boundaries* (round, message, tool call) — not on individual
-content deltas. The only hook that sees deltas is `emit`. Question: do we need a
-streaming-content hook (`on_content_delta`, fires per chunk)?
+The accepted RFC originally assumed that `emit` would be the only hook seeing streamed
+content deltas. The current implementation exposes `content_delta` before accumulation
+and before `content` SSE emission.
 
-**Recommendation:** No. `emit` already sees every `SSEEvent.type=="content"` event, and
-that's the chunk boundary. Adding a deeper hook just creates two ways to do the same
-thing.
+**P1 decision required.**
+
+- **A. Keep `content_delta` as the official 12th hook** if callers need to rewrite or
+  suppress text before it enters the assistant message accumulator.
+- **B. Fold it back into `emit`** if one per-delta rewrite hook is enough and the
+  public surface should remain at 11 hooks.
+
+Until P1 decides, downstreams should not rely on `content_delta` as stable SPI.
 
 ### Q4. Cross-turn state: how does an orchestrator share context across multiple `loop.run()` calls?
 
@@ -963,12 +995,12 @@ The implementation decision (per user decision 2026-05-20) is: **inside
 
 | # | Action | Owner | When |
 |---|---|---|---|
-| 1 | Circulate this RFC for review (deeppath-api, deeppath-agent maintainers) | RFC author | T+0 |
-| 2 | Resolve open questions §13 Q1-Q5 | reviewers | T+2 |
-| 3 | Merge RFC as `Accepted` | RFC author | T+3 |
-| 4 | Begin A1: `ChatLoop` implementation in `steerable-agent-runtime` | implementer | T+3 |
-| 5 | Begin A3: SSE event subtype schemas (parallel) | implementer | T+3 |
-| 6 | Begin A2: `steerable-agent-app` skeleton (depends on A1) | implementer | T+8 |
+| 1 | Reconcile RFC hook surface with implementation (`content_delta`: official 12th hook or fold into `emit`) | runtime owner | P1 |
+| 2 | Lock canonical SSE sequence for P1 minimal runtime slice | runtime owner | P1 |
+| 3 | Add/confirm conformance tests for budget, retry, trace, cancellation, and error final status | runtime owner | P1 |
+| 4 | Add Anthropic `input_json_delta` parity or document provider limitation | provider owner | P1 |
+| 5 | Run sidecar roundtrip smoke against `ChatLoop` | sidecar owner | P1 |
+| 6 | Use `docs/vision/compat-contract.md` for P2 DeepPath task shadow comparison | app owner | P2 |
 
 ---
 
