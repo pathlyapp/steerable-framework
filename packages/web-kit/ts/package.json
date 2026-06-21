@@ -1,0 +1,54 @@
+{
+  "name": "@steerable/web-kit",
+  "version": "0.2.4",
+  "description": "Steerable framework Tier 4 — Web capabilities (Theme system, runtime adapter, action renderer, panel slot system).",
+  "license": "Apache-2.0",
+  "homepage": "https://pathlyapp.github.io/steerable-framework/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/web-kit/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "keywords": [
+    "steerable",
+    "agent",
+    "web",
+    "react",
+    "theme",
+    "adapter"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

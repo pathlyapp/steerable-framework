@@ -99,7 +99,7 @@ export function bridgeLegacySSE(
       if (mapped !== undefined) return mapped;
     }
     if (passthroughUnknown) {
-      return { type: 'agent', event: data.type, payload: data };
+      return { type: 'agent', event: data.type as any, payload: data };
     }
   }
   return null;
@@ -117,17 +117,21 @@ function mapLocalBackendEnvelope(
       if (status === 'budget_exhausted') {
         return {
           type: 'budget_exhausted',
+          payload: {
+            limitKind: 'unknown',
+            budgetState: {},
+          },
           message: typeof data.reason === 'string' ? data.reason : undefined,
         };
       }
-      return { type: 'agent', event: 'round_end', payload: data };
+      return { type: 'agent', event: 'round_end' as any, payload: data };
     }
     case 'executed_actions':
-      return { type: 'agent', event: 'executed_actions', payload: data };
+      return { type: 'agent', event: 'executed_actions' as any, payload: data };
     case 'user_message':
       return null;
     case 'message_id':
-      return { type: 'agent', event: 'message_id', payload: data };
+      return { type: 'agent', event: 'message_id' as any, payload: data };
     default:
       return undefined;
   }

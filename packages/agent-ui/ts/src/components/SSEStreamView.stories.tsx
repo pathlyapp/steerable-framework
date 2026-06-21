@@ -27,7 +27,7 @@ export default meta;
 type Story = StoryObj<typeof SSEStreamView>;
 
 const events: SSEEvent[] = [
-  { type: 'agent', agentId: 'planner', model: 'gpt-4o-mini' },
+  { type: 'agent', event: 'session.start', agentId: 'planner', model: 'gpt-4o-mini' },
   {
     type: 'orchestration',
     orchestrationGroupId: 'plan-1',
@@ -82,7 +82,7 @@ export const ErrorAndBudget: Story = {
   args: {
     events: [
       ...events.slice(0, 5),
-      { type: 'budget_exhausted', message: 'token budget reached after 3.2k tokens' },
+      { type: 'budget_exhausted', payload: { limitKind: 'token_limit', budgetState: {} }, message: 'token budget reached after 3.2k tokens' },
       { type: 'error', message: 'tool_dispatch failed: timeout after 30s' },
     ],
   },
