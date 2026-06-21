@@ -11,6 +11,8 @@ members = [
   "packages/agent-protocol/py",
   "packages/agent-harness/py",
   "packages/agent-runtime/py",
+  "packages/agent-kit/py",
+  "packages/agent-app/py",
   "packages/sidecar/py",
   "examples/py-minimal",
   "examples/sidecar-roundtrip",
@@ -32,6 +34,8 @@ dev = [
   "steerable-agent-protocol",
   "steerable-agent-harness",
   "steerable-agent-runtime",
+  "steerable-agent-kit",
+  "steerable-agent-app",
   "steerable-sidecar",
 ]
 
@@ -39,6 +43,8 @@ dev = [
 steerable-agent-protocol = { workspace = true }
 steerable-agent-harness = { workspace = true }
 steerable-agent-runtime = { workspace = true }
+steerable-agent-kit = { workspace = true }
+steerable-agent-app = { workspace = true }
 steerable-sidecar = { workspace = true }
 
 [tool.pytest.ini_options]
@@ -48,6 +54,8 @@ testpaths = [
   "packages/agent-protocol/py/tests",
   "packages/agent-harness/py/tests",
   "packages/agent-runtime/py/tests",
+  "packages/agent-kit/py/tests",
+  "packages/agent-app/py/tests",
   "packages/sidecar/py/tests",
   "tests/conformance/py",
 ]

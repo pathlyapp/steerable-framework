@@ -4,7 +4,7 @@
 |---|---|
 | **状态** | Accepted |
 | **创建** | 2026-06-21 |
-| **更新** | 2026-06-21 (P1 Completed) |
+| **更新** | 2026-06-21 (P1 & P2 Completed) |
 | **作者** | DeepPath / Steerable maintainers |
 | **目标架构** | [target-architecture.md](./target-architecture.md) |
 | **关联 RFC** | `spec/runtime/chat-loop.md`（ChatLoop，已有 runtime 雏形，需生产化接入） |
@@ -157,20 +157,28 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 
 | # | 任务 | 来源 → 去向 | 备注 |
 |---|---|---|---|
-| P2.1 | 建立 `ToolSpec` / `ToolContext` / `ToolRouter` 业务注册接口 | runtime → kit | 先满足一个真实工具，不追求覆盖所有 handlers |
-| P2.2 | 建立 `ContextProvider` / `SkillPack` 最小接口 | `context_system` / `skill_loader.py` → kit 接口 | 引擎可以先薄，provider/skill 内容留业务 |
-| P2.3 | 建立极小模型基座 | ADR-004 | 第一版只放 runtime 必需模型；`Task/Goal/Project/Event/Note` 留 api |
-| P2.4 | DeepPath `task` 工具作为业务插件接入 | `task_handlers.py` 留 `deeppath-api` | 验证实体链接、时区、权限、DB 写入、SSE 回流 |
-| P2.5 | 新旧路径影子对比 | `deeppath-api` | 同一输入比较旧 loop 与框架路径的 SSE、DB side effect、trace、错误码 |
-| P2.6 | `steerable-agent-app` 最小 FastAPI 装配 | `deeppath-api/app/main.py` 通用部分 | 只覆盖 chat/run/stream，业务路由仍由 api 自己 include |
-| P2.7 | 明确旧 loop 删除条件 | `deeppath-api` | 删除不是本阶段目标；先定义可删门槛 |
+| P2.1 | 建立 `ToolSpec` / `ToolContext` / `ToolRouter` 业务注册接口 | runtime → kit | **[已完成]** 建立 `ToolSpec`, `ToolContext` 强类型接口，支持 contextvars 上下文隔离 |
+| P2.2 | 建立 `ContextProvider` / `SkillPack` 最小接口 | `context_system` / `skill_loader.py` → kit 接口 | **[已完成]** 抽象 `ContextProvider` 与 `SkillPack` / `SkillEngine` SPI 契约 |
+| P2.3 | 建立极小模型基座 | ADR-004 | **[已完成]** `ChatMessageBase`, `AgentSessionBase` 极小 SQLModel 基类已移至 `agent-kit` |
+| P2.4 | DeepPath `task` 工具作为业务插件接入 | `task_handlers.py` 留 `deeppath-api` | **[已完成]** 接入 `CreateTaskHandler` 进行 SPI 工具集成与 `test_steerable_task_plugin` 测试 |
+| P2.5 | 新旧路径影子对比 | `deeppath-api` | **[已完成]** 通过测试与桥接层成功运行影子对比并验证 DB 副作用和时区一致性 |
+| P2.6 | `steerable-agent-app` 最小 FastAPI 装配 | `deeppath-api/app/main.py` 通用部分 | **[已完成]** 新建 `steerable-agent-app` 模块并提供完整的 `create_app` 骨架及 `FastAPISseTransport` 路由及测试 |
+| P2.7 | 明确旧 loop 删除条件 | `deeppath-api` | **[已完成]** 明确四大删除门槛：工具全覆盖、影子行为100%对等、客户端适配通过、无性能衰退 |
 
-### 6.2 验收
+### 6.2 旧 Loop 删除门槛（Decommissioning Criteria）
 
-- [ ] `task` 业务切片经框架 runtime + SPI 跑通，行为与旧路径等价
-- [ ] 产品模型仍留 `deeppath-api`，框架未引入 `Task/Goal/Project/Event/Note`
-- [ ] 新旧路径可影子运行并输出可比对结果
-- [ ] `steerable-agent-kit/app` 的接口足够承载一个真实业务工具，但还未承诺覆盖全部 DeepPath handlers
+为保障生产环境平稳升级，旧 loop（`deeppath-api` 原 chat loop 逻辑）在 P4 阶段被彻底删除前必须达成以下门槛：
+1. **工具覆盖对齐 (Tool Coverage Parity)**: 所有生产环境工具 handler（包括 task、goal、project、event、note 等）均完全适配并注册入新框架的 `ToolRouter`。
+2. **行为 100% 对等 (Behavioral Equivalence)**: 经由影子运行或自动化集成测试，新旧两条路径在数据库 side effect（字段写入、活动日志、图谱更新等）及 SSE 消息流（事件序列、字段完整度）上保持 100% 一致。
+3. **前端适配完毕 (Client Integration Parity)**: 前端 Web 和 Desktop 客户端全部重构为通过 standard SSE (`/api/v2/chats/stream`) 消费新格式，且没有功能性阻塞。
+4. **性能与可靠性验证 (Performance & Reliability)**: 新路径在高并发压测和线上灰度运行期间，其 Token 消耗、耗时、异常率等指标不低于旧 loop 基线。
+
+### 6.3 验收
+
+- [x] `task` 业务切片经框架 runtime + SPI 跑通，行为与旧路径等价
+- [x] 产品模型仍留 `deeppath-api`，框架未引入 `Task/Goal/Project/Event/Note`
+- [x] 新旧路径可影子运行并输出可比对结果
+- [x] `steerable-agent-kit/app` 的接口足够承载一个真实业务工具，但还未承诺覆盖全部 DeepPath handlers
 
 ---
 
