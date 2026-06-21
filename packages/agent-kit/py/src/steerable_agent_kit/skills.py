@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SkillPack:
-    name: str                              # e.g. "deeppath-core"
+    name: str                              # e.g. "core"
     directory: Path                        # Directory containing subdirectories with SKILL.md files
     priority: int = 100                    # Assembly priority (higher priority packs are assembled first or last)
 

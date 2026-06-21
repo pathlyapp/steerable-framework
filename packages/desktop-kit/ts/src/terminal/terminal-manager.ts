@@ -103,7 +103,7 @@ export class TerminalManager extends EventEmitter {
       // Users can override in their dotfiles; only TERM/LANG are forced.
       TERM: 'xterm-256color',
       LANG: process.env.LANG || 'en_US.UTF-8',
-      DEEPPATH_AGENT_PTY: '1',
+      STEERABLE_AGENT_PTY: '1',
     } as Record<string, string>;
 
     const proc = pty.spawn(shell, options.args || [], {

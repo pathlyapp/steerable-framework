@@ -35,7 +35,7 @@ class ToolSpec:
     json_schema: dict[str, Any]            # JSON Schema for arguments (fed to LLM)
     handler: ToolHandler
     mode: ToolMode = "read"                # for harness policy / decide_tool_mode
-    tags: tuple[str, ...] = ()             # e.g. ("task",) / ("cflog",)
+    tags: tuple[str, ...] = ()             # e.g. ("task",)
 
 
 # ContextVar for thread-local/async-safe tool context access

@@ -1,5 +1,7 @@
 # Architecture (Tier 1 → Tier 4)
 
+> ⚠️ **Note on Evolution**: The Tier-based model described below represents the core **Layer A/B (Plumbing & Runtime)** perspective of the framework. For the expanded full-stack architecture including **Layer C (Application Kits)** and **Layer D (Web & Desktop Kits)**, please refer to our [Target Architecture Vision](../vision/target-architecture.md).
+
 Steerable is intentionally **layered**. Each tier has a single
 responsibility and a small surface, so consumers can swap or replace any
 layer without leaking concerns into the layers above and below.

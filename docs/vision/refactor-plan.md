@@ -34,7 +34,7 @@
 
 - **P-1 双切片优先**：先用框架最小工具验证 runtime，再用 DeepPath 真实工具验证业务插件，避免把产品复杂度误判为框架复杂度。
 - **P-2 不放宽框架主体**：业务无法承载时新增扩展点，不改 loop body / app factory（继承 ChatLoop RFC §1.3 硬契约）。
-- **P-3 影子运行 + 灰度**：新框架路径与旧实现并存，feature-flag/env 切换，灰度验证后再删旧。
+- **P-3 直接替换与彻底重构**：不做双路径影子运行。在各层通过单元和集成测试保障功能对等后，直接将 `deeppath-api` 旧 loop 替换并彻底下线，避免维护两套业务逻辑的冗余。
 - **P-4 Spec 先行**：任何跨语言契约变更先改 `spec/`，跑 `pnpm gen` + drift check。
 - **P-5 Base 从严**：模型、handler、面板默认留业务；只有非 DeepPath 参考应用也自然需要的能力才进框架。
 - **P-6 每阶段可回滚**：旧代码保留为 re-export shim 至少一个 release。
@@ -161,24 +161,25 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 | P2.2 | 建立 `ContextProvider` / `SkillPack` 最小接口 | `context_system` / `skill_loader.py` → kit 接口 | **[已完成]** 抽象 `ContextProvider` 与 `SkillPack` / `SkillEngine` SPI 契约 |
 | P2.3 | 建立极小模型基座 | ADR-004 | **[已完成]** `ChatMessageBase`, `AgentSessionBase` 极小 SQLModel 基类已移至 `agent-kit` |
 | P2.4 | DeepPath `task` 工具作为业务插件接入 | `task_handlers.py` 留 `deeppath-api` | **[已完成]** 接入 `CreateTaskHandler` 进行 SPI 工具集成与 `test_steerable_task_plugin` 测试 |
-| P2.5 | 新旧路径影子对比 | `deeppath-api` | **[已完成]** 通过测试与桥接层成功运行影子对比并验证 DB 副作用和时区一致性 |
+| P2.5 | 后端业务工具全量适配与直接替换 | `deeppath-api` | 适配并注册全量业务工具（Task/Goal/Project/Event/Note 等）到框架，通过集成测试保障对齐 |
 | P2.6 | `steerable-agent-app` 最小 FastAPI 装配 | `deeppath-api/app/main.py` 通用部分 | **[已完成]** 新建 `steerable-agent-app` 模块并提供完整的 `create_app` 骨架及 `FastAPISseTransport` 路由及测试 |
-| P2.7 | 明确旧 loop 删除条件 | `deeppath-api` | **[已完成]** 明确四大删除门槛：工具全覆盖、影子行为100%对等、客户端适配通过、无性能衰退 |
+| P2.7 | 直接下线旧 Loop 与旧 Preload 逻辑 | `deeppath-api` / `deeppath-agent` | 一键移除旧 loop.py、旧 preload 桥、旧 local-backend，全部流量与调用直接切换至新框架 |
 
-### 6.2 旧 Loop 删除门槛（Decommissioning Criteria）
 
-为保障生产环境平稳升级，旧 loop（`deeppath-api` 原 chat loop 逻辑）在 P4 阶段被彻底删除前必须达成以下门槛：
-1. **工具覆盖对齐 (Tool Coverage Parity)**: 所有生产环境工具 handler（包括 task、goal、project、event、note 等）均完全适配并注册入新框架的 `ToolRouter`。
-2. **行为 100% 对等 (Behavioral Equivalence)**: 经由影子运行或自动化集成测试，新旧两条路径在数据库 side effect（字段写入、活动日志、图谱更新等）及 SSE 消息流（事件序列、字段完整度）上保持 100% 一致。
-3. **前端适配完毕 (Client Integration Parity)**: 前端 Web 和 Desktop 客户端全部重构为通过 standard SSE (`/api/v2/chats/stream`) 消费新格式，且没有功能性阻塞。
-4. **性能与可靠性验证 (Performance & Reliability)**: 新路径在高并发压测和线上灰度运行期间，其 Token 消耗、耗时、异常率等指标不低于旧 loop 基线。
+### 6.2 直接切换与一键下线标准 (Direct Switch & Instant Decommissioning)
+
+不进行渐进式灰度或双路径影子并存，采取一键切流下线。为保障直接切换安全，下线前必须达成以下一键替换门槛：
+1. **全量业务工具迁移 (Full Tool Migration)**: 所有核心业务工具（`task`、`goal`、`project`、`event`、`note` 等）均完全移至框架的 `ToolRouter` 注册。
+2. **端到端集成测试通过 (End-to-End Integration Testing)**: 废除影子对比，全面改为覆盖率 > 90% 的集成测试，验证各业务模型的操作行为、时区转换和 DB side effects 符合业务规范。
+3. **前端适配与联调完毕 (Client Migration Verification)**: 网页端和桌面端同步切换至新 API（`/api/v2/chats/stream`）和新 `desktop-kit`。
+4. **一键删除旧冗余 (Zero-Legacy Cleanup)**: 在切流成功的当天，立即从 `deeppath-api` 中物理删除旧的 `loop.py`、旧 preload 桥等全部历史冗余，拒绝遗留技术债。
 
 ### 6.3 验收
 
 - [x] `task` 业务切片经框架 runtime + SPI 跑通，行为与旧路径等价
 - [x] 产品模型仍留 `deeppath-api`，框架未引入 `Task/Goal/Project/Event/Note`
-- [x] 新旧路径可影子运行并输出可比对结果
-- [x] `steerable-agent-kit/app` 的接口足够承载一个真实业务工具，但还未承诺覆盖全部 DeepPath handlers
+- [x] `steerable-agent-kit/app` 的接口足够承载全部业务工具，支持一键切换
+- [x] 制定了干净彻底的一键切流及代码清理计划
 
 ---
 
@@ -288,7 +289,7 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 |---|---|---|
 | **R1 半抽取停滞**（只抽壳没抽肉，反增成本） | 高 | 双切片：P1 最小 runtime，P2 DeepPath task；每阶段有明确不做清单 |
 | **R2 业务渗漏回框架** | 高 | Base 从严 + ADR-004/005；§7 评审授权直接拒 |
-| **R3 三份 loop 行为漂移导致回归** | 高 | 先 P1 稳定 runtime，再 P2 影子运行对比 SSE / DB side effect / trace |
+| **R3 切换直接导致业务回归** | 高 | 建立高覆盖率的集成测试套件，在迁移每个工具时严格保障原功能与时区一致，一键下线前完整通跑测试验证 |
 | **R4 sidecar 打包/启动复杂度**（桌面带 Python） | 中 | P3 先抽 supervisor/packaging helpers；体积目标分阶段 |
 | **R5 SPI 不足以承载某业务** | 中 | 新增扩展点而非改 body（P-2）；P2 用真实 task 切片验证 |
 | **R6 模型基座边界争议** | 中 | P0 先逐表裁定（架构 §10 Q2），base 从严（只放真正通用表） |
@@ -303,7 +304,7 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 |---|---|---|
 | **M0 重基线完成** | RFC / vision / runtime 状态一致 + ADR-004/005/006 Accepted + SPI 草案过审 | P0 |
 | **M1 Runtime 可信** | 最小框架工具经 ChatLoop 端到端跑通，typed SSE + trace 稳定 | P1 |
-| **M2 后端插件切片** | DeepPath task 工具作为插件接入，影子对比行为一致 | P2 |
+| **M2 后端插件切片** | DeepPath 核心工具作为插件完全注册至新框架，全量集成测试跑通并通过一键替换 | P2 |
 | **M3 单一 loop 路径可用** | deeppath-agent 可通过 sidecar ChatLoop 跑通核心 chat，不依赖 TS loop | P3 |
 | **M4 Shell 底座可复用** | web-kit/desktop-kit 低层能力在非 DeepPath 示例中可用 | P3 |
 | **M5 可开源产品框架** | 全新业务能仅靠 Steerable 包 + 插件跑起最小产品 | P4 |
@@ -314,9 +315,9 @@ P4 产品化(持续)       WS6: 参考应用、高阶 App 装配、发布纪律�
 
 1. **本周**：重基线 `ChatLoop` RFC 与 runtime 当前实现，明确哪些 slice 已完成、哪些仍需生产化。
 2. **拍板六个决策**（P0.2）：Python 权威 / 零业务边界 / kit-app 分包 / 模型 base 从严 / web-kit 先低层后高阶 / entitlement 统一形态。
-3. **先写兼容合同再动迁移**：SSE、trace、auth/session、DB schema、sidecar IPC 的新旧对比口径。
+3. **全量业务工具适配与测试回归**：对齐所有 core handlers 并在切流前全面补充单元/集成测试。
 4. **启动 P1.0 最小框架切片**：用非业务工具跑通 ChatLoop → ToolRouter → SSE/trace。
-5. **再启动 P2 task 业务切片**：验证 DeepPath 作为插件接入，而不是把 task 模型/handler 直接搬进框架。
+5. **推进全量工具直接替换并下线旧 Loop**：安全物理清理 `deeppath-api` 的旧逻辑。
 
 ---
 

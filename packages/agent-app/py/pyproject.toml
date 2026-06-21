@@ -1,6 +1,6 @@
 [project]
 name = "steerable-agent-app"
-version = "0.2.0"
+version = "0.2.4"
 description = "Steerable application: FastAPI factories, routing, and SSE endpoint setups."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,7 +11,7 @@ dependencies = [
   "pydantic>=2.10.0",
   "sqlmodel>=0.0.22",
   "steerable-agent-protocol>=0.1.0,<1.0.0",
-  "steerable-agent-kit>=0.2.0,<1.0.0",
+  "steerable-agent-kit>=0.2.4,<1.0.0",
   "steerable-agent-runtime[all]>=0.1.0,<1.0.0",
 ]
 

@@ -40,10 +40,10 @@ const theme = {
 };
 
 const branding = {
-  productName: '时踪',
-  tagline: 'AI 行动助手',
+  productName: 'MyAgent',
+  tagline: 'My AI Copilot',
   logo: <MyLogoIcon />,
-  domain: 'deeppath.cc'
+  domain: 'myagent.ai'
 };
 
 const runtime = {

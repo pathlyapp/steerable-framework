@@ -3,10 +3,10 @@
 
 Used by CI in two ways:
   * `python scripts/check_lockstep_versions.py`
-      Verify all 7 packages have the same version (any version).
+      Verify all 11 packages have the same version (any version).
       Cheap pre-commit / pre-push gate.
   * `python scripts/check_lockstep_versions.py --expected 0.3.0`
-      Verify all 7 packages report exactly 0.3.0.
+      Verify all 11 packages report exactly 0.3.0.
       Run by `release.yml` against the pushed tag — refuses to publish
       unless the source tree matches the tag.
 
@@ -33,6 +33,8 @@ TS_PACKAGES: list[tuple[str, str]] = [
     ("@steerable/agent-protocol", "packages/agent-protocol/ts/package.json"),
     ("@steerable/agent-harness",  "packages/agent-harness/ts/package.json"),
     ("@steerable/agent-ui",       "packages/agent-ui/ts/package.json"),
+    ("@steerable/web-kit",        "packages/web-kit/ts/package.json"),
+    ("@steerable/desktop-kit",    "packages/desktop-kit/ts/package.json"),
 ]
 
 PY_PACKAGES: list[tuple[str, str]] = [
@@ -40,6 +42,8 @@ PY_PACKAGES: list[tuple[str, str]] = [
     ("steerable-agent-harness",  "packages/agent-harness/py/pyproject.toml"),
     ("steerable-agent-runtime",  "packages/agent-runtime/py/pyproject.toml"),
     ("steerable-sidecar",        "packages/sidecar/py/pyproject.toml"),
+    ("steerable-agent-kit",      "packages/agent-kit/py/pyproject.toml"),
+    ("steerable-agent-app",      "packages/agent-app/py/pyproject.toml"),
 ]
 
 
@@ -88,7 +92,7 @@ def main() -> int:
         return 1
 
     suffix = " (matches --expected)" if args.expected else ""
-    print(f"\nOK: all 7 packages at {only_version}{suffix}")
+    print(f"\nOK: all 11 packages at {only_version}{suffix}")
     return 0
 
 

@@ -3,7 +3,7 @@
 Two layers:
 
 * ``is_terminal_result(result_dict)`` — the original predicate, kept for back
-  compat (existing call sites in deeppath-api still use it).
+  compat (existing call sites in the host API still use it).
 * ``decide_completion(...)`` — the higher-level dispatcher used by the
   framework ``ChatLoop``. Takes the round's tool calls + tool results +
   budget state + budget limits and returns a single ``CompletionDecision``

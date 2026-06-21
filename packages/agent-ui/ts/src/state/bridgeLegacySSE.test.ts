@@ -66,7 +66,14 @@ describe('bridgeLegacySSE', () => {
         status: 'budget_exhausted',
         reason: 'token limit',
       });
-      expect(ev).toEqual({ type: 'budget_exhausted', message: 'token limit' });
+      expect(ev).toEqual({
+        type: 'budget_exhausted',
+        payload: {
+          limitKind: 'unknown',
+          budgetState: {},
+        },
+        message: 'token limit',
+      });
     });
 
     it('completion:executing → agent/round_end', () => {
@@ -118,7 +125,7 @@ describe('bridgeLegacySSE', () => {
       const ev = bridgeLegacySSE(
         { type: 'wholly-unknown' },
         undefined,
-        { passthroughUnknownAsAgent: false, profile: 'deeppathCloud' },
+        { passthroughUnknownAsAgent: false, profile: 'legacyCloud' },
       );
       expect(ev).toBeNull();
     });

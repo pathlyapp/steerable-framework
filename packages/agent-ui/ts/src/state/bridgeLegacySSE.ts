@@ -9,8 +9,8 @@
  *
  * The two implementations are merged here, with deeppath-agent's richer
  * `completion` / `executed_actions` / `user_message` / `message_id` handling
- * promoted as the default and the older deeppath wire shapes added as
- * `EnvelopeProfile.deeppathCloud`. A consumer picks a profile (or "auto"),
+ * promoted as the default and the older legacy wire shapes added as
+ * `EnvelopeProfile.legacyCloud`. A consumer picks a profile (or "auto"),
  * and the bridge does the rest.
  *
  * The bridge is intentionally pure — no I/O, no DOM, no electron — so it can
@@ -22,9 +22,9 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 export type EnvelopeProfile =
   | 'auto'
   /** Next.js `/api/chats/:id/send` legacy wire — `{content}` deltas, `{error}` envelopes. */
-  | 'deeppathCloud'
+  | 'legacyCloud'
   /** Electron local-backend wire — typed completion/executed_actions/user_message. */
-  | 'deeppathLocal';
+  | 'legacyLocal';
 
 export interface BridgeLegacySSEOptions {
   profile?: EnvelopeProfile;
@@ -94,7 +94,7 @@ export function bridgeLegacySSE(
     if (KNOWN_EVENT_TYPES.has(data.type as SSEEvent['type'])) {
       return data as unknown as SSEEvent;
     }
-    if (profile === 'deeppathLocal' || profile === 'auto') {
+    if (profile === 'legacyLocal' || profile === 'auto') {
       const mapped = mapLocalBackendEnvelope(data);
       if (mapped !== undefined) return mapped;
     }

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -23,7 +24,7 @@ DEFAULT_MAX_RESULTS = 5
 DEEP_FETCH_TOP_N = 3
 DEEP_FETCH_TIMEOUT = 8
 DEEP_FETCH_MAX_CHARS = 1500
-SELF_DOMAINS = {"deeppath.cc", "www.deeppath.cc", "ai-deeppath.com", "www.ai-deeppath.com"}
+SELF_DOMAINS = set(filter(None, os.environ.get("STEERABLE_SELF_DOMAINS", "").split(",")))
 
 _NSFW_KEYWORDS = {
     "porn", "xxx", "sex", "hentai", "nude", "naked", "nsfw",
