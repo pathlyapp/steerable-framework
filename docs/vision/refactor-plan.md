@@ -2,8 +2,9 @@
 
 | 字段 | 值 |
 |---|---|
-| **状态** | Draft（待评审） |
+| **状态** | Accepted |
 | **创建** | 2026-06-21 |
+| **更新** | 2026-06-21 (P1 Completed) |
 | **作者** | DeepPath / Steerable maintainers |
 | **目标架构** | [target-architecture.md](./target-architecture.md) |
 | **关联 RFC** | `spec/runtime/chat-loop.md`（ChatLoop，已有 runtime 雏形，需生产化接入） |

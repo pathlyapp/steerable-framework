@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| **状态** | Draft |
+| **状态** | Accepted |
 | **创建** | 2026-06-21 |
 | **关联** | [refactor-plan.md](./refactor-plan.md) P0/P1/P2 · [target-architecture.md](./target-architecture.md) · `spec/runtime/chat-loop.md` |
 

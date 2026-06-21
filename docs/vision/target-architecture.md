@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| **状态** | Draft（待评审） |
+| **状态** | Accepted |
 | **创建** | 2026-06-21 |
 | **作者** | DeepPath / Steerable maintainers |
 | **关联** | `spec/runtime/chat-loop.md`（ChatLoop RFC）、`docs/spec/architecture.md`、`docs/migration/deeppath.md` |

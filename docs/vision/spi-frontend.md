@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 |---|---|
-| **状态** | Draft（接口签名级，实现以 PR 为准） |
+| **状态** | Accepted (Signature-level Contract) |
 | **日期** | 2026-06-21 |
 | **关联** | [target-architecture.md](./target-architecture.md) §6.2/§6.3 · [spi-backend.md](./spi-backend.md) · `@steerable/agent-ui` |
 
