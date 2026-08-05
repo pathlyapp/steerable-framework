@@ -324,7 +324,7 @@ pnpm shell:build
 `ci.yml` runs `pnpm shell:build` on every PR so any framework export / type /
 fixture drift fails fast. `docs.yml` ships the same build to GH Pages on
 every push to `main`, giving us the badge-linked "Live demo" URL at
-`https://pathlyapp.github.io/steerable-framework/demo/`.
+`https://steerableframework.com/demo/`.
 
 Fixtures the web-shell consumes live at `spec/blocks/fixtures/*.json` and
 are kept honest by the Ajv conformance test

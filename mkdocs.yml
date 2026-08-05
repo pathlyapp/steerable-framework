@@ -1,6 +1,6 @@
 site_name: Steerable Framework
 site_description: Spec-first agent framework for TypeScript + Python.
-site_url: https://pathlyapp.github.io/steerable-framework/
+site_url: https://steerableframework.com/
 repo_url: https://github.com/pathlyapp/steerable-framework
 repo_name: pathlyapp/steerable-framework
 edit_uri: edit/main/docs/
