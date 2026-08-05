@@ -1,0 +1,164 @@
+/* Landing-page styles for docs/index.md.
+   Scoped under .sf-* classes so other pages are unaffected. Works in both
+   the `default` (light) and `slate` (dark) Material palettes via the
+   theme's own CSS variables. */
+
+/* ---- hero -------------------------------------------------------------- */
+
+.sf-hero {
+  text-align: center;
+  padding: 2.6rem 1rem 1.4rem;
+  margin: -0.6rem -0.6rem 1.6rem;
+  border-radius: 0 0 1.2rem 1.2rem;
+}
+
+[data-md-color-scheme="default"] .sf-hero {
+  background: radial-gradient(ellipse 90% 100% at 50% 0%, rgba(92, 107, 192, 0.12), transparent 65%);
+}
+
+[data-md-color-scheme="slate"] .sf-hero {
+  background: radial-gradient(ellipse 90% 100% at 50% 0%, rgba(129, 140, 248, 0.18), transparent 65%);
+}
+
+.sf-hero-logo {
+  width: 4.2rem;
+  height: 4.2rem;
+  margin-bottom: 0.4rem;
+}
+
+.sf-hero h1 {
+  margin: 0 0 0.5rem;
+  font-size: 2.5rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(120deg, #5c6bc0 0%, #7e57c2 55%, #26a69a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.sf-hero .headerlink {
+  display: none;
+}
+
+.sf-tagline {
+  font-size: 1.12rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+  color: var(--md-default-fg-color);
+}
+
+.sf-sub {
+  font-size: 0.92rem;
+  color: var(--md-default-fg-color--light);
+  margin: 0 auto 1.1rem;
+  max-width: 38rem;
+}
+
+.sf-cta {
+  display: flex;
+  gap: 0.55rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.sf-cta .md-button {
+  border-radius: 2rem;
+  padding: 0.42rem 1.15rem;
+}
+
+.sf-badges {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.sf-badges img {
+  height: 1.05rem;
+  display: block;
+}
+
+/* ---- feature grid ------------------------------------------------------- */
+
+.sf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.7rem;
+  margin: 1.1rem 0 1.6rem;
+}
+
+.sf-card {
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.55rem;
+  padding: 0.85rem 1rem;
+  background: var(--md-default-bg-color);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.sf-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.1);
+}
+
+.sf-card h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.sf-card h3 code {
+  font-size: 0.8rem;
+}
+
+.sf-card p {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--md-default-fg-color--light);
+}
+
+/* ---- section headings ---------------------------------------------------- */
+
+.sf-section {
+  text-align: center;
+  margin: 2.2rem 0 0.4rem;
+}
+
+.sf-section + p.sf-lede {
+  text-align: center;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.85rem;
+  max-width: 36rem;
+  margin: 0 auto 1rem;
+}
+
+/* ---- quickstart tabs ------------------------------------------------------ */
+
+.sf-tabs {
+  max-width: 44rem;
+  margin: 0 auto 1.4rem;
+}
+
+/* ---- footer link row ------------------------------------------------------- */
+
+.sf-links {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin: 1.2rem 0 0.6rem;
+}
+
+.sf-links .md-button {
+  border-radius: 2rem;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .sf-hero h1 {
+    font-size: 1.9rem;
+  }
+}

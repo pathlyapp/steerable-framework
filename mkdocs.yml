@@ -7,6 +7,8 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
   features:
     - navigation.instant
     - navigation.tracking
@@ -41,6 +43,7 @@ markdown_extensions:
   - attr_list
   - def_list
   - footnotes
+  - md_in_html
   - tables
   - toc:
       permalink: true
@@ -80,6 +83,9 @@ nav:
 
 plugins:
   - search
+
+extra_css:
+  - stylesheets/home.css
 
 extra:
   social:
