@@ -50,6 +50,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # web-shell resolves workspace packages (@steerable/agent-ui,
+      # @steerable/agent-protocol) through their built `dist/` entry points,
+      # so the TS workspace must be built first — same install → build order
+      # as ci.yml. Skipping this fails the web-shell `tsc` step with TS2307.
+      - run: pnpm build
       # Storybook is generated *into* the mkdocs site so a single Pages
       # deployment serves both `/` (docs) and `/storybook/` (UI).
       - name: Build Storybook
