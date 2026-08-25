@@ -81,18 +81,19 @@ async def test_under_threshold_transcript_unchanged() -> None:
 async def test_over_threshold_folds_old_tool_results() -> None:
     # Three tool rounds with big outputs; by round 3 the estimate crosses the
     # threshold and old tool results must be folded into placeholders.
+    # (Distinct args per round — identical calls would hit the dedup guard.)
     big = "y" * 3_000
     provider = make_provider(
         [
-            {"content": "", "tool_calls": [tc("emit")]},
-            {"content": "", "tool_calls": [tc("emit")]},
-            {"content": "", "tool_calls": [tc("emit")]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 3})]},
             {"content": "final"},
         ]
     )
     router = ToolRouter()
 
-    async def emit() -> str:
+    async def emit(n: int) -> str:
         return big
 
     router.register(emit)

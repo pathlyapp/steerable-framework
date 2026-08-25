@@ -13,6 +13,15 @@ Contract (shared across api / agent / framework):
     budget_exhausted  (``planning`` / ``verifying`` do NOT)
   * budgets.stepCount = number of deduped steps;
     budgets.toolErrorCount = sum of each step's toolErrorCount
+
+Note: ``waiting_approval`` stays in the enum for replay-contract alignment —
+deeppath-api emits it when dp-action write proposals await approval, and
+replaying those trajectories requires the status to reduce correctly. The
+framework's CoreLoop never emits it: approval gating is a product-side
+concern (the desktop app deliberately runs tools without an approval wait;
+dp-action proposals stay product-side per the migration plan). Consent for
+individual tools is enforced synchronously by ToolRouter's require_consent
+instead of a suspending loop state.
 """
 
 from __future__ import annotations

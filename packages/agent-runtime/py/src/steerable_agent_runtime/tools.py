@@ -16,6 +16,7 @@ self-heal.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import logging
 import time
@@ -162,11 +163,21 @@ class ToolRouter:
     ) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
+            # Quick-fail with a nudge toward legal alternatives (ported from
+            # deeppath-api's `_suggest_similar_tools`): difflib with a
+            # permissive cutoff — the goal is suggestion, not auto-correction.
+            suggestions = difflib.get_close_matches(
+                call.name, list(self._tools), n=3, cutoff=0.4
+            )
+            error = f"Unknown tool: {call.name}"
+            if suggestions:
+                error += f". Did you mean: {', '.join(suggestions)}?"
             return ToolResult(
                 success=False,
-                error=f"Unknown tool: {call.name}",
+                error=error,
                 terminal=False,
-                needsFollowup=False,
+                needsFollowup=True,
+                data={"unknownTool": call.name, "suggestions": suggestions},
             )
         if tool.require_consent and not consent_granted:
             raise PolicyDeniedError(
@@ -198,7 +209,9 @@ class ToolRouter:
                     }
         started = time.monotonic()
         try:
-            result = await self._invoke(tool, call.arguments or {}, context or {})
+            result = await self._invoke(
+                tool, _coerce_arguments(tool, call.arguments or {}), context or {}
+            )
         except Exception as exc:
             logger.exception("Tool %s failed", tool.name)
             return ToolResult(
@@ -301,6 +314,41 @@ def tool(
         return handler
 
     return _decorator
+
+
+# ---------------------------------------------------------------------------
+# Argument coercion
+# ---------------------------------------------------------------------------
+
+
+def _coerce_arguments(tool: RegisteredTool, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Coerce argument primitives to the tool's schema types.
+
+    LLMs sometimes return wrong primitive types (integer ``11111`` where the
+    schema expects a string), which silently breaks downstream APIs. Walk the
+    schema properties and cast when safe (ported from deeppath-api's
+    ``_coerce_tool_args``). Un-castable values are left as-is.
+    """
+
+    properties = (tool.schema or {}).get("properties") or {}
+    if not properties:
+        return arguments
+    coerced = dict(arguments)
+    for key, value in arguments.items():
+        expected = (properties.get(key) or {}).get("type")
+        if expected == "string" and not isinstance(value, str):
+            coerced[key] = str(value)
+        elif expected == "integer" and isinstance(value, (str, float)):
+            try:
+                coerced[key] = int(value)
+            except (ValueError, OverflowError):
+                pass
+        elif expected == "number" and isinstance(value, str):
+            try:
+                coerced[key] = float(value)
+            except ValueError:
+                pass
+    return coerced
 
 
 # ---------------------------------------------------------------------------

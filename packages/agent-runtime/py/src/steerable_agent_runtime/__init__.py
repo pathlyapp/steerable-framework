@@ -34,6 +34,7 @@ from .retry import RetryHooks
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
+from .tracing import TraceRecorder
 from .transport import TransportAdapter
 
 __all__ = [
@@ -70,6 +71,7 @@ __all__ = [
     "ToolDispatchError",
     "ToolExecutor",
     "ToolRouter",
+    "TraceRecorder",
     "TransportAdapter",
     "TransportError",
     "build_step_decision_event",

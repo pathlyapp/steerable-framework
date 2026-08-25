@@ -6,8 +6,13 @@ decision, yielding structured `LoopEvent`s (never encoded bytes). A
 
 Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
   * inner loop state machine and round control
-  * LLM stream consumption (via LLMProvider)
-  * tool dispatch through the ToolExecutor port
+  * LLM stream consumption (via LLMProvider) with display hygiene:
+    UTF-16 surrogate-pair carry and streaming pseudo/echo-block stripping
+    (see pseudo.py) — raw text is kept for recovery/transcript, cleaned
+    text is what ``content_delta`` events emit
+  * tool dispatch through the ToolExecutor port, with hygiene guards:
+    same-turn ``(name, args)`` dedup (soft ``duplicate_call`` signal),
+    unknown-tool suggestions and schema argument coercion (tools.py)
   * token budget counters + completion decision
   * pseudo / markdown tool-call recovery (see pseudo.py)
   * LoopHooks extension points (see hooks.py): pre_step / post_tool_result /
@@ -19,10 +24,11 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     round boundaries; once exceeded the loop stops offering tools and asks
     the model for a final answer instead of hard-killing the run
 
-Not yet implemented (later slices per the plan): tool dedup, policy gate,
-and the anti-hallucination layer (data-need routing, grounding judge,
-deferred/claimed retry, narration round). Compaction and large-result
-externalization live in hooks (compaction.py / spill.py), not here.
+Not yet implemented (later slices per the plan): the anti-hallucination
+layer (data-need routing, grounding judge, deferred/claimed retry,
+narration round). Compaction and large-result externalization live in hooks
+(compaction.py / spill.py), not here. Observability lives in tracing.py
+(a TraceRecorder consuming this event stream), not in the loop itself.
 """
 
 from __future__ import annotations
@@ -42,7 +48,12 @@ from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .hooks import LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
-from .pseudo import extract_inline_tool_calls
+from .pseudo import (
+    PseudoStreamStripper,
+    extract_inline_tool_calls,
+    split_trailing_high_surrogate,
+    strip_pseudo_fn_final,
+)
 from .replay import (
     HarnessTrajectoryEvent,
     build_step_decision_event,
@@ -164,6 +175,13 @@ class LoopConfig:
     #: asks the model to wrap up with what it has (one final no-tools round),
     #: instead of hard-killing the run. ``None`` disables.
     soft_timeout_ms: int | None = None
+    #: Block re-issuing an identical ``(name, args)`` call within one run.
+    #: Deterministic tools return identical output for identical input, so a
+    #: repeat only burns tokens and can push the model into a retry loop
+    #: (ported from deeppath-api's P0.3 guard; counts toward the consecutive
+    #: tool-error breaker). No write/destructive exemption — idempotency of
+    #: side effects belongs to the action layer below.
+    tool_dedup: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +228,7 @@ class CoreLoop:
         ctx = LoopContext(chat_id=chat_id)
         transcript: list[LLMMessage] = list(messages)
         budget_state = BudgetState()
+        tool_call_signatures: set[tuple[str, str]] = set()
         started = time.monotonic()
         soft_deadline = (
             started + self._config.soft_timeout_ms / 1000
@@ -296,6 +315,13 @@ class CoreLoop:
             # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
+            # Display pipeline: raw text is accumulated for recovery and the
+            # transcript, but content_delta events pass through a surrogate
+            # carry (half-emoji split across chunks) and the pseudo stripper
+            # (echo blocks / pseudo calls never reach the user's screen).
+            stripper = PseudoStreamStripper()
+            content_carry = ""
+            reasoning_carry = ""
             while True:
                 try:
                     async for chunk in self._provider.stream(
@@ -308,9 +334,18 @@ class CoreLoop:
                     ):
                         if chunk.content_delta:
                             content_parts.append(chunk.content_delta)
-                            yield LoopEvent("content_delta", {"delta": chunk.content_delta})
+                            emit, content_carry = split_trailing_high_surrogate(
+                                chunk.content_delta, content_carry
+                            )
+                            display = stripper.feed(emit)
+                            if display:
+                                yield LoopEvent("content_delta", {"delta": display})
                         if chunk.reasoning_delta:
-                            yield LoopEvent("reasoning_delta", {"delta": chunk.reasoning_delta})
+                            emit, reasoning_carry = split_trailing_high_surrogate(
+                                chunk.reasoning_delta, reasoning_carry
+                            )
+                            if emit:
+                                yield LoopEvent("reasoning_delta", {"delta": emit})
                         if chunk.tool_call_delta is not None:
                             tool_calls.append(chunk.tool_call_delta)
                         if chunk.usage is not None and self._config.budget is not None:
@@ -339,6 +374,14 @@ class CoreLoop:
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
                     action = await self._hooks.on_request_error(exc, ctx)
                     if action.kind == "retry":
+                        # The retry re-streams from scratch: drop the failed
+                        # attempt's partial content and display-pipeline state
+                        # so neither the transcript nor the user sees it twice.
+                        content_parts = []
+                        tool_calls = []
+                        stripper = PseudoStreamStripper()
+                        content_carry = ""
+                        reasoning_carry = ""
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)
                         continue
@@ -361,6 +404,18 @@ class CoreLoop:
                         decision,
                     )
                     return
+
+            # Flush the display pipeline: any held-back tail (partial marker
+            # that never completed, deferred surrogate half) goes out now.
+            if content_carry:
+                tail = stripper.feed(content_carry)
+                if tail:
+                    yield LoopEvent("content_delta", {"delta": tail})
+            tail = stripper.flush()
+            if tail:
+                yield LoopEvent("content_delta", {"delta": tail})
+            if reasoning_carry:
+                yield LoopEvent("reasoning_delta", {"delta": reasoning_carry})
 
             content = "".join(content_parts)
 
@@ -387,6 +442,10 @@ class CoreLoop:
                         )
                         for i, r in enumerate(recovered)
                     ]
+
+            # Belt-and-suspenders: drop any echo blocks that slipped past the
+            # streaming filter before the content enters the transcript.
+            content = strip_pseudo_fn_final(content)
 
             # ── decide: no tool calls → terminal ─────────────────────────
             if not tool_calls:
@@ -423,20 +482,46 @@ class CoreLoop:
                     "tool_call_start", {"id": call.id, "name": call.name, "round": round_index}
                 )
                 tool_started = time.monotonic()
-                try:
-                    result = await self._executor.execute(call, ctx)
-                except Exception as exc:  # noqa: BLE001 — surface as tool_error event
-                    ctx.consecutive_tool_errors += 1
-                    yield LoopEvent(
-                        "tool_error",
-                        {"id": call.id, "name": call.name, "error": str(exc)},
-                    )
-                    result = ToolResult(success=False, error=str(exc), needsFollowup=True)
-                else:
-                    if result.success:
-                        ctx.consecutive_tool_errors = 0
+
+                # Dedup guard: identical (name, args) already ran this run →
+                # skip execution, feed back a soft "you already called this"
+                # signal. Checked before the executor so retried *unknown*
+                # tools are blocked too (their signature is recorded on the
+                # first attempt).
+                duplicate = False
+                if self._config.tool_dedup:
+                    sig = (call.name, _stable_json_hash(call.arguments or {}))
+                    if sig in tool_call_signatures:
+                        duplicate = True
                     else:
+                        tool_call_signatures.add(sig)
+
+                if duplicate:
+                    ctx.consecutive_tool_errors += 1
+                    result = ToolResult(
+                        success=False,
+                        error="duplicate_call",
+                        needsFollowup=True,
+                        data={
+                            "duplicate": True,
+                            "message": _DUPLICATE_CALL_MESSAGE.format(name=call.name),
+                        },
+                    )
+                else:
+                    try:
+                        result = await self._executor.execute(call, ctx)
+                    except Exception as exc:  # noqa: BLE001 — surface as tool_error event
                         ctx.consecutive_tool_errors += 1
+                        yield LoopEvent(
+                            "tool_error",
+                            {"id": call.id, "name": call.name, "error": str(exc)},
+                        )
+                        result = ToolResult(success=False, error=str(exc), needsFollowup=True)
+                    else:
+                        if result.success:
+                            ctx.consecutive_tool_errors = 0
+                        else:
+                            ctx.consecutive_tool_errors += 1
 
                 # ── hook: post_tool_result (spill / truncation) ──────────
                 result = await self._hooks.post_tool_result(result, call, ctx)
@@ -450,6 +535,7 @@ class CoreLoop:
                         "name": call.name,
                         "success": result.success,
                         "durationMs": duration_ms,
+                        **({"error": result.error} if result.error else {}),
                     },
                 )
                 transcript.append(
@@ -480,6 +566,15 @@ class CoreLoop:
                     return
 
             # ── observe: continue to next round ──────────────────────────
+            yield LoopEvent(
+                "stage_complete",
+                {
+                    "round": round_index,
+                    "toolCallCount": len(tool_calls),
+                    "consecutiveToolErrors": ctx.consecutive_tool_errors,
+                    "elapsedMs": int((time.monotonic() - started) * 1000),
+                },
+            )
             decision = CompletionDecision(
                 status="executing",
                 reason="tool observations were produced; continue",
@@ -522,6 +617,27 @@ _SOFT_TIMEOUT_NOTICE = (
     "any more tools. Summarize what you have done so far and produce the "
     "final answer now."
 )
+
+_DUPLICATE_CALL_MESSAGE = (
+    "You already called `{name}` with identical arguments in this turn; the "
+    "result will not change. Continue from the existing tool result: use "
+    "different arguments or a different tool, or reply to the user directly "
+    "with your conclusion — do not repeat the same call."
+)
+
+
+def _stable_json_hash(value: Any) -> str:
+    """Hash JSON-serializable values for dedup correlation (ported from
+    deeppath-api's ``tracing.stable_json_hash``)."""
+
+    import hashlib
+    import json
+
+    try:
+        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except TypeError:
+        payload = str(value)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _decision_data(decision: CompletionDecision) -> dict[str, Any]:

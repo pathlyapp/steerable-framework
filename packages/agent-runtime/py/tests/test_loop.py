@@ -205,3 +205,31 @@ async def test_tool_exception_is_surfaced_not_raised() -> None:
     assert any(e.kind == "tool_error" for e in events)
     # loop recovered and completed on the next turn
     assert final_completion(events)["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_stage_complete_emitted_after_tool_rounds() -> None:
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("echo", {"text": "hi"})]},
+            {"content": "done"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def echo(text: str) -> str:
+        return text
+
+    router.register(echo)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+
+    stages = [e for e in events if e.kind == "stage_complete"]
+    assert len(stages) == 1  # only the tool round, not the final no-tool round
+    assert stages[0].data["round"] == 0
+    assert stages[0].data["toolCallCount"] == 1
+    assert stages[0].data["consecutiveToolErrors"] == 0
+    # ordering: stage_complete comes after the tool result, before completion
+    kinds = [e.kind for e in events]
+    assert kinds.index("tool_call_result") < kinds.index("stage_complete")
+    assert kinds.index("stage_complete") < kinds.index("completion")
