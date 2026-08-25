@@ -357,11 +357,19 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
         前端/preload/IPC 零改动；关 flag 即回滚 TS 循环。
       - 验证：框架 py 159（+3）/ agent vitest 307（+12）/ 真实 sidecar 进程
         集成 3 / 双仓 CI 绿。
-      - **还差**：真实模型灰度（本机 Ollama 当前无模型，未跑活 LLM 端到端）；
-        plan 模式在 CoreLoop 路径只靠工具广告过滤（无硬阻断）；
-        TraceRecorder 未接入 sidecar 默认路径。
-- [ ] **真实流量灰度**：装一个 Ollama 小模型，双 flag 开跑真实对话，
-      观察伪调用恢复率 / 工具结果大小分布 / 超时抖动 / 安全规则误伤率
+      - **还差**：桌面端真实对话灰度（无头金丝雀已过，见下）；plan 模式在
+        CoreLoop 路径只靠工具广告过滤（无硬阻断）；TraceRecorder 未接入
+        sidecar 默认路径。
+- [~] **真实流量灰度**：**无头金丝雀已过（2026-08-25，agent `a42db9f`）**——
+      真实 sidecar + Ollama cloud（gpt-oss:20b-cloud）+ 反向通道端到端：
+      模型自主 list_dir → read_file 两轮工具调用，最终回答含校验串
+      （grounding 成立），7s 完成。金丝雀当场抓到两个脚本测试从未覆盖的
+      真实缺口：provider 工厂缺 `name` 参数（此前从未成功构造过真实
+      provider）、sidecar 缺 httpx 依赖（框架 `8551a98` 已修 + 回归测试）。
+      复跑方式：`STEERABLE_SIDECAR_TEST=1 STEERABLE_SIDECAR_PYTHON=<venv> \
+      npx vitest run tests/sidecar/coreloop.integration.test.ts`。
+      **还差**：Electron 桌面端双 flag 真实对话（伪调用恢复率 / 工具结果
+      大小分布 / 超时抖动 / 安全规则误伤率只有桌面分布能回答）。
 - [ ] 灰度通过后删 `deeppath-agent/src/harness`
 - [x] ~~把 61 条 shell 安全规则回流到框架~~（Tier 1 已完成：双语 61 条 +
       ToolRouter 接线 + 一致性测试）
