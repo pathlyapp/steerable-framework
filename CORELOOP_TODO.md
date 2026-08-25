@@ -357,9 +357,12 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
         前端/preload/IPC 零改动；关 flag 即回滚 TS 循环。
       - 验证：框架 py 159（+3）/ agent vitest 307（+12）/ 真实 sidecar 进程
         集成 3 / 双仓 CI 绿。
-      - **还差**：桌面端真实对话灰度（无头金丝雀已过，见下）；plan 模式在
-        CoreLoop 路径只靠工具广告过滤（无硬阻断）；TraceRecorder 未接入
-        sidecar 默认路径。
+      - **已补（2026-08-26，框架 `9d92b12` + agent `7dfaf65`）**：plan 模式
+        执行层硬阻断（请求带 `toolContext {mode}`，反向 handler 拒绝写工具，
+        不再只靠工具广告过滤）；TraceRecorder 接入 sidecar CoreLoop 路径
+        （事件落 sidecar storage，`stream.done` 带 `traceId`，宿主可
+        `trace.fetch` 拉取完整轨迹）。
+      - **还差**：桌面端真实对话灰度（无头金丝雀已过，见下）。
 - [~] **真实流量灰度**：**无头金丝雀已过（2026-08-25，agent `a42db9f`）**——
       真实 sidecar + Ollama cloud（gpt-oss:20b-cloud）+ 反向通道端到端：
       模型自主 list_dir → read_file 两轮工具调用，最终回答含校验串
