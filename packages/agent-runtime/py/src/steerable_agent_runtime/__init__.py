@@ -10,6 +10,7 @@ from .errors import (
 from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
+from .hooks import LoopHooks, NoopHooks, PreStepAction, RetryAction
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
 from .loop import (
     CompletionDecision,
@@ -46,8 +47,12 @@ __all__ = [
     "LoopConfig",
     "LoopContext",
     "LoopEvent",
+    "LoopHooks",
+    "NoopHooks",
     "PolicyDeniedError",
+    "PreStepAction",
     "RegisteredTool",
+    "RetryAction",
     "RouterToolExecutor",
     "SteerableRuntimeError",
     "StorageAdapter",

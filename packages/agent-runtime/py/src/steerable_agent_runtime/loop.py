@@ -10,6 +10,11 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
   * tool dispatch through the ToolExecutor port
   * token budget counters + completion decision
   * pseudo / markdown tool-call recovery (see pseudo.py)
+  * LoopHooks extension points (see hooks.py): pre_step / post_tool_result /
+    on_request_error — remaining slices land as hook implementations, not as
+    more branches here
+  * single write path: completion events carry their full step summary and
+    the compact trajectory is derived from them (no separate record channel)
 
 Not yet implemented (later slices per the plan): soft-timeout,
 compaction-continue, large-result externalization, tool dedup, policy gate,
@@ -19,6 +24,7 @@ deferred/claimed retry, narration round).
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -31,6 +37,7 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
+from .hooks import LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
 from .pseudo import extract_inline_tool_calls
 from .replay import (
@@ -174,12 +181,15 @@ class CoreLoop:
         provider: LLMProvider,
         executor: ToolExecutor,
         config: LoopConfig | None = None,
+        hooks: LoopHooks | None = None,
     ) -> None:
         self._provider = provider
         self._executor = executor
         self._config = config or LoopConfig()
+        self._hooks: LoopHooks = hooks if hooks is not None else NoopHooks()
         # Compact trajectory recorded during run(); replayable via
-        # replay.reduce_execution_state. Reset at the start of each run.
+        # replay.reduce_execution_state. Derived from the completion events
+        # (single write path — see _emit_completion). Reset each run.
         self.trajectory: list[HarnessTrajectoryEvent] = []
 
     async def run(
@@ -195,9 +205,30 @@ class CoreLoop:
         started = time.monotonic()
         self.trajectory = []
 
-        def record(step: dict[str, Any], dec: CompletionDecision) -> None:
-            self.trajectory.append(
-                build_step_decision_event(step, _decision_data(dec))
+        def emit_completion(
+            step: dict[str, Any], dec: CompletionDecision
+        ) -> LoopEvent:
+            """Build the completion event carrying its full step summary, and
+            derive the trajectory entry from it (single write path — the
+            trajectory is never recorded through a separate channel, so the
+            event stream alone can rebuild it)."""
+            data = {**step, **_decision_data(dec)}
+            self.trajectory.append(build_step_decision_event(step, _decision_data(dec)))
+            return LoopEvent("completion", data)
+
+        def step_summary(
+            *,
+            round_index: int,
+            finish_reason: str,
+            content: str,
+            tool_calls: list[ToolCall],
+        ) -> dict[str, Any]:
+            return _step_summary(
+                round_index=round_index,
+                finish_reason=finish_reason,
+                content=content,
+                tool_calls=tool_calls,
+                consecutive_tool_errors=ctx.consecutive_tool_errors,
             )
 
         yield LoopEvent("stage_start", {"model": self._provider.model})
@@ -206,45 +237,93 @@ class CoreLoop:
         for round_index in range(self._config.max_rounds):
             ctx.round_index = round_index
 
-            # ── think: consume one LLM stream ────────────────────────────
+            # ── hook: pre_step (compaction / turn rejection) ─────────────
+            pre = await self._hooks.pre_step(transcript, ctx)
+            if pre.kind == "reject":
+                decision = CompletionDecision(
+                    status="failed",
+                    reason=pre.reason or "rejected by pre_step hook",
+                    confidence=1.0,
+                )
+                yield emit_completion(
+                    step_summary(
+                        round_index=round_index,
+                        finish_reason="stop",
+                        content="",
+                        tool_calls=[],
+                    ),
+                    decision,
+                )
+                return
+            if pre.transcript is not None:
+                transcript = pre.transcript
+
+            # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
-            async for chunk in self._provider.stream(
-                transcript,
-                tools=tools,
-                temperature=self._config.temperature,
-                max_tokens=self._config.max_tokens,
-            ):
-                if chunk.content_delta:
-                    content_parts.append(chunk.content_delta)
-                    yield LoopEvent("content_delta", {"delta": chunk.content_delta})
-                if chunk.reasoning_delta:
-                    yield LoopEvent("reasoning_delta", {"delta": chunk.reasoning_delta})
-                if chunk.tool_call_delta is not None:
-                    tool_calls.append(chunk.tool_call_delta)
-                if chunk.usage is not None and self._config.budget is not None:
-                    budget_state, exhausted = consume_budget(
-                        budget_state, self._config.budget, tokens=chunk.usage.total_tokens
+            while True:
+                try:
+                    async for chunk in self._provider.stream(
+                        transcript,
+                        tools=tools,
+                        temperature=self._config.temperature,
+                        max_tokens=self._config.max_tokens,
+                    ):
+                        if chunk.content_delta:
+                            content_parts.append(chunk.content_delta)
+                            yield LoopEvent("content_delta", {"delta": chunk.content_delta})
+                        if chunk.reasoning_delta:
+                            yield LoopEvent("reasoning_delta", {"delta": chunk.reasoning_delta})
+                        if chunk.tool_call_delta is not None:
+                            tool_calls.append(chunk.tool_call_delta)
+                        if chunk.usage is not None and self._config.budget is not None:
+                            budget_state, exhausted = consume_budget(
+                                budget_state, self._config.budget, tokens=chunk.usage.total_tokens
+                            )
+                            if exhausted:
+                                yield LoopEvent(
+                                    "budget_exhausted",
+                                    {"kind": "tokens", "used": budget_state.tokens_used},
+                                )
+                                decision = CompletionDecision(
+                                    status="budget_exhausted", reason="token budget exceeded"
+                                )
+                                yield emit_completion(
+                                    step_summary(
+                                        round_index=round_index,
+                                        finish_reason="stop",
+                                        content="".join(content_parts),
+                                        tool_calls=tool_calls,
+                                    ),
+                                    decision,
+                                )
+                                return
+                    break  # stream completed without error
+                except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
+                    action = await self._hooks.on_request_error(exc, ctx)
+                    if action.kind == "retry":
+                        if action.delay_ms > 0:
+                            await asyncio.sleep(action.delay_ms / 1000)
+                        continue
+                    yield LoopEvent(
+                        "error",
+                        {"message": str(exc), "round": round_index, "phase": "llm_stream"},
                     )
-                    if exhausted:
-                        yield LoopEvent(
-                            "budget_exhausted", {"kind": "tokens", "used": budget_state.tokens_used}
-                        )
-                        decision = CompletionDecision(
-                            status="budget_exhausted", reason="token budget exceeded"
-                        )
-                        record(
-                            _step_summary(
-                                round_index=round_index,
-                                finish_reason="stop",
-                                content="".join(content_parts),
-                                tool_calls=tool_calls,
-                                consecutive_tool_errors=ctx.consecutive_tool_errors,
-                            ),
-                            decision,
-                        )
-                        yield LoopEvent("completion", _decision_data(decision))
-                        return
+                    decision = CompletionDecision(
+                        status="failed",
+                        reason=action.reason or f"llm stream error: {exc}",
+                        confidence=0.9,
+                    )
+                    yield emit_completion(
+                        step_summary(
+                            round_index=round_index,
+                            finish_reason="stop",
+                            content="".join(content_parts),
+                            tool_calls=tool_calls,
+                        ),
+                        decision,
+                    )
+                    return
 
             content = "".join(content_parts)
 
@@ -282,17 +361,15 @@ class CoreLoop:
                         reason="no tool calls and no final response",
                         confidence=0.75,
                     )
-                record(
-                    _step_summary(
+                yield emit_completion(
+                    step_summary(
                         round_index=round_index,
                         finish_reason="stop",
                         content=content,
                         tool_calls=tool_calls,
-                        consecutive_tool_errors=ctx.consecutive_tool_errors,
                     ),
                     decision,
                 )
-                yield LoopEvent("completion", _decision_data(decision))
                 return
 
             # ── act: append assistant turn, then run each tool ───────────
@@ -319,6 +396,9 @@ class CoreLoop:
                         ctx.consecutive_tool_errors = 0
                     else:
                         ctx.consecutive_tool_errors += 1
+
+                # ── hook: post_tool_result (spill / truncation) ──────────
+                result = await self._hooks.post_tool_result(result, call, ctx)
 
                 ctx.tool_calls_used += 1
                 duration_ms = int((time.monotonic() - tool_started) * 1000)
@@ -347,17 +427,15 @@ class CoreLoop:
                         reason="too many consecutive tool errors",
                         confidence=0.9,
                     )
-                    record(
-                        _step_summary(
+                    yield emit_completion(
+                        step_summary(
                             round_index=round_index,
                             finish_reason="tool_calls",
                             content=content,
                             tool_calls=tool_calls,
-                            consecutive_tool_errors=ctx.consecutive_tool_errors,
                         ),
                         decision,
                     )
-                    yield LoopEvent("completion", _decision_data(decision))
                     return
 
             # ── observe: continue to next round ──────────────────────────
@@ -366,17 +444,15 @@ class CoreLoop:
                 reason="tool observations were produced; continue",
                 confidence=0.7,
             )
-            record(
-                _step_summary(
+            yield emit_completion(
+                step_summary(
                     round_index=round_index,
                     finish_reason="tool_calls",
                     content=content,
                     tool_calls=tool_calls,
-                    consecutive_tool_errors=ctx.consecutive_tool_errors,
                 ),
                 decision,
             )
-            yield LoopEvent("completion", _decision_data(decision))
 
         # Ran out of rounds — runaway guard.
         decision = CompletionDecision(
@@ -384,20 +460,18 @@ class CoreLoop:
             reason=f"reached maxRounds={self._config.max_rounds} runaway guard",
             confidence=1.0,
         )
-        record(
-            _step_summary(
+        yield LoopEvent(
+            "budget_exhausted", {"kind": "rounds", "rounds": self._config.max_rounds}
+        )
+        yield emit_completion(
+            step_summary(
                 round_index=self._config.max_rounds - 1,
                 finish_reason="tool_calls",
                 content="",
                 tool_calls=[],
-                consecutive_tool_errors=ctx.consecutive_tool_errors,
             ),
             decision,
         )
-        yield LoopEvent(
-            "budget_exhausted", {"kind": "rounds", "rounds": self._config.max_rounds}
-        )
-        yield LoopEvent("completion", _decision_data(decision))
 
         _ = started  # reserved for a future durationMs stage_complete event
 
