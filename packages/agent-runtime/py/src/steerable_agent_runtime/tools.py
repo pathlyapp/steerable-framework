@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from steerable_agent_harness.policy import ToolMode, decide_tool_mode
+from steerable_agent_harness.safety import classify_shell_command
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .errors import PolicyDeniedError, ToolDispatchError
@@ -172,10 +173,33 @@ class ToolRouter:
                 f"Tool '{tool.name}' requires explicit consent",
                 data={"tool": tool.name, "mode": tool.mode},
             )
+        # Shell safety gate: tools that execute a shell command declare which
+        # argument carries it via metadata["shell_command_param"]. A critical
+        # verdict blocks the call outright; a warning annotates the result.
+        safety_note: dict[str, Any] | None = None
+        shell_param = tool.metadata.get("shell_command_param")
+        if shell_param:
+            command = (call.arguments or {}).get(shell_param)
+            if isinstance(command, str):
+                verdict = classify_shell_command(command)
+                if verdict.severity == "critical":
+                    raise PolicyDeniedError(
+                        f"Shell command blocked by safety policy: {verdict.matched_rules}",
+                        data={
+                            "tool": tool.name,
+                            "matchedRules": verdict.matched_rules,
+                            "severity": verdict.severity,
+                        },
+                    )
+                if verdict.severity == "warning":
+                    safety_note = {
+                        "severity": verdict.severity,
+                        "matchedRules": verdict.matched_rules,
+                    }
         started = time.monotonic()
         try:
             result = await self._invoke(tool, call.arguments or {}, context or {})
-        except Exception as exc:  # noqa: BLE001 — wrap for the loop
+        except Exception as exc:
             logger.exception("Tool %s failed", tool.name)
             return ToolResult(
                 success=False,
@@ -184,7 +208,12 @@ class ToolRouter:
                 needsFollowup=True,
                 data={"durationMs": int((time.monotonic() - started) * 1000)},
             )
-        return _coerce_to_tool_result(result, duration_ms=int((time.monotonic() - started) * 1000))
+        coerced = _coerce_to_tool_result(result, duration_ms=int((time.monotonic() - started) * 1000))
+        if safety_note is not None:
+            if coerced.data is None:
+                coerced.data = {}
+            coerced.data.setdefault("safety", safety_note)
+        return coerced
 
     async def _invoke(
         self,
@@ -259,7 +288,7 @@ def tool(
             "schema": schema,
             "require_consent": require_consent,
         }
-        setattr(handler, "__steerable_tool_meta__", meta)
+        handler.__steerable_tool_meta__ = meta
         if router is not None:
             router.register(
                 handler,

@@ -1,5 +1,6 @@
 """Steerable agent runtime — Tier 3 adapter package."""
 
+from .compaction import CompactionHooks, estimate_tokens
 from .errors import (
     BudgetExhaustedError,
     PolicyDeniedError,
@@ -29,17 +30,21 @@ from .replay import (
     build_step_decision_event,
     reduce_execution_state,
 )
+from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
 from .transport import TransportAdapter
 
 __all__ = [
     "BudgetExhaustedError",
+    "CompactionHooks",
     "CompletionDecision",
     "CoreLoop",
     "ExecutionBudget",
+    "FilesystemSpillStore",
     "HarnessExecutionState",
     "HarnessTrajectoryEvent",
+    "InMemorySpillStore",
     "LLMMessage",
     "LLMProvider",
     "LLMStreamChunk",
@@ -54,6 +59,8 @@ __all__ = [
     "RegisteredTool",
     "RetryAction",
     "RouterToolExecutor",
+    "SpillHooks",
+    "SpillStore",
     "SteerableRuntimeError",
     "StorageAdapter",
     "StorageError",
@@ -63,6 +70,7 @@ __all__ = [
     "TransportAdapter",
     "TransportError",
     "build_step_decision_event",
+    "estimate_tokens",
     "extract_inline_tool_calls",
     "reduce_execution_state",
     "tool",
