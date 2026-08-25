@@ -251,20 +251,43 @@ sidecar-budget/examples 全过）。
 **线上回测**：framework CI run `32860387055` success（py/ts/lockstep/
 sidecar-budget/examples 全过）。
 
-#### Tier 3 · 补齐，不急
+#### Tier 3 · 补齐，不急 ✅ 大部分完成（2026-08-25，commit `bdfea84`）
 
-- [ ] LLM 流消费的 UTF-16 代理对修复、推理内容提取（真实 bug 源但不阻塞）
-- [ ] 伪调用的**流式剥离**（净化前端显示，对齐 api 生产路径）
-- [ ] 工具去重、未知工具建议、参数 schema 强制转换
-- [ ] **审批 / 沙箱**：桌面产品最终需要，可先留产品侧。框架里
-      `waiting_approval` 状态枚举目前没人 emit，属半成品，要么接通要么删掉。
-- [ ] **trace 接入 loop + OTel**：StorageAdapter 的 trace API 有了但 loop 不写。
-      可观测是 codex/dsh 都远超的一块，但不阻塞功能。
-- [ ] **补齐 LoopEvent**：`stage_complete` 和 `error` 两类定义了从不 emit，
-      类型与实现不符，顺手补上。
+- [x] **UTF-16 代理对修复**：`split_trailing_high_surrogate`——chunk 末尾的
+      高位代理留进 carry，下一 chunk 拼回完整字符；流尾残余照常释放。
+      **推理内容提取**：框架侧已由 provider adapter 产出 `reasoning_delta`
+      事件覆盖；api 的 `<think title="… · 推理">` 包装与落库正则是产品
+      展示格式，留产品侧不下沉。
+- [x] **伪调用流式剥离**：`PseudoStreamStripper`（`pseudo.py`）——移植 api
+      生产路径的双状态机（`<function_results>` 族回显块 + `[Tool call:]`
+      markdown 块），跨 chunk 吞块、硬上限防永吞（32k / 4096）。原始文本
+      仍进 recovery 与 transcript，剥离只作用于 `content_delta` 显示流；
+      `strip_pseudo_fn_final` 在入 transcript 前兜底。顺带修了重试时
+      部分内容重复进 transcript 的问题（重试前清空当轮 partials）。
+- [x] **工具卫生三件套**：① 同 turn `(name, argsHash)` 去重——重复调用
+      不执行，回 `duplicate_call` 软信号并计入连续错误断路器
+      （`LoopConfig.tool_dedup` 可关）；② 未知工具 difflib 建议
+      （cutoff=0.4，`did you mean`）；③ 参数按 schema 原始类型强制转换
+      （string/integer/number）。②③ 在 ToolRouter，① 在 CoreLoop。
+- [x] **审批 / 沙箱（决策记录）**：`waiting_approval` 枚举**保留**——
+      api 的 dp-action 提案轨迹回放需要它正确 reduce；CoreLoop **不 emit**
+      （审批等待是产品侧概念，桌面端刻意全允许；单工具同意由
+      ToolRouter `require_consent` 同步强制，不做挂起态）。沙箱不下沉。
+- [x] **trace 接入 loop**：`TraceRecorder`（`tracing.py`）——以消费者身份
+      tee loop 事件流进 StorageAdapter：每工具调用一个 span、每事件一条
+      TraceEvent、终态 upsert HarnessTrace（payload 截断）。loop 本身保持
+      无存储依赖。OTel 导出未做——需要时写一个 span 转换器即可，不阻塞。
+- [x] **补齐 LoopEvent**：`stage_complete` 现于每个工具轮次后 emit
+      （round/toolCallCount/consecutiveToolErrors/elapsedMs）；
+      `tool_call_result` 失败时带 `error`。`error` 事件自 hooks 切片已 emit。
 - [ ] **MCP**：agent 侧已有 MCP client，框架侧没有。等 A4 之后按需下沉。
 - [ ] **agent 独有的反幻觉层**（这是 api 缺的，是净增益，放最后一片）：
       data-need 路由、grounding 判定、deferred/claimed 重试、narration round
+
+**测试**：runtime py 132（+18：hygiene 7 / stream strip 14 / tracing 3，
+含既有用例适配去重守卫），sidecar py 24，harness py 41，一致性 py 5 /
+ts 36。ruff 触及文件全净（注意：`ruff --fix` 整个包会顺手改未触及文件，
+已回滚，只保留触及文件的修复）。
 
 #### 明确不建议做（复审结论）
 
