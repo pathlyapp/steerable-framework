@@ -536,7 +536,14 @@ class Sidecar:
         elif kind == "tool_call_start":
             await transport.emit_notification(
                 "stream.chunk",
-                {"streamId": stream_id, "toolCall": {"id": data["id"], "name": data["name"]}},
+                {
+                    "streamId": stream_id,
+                    "toolCall": {
+                        "id": data["id"],
+                        "name": data["name"],
+                        "arguments": data.get("arguments") or {},
+                    },
+                },
             )
         elif kind in ("tool_call_result", "tool_error"):
             payload: dict[str, Any] = {
@@ -548,6 +555,8 @@ class Sidecar:
                 payload["durationMs"] = data["durationMs"]
             if "error" in data:
                 payload["error"] = data["error"]
+            if "resultPreview" in data:
+                payload["resultPreview"] = data["resultPreview"]
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "toolResult": payload}
             )

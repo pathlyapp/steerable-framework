@@ -8,6 +8,7 @@ import json
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
+
 from steerable_sidecar.host_tools import HostToolExecutor
 from steerable_sidecar.sidecar import Sidecar
 

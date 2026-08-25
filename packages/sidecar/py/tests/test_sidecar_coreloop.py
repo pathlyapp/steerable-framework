@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
+
 from steerable_sidecar.sidecar import Sidecar
 
 
@@ -146,7 +147,7 @@ async def test_coreloop_path_executes_tool_round() -> None:
     chunks = [p for m, p in events if m == "stream.chunk"]
     tool_calls = [c["toolCall"] for c in chunks if "toolCall" in c]
     tool_results = [c["toolResult"] for c in chunks if "toolResult" in c]
-    assert tool_calls == [{"id": "c1", "name": "add"}]
+    assert tool_calls == [{"id": "c1", "name": "add", "arguments": {"a": 1, "b": 2}}]
     assert len(tool_results) == 1 and tool_results[0]["success"] is True
     assert any(c.get("delta") == "sum is 3" for c in chunks)
     done = [p for m, p in events if m == "stream.done"]

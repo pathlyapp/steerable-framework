@@ -479,7 +479,13 @@ class CoreLoop:
 
             for call in tool_calls:
                 yield LoopEvent(
-                    "tool_call_start", {"id": call.id, "name": call.name, "round": round_index}
+                    "tool_call_start",
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "round": round_index,
+                        "arguments": call.arguments or {},
+                    },
                 )
                 tool_started = time.monotonic()
 
@@ -528,6 +534,12 @@ class CoreLoop:
 
                 ctx.tool_calls_used += 1
                 duration_ms = int((time.monotonic() - tool_started) * 1000)
+                # Small preview for display/trace consumers (tool cards, logs);
+                # the full result only lives in the transcript (and spill
+                # storage when externalized).
+                preview = _result_content(result)
+                if len(preview) > 300:
+                    preview = preview[:300] + "…"
                 yield LoopEvent(
                     "tool_call_result",
                     {
@@ -535,6 +547,7 @@ class CoreLoop:
                         "name": call.name,
                         "success": result.success,
                         "durationMs": duration_ms,
+                        "resultPreview": preview,
                         **({"error": result.error} if result.error else {}),
                     },
                 )
