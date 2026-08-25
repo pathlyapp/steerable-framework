@@ -97,6 +97,45 @@ class ToolRouter:
         self._tools[resolved_name] = tool_meta
         return tool_meta
 
+    def register_remote(
+        self,
+        name: str,
+        invoker: Callable[[str, dict[str, Any]], Awaitable[Any]],
+        *,
+        mode: ToolMode | None = None,
+        description: str = "",
+        schema: dict[str, Any] | None = None,
+        require_consent: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> RegisteredTool:
+        """Register a tool whose execution is delegated to a remote peer.
+
+        ``invoker`` is an async callable ``(name, arguments) -> result`` that
+        forwards the call elsewhere — e.g. over the sidecar reverse channel to
+        a host-executed tool. This is how a sidecar-hosted loop runs tools that
+        must live in the Electron host (filesystem, shell, MCP subprocesses).
+
+        The invoker's return value is coerced to a `ToolResult` like any other
+        handler result, so it may return a `ToolResult`, a `{"success": ...}`
+        dict, or a plain value.
+        """
+
+        # `_invoke` injects params by name from the call arguments, so a remote
+        # handler can't rely on a single `arguments` dict. Accept the full arg
+        # set via VAR_KEYWORD and forward it wholesale to the invoker.
+        async def _remote_handler(**kwargs: Any) -> Any:
+            return await invoker(name, kwargs)
+
+        return self.register(
+            _remote_handler,
+            name=name,
+            mode=mode,
+            description=description,
+            schema=schema,
+            require_consent=require_consent,
+            metadata={**(metadata or {}), "remote": True},
+        )
+
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
 
@@ -154,8 +193,12 @@ class ToolRouter:
         context: dict[str, Any],
     ) -> Any:
         signature = inspect.signature(tool.handler)
+        params = list(signature.parameters.values())
+        accepts_var_keyword = any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params
+        )
         kwargs: dict[str, Any] = {}
-        for parameter in signature.parameters.values():
+        for parameter in params:
             if parameter.kind in (
                 inspect.Parameter.VAR_POSITIONAL,
                 inspect.Parameter.VAR_KEYWORD,
@@ -166,6 +209,11 @@ class ToolRouter:
                 kwargs[name] = arguments[name]
             elif name == "context":
                 kwargs[name] = context
+        if accepts_var_keyword:
+            # A **kwargs handler (e.g. a remote proxy) wants the full argument
+            # set, not just the ones matching named parameters.
+            for key, value in arguments.items():
+                kwargs.setdefault(key, value)
         result = tool.handler(**kwargs)
         if inspect.isawaitable(result):
             return await result

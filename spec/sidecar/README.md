@@ -10,8 +10,44 @@ Electron/desktop host (e.g. `deeppath-agent`) and addressed via stdio JSON-RPC 2
 | `SidecarRequest.schema.json` | host → sidecar | Synchronous calls (require id + response). |
 | `SidecarResponse.schema.json` | sidecar → host | Reply for a previous request id (success or error). |
 | `SidecarNotification.schema.json` | both ways | Fire-and-forget (streaming SSE chunks, log lines, lifecycle). |
-| `SidecarError.schema.json` | sidecar → host | Embedded inside `SidecarResponse.error`. |
+| `SidecarError.schema.json` | both ways | Embedded inside a `*.error` reply. |
 | `SidecarHealth.schema.json` | sidecar → host | `result` payload for `system.ping`. |
+
+## Reverse channel (sidecar → host requests)
+
+The transport is **bidirectional for requests**, not just notifications. The
+sidecar may itself send a request frame to the host and await its response —
+this is how a sidecar-hosted agent loop executes tools that must run in the
+host process (Electron filesystem, shell, MCP subprocesses).
+
+Frame discrimination (applies on **both** peers):
+
+| Frame shape | Meaning |
+| --- | --- |
+| has `id` **and** `method` | a **request**; the receiver must reply |
+| has `id`, **no** `method`, has `result`/`error` | a **response** to a prior request |
+| no `id`, has `method` | a **notification** (fire-and-forget) |
+
+**Id namespaces MUST NOT collide.** Convention: the host issues integer ids
+(`1, 2, 3, …`); the sidecar issues string ids prefixed `srv_` (`srv_1, srv_2, …`).
+Each peer matches an incoming response to its own pending request by `id`.
+
+| Schema | Direction | Use |
+| --- | --- | --- |
+| `SidecarRequest.schema.json` | sidecar → host | Reverse call, e.g. `tool.invoke` for a host-executed tool. |
+| `SidecarResponse.schema.json` | host → sidecar | Host's reply carrying the tool's `ToolResult` or an error. |
+
+### Reserved reverse methods (sidecar → host)
+
+```
+tool.invoke                  → ToolResult   (run a host-local tool mid-turn)
+```
+
+A sidecar-hosted loop registers host tools as *remote proxy* tools; dispatching
+one sends `tool.invoke` to the host and awaits the host's `SidecarResponse`.
+The host executes the real tool (shell, fs, MCP) and replies. The sidecar's
+read loop must keep dispatching while a reverse call is outstanding — it must
+never block waiting on a response, or the two peers deadlock.
 
 ## Reserved methods
 

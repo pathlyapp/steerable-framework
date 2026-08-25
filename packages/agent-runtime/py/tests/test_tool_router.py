@@ -165,3 +165,43 @@ async def test_handler_can_request_context() -> None:
     assert result.data is not None
     assert result.data["value"] == {"who": "tai"}
     assert seen == [{"user": "tai"}]
+
+
+@pytest.mark.asyncio
+async def test_register_remote_forwards_full_arguments() -> None:
+    router = ToolRouter()
+    captured: list[tuple[str, dict]] = []
+
+    async def invoker(name: str, arguments: dict) -> dict:
+        captured.append((name, arguments))
+        return {"success": True, "data": {"echo": arguments}}
+
+    router.register_remote(
+        "local_exec_shell",
+        invoker,
+        description="Run a shell command on the host",
+        schema={"type": "object", "properties": {"command": {"type": "string"}}},
+    )
+
+    result = await router.dispatch(
+        ToolCall(id="r1", name="local_exec_shell", arguments={"command": "ls -la"})
+    )
+    assert result.success is True
+    assert captured == [("local_exec_shell", {"command": "ls -la"})]
+    assert result.data is not None
+    assert result.data["echo"] == {"command": "ls -la"}
+
+
+@pytest.mark.asyncio
+async def test_register_remote_marks_metadata_and_describes() -> None:
+    router = ToolRouter()
+
+    async def invoker(_name: str, _arguments: dict) -> dict:
+        return {"success": True}
+
+    registered = router.register_remote("local_read_file", invoker)
+    assert registered.metadata.get("remote") is True
+
+    described = router.describe()
+    names = [d["function"]["name"] for d in described]
+    assert "local_read_file" in names

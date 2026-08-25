@@ -132,3 +132,93 @@ async def test_server_handles_notification_with_handler_invocation() -> None:
     assert out is None
     await asyncio.sleep(0)  # let handler run if scheduled
     assert received == [{"level": "INFO"}]
+
+
+# ---------------------------------------------------------------------------
+# Reverse channel (this peer -> other peer)
+# ---------------------------------------------------------------------------
+
+
+def _read_frames(writer: _FakeWriter) -> list[dict]:
+    """Parse all complete newline-delimited frames a writer has buffered."""
+
+    text = bytes(writer.buffer).decode("utf-8")
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+@pytest.mark.asyncio
+async def test_reverse_call_sends_srv_id_and_resolves_on_response() -> None:
+    server = JsonRpcServer()
+    writer = _FakeWriter()
+    server.attach_writer(writer)
+
+    async def make_call():
+        return await server.call("tool.invoke", {"name": "local_exec_shell"})
+
+    task = asyncio.ensure_future(make_call())
+    await asyncio.sleep(0)  # let the request frame flush
+
+    frames = _read_frames(writer)
+    assert len(frames) == 1
+    request = frames[0]
+    assert request["method"] == "tool.invoke"
+    assert request["params"] == {"name": "local_exec_shell"}
+    assert isinstance(request["id"], str)
+    assert request["id"].startswith("srv_")
+
+    # The peer replies with a response frame (id, no method).
+    await server.handle_frame(
+        json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {"success": True}})
+    )
+    assert await task == {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_reverse_call_surfaces_peer_error() -> None:
+    server = JsonRpcServer()
+    writer = _FakeWriter()
+    server.attach_writer(writer)
+
+    task = asyncio.ensure_future(server.call("tool.invoke", {"name": "x"}))
+    await asyncio.sleep(0)
+    request_id = _read_frames(writer)[0]["id"]
+
+    await server.handle_frame(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32030, "message": "tool blew up", "kind": "tool_failed"},
+            }
+        )
+    )
+    with pytest.raises(JsonRpcError) as excinfo:
+        await task
+    assert excinfo.value.code == -32030
+    assert excinfo.value.kind == "tool_failed"
+
+
+@pytest.mark.asyncio
+async def test_reverse_call_requires_attached_writer() -> None:
+    server = JsonRpcServer()
+    with pytest.raises(RuntimeError):
+        await server.call("tool.invoke", {})
+
+
+@pytest.mark.asyncio
+async def test_reverse_call_times_out() -> None:
+    server = JsonRpcServer()
+    server.attach_writer(_FakeWriter())
+    with pytest.raises(asyncio.TimeoutError):
+        await server.call("tool.invoke", {}, timeout=0.05)
+
+
+@pytest.mark.asyncio
+async def test_stray_string_id_response_is_ignored() -> None:
+    server = JsonRpcServer()
+    server.attach_writer(_FakeWriter())
+    # A response for an id we never issued must not error or be dispatched.
+    out = await server.handle_frame(
+        json.dumps({"jsonrpc": "2.0", "id": "srv_999", "result": None})
+    )
+    assert out is None

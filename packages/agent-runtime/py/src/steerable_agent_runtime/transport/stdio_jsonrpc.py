@@ -165,11 +165,101 @@ class JsonRpcServer:
     Returning ``None`` from a handler still produces a JSON-RPC ``result: null``
     response (so the client knows the request succeeded). Raise to surface an
     error; ``JsonRpcError`` instances pass their ``code/kind/data`` through.
+
+    The server also supports **reverse calls**: it can send a request to the
+    peer and await the peer's response (see ``call``). To avoid id collisions,
+    reverse calls use string ids prefixed ``srv_`` while the host is expected
+    to use integer ids. Incoming frames with an ``id`` but no ``method`` are
+    treated as responses to outstanding reverse calls and resolve the matching
+    future rather than being dispatched as new requests.
     """
 
     def __init__(self) -> None:
         self._handlers: dict[str, JsonRpcMethodHandler] = {}
         self._notification_handlers: dict[str, JsonRpcMethodHandler] = {}
+        self._writer: Any | None = None
+        self._pending_reverse: dict[str, asyncio.Future[Any]] = {}
+        self._next_reverse_id = 0
+
+    # ------------------------------------------------------------------
+    # Reverse channel (this peer -> other peer)
+    # ------------------------------------------------------------------
+
+    def attach_writer(self, writer: Any) -> None:
+        """Bind the outbound writer used to send reverse-call request frames.
+
+        Called by the serve loop once the stdio writer exists. Required before
+        ``call`` can be used.
+        """
+
+        self._writer = writer
+
+    async def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """Send a request to the peer and await its response.
+
+        Used for reverse-channel calls (e.g. the sidecar asking the host to
+        execute a local tool mid-turn). The request id is a ``srv_``-prefixed
+        string so it cannot collide with the host's integer ids.
+        """
+
+        if self._writer is None:
+            raise RuntimeError("reverse channel not attached (no writer)")
+        self._next_reverse_id += 1
+        request_id = f"srv_{self._next_reverse_id}"
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        self._pending_reverse[request_id] = future
+        try:
+            frame = build_request(request_id=request_id, method=method, params=params)
+            await self._write_frame(frame.model_dump(exclude_none=True))
+            if timeout is None:
+                return await future
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self._pending_reverse.pop(request_id, None)
+
+    async def _write_frame(self, payload: dict[str, Any]) -> None:
+        frame = encode_frame(payload)
+        result = self._writer.write(frame)
+        if asyncio.iscoroutine(result):
+            await result
+        drain = getattr(self._writer, "drain", None)
+        if drain is not None:
+            drained = drain()
+            if asyncio.iscoroutine(drained):
+                await drained
+
+    def _resolve_reverse_response(self, payload: dict[str, Any]) -> bool:
+        """Resolve a pending reverse call if this frame is its response.
+
+        Returns True when the frame was consumed as a reverse response.
+        """
+
+        request_id = payload.get("id")
+        if not isinstance(request_id, str):
+            return False
+        future = self._pending_reverse.get(request_id)
+        if future is None or future.done():
+            return False
+        error = payload.get("error")
+        if isinstance(error, dict):
+            future.set_exception(
+                JsonRpcError(
+                    error.get("message", "reverse call failed"),
+                    code=int(error.get("code", -32000)),
+                    kind=error.get("kind"),
+                    data=error.get("data"),
+                )
+            )
+        else:
+            future.set_result(payload.get("result"))
+        return True
 
     # ------------------------------------------------------------------
     # Registration
@@ -199,6 +289,16 @@ class JsonRpcServer:
             ).model_dump(exclude_none=True)
         if payload is None:
             return None
+        # A frame with an id but no method is a *response*. Only consume it as
+        # a reverse-call response when it carries one of our ``srv_`` string
+        # ids; anything else without a method is an invalid request.
+        if "method" not in payload and "id" in payload:
+            if self._resolve_reverse_response(payload):
+                return None
+            if isinstance(payload.get("id"), str):
+                # Stray string-id response we didn't issue — ignore.
+                return None
+            # Integer/None id with no method: fall through to invalid request.
         if "id" not in payload:  # notification
             await self._dispatch_notification(payload)
             return None
@@ -266,24 +366,36 @@ class JsonRpcServer:
 
         if reader is None or writer is None:
             reader, writer = await _connect_default_stdio()
+        self.attach_writer(writer)
+        in_flight: set[asyncio.Task[None]] = set()
         try:
             while True:
                 line = await reader.readline()
                 if not line:
                     return
-                response = await self.handle_frame(line.decode("utf-8"))
-                if response is None:
-                    continue
-                writer.write(encode_frame(response))
-                drain = getattr(writer, "drain", None)
-                if drain is not None:
-                    drained = drain()
-                    if asyncio.iscoroutine(drained):
-                        await drained
+                # Handlers run as separate tasks so the read loop keeps
+                # dispatching while a handler is awaiting a reverse call —
+                # otherwise the two peers deadlock.
+                task = asyncio.ensure_future(self._process_line(line, writer))
+                in_flight.add(task)
+                task.add_done_callback(in_flight.discard)
         finally:
+            if in_flight:
+                await asyncio.gather(*in_flight, return_exceptions=True)
             close = getattr(writer, "close", None)
             if close is not None:
                 close()
+
+    async def _process_line(self, line: bytes, writer: Any) -> None:
+        response = await self.handle_frame(line.decode("utf-8"))
+        if response is None:
+            return
+        writer.write(encode_frame(response))
+        drain = getattr(writer, "drain", None)
+        if drain is not None:
+            drained = drain()
+            if asyncio.iscoroutine(drained):
+                await drained
 
 
 class JsonRpcError(Exception):

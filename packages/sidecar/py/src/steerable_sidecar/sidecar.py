@@ -138,6 +138,7 @@ class Sidecar:
         reader, writer = await self._connect_stdio()
         transport = StdioJsonRpcTransport(writer)
         self._transport = transport
+        self.server.attach_writer(writer)
         await transport.emit_notification(
             "lifecycle.ready",
             {
@@ -149,6 +150,7 @@ class Sidecar:
         )
 
         self._serving = True
+        in_flight: set[asyncio.Task[None]] = set()
         try:
             while not self._shutdown_requested.is_set():
                 line_task = asyncio.ensure_future(reader.readline())
@@ -164,12 +166,15 @@ class Sidecar:
                 line = line_task.result()
                 if not line:
                     break
-                response = await self.server.handle_frame(line.decode("utf-8"))
-                if response is None:
-                    continue
-                writer.write(encode_frame(response))
-                await self._maybe_drain(writer)
+                # Dispatch each frame on its own task so the read loop keeps
+                # serving while a handler awaits a reverse (sidecar -> host)
+                # call — otherwise the two peers deadlock.
+                task = asyncio.ensure_future(self._process_line(line, writer))
+                in_flight.add(task)
+                task.add_done_callback(in_flight.discard)
         finally:
+            if in_flight:
+                await asyncio.gather(*in_flight, return_exceptions=True)
             await transport.emit_notification(
                 "lifecycle.shutdown",
                 {"reason": "normal" if self._shutdown_requested.is_set() else "eof"},
@@ -179,6 +184,13 @@ class Sidecar:
             if close is not None:
                 close()
             self._serving = False
+
+    async def _process_line(self, line: bytes, writer: Any) -> None:
+        response = await self.server.handle_frame(line.decode("utf-8"))
+        if response is None:
+            return
+        writer.write(encode_frame(response))
+        await self._maybe_drain(writer)
 
     async def request_shutdown(self) -> None:
         self._shutdown_requested.set()
