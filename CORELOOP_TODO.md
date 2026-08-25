@@ -320,9 +320,11 @@ Tier 1–3 落地后重排。上次 6 个红项 4 个转绿、2 个转橙（审�
 trace=已落库无 OTel）；**头号风险不变：零生产验证**。
 
 - **P0 · 阻塞桌面发布**
-  - [ ] **A4 切换**（见下节）——sidecar CoreLoop 路径与 flag 已就绪，
-        差 agent 端接入。所有能力只有测试验证，灰度是唯一的真实校验
-        （包括 61 条安全规则在真实命令分布上的误伤率）。
+  - [~] **A4 切换**（见下节）——Slice 1 已接线（2026-08-25）：agent 端
+        `STEERABLE_USE_CORELOOP=1` 整轮走 sidecar CoreLoop，工具经反向通道
+        回 Electron，SSE 契约不变。剩下的就是真实模型灰度——所有能力仍只有
+        测试验证，灰度是唯一的真实校验（包括 61 条安全规则在真实命令分布
+        上的误伤率）。
   - [ ] **包体门禁 741MB → 320MB**——独立硬阻塞，并行推进，不等 A4。
 - **P1 · 校验闭环 + 净增益**
   - [ ] **跨语言回放逐事件比对**：TS reduce 与 Py reduce 对同一轨迹跑分。
@@ -343,7 +345,23 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
 
 ## A4 · desktop 切换并删码（2–3 周）
 
-- [ ] sidecar 托管 CoreLoop，工具走 A1 的反向通道回 Electron 执行
+- [~] sidecar 托管 CoreLoop，工具走 A1 的反向通道回 Electron 执行
+      **Slice 1 已落地（2026-08-25，框架 `9bed21a` + agent `28a12af`）**：
+      - 框架：`HostToolExecutor`（反向 `tool.invoke` → ToolResult，超时/错误
+        兜底为失败结果）；sidecar CoreLoop 路径新增 `toolsViaHost` 请求参数；
+        wire 事件补齐 `arguments` + `resultPreview`（工具卡片可视化）。
+      - agent：`STEERABLE_USE_CORELOOP=1`（配合 `STEERABLE_USE_SIDECAR=1`）时
+        `handleStream` 整轮委托 sidecar CoreLoop；`main.ts` 注册反向
+        `tool.invoke` handler（critical shell 命令硬阻断，比 TS 路径的
+        仅标注更严）；`coreloop-stream.ts` 把 wire 通知翻译成既有 SSE 契约，
+        前端/preload/IPC 零改动；关 flag 即回滚 TS 循环。
+      - 验证：框架 py 159（+3）/ agent vitest 307（+12）/ 真实 sidecar 进程
+        集成 3 / 双仓 CI 绿。
+      - **还差**：真实模型灰度（本机 Ollama 当前无模型，未跑活 LLM 端到端）；
+        plan 模式在 CoreLoop 路径只靠工具广告过滤（无硬阻断）；
+        TraceRecorder 未接入 sidecar 默认路径。
+- [ ] **真实流量灰度**：装一个 Ollama 小模型，双 flag 开跑真实对话，
+      观察伪调用恢复率 / 工具结果大小分布 / 超时抖动 / 安全规则误伤率
 - [ ] 灰度通过后删 `deeppath-agent/src/harness`
 - [x] ~~把 61 条 shell 安全规则回流到框架~~（Tier 1 已完成：双语 61 条 +
       ToolRouter 接线 + 一致性测试）
@@ -351,7 +369,8 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
 
 **通过标准**：sidecar 模式下离线 Ollama + 本地 shell/文件/MCP 工具全部跑通；
 包体过门禁。
-**回滚**：关掉 STEERABLE_USE_SIDECAR 即回落本地 TS 路径。
+**回滚**：关掉 STEERABLE_USE_CORELOOP（或 STEERABLE_USE_SIDECAR）即回落
+本地 TS 路径。
 
 ## A5 · api 采纳（可选，以后）
 
