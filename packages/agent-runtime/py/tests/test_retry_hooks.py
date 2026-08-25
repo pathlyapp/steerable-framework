@@ -1,4 +1,4 @@
-"""RetryHooks: on_request_error wired to the harness backoff primitive."""
+"""RetryHooks (test_retry_hooks): on_request_error wired to the harness backoff primitive."""
 
 from __future__ import annotations
 
