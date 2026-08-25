@@ -57,6 +57,8 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
     encode_frame,
 )
 
+from .host_tools import HostToolExecutor
+
 logger = logging.getLogger("steerable_sidecar")
 
 PROTOCOL_VERSION = "0.1.0"
@@ -479,9 +481,17 @@ class Sidecar:
             if self._loop_hooks_factory is not None
             else RetryHooks()
         )
+        # toolsViaHost: every tool call is forwarded to the host over the
+        # reverse channel (desktop deployment — tools live in Electron).
+        # Otherwise the sidecar-local registry executes them.
+        executor = (
+            HostToolExecutor(self.server)
+            if params.get("toolsViaHost")
+            else RouterToolExecutor(self.tools)
+        )
         loop = CoreLoop(
             provider,
-            RouterToolExecutor(self.tools),
+            executor,
             _build_loop_config(params),
             hooks=hooks,
         )
