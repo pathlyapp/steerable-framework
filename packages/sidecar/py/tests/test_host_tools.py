@@ -215,3 +215,22 @@ async def test_host_executor_unit_unanswered_host_is_tool_error() -> None:
     )
     assert result.success is False
     assert result.needsFollowup is True
+
+
+@pytest.mark.asyncio
+async def test_host_executor_forwards_tool_context() -> None:
+    from steerable_agent_runtime import LoopContext
+    from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
+
+    server = JsonRpcServer()
+    host = _HostWriter(server, {"read_file": {"success": True, "data": {"value": "x"}}})
+    server.attach_writer(host)
+    executor = HostToolExecutor(server, tool_context={"mode": "plan"})
+
+    result = await executor.execute(
+        ToolCall(id="c1", name="read_file", arguments={"path": "/a"}),
+        LoopContext(chat_id="chat-9"),
+    )
+
+    assert result.success is True
+    assert host.reverse_calls[0]["context"] == {"chatId": "chat-9", "mode": "plan"}

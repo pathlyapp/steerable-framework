@@ -143,8 +143,12 @@ class TraceRecorder:
 
     async def finalize(self, *, status: str | None = None) -> HarnessTrace:
         """Upsert the trace summary. Called by ``tee`` at stream end; call
-        manually if you consume events via ``record`` directly."""
+        manually if you consume events via ``record`` directly. Idempotent —
+        safe to call again from a finally guard after an abnormal exit."""
 
+        if getattr(self, "_finalized", False):
+            return await self._storage.get_trace(self.trace_id)  # type: ignore[return-value]
+        self._finalized = True
         final = status or self._final_status or "failed"
         now_iso = datetime.now(timezone.utc).isoformat()
         trace = HarnessTrace(

@@ -239,3 +239,39 @@ async def test_coreloop_path_reports_terminal_failure() -> None:
     assert len(errors) == 1
     assert done[0]["ok"] is False
     assert done[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_coreloop_stream_persists_trace_fetchable() -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+        },
+    )
+
+    done = [p for m, p in events if m == "stream.done"]
+    trace_id = done[0].get("traceId")
+    assert trace_id, "stream.done should carry the recorder's traceId"
+
+    response = await sidecar.server.handle_frame(
+        _frame("trace.fetch", {"traceId": trace_id})
+    )
+    assert "error" not in response, response
+    result = response["result"]
+    assert result["trace"]["status"] == "completed"
+    assert result["trace"]["spanCount"] == 1  # one tool span
+    assert result["spans"][0]["name"] == "add"
+    kinds = [e["kind"] for e in result["events"]]
+    assert "tool_call_start" in kinds and "tool_call_result" in kinds

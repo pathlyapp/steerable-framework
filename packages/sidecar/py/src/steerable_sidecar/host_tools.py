@@ -34,12 +34,21 @@ class HostToolExecutor:
         *,
         method: str = "tool.invoke",
         timeout: float | None = None,
+        tool_context: dict[str, Any] | None = None,
     ) -> None:
         self._server = server
         self._method = method
         self._timeout = timeout
+        # Embedder-supplied context forwarded on every reverse call (e.g.
+        # {"mode": "plan"} so the host can hard-block write tools).
+        self._tool_context = tool_context
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        context: dict[str, Any] = {}
+        if ctx.chat_id:
+            context["chatId"] = ctx.chat_id
+        if self._tool_context:
+            context.update(self._tool_context)
         try:
             payload: Any = await self._server.call(
                 self._method,
@@ -47,7 +56,7 @@ class HostToolExecutor:
                     "id": call.id,
                     "name": call.name,
                     "arguments": call.arguments or {},
-                    "context": {"chatId": ctx.chat_id} if ctx.chat_id else None,
+                    "context": context or None,
                 },
                 timeout=self._timeout,
             )

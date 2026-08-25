@@ -47,6 +47,7 @@ from steerable_agent_runtime import (
     StorageError,
     ToolDispatchError,
     ToolRouter,
+    TraceRecorder,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMProvider
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
@@ -485,7 +486,9 @@ class Sidecar:
         # reverse channel (desktop deployment — tools live in Electron).
         # Otherwise the sidecar-local registry executes them.
         executor = (
-            HostToolExecutor(self.server)
+            HostToolExecutor(
+                self.server, tool_context=params.get("toolContext") or None
+            )
             if params.get("toolsViaHost")
             else RouterToolExecutor(self.tools)
         )
@@ -495,13 +498,18 @@ class Sidecar:
             _build_loop_config(params),
             hooks=hooks,
         )
+        # Persist the run as it streams so the host can inspect it afterwards
+        # via trace.fetch (and so a future resume projection has the events).
+        recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
         try:
-            async for event in loop.run(
-                messages,
-                tools=params.get("tools"),
-                chat_id=params.get("chatId"),
+            async for event in recorder.tee(
+                loop.run(
+                    messages,
+                    tools=params.get("tools"),
+                    chat_id=params.get("chatId"),
+                )
             ):
-                await self._emit_loop_event(transport, stream_id, event)
+                await self._emit_loop_event(transport, stream_id, event, recorder.trace_id)
         except asyncio.CancelledError:
             await transport.emit_notification(
                 "stream.done", {"streamId": stream_id, "ok": False, "cancelled": True}
@@ -517,11 +525,15 @@ class Sidecar:
                 },
             )
         finally:
+            await recorder.finalize()
             self._streams.pop(stream_id, None)
 
     @staticmethod
     async def _emit_loop_event(
-        transport: StdioJsonRpcTransport, stream_id: str, event: Any
+        transport: StdioJsonRpcTransport,
+        stream_id: str,
+        event: Any,
+        trace_id: str | None = None,
     ) -> None:
         kind = event.kind
         data = event.data
@@ -577,6 +589,7 @@ class Sidecar:
                     "ok": data["status"] == "completed",
                     "status": data["status"],
                     "reason": data["reason"],
+                    **({"traceId": trace_id} if trace_id else {}),
                 },
             )
 
