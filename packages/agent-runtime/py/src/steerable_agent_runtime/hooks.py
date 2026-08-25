@@ -105,3 +105,52 @@ class NoopHooks:
         self, error: Exception, ctx: LoopContext
     ) -> RetryAction:
         return RetryAction(kind="fail", reason=str(error))
+
+
+class ChainHooks:
+    """Compose several hooks into one ``LoopHooks``.
+
+    - ``pre_step``: applied in order, the transcript threading through each;
+      the first ``reject`` wins.
+    - ``post_tool_result``: the result threads through each hook in order.
+    - ``on_request_error``: the first ``retry`` decision wins; if every hook
+      says ``fail``, the first failure reason is surfaced.
+
+    This is how a product stacks e.g. compaction + spill + retry without the
+    loop knowing about any of them.
+    """
+
+    def __init__(self, *hooks: LoopHooks) -> None:
+        self._hooks = hooks
+
+    async def pre_step(
+        self, transcript: list[LLMMessage], ctx: LoopContext
+    ) -> PreStepAction:
+        current = transcript
+        for hook in self._hooks:
+            action = await hook.pre_step(current, ctx)
+            if action.kind == "reject":
+                return action
+            if action.transcript is not None:
+                current = action.transcript
+        return PreStepAction(kind="proceed", transcript=current)
+
+    async def post_tool_result(
+        self, result: ToolResult, call: ToolCall, ctx: LoopContext
+    ) -> ToolResult:
+        current = result
+        for hook in self._hooks:
+            current = await hook.post_tool_result(current, call, ctx)
+        return current
+
+    async def on_request_error(
+        self, error: Exception, ctx: LoopContext
+    ) -> RetryAction:
+        first_fail: RetryAction | None = None
+        for hook in self._hooks:
+            action = await hook.on_request_error(error, ctx)
+            if action.kind == "retry":
+                return action
+            if first_fail is None:
+                first_fail = action
+        return first_fail or RetryAction(kind="fail", reason=str(error))

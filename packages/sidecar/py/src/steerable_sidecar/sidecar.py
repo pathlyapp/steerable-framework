@@ -30,6 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from steerable_agent_harness import BudgetLimit
 from steerable_agent_protocol.generated import (
     AgentSession,
     SidecarHealth,
@@ -37,7 +38,12 @@ from steerable_agent_protocol.generated import (
 )
 from steerable_agent_runtime import (
     BudgetExhaustedError,
+    CoreLoop,
+    LoopConfig,
+    LoopHooks,
     PolicyDeniedError,
+    RetryHooks,
+    RouterToolExecutor,
     StorageError,
     ToolDispatchError,
     ToolRouter,
@@ -84,12 +90,17 @@ class Sidecar:
         storage: StorageAdapter | None = None,
         tools: ToolRouter | None = None,
         llm_provider_factory: Any | None = None,
+        loop_hooks_factory: Any | None = None,
     ) -> None:
         self.config = config or SidecarConfig()
         self.storage: StorageAdapter = storage or InMemoryStorage()
         self.tools: ToolRouter = tools or ToolRouter()
         self.server = JsonRpcServer()
         self._llm_provider_factory = llm_provider_factory or default_llm_provider_factory
+        # Optional embedder hook for the CoreLoop chat path — receives the
+        # request params, returns a LoopHooks (e.g. ChainHooks of retry +
+        # compaction + spill). Defaults to RetryHooks alone.
+        self._loop_hooks_factory = loop_hooks_factory
         self._streams: dict[str, asyncio.Task[Any]] = {}
         self._transport: StdioJsonRpcTransport | None = None
         self._started_ms = int(time.monotonic() * 1000)
@@ -221,11 +232,9 @@ class Sidecar:
         # Schedule the actual stop so the response can be drained first.
         loop = asyncio.get_running_loop()
         loop.call_later(0.1, lambda: self._shutdown_requested.set())
-        return None
 
     async def _handle_shutdown_now(self, _params: dict[str, Any] | None) -> None:
         self._shutdown_requested.set()
-        return None
 
     async def _handle_session_create(self, params: dict[str, Any] | None) -> dict[str, Any]:
         params = _require_params(params)
@@ -335,7 +344,6 @@ class Sidecar:
         if log_level is not None:
             self.config.log_level = str(log_level)
             logging.getLogger().setLevel(self.config.log_level)
-        return None
 
     async def _handle_chat_stream(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Start a streaming chat-completion run.
@@ -378,12 +386,17 @@ class Sidecar:
 
         stream_id = params.get("streamId") or _new_stream_id()
         messages = _coerce_messages(params.get("messages") or [])
-        kwargs = _build_provider_kwargs(params)
 
         transport = self._transport
-        task = asyncio.create_task(
-            self._run_chat_stream(provider, messages, kwargs, stream_id, transport)
-        )
+        if _use_coreloop(params):
+            task = asyncio.create_task(
+                self._run_chat_stream_coreloop(provider, messages, params, stream_id, transport)
+            )
+        else:
+            kwargs = _build_provider_kwargs(params)
+            task = asyncio.create_task(
+                self._run_chat_stream(provider, messages, kwargs, stream_id, transport)
+            )
         self._streams[stream_id] = task
         return {"streamId": stream_id}
 
@@ -395,7 +408,6 @@ class Sidecar:
         task = self._streams.pop(stream_id, None)
         if task is not None and not task.done():
             task.cancel()
-        return None
 
     async def _run_chat_stream(
         self,
@@ -445,6 +457,109 @@ class Sidecar:
             )
         finally:
             self._streams.pop(stream_id, None)
+
+    async def _run_chat_stream_coreloop(
+        self,
+        provider: LLMProvider,
+        messages: list[LLMMessage],
+        params: dict[str, Any],
+        stream_id: str,
+        transport: StdioJsonRpcTransport,
+    ) -> None:
+        """CoreLoop-backed chat stream (flag-gated — see ``_use_coreloop``).
+
+        Maps LoopEvents onto the existing wire surface so hosts don't need a
+        new protocol to opt in: content/reasoning deltas and tool progress
+        arrive as ``stream.chunk``; the terminal completion arrives as
+        ``stream.done`` with the loop's status/reason attached.
+        """
+
+        hooks: LoopHooks = (
+            self._loop_hooks_factory(params)
+            if self._loop_hooks_factory is not None
+            else RetryHooks()
+        )
+        loop = CoreLoop(
+            provider,
+            RouterToolExecutor(self.tools),
+            _build_loop_config(params),
+            hooks=hooks,
+        )
+        try:
+            async for event in loop.run(
+                messages,
+                tools=params.get("tools"),
+                chat_id=params.get("chatId"),
+            ):
+                await self._emit_loop_event(transport, stream_id, event)
+        except asyncio.CancelledError:
+            await transport.emit_notification(
+                "stream.done", {"streamId": stream_id, "ok": False, "cancelled": True}
+            )
+        except Exception as exc:
+            logger.exception("coreloop chat stream %s failed", stream_id)
+            await transport.emit_notification(
+                "stream.error",
+                {
+                    "streamId": stream_id,
+                    "kind": exc.__class__.__name__,
+                    "message": str(exc),
+                },
+            )
+        finally:
+            self._streams.pop(stream_id, None)
+
+    @staticmethod
+    async def _emit_loop_event(
+        transport: StdioJsonRpcTransport, stream_id: str, event: Any
+    ) -> None:
+        kind = event.kind
+        data = event.data
+        if kind == "content_delta":
+            await transport.emit_notification(
+                "stream.chunk", {"streamId": stream_id, "delta": data["delta"]}
+            )
+        elif kind == "reasoning_delta":
+            await transport.emit_notification(
+                "stream.chunk", {"streamId": stream_id, "reasoningDelta": data["delta"]}
+            )
+        elif kind == "tool_call_start":
+            await transport.emit_notification(
+                "stream.chunk",
+                {"streamId": stream_id, "toolCall": {"id": data["id"], "name": data["name"]}},
+            )
+        elif kind in ("tool_call_result", "tool_error"):
+            payload: dict[str, Any] = {
+                "id": data["id"],
+                "name": data["name"],
+                "success": data.get("success", False),
+            }
+            if "durationMs" in data:
+                payload["durationMs"] = data["durationMs"]
+            if "error" in data:
+                payload["error"] = data["error"]
+            await transport.emit_notification(
+                "stream.chunk", {"streamId": stream_id, "toolResult": payload}
+            )
+        elif kind in ("soft_timeout", "budget_exhausted"):
+            await transport.emit_notification(
+                "stream.chunk", {"streamId": stream_id, "notice": {"kind": kind, **data}}
+            )
+        elif kind == "error":
+            await transport.emit_notification(
+                "stream.error",
+                {"streamId": stream_id, "kind": "LoopError", "message": data["message"]},
+            )
+        elif kind == "completion" and data.get("status") != "executing":
+            await transport.emit_notification(
+                "stream.done",
+                {
+                    "streamId": stream_id,
+                    "ok": data["status"] == "completed",
+                    "status": data["status"],
+                    "reason": data["reason"],
+                },
+            )
 
     # ------------------------------------------------------------------
     # Plumbing
@@ -561,6 +676,43 @@ def _build_provider_kwargs(params: dict[str, Any]) -> dict[str, Any]:
     if isinstance(extra, dict):
         kwargs.update(extra)
     return kwargs
+
+
+def _use_coreloop(params: dict[str, Any]) -> bool:
+    """Flag resolution for the CoreLoop chat path: per-request
+    ``useCoreLoop`` wins; otherwise the ``STEERABLE_SIDECAR_CORELOOP`` env
+    var; default off (legacy direct-stream path)."""
+
+    flag = params.get("useCoreLoop")
+    if flag is not None:
+        return bool(flag)
+    return os.environ.get("STEERABLE_SIDECAR_CORELOOP", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
+    budget = None
+    if (budget_tokens := params.get("budgetTokens")) is not None:
+        budget = BudgetLimit(
+            max_tokens=int(budget_tokens),
+            max_steps=int(params.get("maxRounds", 32)),
+            max_tool_calls=int(params.get("budgetMaxToolCalls", 10_000)),
+        )
+    return LoopConfig(
+        max_rounds=int(params.get("maxRounds", 32)),
+        max_tool_errors=int(params.get("maxToolErrors", 3)),
+        budget=budget,
+        temperature=(
+            float(params["temperature"]) if params.get("temperature") is not None else None
+        ),
+        max_tokens=int(params["maxTokens"]) if params.get("maxTokens") is not None else None,
+        soft_timeout_ms=(
+            int(params["softTimeoutMs"]) if params.get("softTimeoutMs") is not None else None
+        ),
+    )
 
 
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:

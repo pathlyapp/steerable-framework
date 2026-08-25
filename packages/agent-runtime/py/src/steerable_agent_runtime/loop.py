@@ -15,11 +15,14 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     more branches here
   * single write path: completion events carry their full step summary and
     the compact trajectory is derived from them (no separate record channel)
+  * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
+    round boundaries; once exceeded the loop stops offering tools and asks
+    the model for a final answer instead of hard-killing the run
 
-Not yet implemented (later slices per the plan): soft-timeout,
-compaction-continue, large-result externalization, tool dedup, policy gate,
+Not yet implemented (later slices per the plan): tool dedup, policy gate,
 and the anti-hallucination layer (data-need routing, grounding judge,
-deferred/claimed retry, narration round).
+deferred/claimed retry, narration round). Compaction and large-result
+externalization live in hooks (compaction.py / spill.py), not here.
 """
 
 from __future__ import annotations
@@ -66,6 +69,7 @@ LoopEventKind = Literal[
     "tool_error",
     # budget / control
     "budget_exhausted",
+    "soft_timeout",
     "completion",
 ]
 
@@ -156,6 +160,10 @@ class LoopConfig:
     budget: BudgetLimit | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    #: Wall-clock soft limit. When exceeded, the loop stops offering tools and
+    #: asks the model to wrap up with what it has (one final no-tools round),
+    #: instead of hard-killing the run. ``None`` disables.
+    soft_timeout_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +211,12 @@ class CoreLoop:
         transcript: list[LLMMessage] = list(messages)
         budget_state = BudgetState()
         started = time.monotonic()
+        soft_deadline = (
+            started + self._config.soft_timeout_ms / 1000
+            if self._config.soft_timeout_ms is not None
+            else None
+        )
+        wrap_up = False
         self.trajectory = []
 
         def emit_completion(
@@ -237,6 +251,27 @@ class CoreLoop:
         for round_index in range(self._config.max_rounds):
             ctx.round_index = round_index
 
+            # ── soft timeout: stop offering tools, ask for the wrap-up ────
+            # Soft = we never interrupt an in-flight stream or tool; the
+            # deadline is only checked at round boundaries.
+            if (
+                soft_deadline is not None
+                and not wrap_up
+                and time.monotonic() >= soft_deadline
+            ):
+                wrap_up = True
+                yield LoopEvent(
+                    "soft_timeout",
+                    {
+                        "round": round_index,
+                        "elapsedMs": int((time.monotonic() - started) * 1000),
+                        "softTimeoutMs": self._config.soft_timeout_ms,
+                    },
+                )
+                transcript.append(
+                    LLMMessage(role="user", content=_SOFT_TIMEOUT_NOTICE)
+                )
+
             # ── hook: pre_step (compaction / turn rejection) ─────────────
             pre = await self._hooks.pre_step(transcript, ctx)
             if pre.kind == "reject":
@@ -265,7 +300,9 @@ class CoreLoop:
                 try:
                     async for chunk in self._provider.stream(
                         transcript,
-                        tools=tools,
+                        # wrap-up round: withhold tool descriptors so the model
+                        # cannot start another act phase.
+                        tools=None if wrap_up else tools,
                         temperature=self._config.temperature,
                         max_tokens=self._config.max_tokens,
                     ):
@@ -334,7 +371,11 @@ class CoreLoop:
             # try to recover inline calls from the content so the act phase
             # runs instead of ending the turn tool-less. The cleaned text
             # (pseudo blocks removed) becomes the round's content.
-            if not tool_calls and content:
+            # Skipped in wrap-up mode: tools are no longer offered, and any
+            # tool intent (structured or pseudo) is dropped so the turn ends.
+            if wrap_up:
+                tool_calls = []
+            elif not tool_calls and content:
                 recovered, cleaned = extract_inline_tool_calls(content)
                 if recovered:
                     content = cleaned
@@ -474,6 +515,13 @@ class CoreLoop:
         )
 
         _ = started  # reserved for a future durationMs stage_complete event
+
+
+_SOFT_TIMEOUT_NOTICE = (
+    "[system notice] The time budget for this task is exhausted. Do NOT call "
+    "any more tools. Summarize what you have done so far and produce the "
+    "final answer now."
+)
 
 
 def _decision_data(decision: CompletionDecision) -> dict[str, Any]:

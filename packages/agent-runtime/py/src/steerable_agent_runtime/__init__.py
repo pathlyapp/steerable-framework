@@ -11,7 +11,7 @@ from .errors import (
 from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
-from .hooks import LoopHooks, NoopHooks, PreStepAction, RetryAction
+from .hooks import ChainHooks, LoopHooks, NoopHooks, PreStepAction, RetryAction
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
 from .loop import (
     CompletionDecision,
@@ -30,6 +30,7 @@ from .replay import (
     build_step_decision_event,
     reduce_execution_state,
 )
+from .retry import RetryHooks
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
 from .tools import RegisteredTool, ToolRouter, tool
@@ -37,6 +38,7 @@ from .transport import TransportAdapter
 
 __all__ = [
     "BudgetExhaustedError",
+    "ChainHooks",
     "CompactionHooks",
     "CompletionDecision",
     "CoreLoop",
@@ -58,6 +60,7 @@ __all__ = [
     "PreStepAction",
     "RegisteredTool",
     "RetryAction",
+    "RetryHooks",
     "RouterToolExecutor",
     "SpillHooks",
     "SpillStore",
