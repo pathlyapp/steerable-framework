@@ -314,11 +314,39 @@ context_system 分层、目标校验器、技能预算、计费、时区、实�
 轨迹跑分）。
 **回滚**：CoreLoop 只在 flag 下启用，默认仍走 TS 路径。
 
+#### 第二轮复审后的优先级（2026-08-25，canvas `steerable-vs-codex-dsh-r2`）
+
+Tier 1–3 落地后重排。上次 6 个红项 4 个转绿、2 个转橙（审批=决策记录、
+trace=已落库无 OTel）；**头号风险不变：零生产验证**。
+
+- **P0 · 阻塞桌面发布**
+  - [ ] **A4 切换**（见下节）——sidecar CoreLoop 路径与 flag 已就绪，
+        差 agent 端接入。所有能力只有测试验证，灰度是唯一的真实校验
+        （包括 61 条安全规则在真实命令分布上的误伤率）。
+  - [ ] **包体门禁 741MB → 320MB**——独立硬阻塞，并行推进，不等 A4。
+- **P1 · 校验闭环 + 净增益**
+  - [ ] **跨语言回放逐事件比对**：TS reduce 与 Py reduce 对同一轨迹跑分。
+        A3 通过标准的最后缺口，是「不需要第二份 loop」承诺的兑现证明。
+  - [ ] **反幻觉层**（A3 最后一片）：data-need 路由、grounding 判定、
+        deferred/claimed 重试、narration round。agent 独有、api 缺失，
+        做完即从「追平」变「反超」。
+- **P2 · 体验与健壮性**
+  - [ ] **会话恢复 / 续跑**：TraceRecorder 已把事件落库，缺「从事件重建
+        transcript」的投影函数（dsh 单一真相源还没学完的一半）。
+        桌面端重启/崩溃续跑是真实需求。
+  - [ ] **token 估算精度**：chars/4 启发式对中文/代码偏差可达 2 倍，
+        compaction 阈值因此失准。按模型校准系数或接真 tokenizer。
+  - [ ] **OTel 导出器**：TraceRecorder → OTel span 转换器，对齐
+        codex/dsh 的 telemetry。
+- **P3 · 生态**
+  - [ ] **MCP 下沉**：agent 侧已有 client，A4 稳定后按需，不提前做。
+
 ## A4 · desktop 切换并删码（2–3 周）
 
 - [ ] sidecar 托管 CoreLoop，工具走 A1 的反向通道回 Electron 执行
 - [ ] 灰度通过后删 `deeppath-agent/src/harness`
-- [ ] 把 61 条 shell 安全规则回流到框架（框架现在只有 6 条存根）
+- [x] ~~把 61 条 shell 安全规则回流到框架~~（Tier 1 已完成：双语 61 条 +
+      ToolRouter 接线 + 一致性测试）
 - [ ] 解决包体门禁（见上方硬阻塞）
 
 **通过标准**：sidecar 模式下离线 Ollama + 本地 shell/文件/MCP 工具全部跑通；
