@@ -19,9 +19,8 @@
 
 ## 硬阻塞（A3 之前必须解决）
 
-- [ ] **sidecar 反向通道**：当前 stdio JSON-RPC 是请求半双工，sidecar 不能
-      向 host 发起带响应的请求。而「Python 跑 loop、工具在 Electron 执行」
-      恰恰需要这个能力。见 A1。
+- [x] **sidecar 反向通道**：✅ A1 已解决（2026-08-25）。sidecar 可发起
+      `srv_` 前缀的反向请求并等响应，host supervisor 服务之。见 A1。
 - [ ] **包体**：sidecar 实测 700–740MB（CI 预算 780MB），320MB 目标未达成。
       开发/canary 可用系统 python 绕过，正式发版前必须解决。
 
@@ -53,23 +52,41 @@
 - api 的 `trajectory_eval`（离线 JSONL 评分）与 `replay`（live stageData
   压缩轨迹）是两套系统；录制已在生产路径，但「导出→评分→回归」未产品化。
 
-## A1 · sidecar 反向通道（1 周，阻塞项）
+## A1 · sidecar 反向通道 ✅ 已完成（2026-08-25）
 
 涉及 steerable-framework + deeppath-agent，与 api 无关。
 
-- [ ] **前置**：给 deeppath-agent 补一个跑 `vitest` 的 CI workflow
-      （当前只有 build-windows + pages，A0 删代码只能靠本地验证，无线上兜底）
-- [ ] 扩展 `spec/sidecar/*.schema.json`：sidecar→host 的请求/响应帧
-- [ ] 改 `packages/agent-runtime/py/.../transport/stdio_jsonrpc.py`：
-      sidecar 侧能发起带 id 的请求并等待响应
-- [ ] 改 `deeppath-agent/src/sidecar/supervisor.ts`：能服务来自 sidecar 的请求
-      （当前收到带 id 的帧只当响应处理）
-- [ ] 在 ToolRouter 上加远程代理工具的注册助手（当前只有进程内可调用工具，
-      见 `packages/agent-runtime/py/.../tools.py` 的 dispatch）
-- [ ] 端到端 example：sidecar 发起请求 → Electron 执行 shell → 结果回到 sidecar
+- [~] **前置**：给 deeppath-agent 补一个跑 `vitest` 的 CI workflow —— **未做**。
+      本次 agent 改动靠本地 284 测试 + 真实子进程集成测试验证；push 后
+      确认 agent 仓库仍无测试 CI 被触发（最近一次 develop run 是 08-20，
+      且 Deploy Pages 只盯 site 路径）。**这个缺口仍是 A2/A3 的风险，单列
+      跟进，不阻塞 A1 收尾。**
+- [x] 扩展 `spec/sidecar/README.md`：新增「Reverse channel」一节 —— 帧判别
+      （id+method=请求 / id 无 method=响应 / 无 id=通知）、id 命名空间约定
+      （host 用整数、sidecar 用 `srv_` 前缀字符串防碰撞）、保留反向方法
+      `tool.invoke`、以及「读循环等待响应时不得阻塞否则双端死锁」的约束。
+- [x] 改 `transport/stdio_jsonrpc.py`：`JsonRpcServer.call()` 发起反向请求
+      （`srv_` id + pending future 表），`attach_writer()` 绑定出站 writer，
+      `_resolve_reverse_response()` 识别响应帧并 resolve；`serve_stdio` 与
+      sidecar 的 `serve()` 读循环改为逐帧并发 task 分发（关键：handler 等待
+      反向响应时读循环继续服务，否则死锁）。
+- [x] 改 `deeppath-agent/src/sidecar/supervisor.ts`：`handleStdoutLine` 区分
+      sidecar 请求（id+method）与响应（仅 id）；新增 `onReverseRequest()`
+      注册 host 侧 handler，handler 返回值写回 sidecar stdin 作为 JSON-RPC
+      result。配套类型 `SidecarReverseRequest` / `SidecarReverseHandler`。
+- [x] `ToolRouter.register_remote()` 注册远程代理工具（dispatch 转发给异步
+      invoker，如反向通道）；`_invoke()` 现在把完整参数集传给 `**kwargs`
+      handler。metadata 标记 `remote: true`。
+- [x] 端到端：Python 侧 `test_sidecar_reverse_channel.py`（真实子进程 stdio
+      上 sidecar 反向 `tool.invoke` → host 执行 → 结果回 sidecar）+
+      agent 侧 supervisor 集成测试新增反向通道用例（spawn framework 的
+      `reverse_echo_sidecar`，host handler 回 `host-ran:pwd`）。
 
-**通过标准**：上面的端到端 example 跑通。
-**回滚**：新增协议方法，旧路径不动，不启用即可。
+**测试**：framework py 116 过（+8）、framework TS 187 过、agent 284 过
+（含 3 个 supervisor 集成测试）。
+**线上回测**：framework CI run `32835311377` success（commit `1f1b7e1`）；
+agent commit `7a960ab`（无测试 CI，见上前置项）。
+**回滚**：新增协议方法 + 新注册点，旧路径不动，不启用即可。
 
 ## A2 · agent 轨迹录制与回放（3–5 天，可与 A1 并行）
 
