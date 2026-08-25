@@ -149,10 +149,28 @@ full trace（`tool.call` 等事件供 trajectory_eval 离线评分）。本次�
 **线上回测**：framework CI run `32838361130` success（pytest + codegen
 idempotency + check_drift 全过；sidecar 包体 741MB/800MB，A4 门禁预警）。
 
+### Slice 2 · 伪函数调用 / markdown 工具调用恢复 ✅ 已完成（2026-08-25，commit `59c3959`）
+
+- [x] `pseudo.py`：`extract_inline_tool_calls()` 识别三族伪调用——
+      MiniMax XML（`<invoke name=...>`）、DeepSeek XML（`<function=...>`）、
+      Markdown pseudo（`[Tool call: NAME]\n{json}`，含平衡括号 JSON 扫描）
+- [x] **恢复执行**（不是只剥离）：CoreLoop 在一轮无标准 tool_calls 时，
+      从 content 提取伪调用还原为真实 `ToolCall` 走 act 段——
+      这是离线 Ollama 等本地模型跑通的关键（A4 前置）
+- [x] 设计决策：采「恢复执行」而非 api 生产现状的「流式剥离净化显示」。
+      api 的 `_extract_inline_tool_calls` 本是死代码（只剥不显恢复）；
+      剥离会丢弃模型意图导致 loop 误判收尾。流式剥离净化显示留后续切片。
+- [x] 真实 tool_calls 存在时不触发恢复（防双重执行）
+
+**测试**：`test_pseudo.py` 11 条（三族提取 + 嵌套/残缺 JSON + 接入 loop
+端到端 + 真实调用不重复 + 纯文本不恢复），全量 py 74 过。
+**线上回测**：framework CI run `32839498768` success（py/ts/lockstep/
+sidecar-budget/examples 全过）。
+
 ### 剩余切片（未做）
 
 - [ ] LLM 流消费的 UTF-16 代理对修复、推理内容提取
-- [ ] 伪函数调用 / markdown 工具调用的识别与恢复
+- [ ] 伪调用的**流式剥离**（净化前端显示，对齐 api 生产路径）
 - [ ] 软超时、压缩续跑、轮次扩展
 - [ ] 大结果外置为 artifact
 - [ ] 工具去重、未知工具建议、参数 schema 强制转换
