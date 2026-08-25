@@ -184,16 +184,23 @@ sidecar-budget/examples 全过）。
 
 #### 架构形状问题（比补功能更该先做，越晚越贵）
 
-- [ ] **loop hook 扩展点**：CoreLoop 现在是硬编码单体，每加一个切片就往
-      `loop.py` 塞 if 分支。剩下 5 个切片全塞进去，它会长成和 deeppath-api
-      那个 6700 行 `loop.py` 一样的巨兽——而逃离那个巨兽正是本次迁移的初衷。
-      参照 dsh 把 compaction/retry/approval 做成挂在 `agent/pre-step` /
-      `agent/request-error` 上的插件（加能力不改 loop）。**在塞进剩余切片之前，
-      先加 pre-step / post-step / on-request-error 三个 hook 点。**
-- [ ] **统一状态来源**：现在 `transcript`（内存瞬态，决定模型看什么）和
-      `trajectory`（旁路记录，决定回放看什么）是两套，由不同代码路径维护，
-      加一个切片就多一处漂移点。参照 dsh 的 `SessionEvent` append-only 日志 +
-      `deriveMessages()` 投影。至少让 transcript 可从事件流重建。
+- [x] **loop hook 扩展点** ✅ 已完成（2026-08-25，commit `318d5e6`）。
+      新增 `hooks.py`：`LoopHooks` 协议三点——`pre_step`（压缩改写 transcript /
+      拒绝本轮）、`post_tool_result`（外置改写超大结果）、`on_request_error`
+      （重试 vs 失败）。默认 `NoopHooks` 全透传，行为不变。LLM 流包进
+      `on_request_error` 驱动的重试循环；此前定义了从不 emit 的 `error` 事件
+      现在在流终态失败时触发。后续切片 = 写 hooks 实现，不再动 `loop.py`。
+- [x] **统一状态来源（轻量版）** ✅ 已完成（同上 commit）。采「单一写入路径」：
+      completion 事件携带完整 step 摘要（round/finishReason/toolCalls/
+      textLength/...），trajectory 在 `emit_completion` 内从事件派生，删掉独立
+      `record()` 双写。事件流自此可独自重建轨迹——模型看到的与回放看到的不可能
+      再漂移。完整 event-sourcing（dsh 式 SessionEvent 日志 + deriveMessages）
+      留到有会话持久化/重载需求时（A4+）再评估。
+
+**测试**：`test_hooks.py` 7 条（hooks 触发 / reject / 改写 / 重试 / 失败 /
+NoopHooks 行为不变 / trajectory 与事件流一致），全量 py 81 过。
+**线上回测**：framework CI run `32856885116` success（py/ts/lockstep/
+sidecar-budget/examples 全过）。
 
 #### Tier 1 · 阻塞 A4 桌面切换
 
