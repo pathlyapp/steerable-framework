@@ -3,10 +3,12 @@
 from .errors import (
     BudgetExhaustedError,
     PolicyDeniedError,
-    RuntimeError as SteerableRuntimeError,
     StorageError,
     ToolDispatchError,
     TransportError,
+)
+from .errors import (
+    RuntimeError as SteerableRuntimeError,
 )
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
 from .loop import (
@@ -18,6 +20,7 @@ from .loop import (
     RouterToolExecutor,
     ToolExecutor,
 )
+from .pseudo import extract_inline_tool_calls
 from .replay import (
     ExecutionBudget,
     HarnessExecutionState,
@@ -31,32 +34,33 @@ from .transport import TransportAdapter
 
 __all__ = [
     "BudgetExhaustedError",
-    "PolicyDeniedError",
-    "SteerableRuntimeError",
-    "StorageError",
-    "ToolDispatchError",
-    "TransportError",
+    "CompletionDecision",
+    "CoreLoop",
+    "ExecutionBudget",
+    "HarnessExecutionState",
+    "HarnessTrajectoryEvent",
     "LLMMessage",
     "LLMProvider",
     "LLMStreamChunk",
     "LLMUsage",
-    "RegisteredTool",
-    "ToolRouter",
-    "tool",
-    "StorageAdapter",
-    "TransportAdapter",
-    "CompletionDecision",
-    "CoreLoop",
     "LoopConfig",
     "LoopContext",
     "LoopEvent",
+    "PolicyDeniedError",
+    "RegisteredTool",
     "RouterToolExecutor",
+    "SteerableRuntimeError",
+    "StorageAdapter",
+    "StorageError",
+    "ToolDispatchError",
     "ToolExecutor",
-    "ExecutionBudget",
-    "HarnessExecutionState",
-    "HarnessTrajectoryEvent",
+    "ToolRouter",
+    "TransportAdapter",
+    "TransportError",
     "build_step_decision_event",
+    "extract_inline_tool_calls",
     "reduce_execution_state",
+    "tool",
 ]
 
 __version__ = "0.1.0"

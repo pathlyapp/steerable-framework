@@ -32,6 +32,7 @@ from steerable_agent_harness import (
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .llm import LLMMessage, LLMProvider
+from .pseudo import extract_inline_tool_calls
 from .replay import (
     HarnessTrajectoryEvent,
     build_step_decision_event,
@@ -245,6 +246,26 @@ class CoreLoop:
                         return
 
             content = "".join(content_parts)
+
+            # ── recover pseudo / markdown tool calls ─────────────────────
+            # Some models (local ones via Ollama, or Claude/OpenAI regressing
+            # into prose) emit tool *intent* as text instead of a structured
+            # tool_calls block. If this round produced no real tool_calls,
+            # try to recover inline calls from the content so the act phase
+            # runs instead of ending the turn tool-less. The cleaned text
+            # (pseudo blocks removed) becomes the round's content.
+            if not tool_calls and content:
+                recovered, cleaned = extract_inline_tool_calls(content)
+                if recovered:
+                    content = cleaned
+                    tool_calls = [
+                        ToolCall(
+                            id=f"recovered_{round_index}_{i}",
+                            name=r["name"],
+                            arguments=r["arguments"],
+                        )
+                        for i, r in enumerate(recovered)
+                    ]
 
             # ── decide: no tool calls → terminal ─────────────────────────
             if not tool_calls:
