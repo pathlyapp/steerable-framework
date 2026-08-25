@@ -11,6 +11,11 @@ requires-python = ">=3.10"
 # See packages/agent-harness/py/pyproject.toml for the rationale.
 dependencies = [
   "pydantic>=2.10.0",
+  # httpx backs OpenAICompatProvider — the default provider family for
+  # agent.chat.stream (openai_compat / ollama). Not optional here: the
+  # sidecar exists to talk to LLM endpoints. (anthropic stays a lazy
+  # import, only loaded when provider=anthropic.)
+  "httpx>=0.27",
   "steerable-agent-protocol>=0.1.0,<1.0.0",
   "steerable-agent-harness>=0.1.0,<1.0.0",
   "steerable-agent-runtime>=0.1.0,<1.0.0",

@@ -753,6 +753,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
         from steerable_agent_runtime.llm import OpenAICompatProvider
 
         return OpenAICompatProvider(
+            name=provider_kind or "openai_compat",
             base_url=base_url or "https://api.openai.com/v1",
             api_key=api_key,
             model=str(model),
@@ -760,6 +761,8 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     if provider_kind in {"anthropic", "claude"}:
         from steerable_agent_runtime.llm import AnthropicProvider
 
-        return AnthropicProvider(api_key=api_key, model=str(model))
+        return AnthropicProvider(
+            name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+        )
 
     raise ValueError(f"unknown provider: {provider_kind!r}")
