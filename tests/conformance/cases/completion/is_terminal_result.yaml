@@ -1,0 +1,23 @@
+name: completion-is-terminal-result
+inputs:
+  - null
+  - {}
+  - { terminal: true }
+  - { terminal: false }
+  - { success: false }
+  - { success: false, needsFollowup: true }
+  - { success: false, needsFollowup: false }
+  - { success: true }
+  - { success: true, needsFollowup: false }
+  - { terminal: false, success: false }
+expected:
+  - false
+  - false
+  - true
+  - false
+  - true
+  - false
+  - true
+  - false
+  - false
+  - true

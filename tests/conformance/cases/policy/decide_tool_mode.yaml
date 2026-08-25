@@ -1,0 +1,37 @@
+name: policy-decide-tool-mode
+inputs:
+  - get_x
+  - list_items
+  - read_file
+  - GET_upper
+  - create_x
+  - update_x
+  - set_config
+  - write_file
+  - apply_patch
+  - delete_x
+  - drop_table
+  - remove_item
+  - destroy_env
+  - frobnicate
+  - local_exec_shell
+  - web_search
+  - ""
+expected:
+  - read
+  - read
+  - read
+  - read
+  - safe_write
+  - safe_write
+  - safe_write
+  - safe_write
+  - safe_write
+  - destructive
+  - destructive
+  - destructive
+  - destructive
+  - other
+  - other
+  - other
+  - other

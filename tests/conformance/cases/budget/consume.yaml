@@ -1,0 +1,23 @@
+name: budget-consume
+limits:
+  maxTokens: 1000
+  maxSteps: 5
+  maxToolCalls: 3
+ops:
+  - { tokens: 100 }
+  - { tokens: 200, step: true }
+  - { toolCall: true }
+  - { tokens: 800 }
+  - { step: true, toolCall: true }
+  - { toolCall: true }
+  - { toolCall: true }
+  - { tokens: -50 }
+expected:
+  - { tokensUsed: 100, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 300, stepsUsed: 1, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 300, stepsUsed: 1, toolCallsUsed: 1, exhausted: false }
+  - { tokensUsed: 1100, stepsUsed: 1, toolCallsUsed: 1, exhausted: true }
+  - { tokensUsed: 1100, stepsUsed: 2, toolCallsUsed: 2, exhausted: true }
+  - { tokensUsed: 1100, stepsUsed: 2, toolCallsUsed: 3, exhausted: true }
+  - { tokensUsed: 1100, stepsUsed: 2, toolCallsUsed: 4, exhausted: true }
+  - { tokensUsed: 1100, stepsUsed: 2, toolCallsUsed: 4, exhausted: true }
