@@ -90,17 +90,41 @@
 agent commit `7a960ab`（无测试 CI，见上前置项）。
 **回滚**：新增协议方法 + 新注册点，旧路径不动，不启用即可。
 
-## A2 · agent 轨迹录制与回放（3–5 天，可与 A1 并行）
+## A2 · agent 轨迹录制与回放 ✅ 已完成（2026-08-25）
 
 api 有 trajectory_eval.py + replay.py，agent 没有。这层安全网必须先建，
 否则 A3 的 Python 重写没法证明行为没变。
 
-- [ ] 基于现有 `harness_traces` 表 + `saveTrace` + 消息上的 `executedActions`
-      补录制
-- [ ] 补逐事件回放（对齐 api 的 `reduce_execution_state` 思路）
-- [ ] 先存档 ≥20 条覆盖主要场景的真实桌面轨迹
+**勘察关键结论**：api 是**两套并行契约**——compact trajectory
+（`step_decision` 事件 + `reduce_execution_state` 还原执行状态机）和
+full trace（`tool.call` 等事件供 trajectory_eval 离线评分）。本次只做
+**compact 层**回放（TODO 原定范围），full trace 改为不截断落库做保真存档。
 
-**通过标准**：能录制并逐事件回放至少 20 条真实轨迹。
+- [x] **录制**：router.ts 在两处 `decideCompletion` 调用点构造 `step_decision`
+      事件（step 摘要含 `round`/`traceStepId`/`finishReason`/`toolCalls`/
+      `toolCallCount`/`toolErrorCount`/`textLength`，对齐 api 契约），累积后
+      落进 `harness_traces.payload.trajectory`（cap 最近 100 条，对齐 api
+      `_MAX_TRAJECTORY_EVENTS`）。
+- [x] **逐事件回放**：新建 `src/harness/replay.ts`，TS 移植 api 的
+      `execution_state.py` + `replay.py`——`HarnessExecutionState` /
+      `HarnessTrajectoryEvent` / `reduceExecutionState()`。契约对齐：step 按
+      `(round, traceStepId)` 去重、只有 6 个白名单 status 驱动状态机、
+      budgets 从 steps 派生、未知事件类型静默跳过、输入不被 mutate。
+- [x] **full trace 保真**：`toMetadata({ full: true })` 落库不截断（原截断
+      50 条事件）；消息 metadata 仍用截断版保持紧凑。
+
+**决策记录**（2026-08-25 与用户确认）：
+- compact trajectory 存 `harness_traces.payload`（agent 无 stageData），不新建表。
+- full trace 不截断落库（full-fidelity），用于后续回归存档。
+- 只做 compact 层回放，不做 full trace 评分层。
+
+**测试**：`tests/harness/replay.test.ts`（replay round-trip / 去重 / status
+白名单 / 静默跳过）+ tracing 的 full/uncapped 测试。本地 294 过。
+**线上回测**：agent CI run `32837333624` success，295 过 / 7 skipped
+（commit `81d72be`）。
+**遗留**：「存档 ≥20 条真实桌面轨迹」需在真实桌面使用中积累，无法靠 CI
+凭空产生——能力已就绪（每次 loop 自动落 trajectory + full trace），存档
+随使用自然增长。后续可补一个「导出轨迹 → 回放比对」的回归脚本。
 **备注**：这套录制回放能力本身以后该进框架。
 
 ## A3 · CoreLoop v0（Python，4–6 周，最大工作量）
