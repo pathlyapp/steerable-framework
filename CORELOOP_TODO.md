@@ -288,6 +288,10 @@ sidecar-budget/examples 全过）。
 含既有用例适配去重守卫），sidecar py 24，harness py 41，一致性 py 5 /
 ts 36。ruff 触及文件全净（注意：`ruff --fix` 整个包会顺手改未触及文件，
 已回滚，只保留触及文件的修复）。
+**踩坑**：又一次根目录 pytest 同名撞车——`test_tracing.py` 与 harness 的
+tracing golden 测试撞模块名，改名 `test_trace_recorder.py` 修复
+（`deafc1d`）。runtime 新增测试文件前先对照 harness 既有文件名。
+**线上回测**：framework CI run `32863602178` success。
 
 #### 明确不建议做（复审结论）
 
