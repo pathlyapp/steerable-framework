@@ -169,13 +169,79 @@ sidecar-budget/examples 全过）。
 
 ### 剩余切片（未做）
 
-- [ ] LLM 流消费的 UTF-16 代理对修复、推理内容提取
+> 2026-08-25 复审（steerable vs codex vs dsh，见 canvas
+> `steerable-coreloop-vs-codex-dsh`）后重排优先级。原顺序按「实现依赖」排，
+> 复审发现应按「阻塞 A4 的程度」排，且有两个**架构形状问题**比补功能更该先做。
+> 复审核心结论：
+> - **最大风险是 CoreLoop 零生产验证**：sidecar 的 `agent.chat.stream` 直接调
+>   `provider.stream()` 绕过 CoreLoop，agent 仍跑自己的 TS 循环。测试全绿但
+>   没有一行真实流量。每加一个切片都在累积未验证的风险。
+> - **伪调用恢复（Slice 2）是唯一明确领先项**：codex / dsh 都没有（都假设
+>   上游返回结构化 tool_calls；dsh 甚至不解析 DeepSeek 模型自己常输出的
+>   `<function=name>` 格式，会落进 text block 永不执行）。
+> - 规模现实：CoreLoop ~3K 行 Python vs codex 1.49M 行 Rust / dsh 468K 行 TS。
+>   差距是取舍不是落后，只补「让 A4 跑不起来」的那些。
+
+#### 架构形状问题（比补功能更该先做，越晚越贵）
+
+- [ ] **loop hook 扩展点**：CoreLoop 现在是硬编码单体，每加一个切片就往
+      `loop.py` 塞 if 分支。剩下 5 个切片全塞进去，它会长成和 deeppath-api
+      那个 6700 行 `loop.py` 一样的巨兽——而逃离那个巨兽正是本次迁移的初衷。
+      参照 dsh 把 compaction/retry/approval 做成挂在 `agent/pre-step` /
+      `agent/request-error` 上的插件（加能力不改 loop）。**在塞进剩余切片之前，
+      先加 pre-step / post-step / on-request-error 三个 hook 点。**
+- [ ] **统一状态来源**：现在 `transcript`（内存瞬态，决定模型看什么）和
+      `trajectory`（旁路记录，决定回放看什么）是两套，由不同代码路径维护，
+      加一个切片就多一处漂移点。参照 dsh 的 `SessionEvent` append-only 日志 +
+      `deriveMessages()` 投影。至少让 transcript 可从事件流重建。
+
+#### Tier 1 · 阻塞 A4 桌面切换
+
+- [ ] **大结果外置 / 截断**：本地 shell 输出动辄几 MB，直接 `json.dumps` 进
+      transcript 会瞬间爆掉 60k 本地上下文。跑本地工具的硬前提。
+      参照 dsh 的 spill-policy（超阈值写文件 + preview + locator）。
+- [ ] **上下文压缩**：本地小上下文（60k）比服务端 120k 更需要压缩，多轮工具
+      调用几轮就满。没有压缩，长会话在桌面端必然断。参照 dsh compaction-basic
+      的阈值+保留比设计（codex 的本地/远程/token预算/轮次中四件套太重）。
+- [ ] **shell 安全规则接线**：框架 6 条规则躺在 TS 侧没接线，Py 侧没有；
+      agent 侧 61 条要回流。桌面端直接跑用户机器上的命令，这是安全底线。
+      参照 codex 的 88 条 banned prefix 对照补全。
+
+#### Tier 2 · 架构级，越早越便宜
+
+- [ ] **CoreLoop 接真实流量**：让 sidecar 的 `agent.chat.stream` 改走 CoreLoop
+      （flag 控制），最小成本验证。这是复审认定的最高优先项。
+- [ ] **重试接入 loop**：harness 里 `next_retry_delay_ms` 写好了却没人调用。
+      本地模型比云端更容易抖，白捡的健壮性不该空着。参照 dsh 每次 retry 开
+      新 turn 的做法。
+- [ ] **软超时**（原「软超时、压缩续跑、轮次扩展」拆分；压缩续跑见 Tier 1
+      上下文压缩，轮次扩展暂缓——codex/dsh 核心 loop 都无硬上限，靠 token/
+      compaction 驱动，steerable 的 max_rounds=32 已是更保守的选择）。
+
+#### Tier 3 · 补齐，不急
+
+- [ ] LLM 流消费的 UTF-16 代理对修复、推理内容提取（真实 bug 源但不阻塞）
 - [ ] 伪调用的**流式剥离**（净化前端显示，对齐 api 生产路径）
-- [ ] 软超时、压缩续跑、轮次扩展
-- [ ] 大结果外置为 artifact
 - [ ] 工具去重、未知工具建议、参数 schema 强制转换
+- [ ] **审批 / 沙箱**：桌面产品最终需要，可先留产品侧。框架里
+      `waiting_approval` 状态枚举目前没人 emit，属半成品，要么接通要么删掉。
+- [ ] **trace 接入 loop + OTel**：StorageAdapter 的 trace API 有了但 loop 不写。
+      可观测是 codex/dsh 都远超的一块，但不阻塞功能。
+- [ ] **补齐 LoopEvent**：`stage_complete` 和 `error` 两类定义了从不 emit，
+      类型与实现不符，顺手补上。
+- [ ] **MCP**：agent 侧已有 MCP client，框架侧没有。等 A4 之后按需下沉。
 - [ ] **agent 独有的反幻觉层**（这是 api 缺的，是净增益，放最后一片）：
       data-need 路由、grounding 判定、deferred/claimed 重试、narration round
+
+#### 明确不建议做（复审结论）
+
+- **不要追 codex 的规模和安全栈**：149 万行 Rust + Guardian/execpolicy/多平台
+  沙箱是 OpenAI 的产品投入，桌面端用不到那么重。steerable 的价值恰恰是
+  薄核心 + 跨语言契约。
+- **不要在 TS 侧再写一份 CoreLoop**：规格已禁止，继续守住——两份 loop 必然
+  漂移，这正是当初 api 和 agent 两套 harness 的教训。
+- **包体门禁仍是 A4 独立硬阻塞**：741MB/800MB，目标 320MB 未达成。与循环
+  能力无关但会卡住桌面发布，需并行推进。
 
 留在产品侧的（不下沉）：dp-action 提案、UI 工具、response 标签契约、
 context_system 分层、目标校验器、技能预算、计费、时区、实体查库、桌面中继、

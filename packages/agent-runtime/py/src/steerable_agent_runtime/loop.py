@@ -4,17 +4,17 @@ This is the A3 "minimal slice": the inner tool-round loop plus a completion
 decision, yielding structured `LoopEvent`s (never encoded bytes). A
 `TransportAdapter` encodes them for the wire; orchestration stays above.
 
-Scope of this slice (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
+Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
   * inner loop state machine and round control
   * LLM stream consumption (via LLMProvider)
-  * tool dispatch through the ToolExecutor port (dedup / policy / budget are
-    loop-internal cross-cutting concerns)
-  * budget counters + completion decision
+  * tool dispatch through the ToolExecutor port
+  * token budget counters + completion decision
+  * pseudo / markdown tool-call recovery (see pseudo.py)
 
-Deliberately NOT in this slice (later slices per the plan): pseudo / markdown
-tool-call recovery, soft-timeout, compaction-continue, large-result
-externalization, and the anti-hallucination layer (data-need routing,
-grounding judge, deferred/claimed retry, narration round).
+Not yet implemented (later slices per the plan): soft-timeout,
+compaction-continue, large-result externalization, tool dedup, policy gate,
+and the anti-hallucination layer (data-need routing, grounding judge,
+deferred/claimed retry, narration round).
 """
 
 from __future__ import annotations
@@ -94,10 +94,11 @@ class CompletionDecision:
 class ToolExecutor(Protocol):
     """Dispatch port for tool calls.
 
-    Cross-cutting concerns (dedup, policy gate, budget) stay *in* the loop;
-    an executor only runs the tool. The default implementation forwards to a
-    `ToolRouter`; products inject handlers for UI tools, proposals, MCP, and
-    (for the desktop) remote tools over the sidecar reverse channel.
+    An executor only runs the tool; cross-cutting concerns (dedup, policy gate,
+    budget) belong in the loop — of those only the token budget is wired up so
+    far. The default implementation forwards to a `ToolRouter`; products inject
+    handlers for UI tools, proposals, MCP, and (for the desktop) remote tools
+    over the sidecar reverse channel.
     """
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult: ...
