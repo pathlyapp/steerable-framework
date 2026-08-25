@@ -202,17 +202,30 @@ NoopHooks 行为不变 / trajectory 与事件流一致），全量 py 81 过。
 **线上回测**：framework CI run `32856885116` success（py/ts/lockstep/
 sidecar-budget/examples 全过）。
 
-#### Tier 1 · 阻塞 A4 桌面切换
+#### Tier 1 · 阻塞 A4 桌面切换 ✅ 已完成（2026-08-25，commit `a62ebb4`）
 
-- [ ] **大结果外置 / 截断**：本地 shell 输出动辄几 MB，直接 `json.dumps` 进
-      transcript 会瞬间爆掉 60k 本地上下文。跑本地工具的硬前提。
-      参照 dsh 的 spill-policy（超阈值写文件 + preview + locator）。
-- [ ] **上下文压缩**：本地小上下文（60k）比服务端 120k 更需要压缩，多轮工具
-      调用几轮就满。没有压缩，长会话在桌面端必然断。参照 dsh compaction-basic
-      的阈值+保留比设计（codex 的本地/远程/token预算/轮次中四件套太重）。
-- [ ] **shell 安全规则接线**：框架 6 条规则躺在 TS 侧没接线，Py 侧没有；
-      agent 侧 61 条要回流。桌面端直接跑用户机器上的命令，这是安全底线。
-      参照 codex 的 88 条 banned prefix 对照补全。
+三片全部落地为 hooks 实现（`loop.py` 零改动，验证了 hook 设计）：
+
+- [x] **大结果外置 / 截断**：`spill.py`——`SpillHooks`（`post_tool_result`
+      消费者）：结果序列化超 `max_inline_bytes` 写入 `SpillStore`
+      （文件系统 / 内存两实现），transcript 里替换为首尾 preview + locator。
+      几 MB 本地 shell 输出不再爆 60k 上下文。参照 dsh spill-policy。
+- [x] **上下文压缩**：`compaction.py`——`CompactionHooks`（`pre_step`
+      消费者）：chars/4 估 token，超 `threshold_ratio * max_context_tokens`
+      先折叠旧 tool 结果为占位符，仍超则摘要中段（可选 LLM summarizer，
+      无则确定性摘录兜底）。system + 首条 user（目标）永远保留。
+      参照 dsh compaction-basic 阈值+保留比。
+- [x] **shell 安全规则接线**：agent 61 条规则回流框架为唯一事实源——
+      新增 Python 双生 `agent-harness/safety.py`，TS 侧从 6 条存根补齐到
+      61 条。双端锁步由新一致性用例保证（22 条命令，两端 runner 全绿）。
+      接线进 `ToolRouter`：工具声明 `metadata["shell_command_param"]` 即
+      在 dispatch 前分类——critical 经 `PolicyDeniedError` 拦截，warning
+      标注进 result.data。
+
+**测试**：runtime py 99（+18：spill 3 / compaction 5 / safety gate 10），
+harness py 41，一致性 py 5 / ts 36（+1 safety 用例）。ruff 全过。
+**线上回测**：framework CI run `32858399070` success（py/ts/lockstep/
+sidecar-budget/examples 全过）。
 
 #### Tier 2 · 架构级，越早越便宜
 
