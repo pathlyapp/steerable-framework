@@ -227,16 +227,29 @@ harness py 41，一致性 py 5 / ts 36（+1 safety 用例）。ruff 全过。
 **线上回测**：framework CI run `32858399070` success（py/ts/lockstep/
 sidecar-budget/examples 全过）。
 
-#### Tier 2 · 架构级，越早越便宜
+#### Tier 2 · 架构级，越早越便宜 ✅ 已完成（2026-08-25，commit `df668d8` + `e041281`）
 
-- [ ] **CoreLoop 接真实流量**：让 sidecar 的 `agent.chat.stream` 改走 CoreLoop
-      （flag 控制），最小成本验证。这是复审认定的最高优先项。
-- [ ] **重试接入 loop**：harness 里 `next_retry_delay_ms` 写好了却没人调用。
-      本地模型比云端更容易抖，白捡的健壮性不该空着。参照 dsh 每次 retry 开
-      新 turn 的做法。
-- [ ] **软超时**（原「软超时、压缩续跑、轮次扩展」拆分；压缩续跑见 Tier 1
-      上下文压缩，轮次扩展暂缓——codex/dsh 核心 loop 都无硬上限，靠 token/
-      compaction 驱动，steerable 的 max_rounds=32 已是更保守的选择）。
+- [x] **CoreLoop 接真实流量**：sidecar `agent.chat.stream` 新增 CoreLoop 路径——
+      请求级 `useCoreLoop` 优先，否则 `STEERABLE_SIDECAR_CORELOOP` 环境变量，
+      默认仍走旧的直连流式路径。LoopEvent 映射到现有 wire 面（stream.chunk /
+      stream.done / stream.error），宿主无需改协议即可接入。LoopConfig 从
+      params 派生（maxRounds/maxToolErrors/budgetTokens/softTimeoutMs/...），
+      默认 hooks 为 RetryHooks；嵌入方经 `loop_hooks_factory` 自组合
+      （新增 `ChainHooks` 支持多 hooks 叠加）。
+- [x] **重试接入 loop**：`retry.py`——`RetryHooks`（`on_request_error` 消费者）
+      把 harness 的 `next_retry_delay_ms` 接进 loop。每轮独立重试预算
+      （轮次推进计数器重置），有界指数退避，可插拔 retryable 判定。
+- [x] **软超时**：`LoopConfig.soft_timeout_ms`，只在轮次边界检查（绝不打断
+      在飞的流/工具）。过线后 emit `soft_timeout` 事件、收起工具描述符、
+      追加收尾通知，模型再有工具意图也丢弃——以最终回答优雅收尾而非硬杀。
+
+**测试**：runtime py 107（+8：retry 4 / soft timeout 4），sidecar py 24
+（+6 CoreLoop 路径），harness py 41，一致性 py 5 / ts 36。ruff 触及文件全净。
+**踩坑**：CI 从仓库根跑 pytest，新增 `test_retry.py` 与 harness 同名文件
+撞模块名（无 `__init__.py`），导致 golden fixture 错位——改名
+`test_retry_hooks.py` 修复（`e041281`）。
+**线上回测**：framework CI run `32860387055` success（py/ts/lockstep/
+sidecar-budget/examples 全过）。
 
 #### Tier 3 · 补齐，不急
 
