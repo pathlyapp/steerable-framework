@@ -27,24 +27,38 @@
 
 ---
 
-## A0 · 盘点 api，产出港口规格（只读，3–5 天）
+## A0 · 盘点 api，产出港口规格 ✅ 已完成（2026-08-25）
 
-不改 deeppath-api 一行代码，只读。
+不改 deeppath-api 一行代码，只读。已交付：
 
-- [ ] 把 `deeppath-api/app/services/harness/loop.py` 约 100 个 SSE 发射点
-      归纳成 LoopEvent 分类（生命周期 / 内容流 / 工具侧 / 收尾）
-- [ ] 把 `_run_tool_calls` 的 10 个 if/elif 分支归纳成 ToolExecutor 接口
-- [ ] 列出必须留在产品侧的 hook（dp-action、UI 工具、guardrails、
-      context_system、目标校验器、计费、时区、实体查库、桌面中继）
-- [ ] 产出规格文档，落到 steerable-framework 的 docs/ 下，
-      每条可追溯到 loop.py 行号
+- [x] **港口规格**：`docs/spec/core-loop.md` —— LoopEvent 五类分类
+      （生命周期 / 内容流 / 工具侧 / 证据 / 预算控制）、ToolExecutor 端口
+      （10 个 if/elif 分支 → 注册式处理器映射表）、产品侧 hook 清单、
+      待统一的语义分歧。已上线 https://steerableframework.com/spec/core-loop/
+- [x] **一致性用例**：`tests/conformance/cases/{policy,budget,completion}/`
+      + 两侧 runner（`test_{policy,budget,completion}_conformance.py` /
+      `{policy,budget,completion}.test.ts`）。Py 4 + TS 35 全绿，
+      已进 CI（commit `30343ac`，CI run success）。
+- [x] **agent 死代码清理**：删 `extractIdempotencyKey` / `stripHarnessMetadata`
+      （生产零引用），agent `9888ab3`，harness 测试 35 通过。
 
-**通过标准**：规格覆盖 api 全部发射点与工具分支，逐条可追溯。
+**勘察发现（影响后续阶段）**：
+- api 的 loop 直接 `yield` SSE 字节，约 100 个发射点，无内部事件抽象——
+  A5 的最大工作量在这。
+- `_run_tool_calls`（loop.py 4805–5554）是 10 分支 if/elif，横切关注点
+  （去重/策略/预算）与产品执行混在一起。
+- orchestrator.py 已把 HarnessLoop 当黑盒 worker 用——编排与单步的缝已存在。
+- **agent 仓库没有跑测试的 CI**（只有 build-windows + pages）。A1 会同时动
+  framework + agent，建议先给 agent 补一个跑 vitest 的 workflow。
+- api 的 `trajectory_eval`（离线 JSONL 评分）与 `replay`（live stageData
+  压缩轨迹）是两套系统；录制已在生产路径，但「导出→评分→回归」未产品化。
 
 ## A1 · sidecar 反向通道（1 周，阻塞项）
 
 涉及 steerable-framework + deeppath-agent，与 api 无关。
 
+- [ ] **前置**：给 deeppath-agent 补一个跑 `vitest` 的 CI workflow
+      （当前只有 build-windows + pages，A0 删代码只能靠本地验证，无线上兜底）
 - [ ] 扩展 `spec/sidecar/*.schema.json`：sidecar→host 的请求/响应帧
 - [ ] 改 `packages/agent-runtime/py/.../transport/stdio_jsonrpc.py`：
       sidecar 侧能发起带 id 的请求并等待响应
@@ -117,10 +131,19 @@ context_system 分层、目标校验器、技能预算、计费、时区、实�
 基于 api 真实需求的港口规格。三样东西无论后面怎么选都不浪费，
 到那再决定是否投入 A3 的重写。
 
-## 已发生的漂移（无论是否推进都该修）
+## 已发生的漂移 · 处置决定（2026-08-25）
 
-- [ ] `maxToolErrors`：api 是 2，agent 是 3 —— 对齐
-- [ ] token 预算：api 120k，agent 60k —— 对齐
-- [ ] 跨语言一致性用例目前只有 retry 一条 —— 给 policy / budget /
-      completion 各补至少 3 条
-- [ ] 死桥接函数（consume_framework_budget 等定义了没人调）—— 删掉或接上
+- [x] **跨语言一致性用例** —— 已补 policy / budget / completion（见 A0）。
+- [~] **`maxToolErrors`：推迟到 CoreLoop 统一，A0 不改代码。**
+      勘察发现两端语义根本不同，不能对齐成一个数：
+      api 是**累计**工具错误（完成判定硬编码 2，预算断路器默认 3，
+      api 内部自己都不一致）；agent 是**连续**失败、成功即清零（阈值 3，
+      故意如此——累计制会惩罚「失败后换路径最终成功」的任务）。
+      CoreLoop 需选定一种语义（建议连续）并做成可配置。
+      已记录进 `docs/spec/core-loop.md`。
+- [~] **token 预算：保持不同，只记录。** api 120k（服务端大上下文）、
+      agent 60k（本地小上下文）是刻意的，做成可配置即可，不强求一个数。
+      已记录进规格。
+- [ ] **死桥接函数**：`consume_framework_budget` 等在 api 侧（定义了没人调）。
+      因「不动 api」，本次未处理，留待 A5。
+      agent 侧的死导出已在 A0 清掉。
