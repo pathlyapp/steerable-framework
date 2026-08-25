@@ -131,14 +131,32 @@ full trace（`tool.call` 等事件供 trajectory_eval 离线评分）。本次�
 
 在 `packages/agent-runtime/py` 里实现。这是跨语言重写，不是原地重构。
 
-下沉的（通用机制）：
-- [ ] 内外双层循环状态机与轮次控制
-- [ ] LLM 流消费、UTF-16 代理对修复、推理内容提取
+### Slice 1 · 最小循环 ✅ 已完成（2026-08-25，commit `dba343b`）
+
+- [x] 内外层循环状态机与轮次控制（`CoreLoop.run` 内层工具轮 + completion 决策）
+- [x] LLM 流消费（经 `LLMProvider.stream`，content/reasoning/tool_call delta）
+- [x] 预算计数（token 预算经 `consume_budget`，连续工具错误熔断）
+- [x] `LoopEvent` 五类结构化事件（lifecycle/content/tool/budget/completion），
+      不编码字节，TransportAdapter 负责 wire 编码
+- [x] `ToolExecutor` port + `RouterToolExecutor` 默认实现；去重/策略/预算
+      留在 loop 内，产品注入 handler
+- [x] `max_tool_errors` 采**连续**语义（成功清零），落地 A0 记录的分歧决定
+- [x] **回放一致性**（A3 通过标准的核心）：`replay.py` 移植 api 的
+      execution_state + replay 契约进框架；CoreLoop 每轮录 `step_decision`，
+      `test_loop_replay.py` 验证回放还原的终态与 loop 实际终态一致
+
+**测试**：`test_loop.py` 6 + `test_loop_replay.py` 4，全量 py 126 过。
+**线上回测**：framework CI run `32838361130` success（pytest + codegen
+idempotency + check_drift 全过；sidecar 包体 741MB/800MB，A4 门禁预警）。
+
+### 剩余切片（未做）
+
+- [ ] LLM 流消费的 UTF-16 代理对修复、推理内容提取
 - [ ] 伪函数调用 / markdown 工具调用的识别与恢复
-- [ ] 预算计数、软超时、压缩续跑、轮次扩展
+- [ ] 软超时、压缩续跑、轮次扩展
 - [ ] 大结果外置为 artifact
 - [ ] 工具去重、未知工具建议、参数 schema 强制转换
-- [ ] **agent 独有的反幻觉层**（这是 api 缺的，是净增益）：
+- [ ] **agent 独有的反幻觉层**（这是 api 缺的，是净增益，放最后一片）：
       data-need 路由、grounding 判定、deferred/claimed 重试、narration round
 
 留在产品侧的（不下沉）：dp-action 提案、UI 工具、response 标签契约、
@@ -147,7 +165,9 @@ context_system 分层、目标校验器、技能预算、计费、时区、实�
 
 **推进方式**：按切片，反幻觉层放最后一片；之前 sidecar 路径只在 canary 开启。
 **通过标准**：回放 A2 的轨迹，Python CoreLoop 的决策序列与 TS 版逐事件一致
-（差异需逐条可解释）。
+（差异需逐条可解释）。Slice 1 已在 Python 侧建立回放自洽性；与 TS 版的
+**跨语言**逐事件比对待后续切片补（需要 TS reduce 与 Python reduce 对同一
+轨迹跑分）。
 **回滚**：CoreLoop 只在 flag 下启用，默认仍走 TS 路径。
 
 ## A4 · desktop 切换并删码（2–3 周）
