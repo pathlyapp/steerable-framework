@@ -56,11 +56,13 @@
 
 涉及 steerable-framework + deeppath-agent，与 api 无关。
 
-- [~] **前置**：给 deeppath-agent 补一个跑 `vitest` 的 CI workflow —— **未做**。
-      本次 agent 改动靠本地 284 测试 + 真实子进程集成测试验证；push 后
-      确认 agent 仓库仍无测试 CI 被触发（最近一次 develop run 是 08-20，
-      且 Deploy Pages 只盯 site 路径）。**这个缺口仍是 A2/A3 的风险，单列
-      跟进，不阻塞 A1 收尾。**
+- [x] **前置**：给 deeppath-agent 补一个跑 `vitest` 的 CI workflow —— ✅
+      已补（2026-08-25，commit `5aa0b73`）。`.github/workflows/test.yml`：
+      push 到 develop/main 或 PR 时触发，checkout 私有 framework 到同级目录
+      （`@steerable/*` 是 `link:../steerable-framework/...`），build
+      agent-protocol + agent-harness 出 dist，再 `pnpm test`。首跑
+      run `32835973548` success，284 过 / 7 skipped，与本地一致。
+      （supervisor 子进程集成测试仍 opt-in，CI 不启用。）
 - [x] 扩展 `spec/sidecar/README.md`：新增「Reverse channel」一节 —— 帧判别
       （id+method=请求 / id 无 method=响应 / 无 id=通知）、id 命名空间约定
       （host 用整数、sidecar 用 `srv_` 前缀字符串防碰撞）、保留反向方法
