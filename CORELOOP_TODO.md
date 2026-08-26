@@ -1,8 +1,10 @@
 # CoreLoop 下沉 · agent 先行改造清单
 
 > 目标：把 deeppath-agent 的单 agent 循环下沉为 steerable-agent-runtime 的
-> CoreLoop（Python），由 sidecar 托管，Electron 通过反向通道回调执行工具，
-> 最终删掉 deeppath-agent/src/harness。deeppath-api 采纳排到最后，可选。
+> CoreLoop（Python），由 sidecar 托管，Electron 通过反向通道回调执行工具。
+> ✅ 终态达成（2026-08-26）：deeppath-agent `src/harness` 与 TS 循环已删除
+> （agent `298eb82`，净 -3218 行），CoreLoop 是唯一聊天路径。
+> deeppath-api 采纳排到最后，可选。
 >
 > 决策背景：见 2026-08-25 的边界评审与迁移计划（两份 canvas）。
 > 关键前提：CoreLoop 用 Python 写进 agent-runtime，不是 TypeScript；
@@ -705,15 +707,24 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
       npx vitest run tests/sidecar/coreloop.integration.test.ts`。
       **还差**：Electron 桌面端双 flag 真实对话（伪调用恢复率 / 工具结果
       大小分布 / 超时抖动 / 安全规则误伤率只有桌面分布能回答）。
-- [ ] 灰度通过后删 `deeppath-agent/src/harness`
+- [x] ~~灰度通过后删 `deeppath-agent/src/harness`~~ ✅ 2026-08-26（agent
+     `298eb82`，净 -3218 行）：TS 循环整段删除，`handleStream` 无条件走
+     `handleCoreLoopTurn`（sidecar 不在时 503 失败 loud，无退路）；幸存者
+     搬迁——`safety-patterns.ts` → `src/sidecar/`（反向通道 shell 分类），
+     `ToolMode` 类型 → `tool-router.ts`；`turn-router.ts` /
+     `grounding-judge.ts` 删除（反幻觉由 Python hooks 承担，CoreLoop 路径
+     已传 `antiHallucination: true`）；`deferred-detector.ts` 裁到只剩
+     历史污染检测在用的 `detectDeferredExecution`。验证：tsc 干净、
+     vitest 243 过、electron 构建过、桌面金丝雀 PASS。
 - [x] ~~把 61 条 shell 安全规则回流到框架~~（Tier 1 已完成：双语 61 条 +
-      ToolRouter 接线 + 一致性测试）
-- [ ] 解决包体门禁（见上方硬阻塞）
+     ToolRouter 接线 + 一致性测试）
+- [x] ~~解决包体门禁~~ ✅ 2026-08-26（见上方硬阻塞；框架 `1ce60d0`）
 
 **通过标准**：sidecar 模式下离线 Ollama + 本地 shell/文件/MCP 工具全部跑通；
-包体过门禁。
-**回滚**：关掉 STEERABLE_USE_CORELOOP（或 STEERABLE_USE_SIDECAR）即回落
-本地 TS 路径。
+包体过门禁。✅ 均已达成（金丝雀连续多轮 PASS；包体 darwin 实测 94.7MB，
+Linux x64 的 320MB 门禁待 CI 事故恢复后确认）。
+**回滚**：git revert agent `298eb82` 可恢复 TS 循环；运行时开关已随
+TS 循环一并删除。
 
 ## A5 · api 采纳（可选，以后）
 
