@@ -565,7 +565,13 @@ class Sidecar:
                 await self._emit_loop_event(transport, stream_id, event, recorder.trace_id)
         except asyncio.CancelledError:
             await transport.emit_notification(
-                "stream.done", {"streamId": stream_id, "ok": False, "cancelled": True}
+                "stream.done",
+                {
+                    "streamId": stream_id,
+                    "ok": False,
+                    "cancelled": True,
+                    "traceId": recorder.trace_id,
+                },
             )
         except Exception as exc:
             logger.exception("coreloop chat stream %s failed", stream_id)
@@ -575,6 +581,9 @@ class Sidecar:
                     "streamId": stream_id,
                     "kind": exc.__class__.__name__,
                     "message": str(exc),
+                    # Failed turns are exactly the traces worth keeping — let
+                    # the host persist them via trace.fetch.
+                    "traceId": recorder.trace_id,
                 },
             )
         finally:
@@ -630,6 +639,14 @@ class Sidecar:
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "notice": {"kind": kind, **data}}
             )
+        elif kind == "hook_action":
+            # Hook-driven control flow (compaction / retry / narration /
+            # tool_choice). TraceRecorder already persists it; forward as a
+            # notice so hosts can surface it live too.
+            await transport.emit_notification(
+                "stream.chunk",
+                {"streamId": stream_id, "notice": {"kind": "hook_action", **data}},
+            )
         elif kind == "steer":
             # The host already rendered the user's message; this confirms the
             # loop consumed it into the transcript (vs. still queued).
@@ -643,7 +660,12 @@ class Sidecar:
         elif kind == "error":
             await transport.emit_notification(
                 "stream.error",
-                {"streamId": stream_id, "kind": "LoopError", "message": data["message"]},
+                {
+                    "streamId": stream_id,
+                    "kind": "LoopError",
+                    "message": data["message"],
+                    **({"traceId": trace_id} if trace_id else {}),
+                },
             )
         elif kind == "completion" and data.get("status") != "executing":
             await transport.emit_notification(
@@ -857,6 +879,15 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
 
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import OpenAICompatProvider
+
+        if provider_kind == "ollama":
+            # Ollama's OpenAI-compatible API lives under /v1. Callers that
+            # configure the native daemon root (e.g. the desktop app stores
+            # http://127.0.0.1:11434 for its native /api/chat client) would
+            # otherwise 404 on /chat/completions.
+            base_url = (base_url or "http://127.0.0.1:11434").rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url}/v1"
 
         return OpenAICompatProvider(
             name=provider_kind or "openai_compat",

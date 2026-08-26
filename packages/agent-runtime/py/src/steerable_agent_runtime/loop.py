@@ -86,6 +86,10 @@ LoopEventKind = Literal[
     "completion",
     # mid-turn user steering (see CoreLoop.steer)
     "steer",
+    # hook-driven control flow (compaction, retry, narration, tool_choice) —
+    # emitted at the decision point so traces show *why* the loop changed
+    # course; without it hook triggers are invisible to offline analysis.
+    "hook_action",
 ]
 
 
@@ -271,13 +275,14 @@ class CoreLoop:
         ctx: LoopContext,
         wrap_up: bool,
         completion_redos: int,
-    ) -> str | None:
+    ) -> tuple[str, str | None] | None:
         """Offer a terminal draft to ``before_completion`` for narration.
 
-        Returns the narration prompt to seed a wrap-up round, or ``None`` to
-        proceed with the terminal emit. Only empty-content terminals qualify
-        (a turn that already produced text needs no summary), never during an
-        in-flight wrap-up, and redo budget is enforced by the caller's count.
+        Returns ``(narration prompt, reason)`` to seed a wrap-up round, or
+        ``None`` to proceed with the terminal emit. Only empty-content
+        terminals qualify (a turn that already produced text needs no
+        summary), never during an in-flight wrap-up, and redo budget is
+        enforced by the caller's count.
         """
 
         if wrap_up or content.strip() or completion_redos >= _MAX_COMPLETION_REDOS:
@@ -295,7 +300,7 @@ class CoreLoop:
             ctx,
         )
         if action.kind == "narrate":
-            return action.message or _NARRATION_REQUEST
+            return (action.message or _NARRATION_REQUEST, action.reason)
         return None
 
     async def run(
@@ -383,9 +388,19 @@ class CoreLoop:
                     wrap_up=wrap_up, completion_redos=completion_redos,
                 )
                 if narrate is not None:
+                    prompt, reason = narrate
                     completion_redos += 1
                     wrap_up = True
-                    transcript.append(LLMMessage(role="user", content=narrate))
+                    transcript.append(LLMMessage(role="user", content=prompt))
+                    yield LoopEvent(
+                        "hook_action",
+                        {
+                            "hook": "before_completion",
+                            "action": "narrate",
+                            "reason": reason or "budget-exhausted narration",
+                            "round": round_index,
+                        },
+                    )
                     continue
                 yield emit_completion(
                     step_summary(
@@ -439,10 +454,29 @@ class CoreLoop:
                 return
             if pre.transcript is not None:
                 transcript = pre.transcript
+                yield LoopEvent(
+                    "hook_action",
+                    {
+                        "hook": "pre_step",
+                        "action": "compact",
+                        "reason": pre.reason or "transcript rewritten",
+                        "round": round_index,
+                    },
+                )
             # tool_choice only makes sense when tools are actually offered.
             step_tool_choice = (
                 pre.tool_choice if (pre.tool_choice and tools and not wrap_up) else None
             )
+            if step_tool_choice:
+                yield LoopEvent(
+                    "hook_action",
+                    {
+                        "hook": "pre_step",
+                        "action": "tool_choice",
+                        "value": step_tool_choice,
+                        "round": round_index,
+                    },
+                )
 
             # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
@@ -511,6 +545,19 @@ class CoreLoop:
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
                     action = await self._hooks.on_request_error(exc, transcript, ctx)
                     if action.kind == "retry":
+                        yield LoopEvent(
+                            "hook_action",
+                            {
+                                "hook": "on_request_error",
+                                "action": "retry",
+                                "reason": action.reason or str(exc),
+                                "delayMs": action.delay_ms,
+                                # True when the hook rewrote the transcript for
+                                # the retry (context-overflow recovery).
+                                "compacted": action.transcript is not None,
+                                "round": round_index,
+                            },
+                        )
                         # The retry re-streams from scratch: drop the failed
                         # attempt's partial content and display-pipeline state
                         # so neither the transcript nor the user sees it twice.
@@ -634,6 +681,15 @@ class CoreLoop:
                             )
                         )
                         yield LoopEvent(
+                            "hook_action",
+                            {
+                                "hook": "before_completion",
+                                "action": "retry",
+                                "reason": action.reason or "before_completion retry",
+                                "round": round_index,
+                            },
+                        )
+                        yield LoopEvent(
                             "stage_complete",
                             {
                                 "round": round_index,
@@ -650,6 +706,15 @@ class CoreLoop:
                                 role="user",
                                 content=action.message or _NARRATION_REQUEST,
                             )
+                        )
+                        yield LoopEvent(
+                            "hook_action",
+                            {
+                                "hook": "before_completion",
+                                "action": "narrate",
+                                "reason": action.reason or "before_completion narrate",
+                                "round": round_index,
+                            },
                         )
                         continue
                 yield emit_completion(
@@ -826,9 +891,19 @@ class CoreLoop:
                             wrap_up=wrap_up, completion_redos=completion_redos,
                         )
                         if narrate is not None:
+                            prompt, reason = narrate
                             completion_redos += 1
                             wrap_up = True
-                            transcript.append(LLMMessage(role="user", content=narrate))
+                            transcript.append(LLMMessage(role="user", content=prompt))
+                            yield LoopEvent(
+                                "hook_action",
+                                {
+                                    "hook": "before_completion",
+                                    "action": "narrate",
+                                    "reason": reason or "breaker narration",
+                                    "round": round_index,
+                                },
+                            )
                             breaker_tripped = True
                             # The wrap-up round reuses this transcript — every
                             # tool_call must have a tool message or providers

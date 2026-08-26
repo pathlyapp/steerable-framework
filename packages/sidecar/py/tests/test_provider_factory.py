@@ -28,6 +28,25 @@ def test_ollama_alias_constructs() -> None:
     assert provider.name == "ollama"
 
 
+def test_ollama_native_root_gets_v1_suffix() -> None:
+    """Desktop canary regression: the desktop stores the native daemon root
+    (http://127.0.0.1:11434) for its /api/chat client; the sidecar's
+    OpenAI-compat mapping must append /v1 or every request 404s."""
+    provider = default_llm_provider_factory(
+        {"provider": "ollama", "model": "m", "baseUrl": "http://127.0.0.1:11434"}
+    )
+    assert provider.base_url == "http://127.0.0.1:11434/v1"
+
+
+def test_ollama_trailing_slash_and_default() -> None:
+    provider = default_llm_provider_factory(
+        {"provider": "ollama", "model": "m", "baseUrl": "http://127.0.0.1:11434/"}
+    )
+    assert provider.base_url == "http://127.0.0.1:11434/v1"
+    defaulted = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert defaulted.base_url == "http://127.0.0.1:11434/v1"
+
+
 def test_anthropic_constructs() -> None:
     provider = default_llm_provider_factory(
         {"provider": "anthropic", "model": "claude-sonnet-4-5", "apiKey": "k"}

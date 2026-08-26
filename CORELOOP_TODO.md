@@ -373,11 +373,40 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
 历史记录）：
 
 - **P0 · 唯一硬阻塞**
-  - [ ] **A4 真实灰度（桌面端实测）**：开关已就绪
+  - [~] **A4 真实灰度（桌面端实测）**：开关已就绪
         （`STEERABLE_USE_SIDECAR=1` + `STEERABLE_USE_CORELOOP=1`，Ollama
         cloud 模型已配）。先自用 dogfood 一周，落 trace 后用回放比对与
         TS 路径对账；重点观测 61 条安全规则误伤率、反幻觉四机制的真实
         触发率/误判率、host 工具反向通道延迟。
+        - **桌面金丝雀已绿**（2026-08-26）：`scripts/desktop-canary.mjs`
+          经 CDP 驱动真实 Electron（preload bridge → IPC → router →
+          coreloop-stream → sidecar → CoreLoop → Ollama cloud → 反向通道
+          → 真实 tool router → SSE 回 renderer → trace 落库），8/8 通过，
+          答案含 canary token（grounding 实证）。启动方式：
+          `STEERABLE_USE_SIDECAR=1 STEERABLE_USE_CORELOOP=1
+          STEERABLE_SIDECAR_PYTHON=<fw>/.venv/bin/python3
+          DEEPPATH_FORCE_BUNDLED_WEB=1 npx electron .
+          --remote-debugging-port=9222`，然后 `node
+          scripts/desktop-canary.mjs`。
+        - **灰度修掉的三个真实 bug**（测试全绿但生产才暴露）：
+          ① sidecar 把 ollama 映射到 OpenAI-compat 时不补 `/v1`，桌面存的
+          原生 daemon 根地址导致全量 404（factory 归一化 + 回归测试）；
+          ② CoreLoop 路径 trace 只进 sidecar 内存、桌面 harness_traces
+          零落库——dogfood 无数据可挖（router 现在经 `trace.fetch` 回拉
+          并存库，stream.done 已带 traceId）；③ 失败回合恰好不留 trace
+          （stream.error 缺 traceId）——已补，失败 trace 也落库。
+        - **观测闭环**：loop 新增 `hook_action` 事件（pre_step compact /
+          tool_choice、on_request_error retry、before_completion retry /
+          narrate 全在决策点 emit，TraceRecorder 自动落库）；
+          `scripts/trace-report.mjs` 直读桌面 sqlite 输出三项观测
+          （安全拦截清单待人工标注 / hook 触发分布 / 反向通道延迟
+          p50/p95）。首轮实测：2 trace 全 completed，hook 触发
+          compact×5 + tool_choice×1，反向通道 p50=121ms（pty  spawn 占
+          大头，max 21s 是 terminal-exec 轮询开销），安全规则 0 拦截，
+          dedup 真实拦下 2 次重复调用。
+        - **剩余**：用户自用 dogfood 一周（手动操作，无法代办）；一周后
+          跑 `trace-report.mjs` + 回放比对对账，按误伤率/误判率决定是否
+          默认开 `STEERABLE_USE_CORELOOP`。
 - **P1 · 结构差距**（2026-08-26 落地，测试全绿）
   - [x] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
         目前只能整轮取消。最简形态：CoreLoop 加 asyncio 队列 inbox，每轮
