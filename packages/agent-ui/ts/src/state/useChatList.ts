@@ -34,7 +34,7 @@ export interface ChatListTransport<TChat, TAgent> {
     hasMore: boolean;
   }>;
   listAgents: () => Promise<TAgent[]>;
-  createChat?: (input: { agentId?: string }) => Promise<TChat | string>;
+  createChat?: (input: { agentId?: string; projectId?: string }) => Promise<TChat | string>;
   deleteChat?: (chatId: string) => Promise<boolean>;
   /** Tell the hook how to read a chat's id and title. */
   getChatId: (chat: TChat) => string;
@@ -67,7 +67,7 @@ export interface UseChatListReturn<TChat, TAgent> {
   refreshChats: () => Promise<void>;
   refreshAgents: () => Promise<void>;
   loadMoreChats: () => Promise<void>;
-  createChat: (input?: { agentId?: string }) => Promise<string | null>;
+  createChat: (input?: { agentId?: string; projectId?: string }) => Promise<string | null>;
   deleteChat: (chatId: string) => Promise<boolean>;
   /** In-place title patcher — does not hit the server. */
   patchChatTitle: (chatId: string, title: string) => void;
@@ -140,10 +140,13 @@ export function useChatList<TChat, TAgent>(
   }, [hasMoreChats, isLoadingMoreChats, pageSize]);
 
   const createChat = useCallback(
-    async (input?: { agentId?: string }) => {
+    async (input?: { agentId?: string; projectId?: string }) => {
       const t = transportRef.current;
       if (!t.createChat) return null;
-      const created = await t.createChat({ agentId: input?.agentId ?? selectedAgentId ?? undefined });
+      const created = await t.createChat({
+        agentId: input?.agentId ?? selectedAgentId ?? undefined,
+        projectId: input?.projectId,
+      });
       // Either a chat object or a bare id.
       const id = typeof created === 'string' ? created : t.getChatId(created);
       await refreshChats();
