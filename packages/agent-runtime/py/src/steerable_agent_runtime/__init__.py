@@ -55,6 +55,7 @@ from .resume import load_transcript, project_transcript
 from .retry import RetryHooks
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
+from .subagent import SubagentConfig, SubagentExecutor, subagent_tool_descriptor
 from .tokens import (
     MODEL_TOKEN_FACTORS,
     estimate_text_tokens,
@@ -102,6 +103,8 @@ __all__ = [
     "SteerableRuntimeError",
     "StorageAdapter",
     "StorageError",
+    "SubagentConfig",
+    "SubagentExecutor",
     "ToolDispatchError",
     "ToolExecutor",
     "MODEL_TOKEN_FACTORS",
@@ -129,6 +132,7 @@ __all__ = [
     "project_transcript",
     "reduce_execution_state",
     "should_run_grounding_judge",
+    "subagent_tool_descriptor",
     "tool",
 ]
 

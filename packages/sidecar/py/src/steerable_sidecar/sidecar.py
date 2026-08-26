@@ -49,9 +49,11 @@ from steerable_agent_runtime import (
     RetryHooks,
     RouterToolExecutor,
     StorageError,
+    SubagentExecutor,
     ToolDispatchError,
     ToolRouter,
     TraceRecorder,
+    subagent_tool_descriptor,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMProvider
 from steerable_agent_runtime.resume import project_transcript
@@ -608,6 +610,13 @@ class Sidecar:
             if params.get("toolsViaHost")
             else RouterToolExecutor(self.tools)
         )
+        # subagent: opt-in delegation seam — advertise the tool and answer it
+        # with a bounded child CoreLoop (depth-1 by construction). Products
+        # that don't want delegation (the desktop today) simply don't pass it.
+        tools = params.get("tools")
+        if params.get("subagent"):
+            executor = SubagentExecutor(executor, provider)
+            tools = [*(tools or []), subagent_tool_descriptor()]
         loop = CoreLoop(
             provider,
             executor,
@@ -622,7 +631,7 @@ class Sidecar:
             async for event in recorder.tee(
                 loop.run(
                     messages,
-                    tools=params.get("tools"),
+                    tools=tools,
                     chat_id=params.get("chatId"),
                 )
             ):

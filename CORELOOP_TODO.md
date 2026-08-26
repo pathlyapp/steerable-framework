@@ -650,10 +650,25 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
         切断 6% 真实任务；2× 窗口让真实任务通过、失控成本仍有界。
         maxRounds 仍是主失控护栏（BudgetLimit 的 steps/tool_calls 轴当前
         不被 loop 消费）。显式 `budgetTokens` 优先。测试 ×1。
-- **P3 · 观望（不排期）**
-  - [ ] 多智能体 seam（codex/dsh 都有，桌面产品是否需要未定——产品
-        决策）；MCP 下沉（维持约定推迟）；实时 OTel span（事后导出
-        已够 dogfood 用）。灰度结论出来后重估。
+- **P3 · 生态（2026-08-26 两项落地，MCP 维持推迟；框架 353 测试全绿 + 金丝雀 PASS）**
+  - [x] **多智能体 seam**：✅ 框架层落地。新模块 `subagent.py`：
+        `SubagentExecutor`（ToolExecutor 装饰器，拦截 `delegate_subagent`
+        调用 → 同 provider 跑有界子 CoreLoop，max_rounds=8，子代理答案 =
+        completion 时累积的 assistant 文本）+ `subagent_tool_descriptor()`
+        （OpenAI schema）。**深度 1 由构造保证**（子代理派发到 inner
+        executor，无法再 spawn）；子代理在父 trace 中只占一个 tool span。
+        sidecar 接线为 opt-in：`params.subagent: true` → 包装 executor +
+        追加描述符。桌面端是否暴露仍是产品决策（默认不开启）。测试 ×6
+        （往返、禁嵌套、无工具失败关闭、空任务、子代理耗尽、schema）。
+  - [x] **实时可观测性（OTel 项的诚实切片）**：✅ 修复真实缺口——事件和
+        span 本就增量持久化，但 **trace 行只在 finalize 时写入**，回合
+        进行中 `trace.fetch` 报「trace not found」，长回合完全不可观测。
+        TraceRecorder 现在在首个事件时以 `status="running"` upsert trace
+        行（createdAt 固定于首次写入），finalize 覆写终态。完整 OTel
+        collector 实时流仍推迟（事后导出够 dogfood 用）。测试 ×1。
+  - [ ] **MCP 下沉**：维持约定推迟——桌面工具经反向通道在 Electron 侧
+        执行，MCP 客户端留在 TS 层；sidecar 直连 MCP server 是独立的大
+        改动，等 api 采纳或桌面产品需求驱动。
 
 ## A4 · desktop 切换并删码（2–3 周）
 

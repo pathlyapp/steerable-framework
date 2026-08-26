@@ -144,3 +144,27 @@ async def test_recorder_truncates_huge_payloads() -> None:
     for e in events:
         for value in (e.payload or {}).values():
             assert not isinstance(value, str) or len(value) <= 101
+
+
+@pytest.mark.asyncio
+async def test_trace_row_is_live_mid_turn() -> None:
+    """The trace row is upserted status=running on the first event, so
+    trace.fetch works while the turn is still in flight; finalize overwrites
+    with the terminal status."""
+    provider = make_provider([{"content": "hi"}])
+    storage = InMemoryStorage()
+    recorder = TraceRecorder(storage)
+    loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
+
+    seen_running = None
+    async for event in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+        if seen_running is None:
+            mid = await storage.get_trace(recorder.trace_id)
+            assert mid is not None
+            seen_running = mid.status
+    assert seen_running == "running"
+
+    final = await storage.get_trace(recorder.trace_id)
+    assert final is not None
+    assert final.status == "completed"
+    assert final.createdAt <= final.updatedAt

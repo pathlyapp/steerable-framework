@@ -74,6 +74,7 @@ class TraceRecorder:
         self._started_ms = _now_ms()
         self._had_error = False
         self._final_status: str | None = None
+        self._created_iso: str | None = None
 
     async def tee(self, events: AsyncIterator[LoopEvent]) -> AsyncIterator[LoopEvent]:
         """Pass-through wrapper that records each event as it flows."""
@@ -83,6 +84,13 @@ class TraceRecorder:
         await self.finalize()
 
     async def record(self, event: LoopEvent) -> None:
+        if self._sequence == 0:
+            # Write the trace row up front with status="running": events and
+            # spans already persist incrementally, but without the row a
+            # mid-turn trace.fetch reports "trace not found" — live turns
+            # were uninspectable. finalize() overwrites with the terminal
+            # status.
+            await self._upsert("running")
         self._sequence += 1
         await self._storage.append_events(
             self.trace_id,
@@ -149,19 +157,22 @@ class TraceRecorder:
         if getattr(self, "_finalized", False):
             return await self._storage.get_trace(self.trace_id)  # type: ignore[return-value]
         self._finalized = True
-        final = status or self._final_status or "failed"
+        return await self._upsert(status or self._final_status or "failed")
+
+    async def _upsert(self, status: str) -> HarnessTrace:
         now_iso = datetime.now(timezone.utc).isoformat()
+        self._created_iso = self._created_iso or now_iso
         trace = HarnessTrace(
             traceId=self.trace_id,
             userId=self._user_id,
             chatId=self._chat_id,
             sessionId=self._session_id,
-            status=final,
+            status=status,
             durationMs=_now_ms() - self._started_ms,
             hadError=self._had_error,
             eventCount=self._sequence,
             spanCount=self._span_count,
-            createdAt=now_iso,
+            createdAt=self._created_iso,
             updatedAt=now_iso,
         )
         return await self._storage.upsert_trace(trace)

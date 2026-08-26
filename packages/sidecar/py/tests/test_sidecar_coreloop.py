@@ -705,3 +705,57 @@ def test_build_loop_config_default_budget_scales_with_window() -> None:
     cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
     assert cfg_explicit.budget is not None
     assert cfg_explicit.budget.max_tokens == 50_000
+
+
+@pytest.mark.asyncio
+async def test_subagent_optin_advertises_and_executes_delegation() -> None:
+    """params.subagent wraps the executor and appends the tool descriptor;
+    a delegate_subagent call is answered by a bounded child CoreLoop."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="d1", name="delegate_subagent", arguments={"task": "compute"})),
+            _text_round("child answer"),
+            _text_round("parent final"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "delegate"}],
+            "useCoreLoop": True,
+            "subagent": True,
+        },
+    )
+
+    # The descriptor reached the model's tool list.
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    assert any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
+    # The delegation ran a child loop whose answer became the tool result,
+    # and the parent completed.
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["ok"] is True
+    assert done[0]["status"] == "completed"
+    chunks = [p for m, p in events if m == "stream.chunk"]
+    tool_results = [c for c in chunks if c.get("toolResult")]
+    assert any("child answer" in str(tr) for tr in tool_results)
+
+
+@pytest.mark.asyncio
+async def test_subagent_off_by_default() -> None:
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+        },
+    )
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    assert not any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
