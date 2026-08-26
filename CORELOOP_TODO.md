@@ -404,6 +404,12 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
           compact×5 + tool_choice×1，反向通道 p50=121ms（pty  spawn 占
           大头，max 21s 是 terminal-exec 轮询开销），安全规则 0 拦截，
           dedup 真实拦下 2 次重复调用。
+        - **首日 dogfood（2026-08-26 18:00 快照，app 运行 ~4h 后正常
+          退出）**：5 trace 全 completed，hook 触发 compact×22 +
+          tool_choice×3 + narrate×1，dedup 拦截 7 次，安全规则 0 拦截。
+          compact 22 次/5 trace 为病理值 → 催生 R4 的 P1「压缩提频
+          治理」（见下节）。本次会话早于校准闭环提交，
+          token-calibration.json 自下次 app 启动开始积累。
         - **剩余**：用户自用 dogfood 一周（手动操作，无法代办）；一周后
           跑 `trace-report.mjs` + 回放比对对账，按误伤率/误判率决定是否
           默认开 `STEERABLE_USE_CORELOOP`。
@@ -552,6 +558,52 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
 **本轮明确不做**：沙箱下沉（产品侧决策，桌面端刻意全允许）；实时 OTel
 span（事后导出已够用，等灰度暴露真实观测需求）；dsh 完整 inbox 语义；
 真 tokenizer 依赖（校准闭环后启发式误差可控，不引入 tiktoken 二进制）。
+
+#### 第四轮复审后的优先级（2026-08-26，canvas `steerable-vs-codex-dsh-r4`）
+
+P0–P3 全落地 + 首日 dogfood 真实数据后重排：14 轴对比（新增 prompt
+cache 友好性、多智能体两轴）**3 领先 / 8 追平 / 3 落后**。R3 的 6 个
+落后轴闭了 5 个（溢出恢复 / 错误分级 / 转向 / 并行工具 / 崩溃闭合）；
+剩余落后中沙箱是刻意产品决策、多智能体属观望。codex 本周演进集中在
+Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2。
+
+- **P0 · 唯一硬阻塞（进行中，无代码）**
+  - [~] **dogfood 一周 + default-on 决策**：首日数据健康（5 trace 全
+        completed、安全零拦截、dedup 真实拦截 7 次），但样本量不足以
+        决策 `STEERABLE_USE_CORELOOP` 默认开启。每日跑
+        `trace-report.mjs`；周末用回放比对与 TS 路径对账后按误伤率/
+        hook 误判率决策。
+- **P1 · dogfood 暴露的真实问题**
+  - [ ] **压缩提频治理（本轮头号新发现）**：22 次 compact / 5 trace 是
+        病理值——每次压缩全量重写 transcript，打掉 prompt cache 前缀
+        （云端模型按未缓存计费 + 延迟），且反复摘要造成信息损耗。
+        codex/dsh 都明文规避 history rewrite。双重根因：估算高估 41%
+        （deepseek 已校准 0.71，桌面 ollama 模型系数仍 1.0）+ 60k
+        阈值相对生产 14.5 万 tokens/trace 的真实用量偏激进。三步：
+        ① 等校准闭环生效（已上线，20 样本自动修正，无需改码）；
+        ② 阈值从固定 60k 改为按模型上下文窗比例（如 0.75×window）；
+        ③ 压缩策略改「前缀稳定」——只折叠旧工具输出（append-only，
+        保留消息序），摘要重写仅在折叠不够时二段触发。③ 是主要工作量。
+  - [ ] **terminal-exec pty 长尾（max 21s）**：反向通道 p50 仅 121ms，
+        但 terminal-exec 固定间隔轮询把 echo 拖到 21s，用户可感知。
+        agent 侧改 pty data 事件驱动 + 空闲退避（首查 50ms，指数上限
+        1s）。纯 agent 改动，不动框架。
+- **P2 · 产品与默认值**
+  - [ ] **fork / 变体语义**：产品已有消息变体功能（生产
+        `chatmessagevariant` 表实证在用），但 CoreLoop 无 fork 对应物
+        ——重新生成变体时无法「从消息 N 分叉」复用前缀，只能整段重跑。
+        codex（Copied|Referenced）与 dsh（seedLength）都有成熟参照。
+        做法：resume 投影加 `project_transcript(until_message_id)` 截断
+        参数 + sidecar `agent.chat.fork` RPC（新 streamId 从截断
+        transcript 起跑）。
+  - [ ] **budget 默认值按生产分布放宽**：生产 3.1 万 trace 中
+        budget_exhausted 占终态 6%（1,862 条）——默认预算偏紧，真实
+        任务被预算切断的比例可观测。按生产 token 分布（default 模型均值
+        14.5 万/trace）重定 `LoopConfig` 预算默认值，与压缩阈值联动。
+- **P3 · 观望（不排期）**
+  - [ ] 多智能体 seam（codex/dsh 都有，桌面产品是否需要未定——产品
+        决策）；MCP 下沉（维持约定推迟）；实时 OTel span（事后导出
+        已够 dogfood 用）。灰度结论出来后重估。
 
 ## A4 · desktop 切换并删码（2–3 周）
 
