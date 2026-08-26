@@ -365,6 +365,59 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
 - **P3 · 生态**
   - [ ] **MCP 下沉**：agent 侧已有 client，A4 稳定后按需，不提前做。
 
+#### 第三轮复审后的优先级（2026-08-26，canvas `steerable-vs-codex-dsh-r3`）
+
+P0–P2 落地后三仓代码实勘重排：13 轴对比 **3 领先（反幻觉层、跨语言契约、
+CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据——**头号风险
+连续三轮未变：零生产验证**。新优先级如下（与上方 r2 表并存，r2 表保留作
+历史记录）：
+
+- **P0 · 唯一硬阻塞**
+  - [ ] **A4 真实灰度（桌面端实测）**：开关已就绪
+        （`STEERABLE_USE_SIDECAR=1` + `STEERABLE_USE_CORELOOP=1`，Ollama
+        cloud 模型已配）。先自用 dogfood 一周，落 trace 后用回放比对与
+        TS 路径对账；重点观测 61 条安全规则误伤率、反幻觉四机制的真实
+        触发率/误判率、host 工具反向通道延迟。
+- **P1 · 结构差距**
+  - [ ] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
+        目前只能整轮取消。最简形态：CoreLoop 加 asyncio 队列 inbox，每轮
+        `pre_step` 前 drain 并入 transcript；sidecar 加 `agent.chat.steer`
+        RPC；agent 输入框映射「追加」。不做 dsh 完整 inbox 语义
+        （followup/wakeup 对桌面单会话过度设计），先只支持 inject。
+  - [ ] **并行工具执行**：codex（RwLock 门）/ dsh（并发池默认 10）都有；
+        steerable 串行跑只读工具是纯延迟浪费。`RegisteredTool` 加
+        `concurrency_safe` 标记（默认 False），连续 safe 调用
+        `asyncio.gather`，unsafe 做屏障；host 工具经反向通道时由
+        Electron 侧串行化兜底；事件按调用序 emit 保持确定性。
+- **P2 · 健壮性缺口**
+  - [ ] **上下文溢出恢复**：CompactionHooks 只在 `pre_step` 预防，真溢出
+        时 RetryHooks 会重试同样的超长请求必然再失败。在
+        `on_request_error` 识别 context-overflow 类错误，重试前先强制
+        压缩一档（依赖下条的错误分级）。
+  - [ ] **provider 错误分级 taxonomy**：codex 有 `is_retryable` 分级、
+        dsh 有结构化错误码 + retryPolicy；steerable 的 RetryHooks 只认
+        「瞬态」一种。llm 层定义 `LLMErrorKind`（transport / rate_limit /
+        context_overflow / auth / invalid_request / server），
+        openai_compat 按状态码映射，RetryHooks 按 kind 分路，补
+        conformance 用例。
+  - [ ] **崩溃恢复语义（合成闭合）**：dsh 冷启动给中断 turn 合成
+        `TOOL_OUTCOME_UNKNOWN` 工具结果；steerable 的 `resume.py` 若遇
+        崩在工具执行中的 trace，重建 transcript 会有悬空 tool_call（部分
+        provider 直接拒绝）。`project_transcript` 收尾时检测未配对
+        tool_call，补合成 tool 消息（"result unknown — process
+        interrupted, verify side effects"）。纯投影层改动，不动 loop。
+- **P3 · 数据闭环与生态**
+  - [ ] **校准系数实测闭环**：tokens.py 的按模型校准机制已就位但出厂表
+        为空——机制没数据等于没校准。sidecar 每轮拿到 provider usage 后
+        对照估算值算 observed/estimated 比值，滚动平均写入
+        `MODEL_TOKEN_FACTORS`（或落盘配置），一次灰度即积累主力模型
+        真实系数。
+  - [ ] **MCP 下沉**：维持原约定（A4 稳定后按需，用户已确认推迟）。
+
+**本轮明确不做**：沙箱下沉（产品侧决策，桌面端刻意全允许）；实时 OTel
+span（事后导出已够用，等灰度暴露真实观测需求）；dsh 完整 inbox 语义；
+真 tokenizer 依赖（校准闭环后启发式误差可控，不引入 tiktoken 二进制）。
+
 ## A4 · desktop 切换并删码（2–3 周）
 
 - [~] sidecar 托管 CoreLoop，工具走 A1 的反向通道回 Electron 执行
