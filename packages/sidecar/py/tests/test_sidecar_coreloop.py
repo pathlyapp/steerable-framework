@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
@@ -347,3 +349,81 @@ async def test_coreloop_antihallucination_off_by_default() -> None:
     assert provider.stream_kwargs[0].get("tool_choice") is None
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_coreloop_steer_injects_into_running_turn() -> None:
+    """agent.chat.steer lands the user message in the running loop's
+    transcript: the next LLM round sees it, and a steer notice comes back
+    on the wire."""
+    router_tool_started = asyncio.Event()
+    proceed = asyncio.Event()
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        router_tool_started.set()
+        await proceed.wait()  # hold the turn open so steer can land mid-run
+        return a + b
+
+    sidecar.tools.register(add)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "add"}],
+                "useCoreLoop": True,
+            },
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+
+    # wait until the tool is actually executing, then steer
+    await asyncio.wait_for(router_tool_started.wait(), timeout=2)
+    steer_resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.steer", {"streamId": stream_id, "content": "顺便乘以 2"})
+    )
+    assert steer_resp["result"] == {"ok": True}
+    proceed.set()
+
+    task = sidecar._streams.get(stream_id)
+    if task is not None:
+        await task
+
+    events = sidecar._transport.events  # type: ignore[attr-defined]
+    notices = [
+        p["notice"]
+        for m, p in events
+        if m == "stream.chunk" and "notice" in p
+    ]
+    assert any(n.get("kind") == "steer" and n.get("content") == "顺便乘以 2" for n in notices)
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_steer_unknown_stream_soft_fails() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.steer", {"streamId": "nope", "content": "hi"})
+    )
+    assert resp["result"] == {"ok": False, "reason": "stream_not_active"}
+
+
+@pytest.mark.asyncio
+async def test_steer_requires_content() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.steer", {"streamId": "s1", "content": "  "})
+    )
+    assert "error" in resp

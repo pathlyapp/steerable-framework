@@ -43,6 +43,12 @@ class HostToolExecutor:
         # {"mode": "plan"} so the host can hard-block write tools).
         self._tool_context = tool_context
 
+    def concurrency_safe(self, call: ToolCall) -> bool:
+        """Host tools always run serially: the reverse channel executes in
+        the Electron host, which owns the real side effects (shell, files)
+        and serializes them itself."""
+        return False
+
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         context: dict[str, Any] = {}
         if ctx.chat_id:

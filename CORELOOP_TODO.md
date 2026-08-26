@@ -378,34 +378,88 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
         cloud 模型已配）。先自用 dogfood 一周，落 trace 后用回放比对与
         TS 路径对账；重点观测 61 条安全规则误伤率、反幻觉四机制的真实
         触发率/误判率、host 工具反向通道延迟。
-- **P1 · 结构差距**
-  - [ ] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
+- **P1 · 结构差距**（2026-08-26 落地，测试全绿）
+  - [x] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
         目前只能整轮取消。最简形态：CoreLoop 加 asyncio 队列 inbox，每轮
         `pre_step` 前 drain 并入 transcript；sidecar 加 `agent.chat.steer`
         RPC；agent 输入框映射「追加」。不做 dsh 完整 inbox 语义
         （followup/wakeup 对桌面单会话过度设计），先只支持 inject。
-  - [ ] **并行工具执行**：codex（RwLock 门）/ dsh（并发池默认 10）都有；
+        - 落地：`CoreLoop.steer()` + 每轮顶 drain（emit `steer` 事件，
+          在 hooks 前，routing/compaction 可见）；sidecar
+          `agent.chat.steer`（未知 stream 软失败 `stream_not_active`），
+          steer 事件转发为 `stream.chunk.notice`；agent 侧
+          `supervisor.steerChat` → `local-backend:steer` IPC（chatId→
+          sidecar streamId 注册表在 coreloop-stream.ts）→ preload
+          `steerChat` → transport.steer → `useChatStream.steerUserMessage`
+          （成功即上屏 user 消息）→ ChatInput streaming 期间 ⌘+Enter =
+          追加（发送键仍是停止，失败保留草稿）。
+        - 测试：py `test_steer.py` 4 例（下一轮可见/多条按序/run 前注入/
+          run 后无害）；sidecar 3 例（RPC→运行中 loop/未知流软失败/参数
+          校验）；agent-ui 3 例（接受上屏/非 streaming 拒绝/无 steer
+          能力拒绝）。
+  - [x] **并行工具执行**：codex（RwLock 门）/ dsh（并发池默认 10）都有；
         steerable 串行跑只读工具是纯延迟浪费。`RegisteredTool` 加
         `concurrency_safe` 标记（默认 False），连续 safe 调用
         `asyncio.gather`，unsafe 做屏障；host 工具经反向通道时由
         Electron 侧串行化兜底；事件按调用序 emit 保持确定性。
-- **P2 · 健壮性缺口**
-  - [ ] **上下文溢出恢复**：CompactionHooks 只在 `pre_step` 预防，真溢出
-        时 RetryHooks 会重试同样的超长请求必然再失败。在
-        `on_request_error` 识别 context-overflow 类错误，重试前先强制
-        压缩一档（依赖下条的错误分级）。
-  - [ ] **provider 错误分级 taxonomy**：codex 有 `is_retryable` 分级、
+        - 落地：`RegisteredTool.concurrency_safe`（默认按 mode 推断：
+          read→safe，可显式覆盖；register/register_remote/@tool 全链路
+          透传）；loop act 阶段三段式——① start 事件+dedup 顺序执行，
+          ② 连续 safe 批次 gather / unsafe 屏障单跑，③ 按调用序应用
+          counters/hook/result 事件/transcript；`LoopConfig.parallel_tools`
+          默认开，executor 无 `concurrency_safe` 鸭型方法（如
+          HostToolExecutor 显式返回 False）则全串行。结果按批次位置键控
+          （provider 可能发重复 tool_call id）。**顺带修了一个潜在
+          bug**：breaker 触发且 narration 放行时，未执行的 tool_call 现在
+          补合成 tool 消息（`_BREAKER_SKIP_MESSAGE`），否则 wrap-up 轮
+          的 transcript 悬空会被 provider 拒绝。
+        - 测试：py `test_parallel_tools.py` 7 例（并发重叠 rendezvous/
+          事件序确定性/unsafe 屏障/批内 dedup/计数器按序/无检查方法
+          executor 串行/config 关闭串行）。
+- **P2 · 健壮性缺口**（2026-08-26 落地，测试全绿）
+  - [x] **provider 错误分级 taxonomy**：codex 有 `is_retryable` 分级、
         dsh 有结构化错误码 + retryPolicy；steerable 的 RetryHooks 只认
         「瞬态」一种。llm 层定义 `LLMErrorKind`（transport / rate_limit /
         context_overflow / auth / invalid_request / server），
         openai_compat 按状态码映射，RetryHooks 按 kind 分路，补
         conformance 用例。
-  - [ ] **崩溃恢复语义（合成闭合）**：dsh 冷启动给中断 turn 合成
+        - 落地：`llm/errors.py`——`LLMError(kind, status_code)` +
+          `classify_http_status`（400/413 按 body 溢出语料识别
+          context_overflow，覆盖 OpenAI/Ollama/vLLM/DeepSeek/Anthropic
+          措辞）+ `classify_error`（httpx/asyncio 异常兜底）+
+          `is_retryable`。openai_compat 的 complete/stream 均包装
+          HTTPStatusError→LLMError、TransportError→transport；
+          anthropic_native 包装 SDK 的 APIStatusError/APIConnectionError。
+          RetryHooks 默认按 kind 分路：transport/rate_limit/server/unknown
+          退避重试，auth/invalid_request 快速失败，context_overflow 留给
+          CompactionHooks。
+        - 测试：`test_error_taxonomy.py`（状态码映射/溢出语料/分类兜底/
+          分路/auth 快速失败不重试/transport 重试恢复）。
+  - [x] **上下文溢出恢复**：CompactionHooks 只在 `pre_step` 预防，真溢出
+        时 RetryHooks 会重试同样的超长请求必然再失败。在
+        `on_request_error` 识别 context-overflow 类错误，重试前先强制
+        压缩一档（依赖上条的错误分级）。
+        - 落地：`on_request_error` 签名扩展为 `(error, transcript, ctx)`，
+          `RetryAction` 增加 `transcript` 字段——hook 重写 transcript 后
+          loop 采用替换体重试。`CompactionHooks.on_request_error`：识别
+          context_overflow → 无视阈值强制折叠+摘要一档 → retry；每轮上限
+          2 次防 compact→overflow 死循环。sidecar 默认 hooks 链改为
+          `ChainHooks(CompactionHooks(maxContextTokens 参数, model),
+          RetryHooks)`——桌面端开箱获得压缩+溢出恢复。
+        - 测试：溢出→压缩重试→完成（验证重试请求带折叠标记）；连续溢出
+          超上限→fail；无 CompactionHooks 时溢出立即 fail。
+  - [x] **崩溃恢复语义（合成闭合）**：dsh 冷启动给中断 turn 合成
         `TOOL_OUTCOME_UNKNOWN` 工具结果；steerable 的 `resume.py` 若遇
         崩在工具执行中的 trace，重建 transcript 会有悬空 tool_call（部分
         provider 直接拒绝）。`project_transcript` 收尾时检测未配对
         tool_call，补合成 tool 消息（"result unknown — process
         interrupted, verify side effects"）。纯投影层改动，不动 loop。
+        - 落地：`_close_dangling_tool_calls` 后处理——每个 assistant 的
+          tool_calls 与其后连续 tool 消息块配对，未配对的在块后按调用序
+          补 `_INTERRUPTED_RESULT` 合成消息（保持已记录结果的原始位置）。
+          完整 trace 零改动透传。
+        - 测试：部分中断（c1 有结果 c2 合成且顺序保持）/完整 trace 透传/
+          全部中断。
 - **P3 · 数据闭环与生态**
   - [ ] **校准系数实测闭环**：tokens.py 的按模型校准机制已就位但出厂表
         为空——机制没数据等于没校准。sidecar 每轮拿到 provider usage 后

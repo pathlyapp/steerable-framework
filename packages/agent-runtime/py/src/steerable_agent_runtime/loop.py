@@ -84,6 +84,8 @@ LoopEventKind = Literal[
     "budget_exhausted",
     "soft_timeout",
     "completion",
+    # mid-turn user steering (see CoreLoop.steer)
+    "steer",
 ]
 
 
@@ -123,6 +125,10 @@ class ToolExecutor(Protocol):
     far. The default implementation forwards to a `ToolRouter`; products inject
     handlers for UI tools, proposals, MCP, and (for the desktop) remote tools
     over the sidecar reverse channel.
+
+    Optional duck-typed method: ``concurrency_safe(call) -> bool``. When
+    present and ``LoopConfig.parallel_tools`` is on, consecutive safe calls
+    in one round run concurrently. Absent → serial (safe default).
     """
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult: ...
@@ -141,6 +147,12 @@ class RouterToolExecutor:
             consent_granted=self._consent_granted,
             context={"chat_id": ctx.chat_id, "round": ctx.round_index},
         )
+
+    def concurrency_safe(self, call: ToolCall) -> bool:
+        """Optional hook the loop uses for parallel batching (duck-typed —
+        executors without it are treated as serial-only)."""
+        tool = self._router.get(call.name)
+        return bool(tool and tool.concurrency_safe)
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +203,14 @@ class LoopConfig:
     #: the 300-char preview). Off by default to keep traces small; enable when
     #: the trace is the resume record (see ``resume.project_transcript``).
     persist_tool_results: bool = False
+    #: Run consecutive concurrency-safe tool calls from the same round
+    #: concurrently (asyncio.gather); unsafe calls form a barrier and run
+    #: alone. A call is safe when the executor says so — RouterToolExecutor
+    #: looks up ``RegisteredTool.concurrency_safe``; executors without the
+    #: check (e.g. HostToolExecutor, which serializes on the host) stay
+    #: serial. Event order stays deterministic: start events in call order,
+    #: result events in call order after each batch completes.
+    parallel_tools: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +242,25 @@ class CoreLoop:
         self._executor = executor
         self._config = config or LoopConfig()
         self._hooks: LoopHooks = hooks if hooks is not None else NoopHooks()
+        # Mid-turn user messages land here via steer() and are drained into
+        # the transcript at the next round boundary (dsh-style "inject":
+        # consumed at the next step, no separate wakeup semantics).
+        self._inbox: asyncio.Queue[str] = asyncio.Queue()
         # Compact trajectory recorded during run(); replayable via
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
         self.trajectory: list[HarnessTrajectoryEvent] = []
+
+    def steer(self, content: str) -> None:
+        """Inject a user message into a running turn.
+
+        Called from the same event loop (e.g. a sidecar RPC handler) while
+        ``run()`` is active; the message is appended to the transcript at the
+        next round boundary and surfaced as a ``steer`` event. Messages sent
+        after the run ends are ignored by the (already closed) consumer.
+        """
+        if content:
+            self._inbox.put_nowait(content)
 
     async def _offer_narration(
         self,
@@ -319,6 +354,16 @@ class CoreLoop:
         completion_redos = 0
         while True:
             ctx.round_index = round_index
+
+            # ── steer: drain mid-turn user injections into the transcript ──
+            # Drained before hooks so pre_step (compaction, routing) sees the
+            # same transcript the provider will receive.
+            while not self._inbox.empty():
+                injected = self._inbox.get_nowait()
+                transcript.append(LLMMessage(role="user", content=injected))
+                yield LoopEvent(
+                    "steer", {"content": injected, "round": round_index}
+                )
 
             # ── runaway guard: round budget exhausted ────────────────────
             # A terminal like any other: offer narration (the model may have
@@ -464,7 +509,7 @@ class CoreLoop:
                                 return
                     break  # stream completed without error
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
-                    action = await self._hooks.on_request_error(exc, ctx)
+                    action = await self._hooks.on_request_error(exc, transcript, ctx)
                     if action.kind == "retry":
                         # The retry re-streams from scratch: drop the failed
                         # attempt's partial content and display-pipeline state
@@ -474,6 +519,10 @@ class CoreLoop:
                         stripper = PseudoStreamStripper()
                         content_carry = ""
                         reasoning_carry = ""
+                        # A hook may rewrite the transcript for the retry
+                        # (context-overflow recovery compacts first).
+                        if action.transcript is not None:
+                            transcript = action.transcript
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)
                         continue
@@ -619,121 +668,208 @@ class CoreLoop:
                 LLMMessage(role="assistant", content=content, tool_calls=tool_calls)
             )
 
+            # Parallel batching: consecutive concurrency-safe calls run under
+            # one asyncio.gather; any other call is a barrier batch of one.
+            # Determinism is preserved for consumers — start events emit in
+            # call order before execution, result events in call order after
+            # the batch completes (durations stay per-call).
+            concurrency_check = getattr(self._executor, "concurrency_safe", None)
+            batches: list[tuple[bool, list[ToolCall]]] = []
             for call in tool_calls:
-                yield LoopEvent(
-                    "tool_call_start",
-                    {
-                        "id": call.id,
-                        "name": call.name,
-                        "round": round_index,
-                        "arguments": call.arguments or {},
-                    },
+                safe = bool(
+                    self._config.parallel_tools
+                    and concurrency_check is not None
+                    and concurrency_check(call)
                 )
-                tool_started = time.monotonic()
+                if safe and batches and batches[-1][0]:
+                    batches[-1][1].append(call)
+                else:
+                    batches.append((safe, [call]))
 
-                # Dedup guard: identical (name, args) already ran this run →
-                # skip execution, feed back a soft "you already called this"
-                # signal. Checked before the executor so retried *unknown*
-                # tools are blocked too (their signature is recorded on the
-                # first attempt).
-                duplicate = False
-                if self._config.tool_dedup:
-                    sig = (call.name, _stable_json_hash(call.arguments or {}))
-                    if sig in tool_call_signatures:
-                        duplicate = True
-                    else:
-                        tool_call_signatures.add(sig)
+            breaker_tripped = False
+            for batch_idx, (batch_safe, batch) in enumerate(batches):
+                if breaker_tripped:
+                    break
 
-                if duplicate:
-                    ctx.consecutive_tool_errors += 1
-                    result = ToolResult(
-                        success=False,
-                        error="duplicate_call",
-                        needsFollowup=True,
-                        data={
-                            "duplicate": True,
-                            "message": _DUPLICATE_CALL_MESSAGE.format(name=call.name),
+                # Phase 1 (sequential): start events + dedup guard. The dedup
+                # guard skips execution for an identical (name, args) call
+                # that already ran this run, feeding back a soft "you already
+                # called this" signal; it is checked before the executor so
+                # retried *unknown* tools are blocked too (their signature is
+                # recorded on the first attempt).
+                # NOTE: results/errors are keyed by batch position, not
+                # call.id — providers have been seen emitting duplicate ids.
+                pending: list[tuple[int, ToolCall, float]] = []
+                results: dict[int, ToolResult] = {}
+                for call_idx, call in enumerate(batch):
+                    yield LoopEvent(
+                        "tool_call_start",
+                        {
+                            "id": call.id,
+                            "name": call.name,
+                            "round": round_index,
+                            "arguments": call.arguments or {},
                         },
                     )
-                else:
-                    try:
-                        result = await self._executor.execute(call, ctx)
-                    except Exception as exc:  # noqa: BLE001 — surface as tool_error event
+                    duplicate = False
+                    if self._config.tool_dedup:
+                        sig = (call.name, _stable_json_hash(call.arguments or {}))
+                        if sig in tool_call_signatures:
+                            duplicate = True
+                        else:
+                            tool_call_signatures.add(sig)
+                    if duplicate:
+                        results[call_idx] = ToolResult(
+                            success=False,
+                            error="duplicate_call",
+                            needsFollowup=True,
+                            data={
+                                "duplicate": True,
+                                "message": _DUPLICATE_CALL_MESSAGE.format(name=call.name),
+                            },
+                        )
+                    else:
+                        pending.append((call_idx, call, time.monotonic()))
+
+                # Phase 2: execute. Safe batches gather; barrier batches and
+                # single calls run sequentially. Exceptions are collected,
+                # not raised — they surface as tool_error events in call
+                # order during phase 3.
+                started_by_idx = {i: started for i, _, started in pending}
+                errors: dict[int, str] = {}
+                if pending:
+                    if batch_safe and len(pending) > 1:
+                        outcomes = await asyncio.gather(
+                            *(self._executor.execute(call, ctx) for _, call, _ in pending),
+                            return_exceptions=True,
+                        )
+                        for (call_idx, _, _), outcome in zip(pending, outcomes):
+                            if isinstance(outcome, BaseException):
+                                errors[call_idx] = str(outcome)
+                            else:
+                                results[call_idx] = outcome
+                    else:
+                        for call_idx, call, _ in pending:
+                            try:
+                                results[call_idx] = await self._executor.execute(call, ctx)
+                            except Exception as exc:  # noqa: BLE001 — tool_error event
+                                errors[call_idx] = str(exc)
+
+                # Phase 3 (call order): counters, hook, result event,
+                # transcript append, error breaker.
+                for call_idx, call in enumerate(batch):
+                    if call_idx in errors:
                         ctx.consecutive_tool_errors += 1
                         yield LoopEvent(
                             "tool_error",
-                            {"id": call.id, "name": call.name, "error": str(exc)},
+                            {"id": call.id, "name": call.name, "error": errors[call_idx]},
                         )
-                        result = ToolResult(success=False, error=str(exc), needsFollowup=True)
+                        result = ToolResult(
+                            success=False, error=errors[call_idx], needsFollowup=True
+                        )
                     else:
+                        result = results[call_idx]
                         if result.success:
                             ctx.consecutive_tool_errors = 0
                             ctx.tool_successes += 1
                         else:
                             ctx.consecutive_tool_errors += 1
 
-                # ── hook: post_tool_result (spill / truncation) ──────────
-                result = await self._hooks.post_tool_result(result, call, ctx)
+                    # ── hook: post_tool_result (spill / truncation) ──────
+                    result = await self._hooks.post_tool_result(result, call, ctx)
 
-                ctx.tool_calls_used += 1
-                duration_ms = int((time.monotonic() - tool_started) * 1000)
-                # Small preview for display/trace consumers (tool cards, logs);
-                # the full result only lives in the transcript (and spill
-                # storage when externalized).
-                preview = _result_content(result)
-                if len(preview) > 300:
-                    preview = preview[:300] + "…"
-                yield LoopEvent(
-                    "tool_call_result",
-                    {
-                        "id": call.id,
-                        "name": call.name,
-                        "success": result.success,
-                        "durationMs": duration_ms,
-                        "resultPreview": preview,
-                        **(
-                            {"result": _result_content(result)}
-                            if self._config.persist_tool_results
-                            else {}
-                        ),
-                        **({"error": result.error} if result.error else {}),
-                    },
-                )
-                transcript.append(
-                    LLMMessage(
-                        role="tool",
-                        name=call.name,
-                        tool_call_id=call.id,
-                        content=_result_content(result),
+                    ctx.tool_calls_used += 1
+                    tool_started = started_by_idx.get(call_idx, time.monotonic())
+                    duration_ms = int((time.monotonic() - tool_started) * 1000)
+                    # Small preview for display/trace consumers (tool cards,
+                    # logs); the full result only lives in the transcript
+                    # (and spill storage when externalized).
+                    preview = _result_content(result)
+                    if len(preview) > 300:
+                        preview = preview[:300] + "…"
+                    yield LoopEvent(
+                        "tool_call_result",
+                        {
+                            "id": call.id,
+                            "name": call.name,
+                            "success": result.success,
+                            "durationMs": duration_ms,
+                            "resultPreview": preview,
+                            **(
+                                {"result": _result_content(result)}
+                                if self._config.persist_tool_results
+                                else {}
+                            ),
+                            **({"error": result.error} if result.error else {}),
+                        },
                     )
-                )
+                    transcript.append(
+                        LLMMessage(
+                            role="tool",
+                            name=call.name,
+                            tool_call_id=call.id,
+                            content=_result_content(result),
+                        )
+                    )
 
-                # consecutive-error breaker (runaway guard)
-                if ctx.consecutive_tool_errors >= self._config.max_tool_errors:
-                    decision = CompletionDecision(
-                        status="failed",
-                        reason="too many consecutive tool errors",
-                        confidence=0.9,
-                    )
-                    narrate = await self._offer_narration(
-                        content, round_index, had_tool_calls=True, ctx=ctx,
-                        wrap_up=wrap_up, completion_redos=completion_redos,
-                    )
-                    if narrate is not None:
-                        completion_redos += 1
-                        wrap_up = True
-                        transcript.append(LLMMessage(role="user", content=narrate))
-                        break  # leave the tool loop; wrap-up round runs next
-                    yield emit_completion(
-                        step_summary(
-                            round_index=round_index,
-                            finish_reason="tool_calls",
-                            content=content,
-                            tool_calls=tool_calls,
-                        ),
-                        decision,
-                    )
-                    return
+                    # consecutive-error breaker (runaway guard). In a parallel
+                    # batch the remaining calls already ran — their results
+                    # are recorded above; the breaker gates the NEXT batch.
+                    if ctx.consecutive_tool_errors >= self._config.max_tool_errors:
+                        decision = CompletionDecision(
+                            status="failed",
+                            reason="too many consecutive tool errors",
+                            confidence=0.9,
+                        )
+                        narrate = await self._offer_narration(
+                            content, round_index, had_tool_calls=True, ctx=ctx,
+                            wrap_up=wrap_up, completion_redos=completion_redos,
+                        )
+                        if narrate is not None:
+                            completion_redos += 1
+                            wrap_up = True
+                            transcript.append(LLMMessage(role="user", content=narrate))
+                            breaker_tripped = True
+                            # The wrap-up round reuses this transcript — every
+                            # tool_call must have a tool message or providers
+                            # reject the request. Append real results for calls
+                            # that already ran in this batch, synthetic skips
+                            # for everything never executed.
+                            remaining: list[tuple[ToolCall, int | None]] = [
+                                (c, i)
+                                for i, c in enumerate(batch)
+                                if i > call_idx
+                            ] + [
+                                (c, None)
+                                for _, later in batches[batch_idx + 1:]
+                                for c in later
+                            ]
+                            for skipped, skip_idx in remaining:
+                                if skip_idx is not None and skip_idx in errors:
+                                    skip_content = f"Error: {errors[skip_idx]}"
+                                elif skip_idx is not None and skip_idx in results:
+                                    skip_content = _result_content(results[skip_idx])
+                                else:
+                                    skip_content = _BREAKER_SKIP_MESSAGE
+                                transcript.append(
+                                    LLMMessage(
+                                        role="tool",
+                                        name=skipped.name,
+                                        tool_call_id=skipped.id,
+                                        content=skip_content,
+                                    )
+                                )
+                            break  # leave the tool loop; wrap-up round runs next
+                        yield emit_completion(
+                            step_summary(
+                                round_index=round_index,
+                                finish_reason="tool_calls",
+                                content=content,
+                                tool_calls=tool_calls,
+                            ),
+                            decision,
+                        )
+                        return
 
             # ── observe: continue to next round ──────────────────────────
             # A narration grant broke out of the tool loop above — skip the
@@ -797,6 +933,14 @@ _DUPLICATE_CALL_MESSAGE = (
     "result will not change. Continue from the existing tool result: use "
     "different arguments or a different tool, or reply to the user directly "
     "with your conclusion — do not repeat the same call."
+)
+
+#: Synthetic tool message appended for calls skipped when the consecutive-
+#: error breaker trips but a narration round continues with the transcript
+#: (every tool_call needs a tool message or providers reject the request).
+_BREAKER_SKIP_MESSAGE = (
+    "[not executed: the turn stopped after too many consecutive tool errors. "
+    "Do not claim this call produced a result.]"
 )
 
 

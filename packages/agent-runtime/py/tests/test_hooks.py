@@ -181,7 +181,7 @@ async def test_on_request_error_retry_recovers() -> None:
         def __init__(self) -> None:
             self.calls = 0
 
-        async def on_request_error(self, error, ctx):
+        async def on_request_error(self, error, transcript, ctx):
             self.calls += 1
             return RetryAction(kind="retry", delay_ms=0)
 
@@ -201,7 +201,7 @@ async def test_on_request_error_fail_emits_error_event_and_ends() -> None:
     router = ToolRouter()
 
     class _Fail(NoopHooks):
-        async def on_request_error(self, error, ctx):
+        async def on_request_error(self, error, transcript, ctx):
             return RetryAction(kind="fail", reason=f"giving up: {error}")
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=_Fail())

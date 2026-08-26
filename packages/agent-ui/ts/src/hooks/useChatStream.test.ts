@@ -231,3 +231,81 @@ describe('useChatStream', () => {
     expect(true).toBe(true);
   });
 });
+
+describe('steerUserMessage', () => {
+  it('appends the user message when the transport accepts the steer', async () => {
+    const steer = vi.fn().mockResolvedValue(true);
+    const transport: ChatStreamTransport = {
+      stream: vi.fn(async (_input, onEvent) => {
+        onEvent({ type: 'content', content: 'working…' });
+        // keep the stream open until the test steers
+        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+        onEvent({ type: 'content', content: 'done' });
+        onEvent({ type: 'done' });
+      }),
+      steer,
+    };
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    let done: Promise<void>;
+    act(() => {
+      done = result.current.sendUserMessage({ content: 'start' });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.steerUserMessage('补充一句');
+    });
+    expect(ok).toBe(true);
+    expect(steer).toHaveBeenCalledWith('补充一句');
+    expect(
+      result.current.messages.some((m) => m.role === 'user' && m.content === '补充一句'),
+    ).toBe(true);
+
+    await act(async () => {
+      await done;
+    });
+  });
+
+  it('returns false and appends nothing when not streaming', async () => {
+    const steer = vi.fn().mockResolvedValue(true);
+    const transport: ChatStreamTransport = {
+      stream: vi.fn(async () => {}),
+      steer,
+    };
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.steerUserMessage('hello');
+    });
+    expect(ok).toBe(false);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.current.messages).toHaveLength(0);
+  });
+
+  it('returns false when the transport has no steer support', async () => {
+    const transport: ChatStreamTransport = {
+      stream: vi.fn(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }),
+    };
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    let done: Promise<void>;
+    act(() => {
+      done = result.current.sendUserMessage({ content: 'start' });
+    });
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.steerUserMessage('mid');
+    });
+    expect(ok).toBe(false);
+    await act(async () => {
+      await done;
+    });
+  });
+});

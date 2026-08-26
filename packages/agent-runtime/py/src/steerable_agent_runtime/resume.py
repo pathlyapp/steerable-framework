@@ -20,6 +20,11 @@ Fidelity:
 Bookkeeping events (stage/stage_complete/soft_timeout/budget/completion,
 discipline-retry scaffolding) are skipped: the projection is a clean
 conversational prefix, not a forensic replay (that is ``replay.py``'s job).
+
+Crash recovery: a trace that ends mid-tool-execution leaves dangling
+tool_calls on the last assistant message. The projection closes them with a
+synthetic "result unknown — interrupted" tool message so providers accept
+the resumed transcript (mirrors dsh's cold-start ``TOOL_OUTCOME_UNKNOWN``).
 """
 
 from __future__ import annotations
@@ -38,6 +43,17 @@ _CONTENT = "content_delta"
 _CALL_START = "tool_call_start"
 _CALL_RESULT = "tool_call_result"
 _CALL_ERROR = "tool_error"
+
+#: Synthetic tool message closing a tool_call whose result was never
+#: recorded — the process died (or the stream was killed) between
+#: ``tool_call_start`` and the outcome event. dsh does the same on cold
+#: start with ``TOOL_OUTCOME_UNKNOWN``; without it, providers reject the
+#: resumed transcript for dangling tool_calls.
+_INTERRUPTED_RESULT = (
+    "[result unknown — the process was interrupted before this tool call "
+    "completed. Do not claim it succeeded; verify any side effects before "
+    "relying on them.]"
+)
 
 
 def _payload(event: Any) -> dict[str, Any]:
@@ -131,7 +147,48 @@ def project_transcript(events: Iterable[Any]) -> list[LLMMessage]:
         # bookkeeping, not transcript content.
 
     flush_assistant()
-    return messages
+    return _close_dangling_tool_calls(messages)
+
+
+def _close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """Append synthetic tool messages for tool_calls with no recorded result.
+
+    A trace that ends mid-tool-execution (crash, kill, lost stream) projects
+    to an assistant message whose tool_calls were never answered; most
+    providers reject such a transcript outright. Closing them with an
+    explicit "interrupted" marker keeps the session resumable and tells the
+    model not to trust the unknown outcome. Complete traces pass through
+    unchanged.
+    """
+    out: list[LLMMessage] = []
+    i = 0
+    while i < len(messages):
+        message = messages[i]
+        out.append(message)
+        i += 1
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+        # Copy the following tool-message block first, then append synthetic
+        # closures for the unanswered calls — synthetic messages go AFTER the
+        # recorded ones so the original ordering is preserved.
+        answered: set[str] = set()
+        while i < len(messages) and messages[i].role == "tool":
+            tool_msg = messages[i]
+            if tool_msg.tool_call_id:
+                answered.add(tool_msg.tool_call_id)
+            out.append(tool_msg)
+            i += 1
+        for call in message.tool_calls:
+            if call.id not in answered:
+                out.append(
+                    LLMMessage(
+                        role="tool",
+                        name=call.name,
+                        tool_call_id=call.id,
+                        content=_INTERRUPTED_RESULT,
+                    )
+                )
+    return out
 
 
 async def load_transcript(storage: "StorageAdapter", trace_id: str) -> list[LLMMessage]:

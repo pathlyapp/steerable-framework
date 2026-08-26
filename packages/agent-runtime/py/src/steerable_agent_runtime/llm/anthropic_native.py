@@ -20,6 +20,33 @@ from typing import Any
 from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
+from .errors import LLMError, classify_http_status
+
+
+def _classify_anthropic_error(exc: Exception, *, provider: str) -> Exception:
+    """Normalize anthropic SDK exceptions into the ``LLMError`` taxonomy.
+
+    The SDK raises ``APIStatusError`` (has ``status_code``) for HTTP failures
+    and ``APIConnectionError`` for transport problems; anything already
+    classified (or unrecognized) passes through with ``unknown``.
+    """
+    if isinstance(exc, LLMError):
+        return exc
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        kind = classify_http_status(status, str(exc))
+        return LLMError(
+            f"{provider}: HTTP {status} ({kind}): {exc}",
+            kind=kind,
+            status_code=status,
+            provider=provider,
+        )
+    # APIConnectionError / APITimeoutError have no status_code.
+    if exc.__class__.__name__ in ("APIConnectionError", "APITimeoutError"):
+        return LLMError(
+            f"{provider}: transport error: {exc}", kind="transport", provider=provider
+        )
+    return LLMError(f"{provider}: {exc}", kind="unknown", provider=provider)
 
 
 @dataclass(slots=True)
@@ -48,7 +75,10 @@ class AnthropicProvider:
             max_tokens=max_tokens,
             extra=kwargs,
         )
-        message = await client.messages.create(**body)
+        try:
+            message = await client.messages.create(**body)
+        except Exception as exc:  # noqa: BLE001 - normalized into the taxonomy
+            raise _classify_anthropic_error(exc, provider=self.name) from exc
         text_chunks: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in message.content or []:
@@ -98,25 +128,28 @@ class AnthropicProvider:
             max_tokens=max_tokens,
             extra=kwargs,
         )
-        async with client.messages.stream(**body) as stream:
-            async for event in stream:
-                chunk = _parse_anthropic_event(event)
-                if chunk is not None:
-                    yield chunk
-            final = await stream.get_final_message()
-            usage = getattr(final, "usage", None)
-            if usage is not None:
-                yield LLMStreamChunk(
-                    usage=LLMUsage(
-                        prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-                        completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-                        total_tokens=int(
-                            (getattr(usage, "input_tokens", 0) or 0)
-                            + (getattr(usage, "output_tokens", 0) or 0)
+        try:
+            async with client.messages.stream(**body) as stream:
+                async for event in stream:
+                    chunk = _parse_anthropic_event(event)
+                    if chunk is not None:
+                        yield chunk
+                final = await stream.get_final_message()
+                usage = getattr(final, "usage", None)
+                if usage is not None:
+                    yield LLMStreamChunk(
+                        usage=LLMUsage(
+                            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+                            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                            total_tokens=int(
+                                (getattr(usage, "input_tokens", 0) or 0)
+                                + (getattr(usage, "output_tokens", 0) or 0)
+                            ),
                         ),
-                    ),
-                    finish_reason="stop",
-                )
+                        finish_reason="stop",
+                    )
+        except Exception as exc:  # noqa: BLE001 - normalized into the taxonomy
+            raise _classify_anthropic_error(exc, provider=self.name) from exc
 
     # ------------------------------------------------------------------
     # Helpers

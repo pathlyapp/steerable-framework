@@ -14,7 +14,9 @@ Hook points and their intended consumers:
   the transcript. Large-result externalization rewrites oversized results to
   a preview + locator here.
 - ``on_request_error`` — when the LLM stream raises. Retry policy decides
-  retry-with-backoff vs fail here.
+  retry-with-backoff vs fail here; the hook receives the current transcript
+  so recovery strategies that rewrite it (context-overflow compaction) can
+  return the replacement alongside the retry decision.
 
 All hooks default to no-op (``NoopHooks``), so wiring them in changes no
 existing behavior.
@@ -98,12 +100,16 @@ class RetryAction:
     """Outcome of an ``on_request_error`` hook.
 
     ``fail`` (default) surfaces the error and ends the turn. ``retry``
-    re-issues the request after ``delay_ms``.
+    re-issues the request after ``delay_ms`` — with ``transcript`` when the
+    hook rewrote it (the context-overflow recovery compacts before
+    retrying; the loop adopts the replacement for the retried request and
+    the rest of the run).
     """
 
     kind: Literal["fail", "retry"] = "fail"
     delay_ms: int = 0
     reason: str | None = None
+    transcript: list[LLMMessage] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +134,7 @@ class LoopHooks(Protocol):
     ) -> ToolResult: ...
 
     async def on_request_error(
-        self, error: Exception, ctx: LoopContext
+        self, error: Exception, transcript: list[LLMMessage], ctx: LoopContext
     ) -> RetryAction: ...
 
     async def before_completion(
@@ -150,7 +156,7 @@ class NoopHooks:
         return result
 
     async def on_request_error(
-        self, error: Exception, ctx: LoopContext
+        self, error: Exception, transcript: list[LLMMessage], ctx: LoopContext
     ) -> RetryAction:
         return RetryAction(kind="fail", reason=str(error))
 
@@ -167,7 +173,9 @@ class ChainHooks:
       the first ``reject`` wins; the first non-``None`` ``tool_choice`` wins.
     - ``post_tool_result``: the result threads through each hook in order.
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
-      says ``fail``, the first failure reason is surfaced.
+      says ``fail``, the first failure reason is surfaced. The transcript
+      threads through unchanged — hooks that rewrite it (overflow
+      compaction) return the replacement on their ``retry`` action.
     - ``before_completion``: the first non-``accept`` action wins.
 
     This is how a product stacks e.g. compaction + spill + retry without the
@@ -203,11 +211,11 @@ class ChainHooks:
         return current
 
     async def on_request_error(
-        self, error: Exception, ctx: LoopContext
+        self, error: Exception, transcript: list[LLMMessage], ctx: LoopContext
     ) -> RetryAction:
         first_fail: RetryAction | None = None
         for hook in self._hooks:
-            action = await hook.on_request_error(error, ctx)
+            action = await hook.on_request_error(error, transcript, ctx)
             if action.kind == "retry":
                 return action
             if first_fail is None:

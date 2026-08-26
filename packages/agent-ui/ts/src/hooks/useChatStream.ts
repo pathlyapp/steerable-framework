@@ -38,6 +38,14 @@ export interface ChatStreamTransport {
     input: ChatStreamSendInput,
     onEvent: (event: SSEEvent) => void,
   ) => Promise<void | (() => void)>;
+  /**
+   * Optional mid-turn steering: inject a user message into the currently
+   * running turn (CoreLoop `steer`). Resolve `true` when the running turn
+   * accepted the message; `false` when no steerable turn is active (the
+   * caller should keep the draft — a normal send can follow once the turn
+   * ends). When omitted, the UI keeps send-during-streaming disabled.
+   */
+  steer?: (content: string) => Promise<boolean>;
 }
 
 export interface UseChatStreamOptions {
@@ -63,6 +71,13 @@ export interface UseChatStreamReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   sendUserMessage: (input: ChatStreamSendInput) => Promise<void>;
+  /**
+   * Steer the running turn with an extra user message. No-op resolving
+   * `false` when not streaming or the transport has no `steer`. On success
+   * the message is appended to the visible transcript immediately (the loop
+   * consumes it at the next round boundary).
+   */
+  steerUserMessage: (content: string) => Promise<boolean>;
   cancel: () => void;
   /** Replace the message buffer (e.g. when switching chat). */
   setMessages: (messages: ChatMessage[]) => void;
@@ -310,6 +325,21 @@ export function useChatStream(
     setStreaming(false);
   }, [setStreaming]);
 
+  const steerUserMessage = useCallback(
+    async (content: string): Promise<boolean> => {
+      const steer = options.transport.steer;
+      if (!isStreamingRef.current || !steer || !content.trim()) {
+        return false;
+      }
+      const ok = await steer(content);
+      if (ok) {
+        dispatch({ type: 'append', message: newUserMessage(content) });
+      }
+      return ok;
+    },
+    [options.transport],
+  );
+
   const setMessages = useCallback((messages: ChatMessage[]) => {
     dispatch({ type: 'reset', messages });
   }, []);
@@ -332,10 +362,11 @@ export function useChatStream(
       messages: state.messages,
       isStreaming: isStreamingRef.current,
       sendUserMessage,
+      steerUserMessage,
       cancel,
       setMessages,
       appendMessage,
     }),
-    [state.messages, sendUserMessage, cancel, setMessages, appendMessage],
+    [state.messages, sendUserMessage, steerUserMessage, cancel, setMessages, appendMessage],
   );
 }

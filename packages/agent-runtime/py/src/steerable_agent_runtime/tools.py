@@ -44,6 +44,10 @@ class RegisteredTool:
     description: str = ""
     schema: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     require_consent: bool = False
+    #: Safe to run concurrently with other safe tools from the same round
+    #: (no side effects, no shared mutable state). Auto-derived from ``mode``
+    #: at registration (read → safe) unless explicitly overridden.
+    concurrency_safe: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_openai_function(self) -> dict[str, Any]:
@@ -76,6 +80,7 @@ class ToolRouter:
         description: str | None = None,
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
+        concurrency_safe: bool | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
         resolved_name = name or getattr(handler, "__name__", None)
@@ -94,6 +99,9 @@ class ToolRouter:
             description=description or (inspect.getdoc(handler) or "").strip(),
             schema=schema or {"type": "object", "properties": {}},
             require_consent=resolved_consent,
+            concurrency_safe=(
+                concurrency_safe if concurrency_safe is not None else resolved_mode == "read"
+            ),
             metadata=dict(metadata or {}),
         )
         self._tools[resolved_name] = tool_meta
@@ -108,6 +116,7 @@ class ToolRouter:
         description: str = "",
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
+        concurrency_safe: bool | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
         """Register a tool whose execution is delegated to a remote peer.
@@ -135,6 +144,7 @@ class ToolRouter:
             description=description,
             schema=schema,
             require_consent=require_consent,
+            concurrency_safe=concurrency_safe,
             metadata={**(metadata or {}), "remote": True},
         )
 
@@ -276,6 +286,7 @@ def tool(
     description: str | None = None,
     schema: dict[str, Any] | None = None,
     require_consent: bool | None = None,
+    concurrency_safe: bool | None = None,
     router: ToolRouter | None = None,
 ) -> Callable[[ToolHandler], ToolHandler]:
     """Decorator form of `ToolRouter.register()`.
@@ -300,6 +311,7 @@ def tool(
             "description": description,
             "schema": schema,
             "require_consent": require_consent,
+            "concurrency_safe": concurrency_safe,
         }
         handler.__steerable_tool_meta__ = meta
         if router is not None:
@@ -310,6 +322,7 @@ def tool(
                 description=description,
                 schema=schema,
                 require_consent=require_consent,
+                concurrency_safe=concurrency_safe,
             )
         return handler
 

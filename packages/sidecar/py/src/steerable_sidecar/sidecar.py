@@ -41,6 +41,7 @@ from steerable_agent_runtime import (
     AntiHallucinationHooks,
     BudgetExhaustedError,
     ChainHooks,
+    CompactionHooks,
     CoreLoop,
     LoopConfig,
     LoopHooks,
@@ -108,6 +109,9 @@ class Sidecar:
         # compaction + spill). Defaults to RetryHooks alone.
         self._loop_hooks_factory = loop_hooks_factory
         self._streams: dict[str, asyncio.Task[Any]] = {}
+        #: Active CoreLoop instances by stream id — the steer RPC targets
+        #: these to inject user messages into a running turn.
+        self._coreloops: dict[str, CoreLoop] = {}
         self._transport: StdioJsonRpcTransport | None = None
         self._started_ms = int(time.monotonic() * 1000)
         self._wall_started_ms = int(time.time() * 1000)
@@ -137,6 +141,7 @@ class Sidecar:
         register("config.set", self._handle_config_set)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
+        register("agent.chat.steer", self._handle_chat_steer)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -415,6 +420,28 @@ class Sidecar:
         if task is not None and not task.done():
             task.cancel()
 
+    async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Inject a user message into a running CoreLoop turn.
+
+        Soft-fail with ``{"ok": False}`` when the stream is unknown or not
+        CoreLoop-backed — between the user hitting send and this RPC landing,
+        the turn may legitimately have completed.
+        """
+        params = _require_params(params)
+        stream_id = params.get("streamId")
+        content = params.get("content")
+        if not stream_id or not isinstance(content, str) or not content.strip():
+            raise JsonRpcError(
+                "streamId and non-empty content required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        loop = self._coreloops.get(stream_id)
+        if loop is None:
+            return {"ok": False, "reason": "stream_not_active"}
+        loop.steer(content)
+        return {"ok": True}
+
     async def _run_chat_stream(
         self,
         provider: LLMProvider,
@@ -483,7 +510,7 @@ class Sidecar:
         hooks: LoopHooks = (
             self._loop_hooks_factory(params)
             if self._loop_hooks_factory is not None
-            else RetryHooks()
+            else _default_loop_hooks(params)
         )
         # antiHallucination: sink the desktop loop's four guards (data-need
         # routing, deferred/claimed retry, grounding judge, narration) into
@@ -526,6 +553,7 @@ class Sidecar:
         # Persist the run as it streams so the host can inspect it afterwards
         # via trace.fetch (and so a future resume projection has the events).
         recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
+        self._coreloops[stream_id] = loop
         try:
             async for event in recorder.tee(
                 loop.run(
@@ -550,6 +578,7 @@ class Sidecar:
                 },
             )
         finally:
+            self._coreloops.pop(stream_id, None)
             await recorder.finalize()
             self._streams.pop(stream_id, None)
 
@@ -600,6 +629,16 @@ class Sidecar:
         elif kind in ("soft_timeout", "budget_exhausted"):
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "notice": {"kind": kind, **data}}
+            )
+        elif kind == "steer":
+            # The host already rendered the user's message; this confirms the
+            # loop consumed it into the transcript (vs. still queued).
+            await transport.emit_notification(
+                "stream.chunk",
+                {
+                    "streamId": stream_id,
+                    "notice": {"kind": "steer", "content": data.get("content", "")},
+                },
             )
         elif kind == "error":
             await transport.emit_notification(
@@ -761,6 +800,22 @@ def _last_message_content(
             content = message.content
             return content[-tail:] if tail else content
     return ""
+
+
+def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
+    """Default hook chain for the CoreLoop chat path.
+
+    CompactionHooks comes first: its ``on_request_error`` intercepts
+    context-overflow failures and retries with a compacted transcript, and
+    its ``pre_step`` keeps pressure under the threshold in the first place
+    (parity with the desktop TS loop). Everything it declines falls through
+    to RetryHooks' taxonomy-routed backoff.
+    """
+    max_ctx = int(params.get("maxContextTokens") or 60_000)
+    return ChainHooks(
+        CompactionHooks(max_context_tokens=max_ctx, model=params.get("model")),
+        RetryHooks(),
+    )
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:

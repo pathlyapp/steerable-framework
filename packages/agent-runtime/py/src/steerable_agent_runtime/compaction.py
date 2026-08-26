@@ -26,8 +26,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .hooks import NoopHooks, PreStepAction
+from .hooks import NoopHooks, PreStepAction, RetryAction
 from .llm import LLMMessage, LLMProvider
+from .llm.errors import classify_error
 from .tokens import estimate_tokens
 
 _SUMMARY_MARKER = "[context compacted: earlier conversation summarized]"
@@ -60,6 +61,15 @@ class CompactionHooks(NoopHooks):
         self._model = model
         # Observability for callers/tests: how many compactions happened.
         self.compactions = 0
+        # Overflow-recovery state: consecutive context-overflow retries within
+        # one round. Capped so a pathological transcript cannot spin a
+        # compact→overflow→compact loop forever.
+        self._overflow_round = -1
+        self._overflow_attempts = 0
+        #: Max forced compactions per round on context-overflow errors.
+        self.max_overflow_retries = 2
+        # Observability: how many overflow-driven compactions happened.
+        self.overflow_recoveries = 0
 
     def _estimate(self, transcript: Sequence[LLMMessage]) -> int:
         return estimate_tokens(transcript, model=self._model)
@@ -78,6 +88,44 @@ class CompactionHooks(NoopHooks):
         compacted = await self._summarize_middle(compacted)
         self.compactions += 1
         return PreStepAction(kind="proceed", transcript=compacted)
+
+    async def on_request_error(
+        self, error: Exception, transcript: list[LLMMessage], ctx: Any
+    ) -> RetryAction:
+        """Context-overflow recovery: the pre_step threshold is a heuristic
+        estimate, so a request can still exceed the real window. Retrying the
+        identical payload must re-fail — instead force one compaction pass
+        (fold old tool results, then summarize the middle) and retry with the
+        rewritten transcript. Bounded per round; non-overflow errors are left
+        to the retry hooks downstream in the chain.
+        """
+        if classify_error(error) != "context_overflow":
+            return RetryAction(kind="fail", reason=str(error))
+
+        round_index = getattr(ctx, "round_index", 0)
+        if round_index != self._overflow_round:
+            self._overflow_round = round_index
+            self._overflow_attempts = 0
+        self._overflow_attempts += 1
+        if self._overflow_attempts > self.max_overflow_retries:
+            return RetryAction(
+                kind="fail",
+                reason=(
+                    f"context overflow persists after {self.max_overflow_retries} "
+                    f"forced compactions: {error}"
+                ),
+            )
+
+        compacted = self._fold_old_tool_results(transcript)
+        compacted = await self._summarize_middle(compacted)
+        self.compactions += 1
+        self.overflow_recoveries += 1
+        return RetryAction(
+            kind="retry",
+            delay_ms=0,
+            reason="context overflow: compacted transcript before retry",
+            transcript=compacted,
+        )
 
     # ------------------------------------------------------------------
 

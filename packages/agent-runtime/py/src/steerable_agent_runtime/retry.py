@@ -7,22 +7,32 @@ desktop path gets real robustness from this.
 
 Semantics: each round gets its own retry budget (the counter resets when the
 round advances — a request that failed twice in round 3 doesn't eat round
-7's budget). Retryable classification defaults to "everything except obvious
-auth/permission failures"; pass ``retryable=`` to customize.
+7's budget). Retryable classification routes on the provider error taxonomy
+(``llm.errors``): transport / rate_limit / server / unknown retry with
+backoff; auth / invalid_request fail fast; context_overflow fails here too —
+it is ``CompactionHooks``' job to retry those with a rewritten transcript.
+Pass ``retryable=`` to customize.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from steerable_agent_harness import RetryPolicy, next_retry_delay_ms
 
 from .hooks import NoopHooks, RetryAction
+from .llm.errors import classify_error
+
+if TYPE_CHECKING:
+    from .llm import LLMMessage
 
 
-def _default_retryable(_error: Exception) -> bool:
-    return True
+def _default_retryable(error: Exception) -> bool:
+    kind = classify_error(error)
+    # context_overflow is excluded: retrying the identical over-long request
+    # is a guaranteed re-fail. CompactionHooks intercepts that kind upstream.
+    return kind in ("transport", "rate_limit", "server", "unknown")
 
 
 class RetryHooks(NoopHooks):
@@ -41,7 +51,9 @@ class RetryHooks(NoopHooks):
         # Observability for callers/tests.
         self.retries = 0
 
-    async def on_request_error(self, error: Exception, ctx: Any) -> RetryAction:
+    async def on_request_error(
+        self, error: Exception, transcript: list[LLMMessage], ctx: Any
+    ) -> RetryAction:
         round_index = getattr(ctx, "round_index", 0)
         if round_index != self._round:
             self._round = round_index
@@ -49,7 +61,10 @@ class RetryHooks(NoopHooks):
         self._attempt += 1
 
         if not self._retryable(error):
-            return RetryAction(kind="fail", reason=f"non-retryable error: {error}")
+            return RetryAction(
+                kind="fail",
+                reason=f"non-retryable error ({classify_error(error)}): {error}",
+            )
         if self._attempt >= self._policy.max_attempts:
             return RetryAction(
                 kind="fail",

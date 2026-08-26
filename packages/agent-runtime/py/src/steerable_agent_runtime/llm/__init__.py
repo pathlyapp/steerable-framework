@@ -90,6 +90,14 @@ class LLMProvider(Protocol):
         ...
 
 
+from .errors import (  # noqa: E402
+    RETRYABLE_KINDS,
+    LLMError,
+    LLMErrorKind,
+    classify_error,
+    classify_http_status,
+    is_retryable,
+)
 from .openai_compat import OpenAICompatProvider  # noqa: E402
 from .anthropic_native import AnthropicProvider  # noqa: E402
 
@@ -101,4 +109,10 @@ __all__ = [
     "LLMUsage",
     "OpenAICompatProvider",
     "AnthropicProvider",
+    "LLMError",
+    "LLMErrorKind",
+    "RETRYABLE_KINDS",
+    "classify_error",
+    "classify_http_status",
+    "is_retryable",
 ]

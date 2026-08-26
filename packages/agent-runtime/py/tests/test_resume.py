@@ -164,3 +164,64 @@ def test_project_empty_and_bookkeeping_only() -> None:
         _E("completion", {"status": "completed"}),
     ]
     assert project_transcript(events) == []
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery: dangling tool_calls get a synthetic closure
+# ---------------------------------------------------------------------------
+
+
+class _Raw:
+    """Minimal event stand-in (kind + payload), like a TraceEvent row."""
+
+    def __init__(self, kind: str, payload: dict[str, Any]) -> None:
+        self.kind = kind
+        self.payload = payload
+
+
+def _ev(kind: str, payload: dict[str, Any]) -> _Raw:
+    return _Raw(kind, payload)
+
+
+def test_interrupted_tool_call_is_closed_synthetically() -> None:
+    """Trace ends after tool_call_start with no result — the projection must
+    still yield a provider-legal transcript."""
+    events = [
+        _ev("content_delta", {"delta": "查一下"}),
+        _ev("tool_call_start", {"id": "c1", "name": "read_file", "arguments": {"p": "a"}}),
+        _ev("tool_call_start", {"id": "c2", "name": "read_file", "arguments": {"p": "b"}}),
+        # c1 completes; the process dies before c2's result.
+        _ev("tool_call_result", {"id": "c1", "name": "read_file", "success": True,
+                                 "resultPreview": "contents-a"}),
+    ]
+    messages = project_transcript(events)
+
+    assistant = [m for m in messages if m.role == "assistant"][-1]
+    assert assistant.tool_calls and len(assistant.tool_calls) == 2
+    tools = [m for m in messages if m.role == "tool"]
+    assert [t.tool_call_id for t in tools] == ["c1", "c2"]
+    assert tools[0].content == "contents-a"
+    assert "interrupted" in tools[1].content
+    assert tools[1].name == "read_file"
+
+
+def test_complete_trace_passes_through_unchanged() -> None:
+    events = [
+        _ev("content_delta", {"delta": "go"}),
+        _ev("tool_call_start", {"id": "c1", "name": "add", "arguments": {}}),
+        _ev("tool_call_result", {"id": "c1", "name": "add", "success": True,
+                                 "resultPreview": "3"}),
+        _ev("content_delta", {"delta": "done"}),
+    ]
+    messages = project_transcript(events)
+    assert [m.role for m in messages] == ["assistant", "tool", "assistant"]
+    assert all("interrupted" not in (m.content or "") for m in messages)
+
+
+def test_all_calls_interrupted() -> None:
+    events = [
+        _ev("tool_call_start", {"id": "c1", "name": "shell", "arguments": {"cmd": "ls"}}),
+    ]
+    messages = project_transcript(events)
+    assert [m.role for m in messages] == ["assistant", "tool"]
+    assert "interrupted" in messages[1].content

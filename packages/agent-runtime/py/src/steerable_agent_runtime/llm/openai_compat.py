@@ -23,6 +23,7 @@ from typing import Any
 from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
+from .errors import LLMError, classify_http_status
 
 
 @dataclass(slots=True)
@@ -62,14 +63,24 @@ class OpenAICompatProvider:
             stream=False,
             extra=kwargs,
         )
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-            response = await client.post(
-                f"{self.base_url.rstrip('/')}/chat/completions",
-                headers=self._headers(),
-                json=body,
-            )
-            response.raise_for_status()
-            payload = response.json()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+                response = await client.post(
+                    f"{self.base_url.rstrip('/')}/chat/completions",
+                    headers=self._headers(),
+                    json=body,
+                )
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise self._http_error(exc, body_text=response.text) from exc
+                payload = response.json()
+        except httpx.TransportError as exc:
+            raise LLMError(
+                f"{self.name}: transport error: {exc}",
+                kind="transport",
+                provider=self.name,
+            ) from exc
 
         choice = payload["choices"][0]
         message = choice["message"]
@@ -104,34 +115,58 @@ class OpenAICompatProvider:
             stream=True,
             extra=kwargs,
         )
-        async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url.rstrip('/')}/chat/completions",
-                headers=self._headers(),
-                json=body,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    if line.startswith(":"):  # comment/keepalive
-                        continue
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if line == "[DONE]":
-                        return
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url.rstrip('/')}/chat/completions",
+                    headers=self._headers(),
+                    json=body,
+                ) as response:
                     try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    parsed = _parse_stream_chunk(chunk)
-                    if parsed is not None:
-                        yield parsed
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        await response.aread()
+                        raise self._http_error(exc, body_text=response.text) from exc
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if line.startswith(":"):  # comment/keepalive
+                            continue
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                        if line == "[DONE]":
+                            return
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        parsed = _parse_stream_chunk(chunk)
+                        if parsed is not None:
+                            yield parsed
+        except httpx.TransportError as exc:
+            raise LLMError(
+                f"{self.name}: transport error: {exc}",
+                kind="transport",
+                provider=self.name,
+            ) from exc
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _http_error(self, exc: Any, *, body_text: str) -> LLMError:
+        """Classify an httpx status failure into the error taxonomy."""
+        status = exc.response.status_code
+        kind = classify_http_status(status, body_text)
+        snippet = (body_text or "").strip().replace("\n", " ")[:300]
+        return LLMError(
+            f"{self.name}: HTTP {status} ({kind})"
+            + (f": {snippet}" if snippet else ""),
+            kind=kind,
+            status_code=status,
+            provider=self.name,
+        )
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
