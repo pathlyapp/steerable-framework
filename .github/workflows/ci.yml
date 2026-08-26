@@ -122,19 +122,15 @@ jobs:
     # full cross-platform matrix runs on `tags: [sidecar-v*]` via
     # .github/workflows/sidecar-build.yml.
     #
-    # Budget rationale (2026-05):
-    # * The current `install_only` python-build-standalone variant unpacks
-    #   to ~700 MB before any dep installs. With pydantic + our four
-    #   workspace packages and aggressive stdlib pruning the bundle lands
-    #   at ~741 MB on Linux x64.
-    # * 800 MB PR budget = ~60 MB head-room above the observed baseline,
-    #   enough to absorb a dep bump but tight enough to catch a 100 MB+
-    #   regression on the same PR.
-    # * The original 320 MB target documented in earlier commits assumed
-    #   the (smaller) `install_only_stripped` variant. Migrating to that
-    #   variant to reclaim ~400 MB is tracked in TODO.md as a follow-up
-    #   ("Migrate sidecar to install_only_stripped CPython distribution").
-    #   When that lands, drop both budgets back to 320 MB / 300 MB.
+    # Budget rationale (2026-08):
+    # * The build uses the `install_only_stripped` python-build-standalone
+    #   variant (debug symbols / toolchain artefacts removed); with pydantic
+    #   + our four workspace packages and aggressive stdlib pruning the
+    #   bundle lands well under 300 MB on Linux x64.
+    # * 320 MB PR budget = the original design target, with head-room for
+    #   dep bumps but tight enough to catch a 50 MB+ regression on the PR.
+    # * (History: the `install_only` variant unpacked to ~700 MB and needed
+    #   an 800 MB gate; the variant switch reclaimed ~400 MB.)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -147,12 +143,12 @@ jobs:
             --target host \
             --strip-stdlib \
             --aggressive \
-            --budget-mb 800
+            --budget-mb 320
       - name: Report bundle size
         run: |
           python <<'PY'
           import glob, json, pathlib
           manifest_path = glob.glob("packages/sidecar/dist/python-runtime/*/manifest.json")[0]
           mb = json.loads(pathlib.Path(manifest_path).read_text())["totalBytes"] / 1024 / 1024
-          print(f"::notice title=Sidecar bundle size (host)::{mb:.1f} MB / 800 MB budget")
+          print(f"::notice title=Sidecar bundle size (host)::{mb:.1f} MB / 320 MB budget")
           PY

@@ -294,14 +294,12 @@ phase closes or a new follow-up surfaces.
       currently-observed ~741 MB baseline; the original 320 MB design
       target is tracked under "Migrate sidecar to install_only_stripped"
       below.
-- [ ] **Migrate sidecar to `install_only_stripped` CPython distribution**
-      — the current `install_only` python-build-standalone variant
-      unpacks to ~700 MB and the prune logic only reclaims ~20 MB of
-      that. Switching to `install_only_stripped` (32 MB compressed
-      vs 105 MB) plus adapting the prune paths should let us drop both
-      the PR budget (`ci.yml`) and production budget (`sidecar-build.yml`)
-      back down to ~320 MB / ~300 MB respectively, matching the original
-      P5 sidecar size design.
+- [x] **Migrate sidecar to `install_only_stripped` CPython distribution**
+      — landed 2026-08-26. `ARCHIVE_VARIANT` in build_sidecar.py switches
+      the archive; darwin-arm64 bundle is 94.7 MB (was ~700 MB class on
+      Linux x64 with `install_only`). Both CI budgets dropped to the
+      original 320 MB design target (`ci.yml` PR gate, `sidecar-build.yml`
+      release matrix).
 - [ ] **Cross-platform sidecar build matrix**: prepare-sidecar.sh supports
       `--target all`, but the GitHub Actions workflow that emits release
       artefacts for win/linux/mac in one run isn't there yet.

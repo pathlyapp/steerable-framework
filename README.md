@@ -266,7 +266,7 @@ If you're using Steerable in production, send a PR adding your project here.
 |---|---|---|
 | **0.x consolidation** | 🟢 in progress | Stable surface API, integration tests against three downstream repos, downstream lockfile bumps semi-automated |
 | **0.3+ Trusted Publishing** | 🟡 next | PyPI auth migrates from API token → OIDC; cross-platform sidecar build matrix in GHA |
-| **0.4+ Sidecar slimming** | 🟡 planned | Switch to `python-build-standalone` `install_only_stripped` distro; target ~300 MB (down from current ~700 MB) |
+| **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
 
 Full open-follow-up list: [`TODO.md`](./TODO.md). Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.

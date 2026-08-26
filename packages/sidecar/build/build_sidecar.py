@@ -50,6 +50,13 @@ DIST_DIR = SIDECAR_PKG_DIR / "dist" / "python-runtime"
 PYTHON_BUILD_STANDALONE_RELEASE = "20260510"
 DEFAULT_PYTHON_VERSION = "3.12.13"
 
+# python-build-standalone archive variant. ``install_only_stripped`` is the
+# ``install_only`` tree with debug symbols and toolchain artefacts stripped
+# (~32 MB vs ~105 MB compressed; ~700 MB -> ~300 MB unpacked on Linux x64).
+# The sidecar is a distributed runtime, not a build environment — nothing
+# we ship needs the unstripped tree.
+ARCHIVE_VARIANT = "install_only_stripped"
+
 # Modules typically unused by the sidecar — safe to strip.
 # CONSERVATIVE list: definitely unused by us, no third-party module pulls them in.
 STDLIB_STRIP_CANDIDATES = (
@@ -107,14 +114,14 @@ class Target:
     def archive_filename(self) -> str:
         return (
             f"cpython-{DEFAULT_PYTHON_VERSION}+{PYTHON_BUILD_STANDALONE_RELEASE}-"
-            f"{self.triple}-install_only.tar.gz"
+            f"{self.triple}-{ARCHIVE_VARIANT}.tar.gz"
         )
 
     def archive_url(self, version: str) -> str:
         return (
             "https://github.com/astral-sh/python-build-standalone/releases/download/"
             f"{PYTHON_BUILD_STANDALONE_RELEASE}/"
-            f"cpython-{version}+{PYTHON_BUILD_STANDALONE_RELEASE}-{self.triple}-install_only.tar.gz"
+            f"cpython-{version}+{PYTHON_BUILD_STANDALONE_RELEASE}-{self.triple}-{ARCHIVE_VARIANT}.tar.gz"
         )
 
 

@@ -21,8 +21,13 @@
 
 - [x] **sidecar 反向通道**：✅ A1 已解决（2026-08-25）。sidecar 可发起
       `srv_` 前缀的反向请求并等响应，host supervisor 服务之。见 A1。
-- [ ] **包体**：sidecar 实测 700–740MB（CI 预算 780MB），320MB 目标未达成。
-      开发/canary 可用系统 python 绕过，正式发版前必须解决。
+- [x] **包体**：✅ 2026-08-26 解决。根因不是依赖（pydantic+httpx 很轻），
+      是 python-build-standalone 的 `install_only` 变体自带调试符号/工具链
+      产物（Linux x64 解包 ~700MB）。切换到 `install_only_stripped`
+      （`build_sidecar.py` 的 `ARCHIVE_VARIANT`），darwin-arm64 实测
+      94.7MB；CI 预算回落到设计目标：ci.yml 800→320MB、
+      sidecar-build.yml 780→320MB。构建产物冒烟通过（boot + ping +
+      干净退出）。
 
 ---
 
