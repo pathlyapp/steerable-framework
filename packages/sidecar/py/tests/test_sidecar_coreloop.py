@@ -427,3 +427,29 @@ async def test_steer_requires_content() -> None:
         _frame("agent.chat.steer", {"streamId": "s1", "content": "  "})
     )
     assert "error" in resp
+
+
+def test_default_loop_hooks_resolves_window_from_model() -> None:
+    """Fixed-60k default is gone: known models compact against their real
+    context window; explicit maxContextTokens still wins."""
+    from steerable_agent_runtime import ChainHooks, CompactionHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks
+
+    hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    assert isinstance(hooks, ChainHooks)
+    compaction = next(h for h in hooks._hooks if isinstance(h, CompactionHooks))
+    assert compaction._max_tokens == 131_072
+
+    explicit = _default_loop_hooks(
+        {"model": "gpt-oss:20b-cloud", "maxContextTokens": 24_000}
+    )
+    compaction = next(
+        h for h in explicit._hooks if isinstance(h, CompactionHooks)
+    )
+    assert compaction._max_tokens == 24_000
+
+    unknown = _default_loop_hooks({"model": "my-finetune"})
+    compaction = next(
+        h for h in unknown._hooks if isinstance(h, CompactionHooks)
+    )
+    assert compaction._max_tokens == 60_000

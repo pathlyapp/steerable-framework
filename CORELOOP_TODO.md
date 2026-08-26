@@ -407,8 +407,11 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
         - **首日 dogfood（2026-08-26 18:00 快照，app 运行 ~4h 后正常
           退出）**：5 trace 全 completed，hook 触发 compact×22 +
           tool_choice×3 + narrate×1，dedup 拦截 7 次，安全规则 0 拦截。
-          compact 22 次/5 trace 为病理值 → 催生 R4 的 P1「压缩提频
-          治理」（见下节）。本次会话早于校准闭环提交，
+          compact 22 次/5 trace 当时判为病理值 → 催生 R4 的 P1「压缩提频
+          治理」（见下节）。**事后还原（P1 修复时发现）：该读数约一半是
+          测量假象**——loop 的 compact 事件判据 `is not None` 在
+          ChainHooks 下每轮必发伪事件，真实压缩远少于此；判据已改恒等
+          比较。本次会话早于校准闭环提交，
           token-calibration.json 自下次 app 启动开始积累。
         - **剩余**：用户自用 dogfood 一周（手动操作，无法代办）；一周后
           跑 `trace-report.mjs` + 回放比对对账，按误伤率/误判率决定是否
@@ -592,21 +595,41 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
         `from .test_trace_recorder import` 相对导入 → 根目录跑全量
         收集失败。改平级导入 + 新增 tests/conftest.py 插入自身目录
         到 sys.path（importlib 模式不自动加）。根目录 332 全绿。
-- **P1 · dogfood 暴露的真实问题**
-  - [ ] **压缩提频治理（本轮头号新发现）**：22 次 compact / 5 trace 是
-        病理值——每次压缩全量重写 transcript，打掉 prompt cache 前缀
-        （云端模型按未缓存计费 + 延迟），且反复摘要造成信息损耗。
-        codex/dsh 都明文规避 history rewrite。双重根因：估算高估 41%
-        （deepseek 已校准 0.71，桌面 ollama 模型系数仍 1.0）+ 60k
-        阈值相对生产 14.5 万 tokens/trace 的真实用量偏激进。三步：
-        ① 等校准闭环生效（已上线，20 样本自动修正，无需改码）；
-        ② 阈值从固定 60k 改为按模型上下文窗比例（如 0.75×window）；
-        ③ 压缩策略改「前缀稳定」——只折叠旧工具输出（append-only，
-        保留消息序），摘要重写仅在折叠不够时二段触发。③ 是主要工作量。
-  - [ ] **terminal-exec pty 长尾（max 21s）**：反向通道 p50 仅 121ms，
-        但 terminal-exec 固定间隔轮询把 echo 拖到 21s，用户可感知。
-        agent 侧改 pty data 事件驱动 + 空闲退避（首查 50ms，指数上限
-        1s）。纯 agent 改动，不动框架。
+- **P1 · dogfood 暴露的真实问题** ✅ 已解决（2026-08-26 晚）
+  - [x] **压缩提频治理**：修复中还原了真相——「22 次 compact / 5 trace」
+        **约一半是测量假象**：loop.py 的 compact 事件判据是
+        `pre.transcript is not None`，而 ChainHooks 永远返回非 None
+        transcript → 每轮都发伪 compact 事件（已改恒等比较，只有真改写
+        才发事件）。真实治理三件套仍全部落地：
+        ② 阈值按模型上下文窗比例——`tokens.py` 新增
+        `MODEL_CONTEXT_WINDOWS`（镜像 api models_config 权威值：
+        deepseek/gpt-oss 131k、kimi-k2 262k、claude/gpt-5 200k…）+
+        `resolve_context_window(model, explicit)`，sidecar
+        `_default_loop_hooks` 改为按模型解析（显式 maxContextTokens 仍
+        优先；未知模型回落 60k 保守值；本地 ollama num_ctx=4096 场景需
+        显式配置，文档已注）。
+        ③ 观测驱动压力 + 滞后防抖：loop 把每轮 provider 实报的
+        `usage.prompt_tokens` 写进 `LoopContext.last_prompt_tokens`
+        （含当时 transcript 长度），压缩压力 = 上轮实测 + 增量估算，
+        首轮才用全量启发式；hook 改写 transcript 时重置观测（索引失效）。
+        新增 `recompact_margin_ratio=0.1` 滞后——压缩后压力须再涨
+        10%×window 才允许二次压缩，根治「压不下去就每轮重压」的 cache
+        毁灭循环。折叠保留 160 字符 excerpt（文件路径/错误类型留线索）。
+        ① 校准闭环（P3 已上线）继续自动修正系数。
+  - [x] **terminal-exec pty 长尾（max 21s）**：取证推翻原假设——代码里
+        **不存在固定间隔轮询**（terminal-manager 的 exec 是 onData 哨兵
+        事件驱动）。日志配对显示：system_profiler 类命令 2.5–11.8s 是
+        真实执行耗时；瞬时命令的 5.9s 是**会话首条命令**的 pty spawn +
+        zshrc 初始化（dogfood 期间 load avg 124 放大）。已落地：app 启动
+        2s 后预热共享 PTY 会话（`terminalManager.ensurePrimary()`），
+        预热后金丝雀 echo span 从 767ms（温）/5914ms（冷）降到 128–204ms。
+  - **default-on 回测中再抓一个真 bug**：`llm/index.ts` 的
+        `getSidecarSupervisor()` 内部仍要求 `STEERABLE_USE_SIDECAR === '1'`
+        ——P0 只翻了路由门的判据，这个 getter 的旧 opt-in 把 default-on
+        静默架空（零环境变量启动时回合仍落 TS 循环，金丝雀「通过」因为
+        它不分辨路径）。已翻为 `!== '0'`（LlmService 辅助调用同步走
+        sidecar，LLM 流量单一路径）。修复后金丝雀 trace 确认
+        `coreloop:true` 且 hook 事件只剩真实的 `tool_choice@r0`。
 - **P2 · 产品与默认值**
   - [ ] **fork / 变体语义**：产品已有消息变体功能（生产
         `chatmessagevariant` 表实证在用），但 CoreLoop 无 fork 对应物

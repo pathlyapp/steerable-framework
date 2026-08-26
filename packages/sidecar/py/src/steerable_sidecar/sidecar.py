@@ -835,7 +835,15 @@ def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
     (parity with the desktop TS loop). Everything it declines falls through
     to RetryHooks' taxonomy-routed backoff.
     """
-    max_ctx = int(params.get("maxContextTokens") or 60_000)
+    from steerable_agent_runtime.tokens import resolve_context_window
+
+    # Explicit maxContextTokens wins; otherwise the model's known context
+    # window (a fixed 60k against a 131k model compacted far earlier than the
+    # provider required — the dogfood 22-compacts/5-traces pathology).
+    max_ctx = resolve_context_window(
+        params.get("model"),
+        explicit=int(params.get("maxContextTokens") or 0) or None,
+    )
     return ChainHooks(
         CompactionHooks(max_context_tokens=max_ctx, model=params.get("model")),
         RetryHooks(),

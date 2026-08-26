@@ -175,6 +175,12 @@ class LoopContext:
     #: Successful tool results this turn — the anti-hallucination layer keys
     #: off "zero usable tool returns" to detect fabricated data reports.
     tool_successes: int = 0
+    #: Provider-reported prompt tokens of the last completed request, and the
+    #: transcript length at that moment. Ground truth for compaction pressure
+    #: (the heuristic estimate drifts per model; this does not). Hooks that
+    #: rewrite the transcript must reset both — the indices go stale.
+    last_prompt_tokens: int | None = None
+    last_prompt_transcript_len: int = 0
 
 
 @dataclass(slots=True)
@@ -452,7 +458,10 @@ class CoreLoop:
                     decision,
                 )
                 return
-            if pre.transcript is not None:
+            # Identity, not just non-None: ChainHooks always returns a
+            # transcript (the unchanged input when no hook rewrote it), so a
+            # non-None check would emit a spurious "compact" every round.
+            if pre.transcript is not None and pre.transcript is not transcript:
                 transcript = pre.transcript
                 yield LoopEvent(
                     "hook_action",
@@ -519,6 +528,10 @@ class CoreLoop:
                                 yield LoopEvent("reasoning_delta", {"delta": emit})
                         if chunk.tool_call_delta is not None:
                             tool_calls.append(chunk.tool_call_delta)
+                        if chunk.usage is not None:
+                            # Ground-truth context size for compaction pressure.
+                            ctx.last_prompt_tokens = chunk.usage.prompt_tokens
+                            ctx.last_prompt_transcript_len = len(transcript)
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
                                 budget_state, self._config.budget, tokens=chunk.usage.total_tokens

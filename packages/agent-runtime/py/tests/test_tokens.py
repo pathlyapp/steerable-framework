@@ -104,3 +104,20 @@ def test_builtin_deepseek_calibration() -> None:
     assert factor_for_model("deepseek-v3") == 0.71
     messages = [LLMMessage(role="user", content="a" * 40)]  # base 18
     assert estimate_tokens(messages, model="deepseek-v4") == math.ceil(18 * 0.71)
+
+
+def test_resolve_context_window() -> None:
+    from steerable_agent_runtime.tokens import (
+        DEFAULT_CONTEXT_WINDOW,
+        resolve_context_window,
+    )
+
+    # Explicit config always wins.
+    assert resolve_context_window("deepseek-v4", explicit=32_000) == 32_000
+    # Known models resolve from the table (mirrors deeppath-api models_config).
+    assert resolve_context_window("deepseek-v4") == 131_072
+    assert resolve_context_window("gpt-oss:20b-cloud") == 131_072
+    assert resolve_context_window("Kimi-K2.6") == 262_144
+    # Unknown model / no model → conservative fallback (the old fixed default).
+    assert resolve_context_window("some-finetune-9b") == DEFAULT_CONTEXT_WINDOW
+    assert resolve_context_window(None) == DEFAULT_CONTEXT_WINDOW

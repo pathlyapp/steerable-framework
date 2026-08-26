@@ -7,18 +7,24 @@ the transcript so the turn can continue.
 
 Strategy (deterministic first, LLM optional):
 
-1. Estimate transcript tokens (CJK-aware heuristic with per-model calibration
-   — see ``tokens.py``; providers report real usage for the budget axis).
+1. Measure context pressure. Ground truth is the provider-reported prompt
+   tokens of the previous request (exposed on ``ctx.last_prompt_tokens``)
+   plus a heuristic estimate of the messages appended since; only the first
+   round falls back to a full heuristic estimate (CJK-aware, per-model
+   calibrated — see ``tokens.py``).
 2. Under ``threshold_ratio * max_context_tokens`` → proceed unchanged.
 3. Over threshold →
    a. fold old ``tool`` messages (beyond ``keep_last_tool_results``) into a
-      one-line placeholder — tool output is the usual space hog;
+      one-line placeholder keeping a short excerpt — tool output is the
+      usual space hog;
    b. if still over and a summarizer provider is configured, replace the
       middle span (after the head, before the recent tail) with a summary
       message; otherwise drop the middle span behind a marker.
 
 System messages and the first user message (the goal) are always kept; the
-most recent ``keep_last_messages`` are never touched.
+most recent ``keep_last_messages`` are never touched. Between compactions
+the transcript is append-only, so provider prompt caches keep hitting; a
+rewrite invalidates the cache once, then the prefix is stable again.
 """
 
 from __future__ import annotations
@@ -34,7 +40,18 @@ from .tokens import estimate_tokens
 _SUMMARY_MARKER = "[context compacted: earlier conversation summarized]"
 _FOLDED_TOOL_MARKER = "[tool output folded to save context]"
 
+#: How much of a folded tool result survives as a clue (file paths, error
+#: types, key numbers) so the model can still reason about what it saw.
+_FOLD_EXCERPT_CHARS = 160
+
 __all__ = ["CompactionHooks", "estimate_tokens"]
+
+
+def _fold_content(content: str | None) -> str:
+    excerpt = " ".join((content or "").split())[:_FOLD_EXCERPT_CHARS]
+    if excerpt:
+        return f"{_FOLDED_TOOL_MARKER} excerpt: {excerpt}"
+    return _FOLDED_TOOL_MARKER
 
 
 class CompactionHooks(NoopHooks):
@@ -49,9 +66,12 @@ class CompactionHooks(NoopHooks):
         keep_last_tool_results: int = 2,
         summarizer: LLMProvider | None = None,
         model: str | None = None,
+        recompact_margin_ratio: float = 0.1,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
+        if not 0 <= recompact_margin_ratio:
+            raise ValueError("recompact_margin_ratio must be >= 0")
         self._max_tokens = max_context_tokens
         self._threshold = threshold_ratio
         self._keep_last = keep_last_messages
@@ -59,6 +79,14 @@ class CompactionHooks(NoopHooks):
         self._summarizer = summarizer
         #: Model name used for calibrated token estimates (see tokens.py).
         self._model = model
+        #: Hysteresis: after a compaction, pressure must grow by
+        #: ``recompact_margin_ratio * max_context_tokens`` before the next one
+        #: fires. Without it a transcript that stays over threshold even after
+        #: folding+summarizing re-compacts EVERY round — each rewrite destroys
+        #: the provider prompt-cache prefix (the dogfood 22-compacts/5-traces
+        #: pathology).
+        self._recompact_margin = recompact_margin_ratio * max_context_tokens
+        self._last_compaction_pressure: int | None = None
         # Observability for callers/tests: how many compactions happened.
         self.compactions = 0
         # Overflow-recovery state: consecutive context-overflow retries within
@@ -74,19 +102,52 @@ class CompactionHooks(NoopHooks):
     def _estimate(self, transcript: Sequence[LLMMessage]) -> int:
         return estimate_tokens(transcript, model=self._model)
 
+    def _pressure(self, transcript: Sequence[LLMMessage], ctx: Any) -> int:
+        """Estimated size of the NEXT request's prompt.
+
+        The provider-reported prompt tokens of the previous request are
+        ground truth for everything sent so far; only the messages appended
+        since (assistant turn + tool results + steers) need the heuristic.
+        First round (or any state where the observation went stale) falls
+        back to a full heuristic estimate.
+        """
+        observed = getattr(ctx, "last_prompt_tokens", None)
+        observed_len = getattr(ctx, "last_prompt_transcript_len", 0) or 0
+        if observed is not None and 0 < observed_len <= len(transcript):
+            return observed + self._estimate(transcript[observed_len:])
+        return self._estimate(transcript)
+
+    @staticmethod
+    def _reset_observed(ctx: Any) -> None:
+        """A rewrite invalidates the observed indices; the next request
+        re-observes. Without this the stale length would mis-slice."""
+        if getattr(ctx, "last_prompt_tokens", None) is not None:
+            ctx.last_prompt_tokens = None
+            ctx.last_prompt_transcript_len = 0
+
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: Any
     ) -> PreStepAction:
-        if self._estimate(transcript) < self._threshold * self._max_tokens:
+        pressure = self._pressure(transcript, ctx)
+        if pressure < self._threshold * self._max_tokens:
+            return PreStepAction(kind="proceed", transcript=transcript)
+        if (
+            self._last_compaction_pressure is not None
+            and pressure < self._last_compaction_pressure + self._recompact_margin
+        ):
             return PreStepAction(kind="proceed", transcript=transcript)
 
         compacted = self._fold_old_tool_results(transcript)
         if self._estimate(compacted) < self._threshold * self._max_tokens:
             self.compactions += 1
+            self._last_compaction_pressure = pressure
+            self._reset_observed(ctx)
             return PreStepAction(kind="proceed", transcript=compacted)
 
         compacted = await self._summarize_middle(compacted)
         self.compactions += 1
+        self._last_compaction_pressure = pressure
+        self._reset_observed(ctx)
         return PreStepAction(kind="proceed", transcript=compacted)
 
     async def on_request_error(
@@ -120,6 +181,8 @@ class CompactionHooks(NoopHooks):
         compacted = await self._summarize_middle(compacted)
         self.compactions += 1
         self.overflow_recoveries += 1
+        self._last_compaction_pressure = self._pressure(transcript, ctx)
+        self._reset_observed(ctx)
         return RetryAction(
             kind="retry",
             delay_ms=0,
@@ -136,7 +199,12 @@ class CompactionHooks(NoopHooks):
             return transcript
         fold_set = set(tool_idx[:fold_before])
         return [
-            LLMMessage(role="tool", name=m.name, tool_call_id=m.tool_call_id, content=_FOLDED_TOOL_MARKER)
+            LLMMessage(
+                role="tool",
+                name=m.name,
+                tool_call_id=m.tool_call_id,
+                content=_fold_content(m.content),
+            )
             if i in fold_set
             else m
             for i, m in enumerate(transcript)

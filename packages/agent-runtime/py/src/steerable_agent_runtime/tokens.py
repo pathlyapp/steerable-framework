@@ -108,3 +108,51 @@ def estimate_tokens(messages: Sequence[LLMMessage], model: str | None = None) ->
                 )
                 total += estimate_text_tokens(args)
     return math.ceil(total * factor_for_model(model))
+
+
+#: model-name prefix → provider context window in tokens (longest match wins).
+#: Values mirror the authoritative table in deeppath-api
+#: ``app/core/models_config.py`` (ProviderModelEntry.context_window).
+#: Unknown models fall back to ``DEFAULT_CONTEXT_WINDOW``.
+#:
+#: Caveat: for a LOCAL Ollama daemon the effective window is the daemon's
+#: ``num_ctx`` (default 4096), not the model's native window — pass an
+#: explicit ``maxContextTokens`` for local-model deployments.
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "deepseek": 131_072,
+    "gpt-oss": 131_072,
+    "llama3": 131_072,
+    "qwen3": 129_024,
+    "qwen2.5": 131_072,
+    "kimi-k2": 262_144,
+    "minimax": 197_000,
+    "claude": 200_000,
+    "gpt-5": 200_000,
+    "gpt-4": 128_000,
+}
+
+#: Fallback window for unknown models — the pre-calibration desktop default.
+DEFAULT_CONTEXT_WINDOW = 60_000
+
+
+def resolve_context_window(model: str | None, explicit: int | None = None) -> int:
+    """Context window for ``model``: explicit config wins, then the known-model
+    table, then the conservative fallback.
+
+    Compaction thresholds derive from this (``threshold_ratio * window``), so
+    a fixed default would either waste small-window models or — as with the
+    old fixed 60k against 131k models — compact far earlier than the provider
+    requires.
+    """
+    if explicit and explicit > 0:
+        return explicit
+    if model:
+        name = model.lower()
+        best = ""
+        window = 0
+        for prefix, w in MODEL_CONTEXT_WINDOWS.items():
+            if name.startswith(prefix) and len(prefix) > len(best):
+                best, window = prefix, w
+        if window:
+            return window
+    return DEFAULT_CONTEXT_WINDOW

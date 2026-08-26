@@ -107,14 +107,17 @@ async def test_over_threshold_folds_old_tool_results() -> None:
     events = await collect(loop.run([LLMMessage(role="user", content="go")]))
 
     assert hooks.compactions >= 1
-    # some later model call saw folded tool output instead of the raw blob
-    folded_seen = any(
-        "[tool output folded" in (m.content or "")
+    # some later model call saw folded tool output instead of the raw blob,
+    # keeping a short excerpt as a clue about what the tool returned
+    folded = [
+        m.content
         for call in provider.calls[1:]
         for m in call
-        if m.role == "tool"
-    )
-    assert folded_seen
+        if m.role == "tool" and "[tool output folded" in (m.content or "")
+    ]
+    assert folded
+    assert "excerpt: " in folded[0]
+    assert len(folded[0]) < 300  # the 3000-char blob is gone
     # and the loop still completed
     assert events[-1].data["status"] == "completed"
 
@@ -155,6 +158,135 @@ async def test_over_threshold_summarizes_middle_when_still_over() -> None:
     )
     assert summarized_seen
     assert events[-1].data["status"] == "completed"
+
+
+def test_pressure_blends_observed_usage_with_delta_estimate() -> None:
+    hooks = CompactionHooks(max_context_tokens=60_000)
+    transcript = [
+        LLMMessage(role="user", content="a" * 400),  # ~108 est
+        LLMMessage(role="assistant", content="b" * 40),
+        LLMMessage(role="tool", name="t", tool_call_id="c", content="c" * 40),
+    ]
+
+    class _Ctx:
+        last_prompt_tokens = None
+        last_prompt_transcript_len = 0
+
+    # No observation → full heuristic.
+    assert hooks._pressure(transcript, _Ctx()) == hooks._estimate(transcript)
+    # Observation covers the first message; only the appended two estimate.
+    _Ctx.last_prompt_tokens = 5_000
+    _Ctx.last_prompt_transcript_len = 1
+    expected = 5_000 + hooks._estimate(transcript[1:])
+    assert hooks._pressure(transcript, _Ctx()) == expected
+    # Stale observation (transcript rewritten shorter) → full heuristic.
+    _Ctx.last_prompt_transcript_len = 99
+    assert hooks._pressure(transcript, _Ctx()) == hooks._estimate(transcript)
+
+
+@pytest.mark.asyncio
+async def test_observed_usage_overrides_heuristic_overestimate() -> None:
+    # Transcript the heuristic scores OVER threshold (4k chars ≈ 1008 > 800),
+    # but the provider measured the real prompt at 100 and nothing was
+    # appended since — ground truth wins, no compaction. This is the
+    # production 41%-overestimate class (dogfood: 22 compacts / 5 traces).
+    hooks = CompactionHooks(max_context_tokens=1_000, threshold_ratio=0.8)
+    transcript = [LLMMessage(role="user", content="x" * 4_000)]
+
+    class _Ctx:
+        last_prompt_tokens = 100
+        last_prompt_transcript_len = 1
+
+    action = await hooks.pre_step(transcript, _Ctx())
+    assert hooks.compactions == 0
+    assert action.transcript is transcript
+
+
+@pytest.mark.asyncio
+async def test_observed_usage_triggers_compaction_when_heuristic_calm() -> None:
+    # Inverse: tiny messages (heuristic ≈ 60, calm) but the provider reports
+    # the real prompt at 2000 against a 1600 threshold — compaction fires.
+    from steerable_agent_runtime.llm import LLMUsage
+
+    usage = LLMUsage(prompt_tokens=2_000, completion_tokens=5, total_tokens=2_005)
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("emit")], "usage": usage},
+            {"content": "final", "usage": usage},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit() -> str:
+        return "ok"
+
+    router.register(emit)
+    hooks = CompactionHooks(max_context_tokens=2_000, threshold_ratio=0.8)
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+
+    assert hooks.compactions >= 1
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_hysteresis_blocks_recompaction_without_pressure_growth() -> None:
+    # A huge assistant message lands in the protected tail (keep_last_messages
+    # covers it), so no compaction can get pressure under threshold. Without
+    # hysteresis pre_step re-compacts EVERY round (each rewrite destroys the
+    # prompt-cache prefix); with it, compaction refires only after pressure
+    # grows by the margin.
+    provider = make_provider(
+        [
+            {"content": "z" * 8_000, "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "s1", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "s2", "tool_calls": [tc("emit", {"n": 3})]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit(n: int) -> str:
+        return "ok"
+
+    router.register(emit)
+    hooks = CompactionHooks(
+        max_context_tokens=1_000,
+        threshold_ratio=0.5,
+        keep_last_messages=6,
+        keep_last_tool_results=0,
+        recompact_margin_ratio=0.2,
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+
+    assert hooks.compactions == 1
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_compaction_resets_observed_state() -> None:
+    # After a rewrite the observed indices are stale; the hook must clear them
+    # so the next pressure check re-estimates (and the next request re-observes).
+    hooks = CompactionHooks(
+        max_context_tokens=1_000, threshold_ratio=0.5, keep_last_tool_results=0
+    )
+    transcript = [
+        LLMMessage(role="user", content="go"),
+        LLMMessage(role="tool", name="t", tool_call_id="c1", content="y" * 3_000),
+        LLMMessage(role="tool", name="t", tool_call_id="c2", content="y" * 3_000),
+    ]
+
+    class _Ctx:
+        last_prompt_tokens = 900
+        last_prompt_transcript_len = 3
+
+    ctx = _Ctx()
+    action = await hooks.pre_step(transcript, ctx)
+    assert hooks.compactions == 1
+    assert ctx.last_prompt_tokens is None
+    assert ctx.last_prompt_transcript_len == 0
+    assert any("[tool output folded" in (m.content or "") for m in action.transcript)
 
 
 @pytest.mark.asyncio
