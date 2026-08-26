@@ -10,7 +10,15 @@ from __future__ import annotations
 
 import pytest
 
+from steerable_agent_runtime import CalibratingProvider
 from steerable_sidecar.sidecar import default_llm_provider_factory
+
+
+@pytest.fixture(autouse=True)
+def _calibration_off(monkeypatch: pytest.MonkeyPatch):
+    """Keep these construction tests hermetic: no reads of the developer's
+    real ~/.steerable/token-calibration.json, no global factor registration."""
+    monkeypatch.setenv("STEERABLE_TOKEN_CALIBRATION", "0")
 
 
 def test_openai_compat_constructs() -> None:
@@ -62,3 +70,21 @@ def test_unknown_provider_rejected() -> None:
 def test_model_required() -> None:
     with pytest.raises(ValueError, match="model is required"):
         default_llm_provider_factory({"provider": "ollama"})
+
+
+def test_calibration_wrapper_default_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.delenv("STEERABLE_TOKEN_CALIBRATION")
+    monkeypatch.setenv("STEERABLE_TOKEN_CALIBRATION_PATH", str(tmp_path / "cal.json"))
+    provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert isinstance(provider, CalibratingProvider)
+    assert provider.inner.name == "ollama"  # type: ignore[attr-defined]
+    # transparent attribute delegation still exposes the inner provider
+    assert provider.base_url == "http://127.0.0.1:11434/v1"  # type: ignore[attr-defined]
+
+
+def test_calibration_wrapper_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEERABLE_TOKEN_CALIBRATION", "0")
+    provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert not isinstance(provider, CalibratingProvider)

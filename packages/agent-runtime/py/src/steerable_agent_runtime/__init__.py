@@ -11,6 +11,7 @@ from .antihallucination import (
     parse_turn_route,
     should_run_grounding_judge,
 )
+from .calibration import CalibratingProvider, ModelCalibration, UsageCalibration
 from .compaction import CompactionHooks
 from .errors import (
     BudgetExhaustedError,
@@ -69,6 +70,7 @@ __all__ = [
     "AntiHallucinationConfig",
     "AntiHallucinationHooks",
     "BudgetExhaustedError",
+    "CalibratingProvider",
     "ChainHooks",
     "CompactionHooks",
     "CompletionAction",
@@ -103,6 +105,7 @@ __all__ = [
     "ToolDispatchError",
     "ToolExecutor",
     "MODEL_TOKEN_FACTORS",
+    "ModelCalibration",
     "ToolRouter",
     "TraceRecorder",
     "estimate_text_tokens",
@@ -113,6 +116,7 @@ __all__ = [
     "to_otlp_json",
     "TransportAdapter",
     "TransportError",
+    "UsageCalibration",
     "build_step_decision_event",
     "detect_claimed_execution",
     "detect_deferred_execution",

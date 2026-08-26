@@ -862,6 +862,29 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
     )
 
 
+def _wrap_with_calibration(provider: LLMProvider) -> LLMProvider:
+    """Wrap the provider so every request records estimated-vs-observed usage.
+
+    Default-on: dogfooding should accumulate calibration samples with zero
+    setup. Disable with ``STEERABLE_TOKEN_CALIBRATION=0``; override the
+    aggregates file with ``STEERABLE_TOKEN_CALIBRATION_PATH`` (default
+    ``~/.steerable/token-calibration.json``). Previously accumulated factors
+    are registered into MODEL_TOKEN_FACTORS on load, so a restarted sidecar
+    resumes with its measured corrections.
+    """
+    flag = os.environ.get("STEERABLE_TOKEN_CALIBRATION", "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return provider
+    from steerable_agent_runtime import CalibratingProvider, UsageCalibration
+
+    path = os.environ.get("STEERABLE_TOKEN_CALIBRATION_PATH") or os.path.join(
+        os.path.expanduser("~"), ".steerable", "token-calibration.json"
+    )
+    calibration = UsageCalibration.load(path)
+    calibration.register_factors()
+    return CalibratingProvider(provider, calibration, persist_path=path)
+
+
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     """Construct an LLMProvider from a chat-stream request payload.
 
@@ -889,17 +912,21 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             if not base_url.endswith("/v1"):
                 base_url = f"{base_url}/v1"
 
-        return OpenAICompatProvider(
-            name=provider_kind or "openai_compat",
-            base_url=base_url or "https://api.openai.com/v1",
-            api_key=api_key,
-            model=str(model),
+        return _wrap_with_calibration(
+            OpenAICompatProvider(
+                name=provider_kind or "openai_compat",
+                base_url=base_url or "https://api.openai.com/v1",
+                api_key=api_key,
+                model=str(model),
+            )
         )
     if provider_kind in {"anthropic", "claude"}:
         from steerable_agent_runtime.llm import AnthropicProvider
 
-        return AnthropicProvider(
-            name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+        return _wrap_with_calibration(
+            AnthropicProvider(
+                name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+            )
         )
 
     raise ValueError(f"unknown provider: {provider_kind!r}")

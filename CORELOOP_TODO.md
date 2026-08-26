@@ -525,12 +525,28 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
         - 测试：部分中断（c1 有结果 c2 合成且顺序保持）/完整 trace 透传/
           全部中断。
 - **P3 · 数据闭环与生态**
-  - [~] **校准系数实测闭环**：出厂表已非空——`deepseek: 0.71` 来自
-        生产聚合回归（见 P0 线上数据实测节，6,605 桶，Σ实际/Σ估算
-        =0.708）。剩余：sidecar 每轮拿到 provider usage 后对照估算值
-        算 observed/estimated 比值，滚动平均写入 `MODEL_TOKEN_FACTORS`
-        （或落盘配置）——请求级数据能拆分聚合回归不可识别的
-        cjk/other 单字符系数（共线性），并覆盖 ollama 系桌面模型。
+  - [x] **校准系数实测闭环**（2026-08-26 落地，runtime 240 + sidecar 43
+        全绿）：出厂表已非空——`deepseek: 0.71` 来自生产聚合回归
+        （见 P0 线上数据实测节，6,605 桶，Σ实际/Σ估算=0.708）。
+        请求级自记录回路已落地：
+        - `calibration.py`：`UsageCalibration`（按模型滚动 Σobs/Σest，
+          ratio-of-sums 抗小样本噪声；单请求比值超出 [0.1, 10] 截断防
+          脏数据；≥20 样本自动 `register_model_factor`，精确模型名经
+          最长前缀匹配覆盖族系数）+ `CalibratingProvider`（包装任意
+          LLMProvider，complete/stream 全透传，**对基础启发式估值**——
+          对已修正估值测量会让比值假性收敛到 1.0；completion 侧含
+          reasoning_delta，思维链按 completion 计费）；JSON 原子落盘
+          （tmp+rename），重启后续算。
+        - sidecar 工厂默认开启（`STEERABLE_TOKEN_CALIBRATION=0` 关闭，
+          `STEERABLE_TOKEN_CALIBRATION_PATH` 改路径，默认
+          `~/.steerable/token-calibration.json`），加载时即注册已有
+          系数——dogfood 零配置积累样本。
+        - 测试 12 项：ratio-of-sums 数学/min_samples 门控/脏数据截断/
+          自动注册/持久化往返/坏文件容错/stream usage 捕获/无 usage
+          不记录/周期落盘/属性透明委托。
+        - 剩余（dogfood 一周后）：读 `~/.steerable/token-calibration.json`
+          对账 ollama 系模型实测系数，与 deepseek 0.71 对照决定是否
+          拆分 cjk/other 单字符系数。
   - [ ] **MCP 下沉**：维持原约定（A4 稳定后按需，用户已确认推迟）。
 
 **本轮明确不做**：沙箱下沉（产品侧决策，桌面端刻意全允许）；实时 OTel
