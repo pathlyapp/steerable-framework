@@ -54,6 +54,7 @@ from steerable_agent_runtime import (
     TraceRecorder,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMProvider
+from steerable_agent_runtime.resume import project_transcript
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
 from steerable_agent_runtime.transport.stdio_jsonrpc import (
     JsonRpcError,
@@ -142,6 +143,7 @@ class Sidecar:
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
         register("agent.chat.steer", self._handle_chat_steer)
+        register("agent.chat.fork", self._handle_chat_fork)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -421,6 +423,66 @@ class Sidecar:
         task = self._streams.pop(stream_id, None)
         if task is not None and not task.done():
             task.cancel()
+
+    async def _handle_chat_fork(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Start a new CoreLoop stream seeded from a recorded trace — the
+        variant/regenerate primitive for trace-sourced sessions.
+
+        Params: everything ``agent.chat.stream`` takes (provider/model are
+        required), plus::
+
+            {
+              "traceId": "tr_...",         # required — the trace to fork from
+              "untilSequence": 41,          # optional inclusive event-sequence
+                                            # bound (see resume.project_transcript)
+              "messages": [...],            # optional messages appended after
+                                            # the projected seed (e.g. the
+                                            # re-asked user turn)
+            }
+
+        Returns ``{"streamId", "seedMessages"}``. The fork always runs the
+        CoreLoop path (projection is a CoreLoop concept) and records its own
+        trace, so each variant is independently auditable. Hosts that keep
+        their own message store (the desktop) don't need this RPC — they
+        truncate their store and call ``agent.chat.stream`` with the rebuilt
+        history.
+        """
+        params = _require_params(params)
+        if self._transport is None:
+            raise JsonRpcError(
+                "transport not ready", code=-32099, kind="internal"
+            )
+        trace_id = params.get("traceId")
+        if not trace_id:
+            raise JsonRpcError("traceId required", code=-32602, kind="invalid_params")
+        events = await self.storage.list_events(str(trace_id))
+        if not events:
+            raise JsonRpcError(
+                f"trace not found: {trace_id}", code=-32004, kind="invalid_request"
+            )
+        events.sort(key=lambda e: getattr(e, "sequence", 0))
+        until = params.get("untilSequence")
+        seed = project_transcript(
+            events, until_sequence=int(until) if until is not None else None
+        )
+        seed.extend(_coerce_messages(params.get("messages") or []))
+
+        try:
+            provider = self._llm_provider_factory(params)
+        except Exception as exc:
+            raise JsonRpcError(
+                f"failed to construct LLM provider: {exc}",
+                code=-32602,
+                kind="invalid_params",
+            ) from exc
+
+        stream_id = params.get("streamId") or _new_stream_id()
+        transport = self._transport
+        task = asyncio.create_task(
+            self._run_chat_stream_coreloop(provider, seed, params, stream_id, transport)
+        )
+        self._streams[stream_id] = task
+        return {"streamId": stream_id, "seedMessages": len(seed)}
 
     async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Inject a user message into a running CoreLoop turn.
@@ -851,15 +913,37 @@ def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
+    max_rounds = int(params.get("maxRounds", 32))
     budget = None
     if (budget_tokens := params.get("budgetTokens")) is not None:
         budget = BudgetLimit(
             max_tokens=int(budget_tokens),
-            max_steps=int(params.get("maxRounds", 32)),
+            max_steps=max_rounds,
             max_tool_calls=int(params.get("budgetMaxToolCalls", 10_000)),
         )
+    else:
+        # Default cost guard (2026-08-26, production-calibrated). The desktop
+        # TS loop had a fixed 60k token budget; the CoreLoop path launched
+        # with none — a default-on regression. Production distribution over
+        # 31k api traces: mean 145k total tokens/trace ≈ 1.1× deepseek's
+        # 131k window, and the api's fixed 120k cap cut 6% of real tasks
+        # (budget_exhausted terminal). Default to 2× the model's context
+        # window: real tasks fit, runaway cost stays bounded. maxRounds is
+        # the primary runaway guard; only the token axis of BudgetLimit is
+        # consumed by the loop today (steps/tool_calls stay inert).
+        from steerable_agent_runtime.tokens import resolve_context_window
+
+        window = resolve_context_window(
+            params.get("model"),
+            explicit=int(params.get("maxContextTokens") or 0) or None,
+        )
+        budget = BudgetLimit(
+            max_tokens=2 * window,
+            max_steps=max_rounds,
+            max_tool_calls=10_000,
+        )
     return LoopConfig(
-        max_rounds=int(params.get("maxRounds", 32)),
+        max_rounds=max_rounds,
         max_tool_errors=int(params.get("maxToolErrors", 3)),
         budget=budget,
         temperature=(

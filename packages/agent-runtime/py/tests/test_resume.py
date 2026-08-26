@@ -71,6 +71,44 @@ async def test_project_full_fidelity_roundtrip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_project_until_sequence_forks_the_transcript() -> None:
+    """Truncating the event stream at a fork point drops everything from
+    that event onward — the variant/regenerate primitive."""
+    router = ToolRouter()
+
+    async def emit(n: int) -> str:
+        return f"r{n}"
+
+    router.register(emit)
+    storage, trace_id = await _run_traced(
+        [
+            {"content": "first ", "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "second ", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "done"},
+        ],
+        router,
+        config=LoopConfig(persist_tool_results=True),
+    )
+
+    events = await storage.list_events(trace_id)
+    events.sort(key=lambda e: e.sequence)
+    # Fork at the end of round 0: round 1's content deltas precede its
+    # tool_call_start in the stream, so the round boundary (stage_complete)
+    # is the correct fork point, not the call start.
+    stage_done = [e for e in events if e.kind == "stage_complete"]
+    assert len(stage_done) == 2
+
+    forked = project_transcript(events, until_sequence=stage_done[0].sequence)
+    assert [m.role for m in forked] == ["assistant", "tool"]
+    assert forked[0].content == "first "
+
+    full = project_transcript(events)
+    assert [m.role for m in full] == [
+        "assistant", "tool", "assistant", "tool", "assistant",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_project_falls_back_to_preview() -> None:
     """Default loop config records only the 300-char preview — projection
     stays lossy-but-usable."""

@@ -23,6 +23,7 @@ class _ScriptedProvider:
         self.attempts = 0
         self._round = 0
         self.stream_kwargs: list[dict] = []
+        self.seen_messages: list[list] = []
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
@@ -31,6 +32,7 @@ class _ScriptedProvider:
         self.attempts += 1
         attempt = self.attempts
         self.stream_kwargs.append(dict(kwargs))
+        self.seen_messages.append(list(messages))
         chunks = self._script[min(self._round, len(self._script) - 1)]
 
         async def _gen():
@@ -453,3 +455,253 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
         h for h in unknown._hooks if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 60_000
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_seeds_from_trace_projection() -> None:
+    """fork = project the source trace, append the re-asked user turn, run a
+    new CoreLoop stream that records its own trace (variant semantics)."""
+    provider = _ScriptedProvider([_text_round("first answer"), _text_round("second answer")])
+    sidecar = _make_sidecar(provider)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "q1"}],
+            "useCoreLoop": True,
+        },
+    )
+    done = [p for m, p in events if m == "stream.done"][0]
+    trace_id = done["traceId"]
+
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "traceId": trace_id,
+                "messages": [{"role": "user", "content": "q2"}],
+            },
+        )
+    )
+    assert "error" not in resp, resp
+    # The seed is the projected assistant reply (the user turn was loop
+    # input, not an event); the re-asked user message is appended.
+    assert resp["result"]["seedMessages"] == 2
+    task = sidecar._streams.get(resp["result"]["streamId"])
+    if task is not None:
+        await task
+
+    fork_call = provider.seen_messages[-1]
+    assert [m.role for m in fork_call] == ["assistant", "user"]
+    assert fork_call[0].content == "first answer"
+    assert fork_call[1].content == "q2"
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_until_sequence_truncates() -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+            _text_round("forked"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+        },
+    )
+    trace_id = [p for m, p in events if m == "stream.done"][0]["traceId"]
+    stored = await sidecar.storage.list_events(trace_id)
+    result_event = next(e for e in stored if e.kind == "tool_call_result")
+
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "traceId": trace_id,
+                "untilSequence": result_event.sequence,
+                "messages": [{"role": "user", "content": "try again"}],
+            },
+        )
+    )
+    assert "error" not in resp, resp
+    # assistant(tool_call) + tool(result) survive; round 1's text is cut.
+    assert resp["result"]["seedMessages"] == 3
+    task = sidecar._streams.get(resp["result"]["streamId"])
+    if task is not None:
+        await task
+    fork_call = provider.seen_messages[-1]
+    assert [m.role for m in fork_call] == ["assistant", "tool", "user"]
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_unknown_trace_errors() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {"provider": "openai_compat", "model": "fake", "traceId": "nope"},
+        )
+    )
+    assert "error" in resp
+
+
+def test_build_loop_config_default_budget_scales_with_window() -> None:
+    """No explicit budgetTokens → 2× the model's context window (production-
+    calibrated: mean trace ≈ 1.1× window; the old fixed 120k api cap cut 6%
+    of real tasks). Explicit budgetTokens still wins."""
+    from steerable_sidecar.sidecar import _build_loop_config
+
+    cfg = _build_loop_config({"model": "deepseek-v4"})
+    assert cfg.budget is not None
+    assert cfg.budget.max_tokens == 2 * 131_072
+
+    cfg_unknown = _build_loop_config({})
+    assert cfg_unknown.budget is not None
+    assert cfg_unknown.budget.max_tokens == 2 * 60_000
+
+    cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
+    assert cfg_explicit.budget is not None
+    assert cfg_explicit.budget.max_tokens == 50_000
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_seeds_from_trace_projection() -> None:
+    """fork = project the source trace, append the re-asked user turn, run a
+    new CoreLoop stream that records its own trace (variant semantics)."""
+    provider = _ScriptedProvider([_text_round("first answer"), _text_round("second answer")])
+    sidecar = _make_sidecar(provider)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "q1"}],
+            "useCoreLoop": True,
+        },
+    )
+    done = [p for m, p in events if m == "stream.done"][0]
+    trace_id = done["traceId"]
+
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "traceId": trace_id,
+                "messages": [{"role": "user", "content": "q2"}],
+            },
+        )
+    )
+    assert "error" not in resp, resp
+    # The seed is the projected assistant reply (the user turn was loop
+    # input, not an event); the re-asked user message is appended.
+    assert resp["result"]["seedMessages"] == 2
+    task = sidecar._streams.get(resp["result"]["streamId"])
+    if task is not None:
+        await task
+
+    fork_call = provider.seen_messages[-1]
+    assert [m.role for m in fork_call] == ["assistant", "user"]
+    assert fork_call[0].content == "first answer"
+    assert fork_call[1].content == "q2"
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_until_sequence_truncates() -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+            _text_round("forked"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+        },
+    )
+    trace_id = [p for m, p in events if m == "stream.done"][0]["traceId"]
+    stored = await sidecar.storage.list_events(trace_id)
+    result_event = next(e for e in stored if e.kind == "tool_call_result")
+
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "traceId": trace_id,
+                "untilSequence": result_event.sequence,
+                "messages": [{"role": "user", "content": "try again"}],
+            },
+        )
+    )
+    assert "error" not in resp, resp
+    # assistant(tool_call) + tool(result) survive; round 1's text is cut.
+    assert resp["result"]["seedMessages"] == 3
+    task = sidecar._streams.get(resp["result"]["streamId"])
+    if task is not None:
+        await task
+    fork_call = provider.seen_messages[-1]
+    assert [m.role for m in fork_call] == ["assistant", "tool", "user"]
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_unknown_trace_errors() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {"provider": "openai_compat", "model": "fake", "traceId": "nope"},
+        )
+    )
+    assert "error" in resp
+
+
+def test_build_loop_config_default_budget_scales_with_window() -> None:
+    """No explicit budgetTokens → 2× the model's context window (production-
+    calibrated: mean trace ≈ 1.1× window; the old fixed 120k api cap cut 6%
+    of real tasks). Explicit budgetTokens still wins."""
+    from steerable_sidecar.sidecar import _build_loop_config
+
+    cfg = _build_loop_config({"model": "deepseek-v4"})
+    assert cfg.budget is not None
+    assert cfg.budget.max_tokens == 2 * 131_072
+
+    cfg_unknown = _build_loop_config({})
+    assert cfg_unknown.budget is not None
+    assert cfg_unknown.budget.max_tokens == 2 * 60_000
+
+    cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
+    assert cfg_explicit.budget is not None
+    assert cfg_explicit.budget.max_tokens == 50_000

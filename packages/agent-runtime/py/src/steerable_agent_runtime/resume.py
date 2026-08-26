@@ -68,13 +68,30 @@ def _kind(event: Any) -> str:
     return str(getattr(event, "kind", ""))
 
 
-def project_transcript(events: Iterable[Any]) -> list[LLMMessage]:
+def project_transcript(
+    events: Iterable[Any],
+    *,
+    until_sequence: int | None = None,
+) -> list[LLMMessage]:
     """Rebuild the loop's transcript from its recorded event stream.
 
     Events must be in emission order (``TraceEvent.sequence`` ascending).
     Returns messages ready to pass to ``CoreLoop.run`` — append the new user
     message and continue the session.
+
+    ``until_sequence`` (inclusive) truncates the event stream before
+    projecting — the fork primitive for variant/regenerate flows: the
+    caller locates the fork point via ``trace.fetch`` (e.g. the sequence of
+    the ``tool_call_start`` to exclude onward, or the completion to stop
+    after) and re-runs from the truncated transcript. Truncation needs
+    stored events (``TraceEvent.sequence``); raw LoopEvents without a
+    sequence attribute are treated as sequence 0.
     """
+
+    if until_sequence is not None:
+        events = [
+            e for e in events if getattr(e, "sequence", 0) <= until_sequence
+        ]
 
     messages: list[LLMMessage] = []
     pending_text: list[str] = []
@@ -191,9 +208,17 @@ def _close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     return out
 
 
-async def load_transcript(storage: "StorageAdapter", trace_id: str) -> list[LLMMessage]:
-    """Fetch a trace's events from storage and project them to a transcript."""
+async def load_transcript(
+    storage: "StorageAdapter",
+    trace_id: str,
+    *,
+    until_sequence: int | None = None,
+) -> list[LLMMessage]:
+    """Fetch a trace's events from storage and project them to a transcript.
+
+    ``until_sequence`` forks the projection — see ``project_transcript``.
+    """
 
     events = await storage.list_events(trace_id)
     events.sort(key=lambda e: getattr(e, "sequence", 0))
-    return project_transcript(events)
+    return project_transcript(events, until_sequence=until_sequence)

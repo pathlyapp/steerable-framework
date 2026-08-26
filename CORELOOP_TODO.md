@@ -630,18 +630,26 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
         它不分辨路径）。已翻为 `!== '0'`（LlmService 辅助调用同步走
         sidecar，LLM 流量单一路径）。修复后金丝雀 trace 确认
         `coreloop:true` 且 hook 事件只剩真实的 `tool_choice@r0`。
-- **P2 · 产品与默认值**
-  - [ ] **fork / 变体语义**：产品已有消息变体功能（生产
-        `chatmessagevariant` 表实证在用），但 CoreLoop 无 fork 对应物
-        ——重新生成变体时无法「从消息 N 分叉」复用前缀，只能整段重跑。
-        codex（Copied|Referenced）与 dsh（seedLength）都有成熟参照。
-        做法：resume 投影加 `project_transcript(until_message_id)` 截断
-        参数 + sidecar `agent.chat.fork` RPC（新 streamId 从截断
-        transcript 起跑）。
-  - [ ] **budget 默认值按生产分布放宽**：生产 3.1 万 trace 中
-        budget_exhausted 占终态 6%（1,862 条）——默认预算偏紧，真实
-        任务被预算切断的比例可观测。按生产 token 分布（default 模型均值
-        14.5 万/trace）重定 `LoopConfig` 预算默认值，与压缩阈值联动。
+- **P2 · 产品与默认值（✅ 2026-08-26 完成，框架 344 测试全绿 + 金丝雀 PASS）**
+  - [x] **fork / 变体语义**：✅ 落地。`project_transcript(events,
+        until_sequence=N)` 截断参数（resume.py，`load_transcript` 透传）
+        + sidecar `agent.chat.fork` RPC：`{traceId, untilSequence?,
+        messages?}` → 投影截断 transcript + 追加消息 → 新 streamId 起跑
+        并独立记录 trace（变体语义：每个变体一条 trace）。桌面端不需要
+        此 RPC——regenerate 已在自有消息库上 truncate-and-rerun，CoreLoop
+        路径天然兼容；fork RPC 服务 trace-sourced 会话（未来 api
+        `chatmessagevariant` 采纳、sidecar 原生会话）。分叉点经
+        `trace.fetch` 定位；注意轮边界（`stage_complete`）才是正确分叉点
+        ——一轮的 content_delta 先于其 tool_call_start。测试 ×4。
+  - [x] **budget 默认值按生产分布放宽**：✅ 落地，并修复一个默认开启
+        回归——TS 循环有固定 60k token 预算，CoreLoop 路径上线时**完全
+        没有**预算（只剩 maxRounds=32 兜底）。sidecar `_build_loop_config`
+        现在在未传 `budgetTokens` 时默认 `max_tokens = 2 ×
+        resolve_context_window(model)`（deepseek 262k / 未知模型 120k）。
+        生产分布实证：均值 14.5 万/trace ≈ 1.1× 窗口，api 固定 120k 上限
+        切断 6% 真实任务；2× 窗口让真实任务通过、失控成本仍有界。
+        maxRounds 仍是主失控护栏（BudgetLimit 的 steps/tool_calls 轴当前
+        不被 loop 消费）。显式 `budgetTokens` 优先。测试 ×1。
 - **P3 · 观望（不排期）**
   - [ ] 多智能体 seam（codex/dsh 都有，桌面产品是否需要未定——产品
         决策）；MCP 下沉（维持约定推迟）；实时 OTel span（事后导出
