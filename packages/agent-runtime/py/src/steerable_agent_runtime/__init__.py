@@ -1,6 +1,17 @@
 """Steerable agent runtime — Tier 3 adapter package."""
 
-from .compaction import CompactionHooks, estimate_tokens
+from .antihallucination import (
+    AntiHallucinationConfig,
+    AntiHallucinationHooks,
+    detect_claimed_execution,
+    detect_deferred_execution,
+    detect_deferred_execution_eager,
+    detect_execution_intent_in_user_message,
+    parse_grounding_verdict,
+    parse_turn_route,
+    should_run_grounding_judge,
+)
+from .compaction import CompactionHooks
 from .errors import (
     BudgetExhaustedError,
     PolicyDeniedError,
@@ -11,7 +22,15 @@ from .errors import (
 from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
-from .hooks import ChainHooks, LoopHooks, NoopHooks, PreStepAction, RetryAction
+from .hooks import (
+    ChainHooks,
+    CompletionAction,
+    CompletionDraft,
+    LoopHooks,
+    NoopHooks,
+    PreStepAction,
+    RetryAction,
+)
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
 from .loop import (
     CompletionDecision,
@@ -30,18 +49,31 @@ from .replay import (
     build_step_decision_event,
     reduce_execution_state,
 )
+from .otel import export_otlp_http, to_otlp_json
+from .resume import load_transcript, project_transcript
 from .retry import RetryHooks
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
+from .tokens import (
+    MODEL_TOKEN_FACTORS,
+    estimate_text_tokens,
+    estimate_tokens,
+    factor_for_model,
+    register_model_factor,
+)
 from .tools import RegisteredTool, ToolRouter, tool
 from .tracing import TraceRecorder
 from .transport import TransportAdapter
 
 __all__ = [
+    "AntiHallucinationConfig",
+    "AntiHallucinationHooks",
     "BudgetExhaustedError",
     "ChainHooks",
     "CompactionHooks",
+    "CompletionAction",
     "CompletionDecision",
+    "CompletionDraft",
     "CoreLoop",
     "ExecutionBudget",
     "FilesystemSpillStore",
@@ -70,14 +102,29 @@ __all__ = [
     "StorageError",
     "ToolDispatchError",
     "ToolExecutor",
+    "MODEL_TOKEN_FACTORS",
     "ToolRouter",
     "TraceRecorder",
+    "estimate_text_tokens",
+    "estimate_tokens",
+    "export_otlp_http",
+    "factor_for_model",
+    "register_model_factor",
+    "to_otlp_json",
     "TransportAdapter",
     "TransportError",
     "build_step_decision_event",
-    "estimate_tokens",
+    "detect_claimed_execution",
+    "detect_deferred_execution",
+    "detect_deferred_execution_eager",
+    "detect_execution_intent_in_user_message",
     "extract_inline_tool_calls",
+    "parse_grounding_verdict",
+    "parse_turn_route",
+    "load_transcript",
+    "project_transcript",
     "reduce_execution_state",
+    "should_run_grounding_judge",
     "tool",
 ]
 

@@ -37,7 +37,10 @@ from steerable_agent_protocol.generated import (
     ToolCall,
 )
 from steerable_agent_runtime import (
+    AntiHallucinationConfig,
+    AntiHallucinationHooks,
     BudgetExhaustedError,
+    ChainHooks,
     CoreLoop,
     LoopConfig,
     LoopHooks,
@@ -482,6 +485,28 @@ class Sidecar:
             if self._loop_hooks_factory is not None
             else RetryHooks()
         )
+        # antiHallucination: sink the desktop loop's four guards (data-need
+        # routing, deferred/claimed retry, grounding judge, narration) into
+        # the CoreLoop via hooks. Off unless the host opts in.
+        ah = params.get("antiHallucination")
+        if ah:
+            ah_opts = ah if isinstance(ah, dict) else {}
+            tool_context = params.get("toolContext") or {}
+            hooks = ChainHooks(
+                AntiHallucinationHooks(
+                    provider,
+                    AntiHallucinationConfig(
+                        mode=tool_context.get("mode"),
+                        user_question=_last_message_content(messages, "user"),
+                        last_assistant_tail=_last_message_content(
+                            messages, "assistant", tail=400
+                        ),
+                        max_retries=int(ah_opts.get("maxRetries") or 2),
+                        tools_available=bool(params.get("tools")),
+                    ),
+                ),
+                hooks,
+            )
         # toolsViaHost: every tool call is forwarded to the host over the
         # reverse channel (desktop deployment — tools live in Electron).
         # Otherwise the sidecar-local registry executes them.
@@ -723,6 +748,19 @@ def _use_coreloop(params: dict[str, Any]) -> bool:
         "true",
         "yes",
     }
+
+
+def _last_message_content(
+    messages: list[LLMMessage], role: str, *, tail: int | None = None
+) -> str:
+    """Content of the last message with ``role`` (for anti-hallucination
+    routing/judging context). ``tail`` truncates to the trailing N chars."""
+
+    for message in reversed(messages):
+        if message.role == role and message.content:
+            content = message.content
+            return content[-tail:] if tail else content
+    return ""
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:

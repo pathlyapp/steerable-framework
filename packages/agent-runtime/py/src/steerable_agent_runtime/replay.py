@@ -7,7 +7,8 @@ events fold back into a `HarnessExecutionState` via `reduce_execution_state`.
 
 Contract (shared across api / agent / framework):
   * the only event ``type`` is ``"step_decision"``; unknown types are skipped
-  * a step is deduplicated by ``(round, traceStepId)``
+  * a step is deduplicated by ``(round, traceStepId)`` with both parts
+    string-coerced (wire type drift must not defeat dedupe)
   * only these decision.status values drive ``status``:
     executing / waiting_user / waiting_approval / completed / failed /
     budget_exhausted  (``planning`` / ``verifying`` do NOT)
@@ -128,9 +129,12 @@ class HarnessExecutionState:
     ) -> None:
         """Merge latest loop steps and the completion decision."""
         if steps:
-            seen = {(s.get("round"), s.get("traceStepId")) for s in self.steps}
+            # Dedupe keys string-coerce: JSON wire drift (e.g. round arriving
+            # as "2" instead of 2) must not resurrect an already-seen step.
+            # Matches the TS reducer's `${round}|${traceStepId}` keying.
+            seen = {(str(s.get("round")), str(s.get("traceStepId"))) for s in self.steps}
             for step in steps:
-                key = (step.get("round"), step.get("traceStepId"))
+                key = (str(step.get("round")), str(step.get("traceStepId")))
                 if key not in seen:
                     self.steps.append(step)
                     seen.add(key)

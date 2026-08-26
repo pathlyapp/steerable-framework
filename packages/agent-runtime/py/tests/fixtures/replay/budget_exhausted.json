@@ -1,0 +1,150 @@
+{
+ "name": "budget_exhausted",
+ "initialState": {
+  "runId": "hrun_fixture",
+  "goalId": "goal_fixture",
+  "status": "planning",
+  "steps": [],
+  "evidence": [],
+  "budgets": {
+   "maxSteps": 10,
+   "maxToolErrors": 2,
+   "stepCount": 0,
+   "toolErrorCount": 0
+  },
+  "lastDecision": null,
+  "updatedAt": null
+ },
+ "events": [
+  {
+   "type": "step_decision",
+   "step": {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   },
+   "decision": {
+    "status": "executing",
+    "reason": "r",
+    "confidence": 0.8,
+    "evidence": []
+   }
+  },
+  {
+   "type": "step_decision",
+   "step": {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   },
+   "decision": {
+    "status": "executing",
+    "reason": "r",
+    "confidence": 0.8,
+    "evidence": []
+   }
+  },
+  {
+   "type": "step_decision",
+   "step": {
+    "round": 2,
+    "traceStepId": "round_2",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   },
+   "decision": {
+    "status": "budget_exhausted",
+    "reason": "tool_errors",
+    "confidence": 0.8,
+    "evidence": []
+   }
+  }
+ ],
+ "expectedPerEvent": [
+  {
+   "status": "executing",
+   "stepCount": 1,
+   "toolErrorCount": 1
+  },
+  {
+   "status": "executing",
+   "stepCount": 2,
+   "toolErrorCount": 2
+  },
+  {
+   "status": "budget_exhausted",
+   "stepCount": 3,
+   "toolErrorCount": 3
+  }
+ ],
+ "expectedFinal": {
+  "runId": "hrun_fixture",
+  "goalId": "goal_fixture",
+  "status": "budget_exhausted",
+  "steps": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   },
+   {
+    "round": 2,
+    "traceStepId": "round_2",
+    "finishReason": "tool_calls",
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "textLength": 0
+   }
+  ],
+  "evidence": [],
+  "budgets": {
+   "maxSteps": 10,
+   "maxToolErrors": 2,
+   "stepCount": 3,
+   "toolErrorCount": 3
+  },
+  "lastDecision": {
+   "status": "budget_exhausted",
+   "reason": "tool_errors",
+   "confidence": 0.8,
+   "evidence": []
+  }
+ }
+}

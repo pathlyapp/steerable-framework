@@ -276,7 +276,7 @@ sidecar-budget/examples 全过）。
 - [x] **trace 接入 loop**：`TraceRecorder`（`tracing.py`）——以消费者身份
       tee loop 事件流进 StorageAdapter：每工具调用一个 span、每事件一条
       TraceEvent、终态 upsert HarnessTrace（payload 截断）。loop 本身保持
-      无存储依赖。OTel 导出未做——需要时写一个 span 转换器即可，不阻塞。
+      无存储依赖。OTel 导出器已补（2026-08-26，`otel.py`，见 P2）。
 - [x] **补齐 LoopEvent**：`stage_complete` 现于每个工具轮次后 emit
       （round/toolCallCount/consecutiveToolErrors/elapsedMs）；
       `tool_call_result` 失败时带 `error`。`error` 事件自 hooks 切片已 emit。
@@ -318,6 +318,8 @@ context_system 分层、目标校验器、技能预算、计费、时区、实�
 
 Tier 1–3 落地后重排。上次 6 个红项 4 个转绿、2 个转橙（审批=决策记录、
 trace=已落库无 OTel）；**头号风险不变：零生产验证**。
+（2026-08-26 更新：P0 包体、P1 回放比对 + 反幻觉层、P2 三项全部转绿，
+详见下表逐项标注；P3 按约定留待 A4 稳定后确认。）
 
 - **P0 · 阻塞桌面发布**
   - [~] **A4 切换**（见下节）——Slice 1 已接线（2026-08-25）：agent 端
@@ -325,21 +327,41 @@ trace=已落库无 OTel）；**头号风险不变：零生产验证**。
         回 Electron，SSE 契约不变。剩下的就是真实模型灰度——所有能力仍只有
         测试验证，灰度是唯一的真实校验（包括 61 条安全规则在真实命令分布
         上的误伤率）。
-  - [ ] **包体门禁 741MB → 320MB**——独立硬阻塞，并行推进，不等 A4。
+  - [x] **包体门禁 741MB → 320MB**（2026-08-25）——实测 558→310MB（mac
+        unpacked）：`electron-builder.js` 去掉平台级 `files`（v25 会用它
+        覆盖全局集导致整仓入包），全局 files 加 `!cflog/**`、`!src/**` 等
+        否定模式，剪掉 better-sqlite3 编译残留；`scripts/check-bundle-size.mjs`
+        门禁挂入 build-windows.yml（预算 420MB 待首测收紧）。
 - **P1 · 校验闭环 + 净增益**
-  - [ ] **跨语言回放逐事件比对**：TS reduce 与 Py reduce 对同一轨迹跑分。
-        A3 通过标准的最后缺口，是「不需要第二份 loop」承诺的兑现证明。
-  - [ ] **反幻觉层**（A3 最后一片）：data-need 路由、grounding 判定、
-        deferred/claimed 重试、narration round。agent 独有、api 缺失，
-        做完即从「追平」变「反超」。
+  - [x] **跨语言回放逐事件比对**（2026-08-25）——共享 JSON fixtures
+        （`packages/agent-runtime/py/tests/fixtures/replay/`），Py
+        `test_replay_crosslang.py` 与 agent `replay-crosslang.test.ts`
+        对同一轨迹逐事件 + 终态比对；修掉 dedupe 键类型漂移分歧
+        （Py 端字符串化对齐 TS）。
+  - [x] **反幻觉层**（2026-08-25）——四机制全部下沉为 hooks：
+        data-need 路由（`pre_step` 设 `tool_choice=required`）、
+        deferred/claimed 纪律重试 + grounding 判定（新 `before_completion`
+        钩子，retry/narrate/accept 三态）、narration round。loop 改
+        `while True` 支持弹性轮次 + redo 预算。sidecar 按
+        `antiHallucination` 请求参数接线，agent `coreloop-stream.ts`
+        默认开启。py 186 测全绿。
 - **P2 · 体验与健壮性**
-  - [ ] **会话恢复 / 续跑**：TraceRecorder 已把事件落库，缺「从事件重建
-        transcript」的投影函数（dsh 单一真相源还没学完的一半）。
-        桌面端重启/崩溃续跑是真实需求。
-  - [ ] **token 估算精度**：chars/4 启发式对中文/代码偏差可达 2 倍，
-        compaction 阈值因此失准。按模型校准系数或接真 tokenizer。
-  - [ ] **OTel 导出器**：TraceRecorder → OTel span 转换器，对齐
-        codex/dsh 的 telemetry。
+  - [x] **会话恢复 / 续跑**（2026-08-26）——`resume.py`：
+        `project_transcript(events)` 纯函数从 TraceEvents 重建
+        `list[LLMMessage]`（content_delta 拼接 + tool_call_start 全参数 +
+        tool_call_result 结果），`load_transcript(storage, trace_id)` 直接
+        从存储加载。新增 `LoopConfig.persist_tool_results`（默认关，开则
+        事件带全量结果而非 300 字符预览，供续跑保真）。
+  - [x] **token 估算精度**（2026-08-26）——`tokens.py`：CJK 感知启发式
+        （CJK 0.6/字符、其他 0.25/字符、每消息 +8，与 agent TS 版同系数
+        同区间），`MODEL_TOKEN_FACTORS` 按模型名前缀校准系数（最长前缀
+        优先），`register_model_factor` 运行时扩展；compaction 改走新
+        估算器并支持 `model=` 参数。
+  - [x] **OTel 导出器**（2026-08-26）——`otel.py`：stdlib-only，
+        `to_otlp_json(trace, spans, events)` 生成 OTLP/HTTP JSON
+        （trace→root span、tool span→子 span、events→root span events，
+        ID 确定性编码保证重导幂等），`export_otlp_http` POST 到
+        collector `/v1/traces`。无 opentelemetry-sdk 依赖。
 - **P3 · 生态**
   - [ ] **MCP 下沉**：agent 侧已有 client，A4 稳定后按需，不提前做。
 

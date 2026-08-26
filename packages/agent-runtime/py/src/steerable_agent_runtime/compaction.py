@@ -7,8 +7,8 @@ the transcript so the turn can continue.
 
 Strategy (deterministic first, LLM optional):
 
-1. Estimate transcript tokens (chars/4 heuristic — good enough for a pressure
-   trigger; providers report real usage for the budget axis).
+1. Estimate transcript tokens (CJK-aware heuristic with per-model calibration
+   — see ``tokens.py``; providers report real usage for the budget axis).
 2. Under ``threshold_ratio * max_context_tokens`` → proceed unchanged.
 3. Over threshold →
    a. fold old ``tool`` messages (beyond ``keep_last_tool_results``) into a
@@ -28,21 +28,12 @@ from typing import Any
 
 from .hooks import NoopHooks, PreStepAction
 from .llm import LLMMessage, LLMProvider
+from .tokens import estimate_tokens
 
 _SUMMARY_MARKER = "[context compacted: earlier conversation summarized]"
 _FOLDED_TOOL_MARKER = "[tool output folded to save context]"
 
-
-def estimate_tokens(messages: Sequence[LLMMessage]) -> int:
-    """Rough token estimate: ~4 chars per token, plus a per-message overhead."""
-    total = 0
-    for m in messages:
-        total += 4  # role / framing overhead
-        total += len(m.content or "") // 4
-        if m.tool_calls:
-            for call in m.tool_calls:
-                total += len(call.name) // 4 + len(str(call.arguments)) // 4 + 8
-    return total
+__all__ = ["CompactionHooks", "estimate_tokens"]
 
 
 class CompactionHooks(NoopHooks):
@@ -56,6 +47,7 @@ class CompactionHooks(NoopHooks):
         keep_last_messages: int = 6,
         keep_last_tool_results: int = 2,
         summarizer: LLMProvider | None = None,
+        model: str | None = None,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
@@ -64,17 +56,22 @@ class CompactionHooks(NoopHooks):
         self._keep_last = keep_last_messages
         self._keep_last_tools = keep_last_tool_results
         self._summarizer = summarizer
+        #: Model name used for calibrated token estimates (see tokens.py).
+        self._model = model
         # Observability for callers/tests: how many compactions happened.
         self.compactions = 0
+
+    def _estimate(self, transcript: Sequence[LLMMessage]) -> int:
+        return estimate_tokens(transcript, model=self._model)
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: Any
     ) -> PreStepAction:
-        if estimate_tokens(transcript) < self._threshold * self._max_tokens:
+        if self._estimate(transcript) < self._threshold * self._max_tokens:
             return PreStepAction(kind="proceed", transcript=transcript)
 
         compacted = self._fold_old_tool_results(transcript)
-        if estimate_tokens(compacted) < self._threshold * self._max_tokens:
+        if self._estimate(compacted) < self._threshold * self._max_tokens:
             self.compactions += 1
             return PreStepAction(kind="proceed", transcript=compacted)
 

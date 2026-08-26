@@ -20,6 +20,7 @@ class _ScriptedProvider:
         self._fail_on = fail_on or set()
         self.attempts = 0
         self._round = 0
+        self.stream_kwargs: list[dict] = []
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
@@ -27,6 +28,7 @@ class _ScriptedProvider:
     def stream(self, messages, **kwargs):
         self.attempts += 1
         attempt = self.attempts
+        self.stream_kwargs.append(dict(kwargs))
         chunks = self._script[min(self._round, len(self._script) - 1)]
 
         async def _gen():
@@ -275,3 +277,73 @@ async def test_coreloop_stream_persists_trace_fetchable() -> None:
     assert result["spans"][0]["name"] == "add"
     kinds = [e["kind"] for e in result["events"]]
     assert "tool_call_start" in kinds and "tool_call_result" in kinds
+
+
+@pytest.mark.asyncio
+async def test_coreloop_antihallucination_deferred_retry() -> None:
+    """antiHallucination: true wires the desktop's deferred-execution guard
+    into the sidecar CoreLoop: an all-talk-no-tool_call round is sent back
+    with a discipline notice and the turn retried."""
+    provider = _ScriptedProvider(
+        [
+            _text_round("任务已排队，任务 ID 为 t_1。现在轮询结果。"),
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "执行 add 计算"}],
+            "useCoreLoop": True,
+            "antiHallucination": True,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "add", "description": "add", "parameters": {"type": "object"}},
+                }
+            ],
+        },
+    )
+
+    # 初始轮（空话）+ 纪律重试轮（工具）+ 收尾轮 = 3 次 LLM 调用
+    assert provider.attempts == 3
+    # 路由分类失败（complete 未实现）回落 require_tool → 首轮强制 tool_choice
+    assert provider.stream_kwargs[0].get("tool_choice") == "required"
+    tool_results = [c["toolResult"] for c in (p for m, p in events if m == "stream.chunk") if "toolResult" in c]
+    assert len(tool_results) == 1 and tool_results[0]["success"] is True
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_coreloop_antihallucination_off_by_default() -> None:
+    """Without the flag the same all-talk round ends the turn (no retry)."""
+    provider = _ScriptedProvider(
+        [_text_round("任务已排队，任务 ID 为 t_1。现在轮询结果。")]
+    )
+    sidecar = _make_sidecar(provider)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "执行 add 计算"}],
+            "useCoreLoop": True,
+        },
+    )
+
+    assert provider.attempts == 1
+    assert provider.stream_kwargs[0].get("tool_choice") is None
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"

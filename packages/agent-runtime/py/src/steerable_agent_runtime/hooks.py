@@ -42,10 +42,54 @@ class PreStepAction:
 
     ``proceed`` (default) continues with ``transcript`` (possibly rewritten,
     e.g. compacted). ``reject`` ends the turn without calling the model.
+
+    ``tool_choice`` (e.g. ``"required"``) is forwarded to the provider for
+    this step's LLM call — the data-need router uses it to force a tool call
+    on the first round of a data-seeking turn. Pass-through value, forwarded
+    as a provider kwarg; providers that cannot honor it ignore it.
     """
 
     kind: Literal["proceed", "reject"] = "proceed"
     transcript: list[LLMMessage] | None = None
+    reason: str | None = None
+    tool_choice: str | None = None
+
+
+@dataclass(slots=True)
+class CompletionDraft:
+    """The terminal state the loop is about to emit, offered to
+    ``before_completion`` for veto.
+
+    ``content`` is the round's (raw) assistant text — empty when the turn
+    ends tool-only or on an error path. ``had_tool_calls`` covers this round;
+    ``tool_successes`` covers the whole turn.
+    """
+
+    status: str
+    reason: str
+    content: str
+    round_index: int
+    had_tool_calls: bool
+    tool_calls_used: int
+    tool_successes: int
+
+
+@dataclass(slots=True)
+class CompletionAction:
+    """Outcome of a ``before_completion`` hook.
+
+    - ``accept`` (default): emit the completion as drafted.
+    - ``retry``: append ``message`` to the transcript and run another round
+      (tools offered as configured). The anti-hallucination layer uses this
+      to send deferred/claimed/fabricated replies back with a discipline
+      notice. The hook is responsible for bounding retries.
+    - ``narrate``: run one no-tools round seeded with ``message`` so the
+      model summarizes what happened, then accept its text as the final
+      content. Used when the draft has no natural-language content.
+    """
+
+    kind: Literal["accept", "retry", "narrate"] = "accept"
+    message: str | None = None
     reason: str | None = None
 
 
@@ -87,6 +131,10 @@ class LoopHooks(Protocol):
         self, error: Exception, ctx: LoopContext
     ) -> RetryAction: ...
 
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: LoopContext
+    ) -> CompletionAction: ...
+
 
 class NoopHooks:
     """Default hooks: pass everything through unchanged."""
@@ -106,15 +154,21 @@ class NoopHooks:
     ) -> RetryAction:
         return RetryAction(kind="fail", reason=str(error))
 
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: LoopContext
+    ) -> CompletionAction:
+        return CompletionAction(kind="accept")
+
 
 class ChainHooks:
     """Compose several hooks into one ``LoopHooks``.
 
     - ``pre_step``: applied in order, the transcript threading through each;
-      the first ``reject`` wins.
+      the first ``reject`` wins; the first non-``None`` ``tool_choice`` wins.
     - ``post_tool_result``: the result threads through each hook in order.
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
       says ``fail``, the first failure reason is surfaced.
+    - ``before_completion``: the first non-``accept`` action wins.
 
     This is how a product stacks e.g. compaction + spill + retry without the
     loop knowing about any of them.
@@ -127,13 +181,18 @@ class ChainHooks:
         self, transcript: list[LLMMessage], ctx: LoopContext
     ) -> PreStepAction:
         current = transcript
+        tool_choice: str | None = None
         for hook in self._hooks:
             action = await hook.pre_step(current, ctx)
             if action.kind == "reject":
                 return action
             if action.transcript is not None:
                 current = action.transcript
-        return PreStepAction(kind="proceed", transcript=current)
+            if tool_choice is None and action.tool_choice is not None:
+                tool_choice = action.tool_choice
+        return PreStepAction(
+            kind="proceed", transcript=current, tool_choice=tool_choice
+        )
 
     async def post_tool_result(
         self, result: ToolResult, call: ToolCall, ctx: LoopContext
@@ -154,3 +213,12 @@ class ChainHooks:
             if first_fail is None:
                 first_fail = action
         return first_fail or RetryAction(kind="fail", reason=str(error))
+
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: LoopContext
+    ) -> CompletionAction:
+        for hook in self._hooks:
+            action = await hook.before_completion(draft, ctx)
+            if action.kind != "accept":
+                return action
+        return CompletionAction(kind="accept")

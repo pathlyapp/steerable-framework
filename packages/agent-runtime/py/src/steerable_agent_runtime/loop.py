@@ -15,20 +15,22 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     unknown-tool suggestions and schema argument coercion (tools.py)
   * token budget counters + completion decision
   * pseudo / markdown tool-call recovery (see pseudo.py)
-  * LoopHooks extension points (see hooks.py): pre_step / post_tool_result /
-    on_request_error — remaining slices land as hook implementations, not as
-    more branches here
+  * LoopHooks extension points (see hooks.py): pre_step (transcript rewrite +
+    tool_choice) / post_tool_result / on_request_error / before_completion
+    (terminal veto: discipline retry or narration round) — capabilities land
+    as hook implementations, not as more branches here
   * single write path: completion events carry their full step summary and
     the compact trajectory is derived from them (no separate record channel)
   * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
     round boundaries; once exceeded the loop stops offering tools and asks
     the model for a final answer instead of hard-killing the run
 
-Not yet implemented (later slices per the plan): the anti-hallucination
-layer (data-need routing, grounding judge, deferred/claimed retry,
-narration round). Compaction and large-result externalization live in hooks
-(compaction.py / spill.py), not here. Observability lives in tracing.py
-(a TraceRecorder consuming this event stream), not in the loop itself.
+The anti-hallucination layer (data-need routing, grounding judge,
+deferred/claimed retry, narration round) lives in antihallucination.py as a
+LoopHooks implementation. Compaction and large-result externalization live
+in hooks (compaction.py / spill.py), not here. Observability lives in
+tracing.py (a TraceRecorder consuming this event stream), not in the loop
+itself.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .hooks import LoopHooks, NoopHooks
+from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
 from .pseudo import (
     PseudoStreamStripper,
@@ -154,6 +156,9 @@ class LoopContext:
     round_index: int = 0
     tool_calls_used: int = 0
     consecutive_tool_errors: int = 0
+    #: Successful tool results this turn — the anti-hallucination layer keys
+    #: off "zero usable tool returns" to detect fabricated data reports.
+    tool_successes: int = 0
 
 
 @dataclass(slots=True)
@@ -182,6 +187,10 @@ class LoopConfig:
     #: tool-error breaker). No write/destructive exemption — idempotency of
     #: side effects belongs to the action layer below.
     tool_dedup: bool = True
+    #: Include the full tool result in ``tool_call_result`` events (not just
+    #: the 300-char preview). Off by default to keep traces small; enable when
+    #: the trace is the resume record (see ``resume.project_transcript``).
+    persist_tool_results: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +226,42 @@ class CoreLoop:
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
         self.trajectory: list[HarnessTrajectoryEvent] = []
+
+    async def _offer_narration(
+        self,
+        content: str,
+        round_index: int,
+        *,
+        had_tool_calls: bool,
+        ctx: LoopContext,
+        wrap_up: bool,
+        completion_redos: int,
+    ) -> str | None:
+        """Offer a terminal draft to ``before_completion`` for narration.
+
+        Returns the narration prompt to seed a wrap-up round, or ``None`` to
+        proceed with the terminal emit. Only empty-content terminals qualify
+        (a turn that already produced text needs no summary), never during an
+        in-flight wrap-up, and redo budget is enforced by the caller's count.
+        """
+
+        if wrap_up or content.strip() or completion_redos >= _MAX_COMPLETION_REDOS:
+            return None
+        action = await self._hooks.before_completion(
+            CompletionDraft(
+                status="failed",
+                reason="terminal with no natural-language content",
+                content=content,
+                round_index=round_index,
+                had_tool_calls=had_tool_calls,
+                tool_calls_used=ctx.tool_calls_used,
+                tool_successes=ctx.tool_successes,
+            ),
+            ctx,
+        )
+        if action.kind == "narrate":
+            return action.message or _NARRATION_REQUEST
+        return None
 
     async def run(
         self,
@@ -267,8 +312,46 @@ class CoreLoop:
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
         decision = CompletionDecision(status="failed", reason="loop did not run")
-        for round_index in range(self._config.max_rounds):
+        round_index = 0
+        # Discipline retries / narration rounds granted by before_completion do
+        # not consume the round budget (mirrors the TS loop's `turn -= 1`), but
+        # the loop still caps them so a faulty hook cannot spin forever.
+        completion_redos = 0
+        while True:
             ctx.round_index = round_index
+
+            # ── runaway guard: round budget exhausted ────────────────────
+            # A terminal like any other: offer narration (the model may have
+            # produced only tool calls), then emit if no hook intervenes.
+            if round_index >= self._config.max_rounds and not wrap_up:
+                decision = CompletionDecision(
+                    status="budget_exhausted",
+                    reason=f"reached maxRounds={self._config.max_rounds} runaway guard",
+                    confidence=1.0,
+                )
+                yield LoopEvent(
+                    "budget_exhausted",
+                    {"kind": "rounds", "rounds": self._config.max_rounds},
+                )
+                narrate = await self._offer_narration(
+                    "", round_index, had_tool_calls=True, ctx=ctx,
+                    wrap_up=wrap_up, completion_redos=completion_redos,
+                )
+                if narrate is not None:
+                    completion_redos += 1
+                    wrap_up = True
+                    transcript.append(LLMMessage(role="user", content=narrate))
+                    continue
+                yield emit_completion(
+                    step_summary(
+                        round_index=round_index - 1,
+                        finish_reason="tool_calls",
+                        content="",
+                        tool_calls=[],
+                    ),
+                    decision,
+                )
+                return
 
             # ── soft timeout: stop offering tools, ask for the wrap-up ────
             # Soft = we never interrupt an in-flight stream or tool; the
@@ -291,7 +374,7 @@ class CoreLoop:
                     LLMMessage(role="user", content=_SOFT_TIMEOUT_NOTICE)
                 )
 
-            # ── hook: pre_step (compaction / turn rejection) ─────────────
+            # ── hook: pre_step (compaction / turn rejection / tool_choice) ──
             pre = await self._hooks.pre_step(transcript, ctx)
             if pre.kind == "reject":
                 decision = CompletionDecision(
@@ -311,6 +394,10 @@ class CoreLoop:
                 return
             if pre.transcript is not None:
                 transcript = pre.transcript
+            # tool_choice only makes sense when tools are actually offered.
+            step_tool_choice = (
+                pre.tool_choice if (pre.tool_choice and tools and not wrap_up) else None
+            )
 
             # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
@@ -331,6 +418,11 @@ class CoreLoop:
                         tools=None if wrap_up else tools,
                         temperature=self._config.temperature,
                         max_tokens=self._config.max_tokens,
+                        **(
+                            {"tool_choice": step_tool_choice}
+                            if step_tool_choice
+                            else {}
+                        ),
                     ):
                         if chunk.content_delta:
                             content_parts.append(chunk.content_delta)
@@ -447,7 +539,7 @@ class CoreLoop:
             # streaming filter before the content enters the transcript.
             content = strip_pseudo_fn_final(content)
 
-            # ── decide: no tool calls → terminal ─────────────────────────
+            # ── decide: no tool calls → terminal (unless a hook vetoes) ──
             if not tool_calls:
                 if content.strip():
                     decision = CompletionDecision(
@@ -461,6 +553,56 @@ class CoreLoop:
                         reason="no tool calls and no final response",
                         confidence=0.75,
                     )
+                # A wrap-up round IS the final answer — offering it back to
+                # before_completion would loop (its content is exactly what a
+                # discipline retry would flag).
+                if not wrap_up and completion_redos < _MAX_COMPLETION_REDOS:
+                    action = await self._hooks.before_completion(
+                        CompletionDraft(
+                            status=decision.status,
+                            reason=decision.reason,
+                            content=content,
+                            round_index=round_index,
+                            had_tool_calls=False,
+                            tool_calls_used=ctx.tool_calls_used,
+                            tool_successes=ctx.tool_successes,
+                        ),
+                        ctx,
+                    )
+                    if action.kind == "retry":
+                        # Send the "all talk, no tool_call" round back: the
+                        # assistant text goes on the record so the model sees
+                        # what it said, then the discipline notice corrects it.
+                        completion_redos += 1
+                        if content.strip():
+                            transcript.append(
+                                LLMMessage(role="assistant", content=content)
+                            )
+                        transcript.append(
+                            LLMMessage(
+                                role="user",
+                                content=action.message or _DISCIPLINE_RETRY_NOTICE,
+                            )
+                        )
+                        yield LoopEvent(
+                            "stage_complete",
+                            {
+                                "round": round_index,
+                                "disciplineRetry": True,
+                                "reason": action.reason or "before_completion retry",
+                            },
+                        )
+                        continue
+                    if action.kind == "narrate":
+                        completion_redos += 1
+                        wrap_up = True
+                        transcript.append(
+                            LLMMessage(
+                                role="user",
+                                content=action.message or _NARRATION_REQUEST,
+                            )
+                        )
+                        continue
                 yield emit_completion(
                     step_summary(
                         round_index=round_index,
@@ -526,6 +668,7 @@ class CoreLoop:
                     else:
                         if result.success:
                             ctx.consecutive_tool_errors = 0
+                            ctx.tool_successes += 1
                         else:
                             ctx.consecutive_tool_errors += 1
 
@@ -548,6 +691,11 @@ class CoreLoop:
                         "success": result.success,
                         "durationMs": duration_ms,
                         "resultPreview": preview,
+                        **(
+                            {"result": _result_content(result)}
+                            if self._config.persist_tool_results
+                            else {}
+                        ),
                         **({"error": result.error} if result.error else {}),
                     },
                 )
@@ -567,6 +715,15 @@ class CoreLoop:
                         reason="too many consecutive tool errors",
                         confidence=0.9,
                     )
+                    narrate = await self._offer_narration(
+                        content, round_index, had_tool_calls=True, ctx=ctx,
+                        wrap_up=wrap_up, completion_redos=completion_redos,
+                    )
+                    if narrate is not None:
+                        completion_redos += 1
+                        wrap_up = True
+                        transcript.append(LLMMessage(role="user", content=narrate))
+                        break  # leave the tool loop; wrap-up round runs next
                     yield emit_completion(
                         step_summary(
                             round_index=round_index,
@@ -579,6 +736,10 @@ class CoreLoop:
                     return
 
             # ── observe: continue to next round ──────────────────────────
+            # A narration grant broke out of the tool loop above — skip the
+            # "executing" bookkeeping and run the wrap-up round directly.
+            if wrap_up:
+                continue
             yield LoopEvent(
                 "stage_complete",
                 {
@@ -602,25 +763,7 @@ class CoreLoop:
                 ),
                 decision,
             )
-
-        # Ran out of rounds — runaway guard.
-        decision = CompletionDecision(
-            status="budget_exhausted",
-            reason=f"reached maxRounds={self._config.max_rounds} runaway guard",
-            confidence=1.0,
-        )
-        yield LoopEvent(
-            "budget_exhausted", {"kind": "rounds", "rounds": self._config.max_rounds}
-        )
-        yield emit_completion(
-            step_summary(
-                round_index=self._config.max_rounds - 1,
-                finish_reason="tool_calls",
-                content="",
-                tool_calls=[],
-            ),
-            decision,
-        )
+            round_index += 1
 
         _ = started  # reserved for a future durationMs stage_complete event
 
@@ -629,6 +772,24 @@ _SOFT_TIMEOUT_NOTICE = (
     "[system notice] The time budget for this task is exhausted. Do NOT call "
     "any more tools. Summarize what you have done so far and produce the "
     "final answer now."
+)
+
+#: Hard cap on before_completion-granted redos (discipline retries +
+#: narration rounds) per run. Hooks bound themselves; this is the
+#: defense-in-depth backstop so a faulty hook cannot spin the loop forever.
+_MAX_COMPLETION_REDOS = 4
+
+_DISCIPLINE_RETRY_NOTICE = (
+    "[system notice] The previous reply described an intended action but did "
+    "not actually issue any tool call. Either make the tool call now, or — "
+    "if no tool is genuinely needed — give the final answer directly without "
+    "open-ended phrasing."
+)
+
+_NARRATION_REQUEST = (
+    "[system notice] The task ended without a natural-language summary. Do "
+    "NOT call any tools. Summarize what was done and what the tool results "
+    "showed, and give the user a clear final answer now."
 )
 
 _DUPLICATE_CALL_MESSAGE = (
