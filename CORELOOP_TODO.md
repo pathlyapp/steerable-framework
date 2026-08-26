@@ -424,10 +424,24 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
             "no tool calls and no final response" 直接失败——CoreLoop
             的纪律重试会把这类失败转为恢复，是净收益的量化证据。
           - **不能用的（数据天然缺失）**：trace payload 只有
-            argsHash/resultHash 无内容 → token 系数校准、安全规则
-            误伤仿真、内容级回放比对都不可行（命令内容本就不出桌面，
-            这是隐私设计的正确性证明）。token 系数校准仍按 P3 原方案
-            由 sidecar 在 dogfood 期间自记录 estimated/observed。
+            argsHash/resultHash 无内容 → 安全规则误伤仿真、内容级回放
+            比对不可行（命令内容本就不出桌面，这是隐私设计的正确性
+            证明）。
+          - **token 系数校准：部分可行，已落地首个实测系数**
+            （2026-08-26 二次挖掘，经 api `.env` 公网端点直连）：此前
+            结论"不可行"过于悲观——`chatmessage` 有 5.1 万条 assistant
+            内容（均值 7.6k 字符），与 `llmusagedaily`
+            （service='harness_loop'）按 (userId, date) 聚合连接得
+            6,605 个单模型桶（99.8% modelId='default' → 经
+            `models_config.py` 解析为 **deepseek-v4**）。聚合回归：
+            **Σ(实际 completionTokens) / Σ(启发式估算) = 0.708**——
+            基础启发式在真实 CJK 流量上**高估 ~41%**，压缩阈值因此
+            比设计意图更早触发（金丝雀单轮 5 次压缩的独立证据链）。
+            已落地 `MODEL_TOKEN_FACTORS["deepseek"] = 0.71` +
+            回归测试（228 全绿）。思维链内容系数 ~0.40 tok/char
+            在各设定下稳定。**cjk/other 单字符系数不可识别**
+            （corr=0.88 共线性，回归给出负系数伪影）——按请求级
+            estimated/observed 对仍按 P3 原方案由 sidecar 自记录。
 - **P1 · 结构差距**（2026-08-26 落地，测试全绿）
   - [x] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
         目前只能整轮取消。最简形态：CoreLoop 加 asyncio 队列 inbox，每轮
@@ -511,11 +525,12 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
         - 测试：部分中断（c1 有结果 c2 合成且顺序保持）/完整 trace 透传/
           全部中断。
 - **P3 · 数据闭环与生态**
-  - [ ] **校准系数实测闭环**：tokens.py 的按模型校准机制已就位但出厂表
-        为空——机制没数据等于没校准。sidecar 每轮拿到 provider usage 后
-        对照估算值算 observed/estimated 比值，滚动平均写入
-        `MODEL_TOKEN_FACTORS`（或落盘配置），一次灰度即积累主力模型
-        真实系数。
+  - [~] **校准系数实测闭环**：出厂表已非空——`deepseek: 0.71` 来自
+        生产聚合回归（见 P0 线上数据实测节，6,605 桶，Σ实际/Σ估算
+        =0.708）。剩余：sidecar 每轮拿到 provider usage 后对照估算值
+        算 observed/estimated 比值，滚动平均写入 `MODEL_TOKEN_FACTORS`
+        （或落盘配置）——请求级数据能拆分聚合回归不可识别的
+        cjk/other 单字符系数（共线性），并覆盖 ollama 系桌面模型。
   - [ ] **MCP 下沉**：维持原约定（A4 稳定后按需，用户已确认推迟）。
 
 **本轮明确不做**：沙箱下沉（产品侧决策，桌面端刻意全允许）；实时 OTel

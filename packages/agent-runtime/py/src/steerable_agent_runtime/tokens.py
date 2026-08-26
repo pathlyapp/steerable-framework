@@ -50,7 +50,18 @@ def estimate_text_tokens(text: str) -> int:
 
 #: model-name prefix → multiplicative calibration factor (first match wins).
 #: 1.0 = base heuristic. Extend at runtime via ``register_model_factor``.
-MODEL_TOKEN_FACTORS: dict[str, float] = {}
+#:
+#: ``deepseek`` 0.71: calibrated 2026-08-26 against production MySQL
+#: (llmusagedaily ⋈ chatmessage, service='harness_loop', 6,605 single-model
+#: user-day buckets, 99.8% modelId='default' → deepseek-v4). Aggregate
+#: regression gave Σ(actual completionTokens) / Σ(base heuristic estimate)
+#: = 0.708 — the base heuristic overestimates DeepSeek-tokenizer completion
+#: tokens by ~41% on real CJK-heavy traffic, so compaction thresholds trip
+#: earlier than intended. The cjk/other per-char split is NOT identifiable
+#: from day-level aggregates (corr(cjk, other) = 0.88), so the correction is
+#: applied as a single global factor; per-char refinement needs per-request
+#: estimated/observed pairs (sidecar self-recording, see CORELOOP_TODO P3).
+MODEL_TOKEN_FACTORS: dict[str, float] = {"deepseek": 0.71}
 
 
 def register_model_factor(prefix: str, factor: float) -> None:

@@ -94,3 +94,13 @@ def test_register_validation() -> None:
         register_model_factor("", 1.0)
     with pytest.raises(ValueError):
         register_model_factor("x", 0)
+
+
+def test_builtin_deepseek_calibration() -> None:
+    """Production-calibrated factor (2026-08-26 regression over 6.6k user-day
+    buckets): base heuristic overestimates deepseek-v4 completion tokens by
+    ~41% on real CJK-heavy traffic."""
+    assert factor_for_model("deepseek-v4") == 0.71
+    assert factor_for_model("deepseek-v3") == 0.71
+    messages = [LLMMessage(role="user", content="a" * 40)]  # base 18
+    assert estimate_tokens(messages, model="deepseek-v4") == math.ceil(18 * 0.71)
