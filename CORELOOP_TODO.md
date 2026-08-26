@@ -407,6 +407,27 @@ CJK token 估算）、3 追平、7 落后**。领先项全部只有测试证据�
         - **剩余**：用户自用 dogfood 一周（手动操作，无法代办）；一周后
           跑 `trace-report.mjs` + 回放比对对账，按误伤率/误判率决定是否
           默认开 `STEERABLE_USE_CORELOOP`。
+        - **线上数据实测（2026-08-26，经 devops SSH 隧道只读访问生产
+          MySQL，纯聚合查询、零内容出库）**：`harness_trace` 31,350 条 +
+          `harness_trace_event` 164 万条。结论分两类——
+          - **能校准的（LoopConfig 默认值有了真实分布依据）**：
+            轮次分布 p95≈8、max=24+ → `maxRounds=32` 覆盖 99.9%，
+            默认值验证通过；完成率 97.2%（30,486/31,350），
+            completed 中 3.8% 带工具错误但恢复 → `maxToolErrors=3`
+            的 breaker 设计合理；工具延迟 <100ms 48% / 100ms-1s 36% /
+            >30s 4.6%（云端工具长尾）；**budget_exhausted 占终态 6%
+            （1,862 条）→ 预算默认值偏紧，按模型 token 分布定**；
+            每 trace 平均 14.5 万 totalTokens（default 模型）→ 桌面
+            60k 压缩阈值相对真实用量偏激进（金丝雀单轮就压缩 5 次
+            与此吻合），dogfood 期间重点看 compact 触发频率。
+            **反幻觉价值实证**：api 路径 646 次
+            "no tool calls and no final response" 直接失败——CoreLoop
+            的纪律重试会把这类失败转为恢复，是净收益的量化证据。
+          - **不能用的（数据天然缺失）**：trace payload 只有
+            argsHash/resultHash 无内容 → token 系数校准、安全规则
+            误伤仿真、内容级回放比对都不可行（命令内容本就不出桌面，
+            这是隐私设计的正确性证明）。token 系数校准仍按 P3 原方案
+            由 sidecar 在 dogfood 期间自记录 estimated/observed。
 - **P1 · 结构差距**（2026-08-26 落地，测试全绿）
   - [x] **轮中转向（steer / inject）**：dsh 的一等公民能力，steerable
         目前只能整轮取消。最简形态：CoreLoop 加 asyncio 队列 inbox，每轮
