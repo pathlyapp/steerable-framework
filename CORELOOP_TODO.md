@@ -567,12 +567,31 @@ cache 友好性、多智能体两轴）**3 领先 / 8 追平 / 3 落后**。R3 �
 剩余落后中沙箱是刻意产品决策、多智能体属观望。codex 本周演进集中在
 Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2。
 
-- **P0 · 唯一硬阻塞（进行中，无代码）**
-  - [~] **dogfood 一周 + default-on 决策**：首日数据健康（5 trace 全
-        completed、安全零拦截、dedup 真实拦截 7 次），但样本量不足以
-        决策 `STEERABLE_USE_CORELOOP` 默认开启。每日跑
-        `trace-report.mjs`；周末用回放比对与 TS 路径对账后按误伤率/
-        hook 误判率决策。
+- **P0 · 已解除（2026-08-26 晚，用户决策）**
+  - [x] **CoreLoop default-on**：不等一周 dogfood（样本收集太慢），直接
+        默认开启。`STEERABLE_USE_CORELOOP` / `STEERABLE_USE_SIDECAR`
+        语义从「=1 开启」翻为「=0 回退」；sidecar 默认随 app 启动
+        （不再阻塞窗口创建，boot 竞态的回合自动落 TS 循环）；dev 机
+        python 解析新增 sibling venv 候选（`../steerable-framework/
+        .venv`），否则默认开启会静默退化成 TS 循环。零环境变量金丝雀
+        8/8 通过（agent 325 测全绿，框架 332 全绿）。
+  - **default-on 验证暴露并修掉的两个真实 bug**（都是「测试全绿但
+        生产才暴露」同类）：
+        ① `OpenAICompatProvider` 流式从不发 `stream_options.
+        include_usage` → usage chunk 不到达 → **预算记账与校准采样
+        双双失明**（dogfood 期间 0 次 budget 事件的根因）；修复后
+        Ollama cloud 实测 usage 正常到达（prompt=72/completion=54）。
+        ② 校准聚合器按请求新建（factory 每回合调用）→ 短回合永远
+        到不了 persist 阈值；改为 sidecar 进程级单例 + 周期落盘 +
+        `system.shutdown` 冲刷。活体验证：真实流式回合 →
+        `stream.done=completed` → 优雅退出后文件含 1 条
+        `gpt-oss:20b-cloud` 样本（est_prompt=14/obs=72，提示词侧
+        该模型被低估 5×，20 样本后自动出系数）。
+  - **测试基建修复**：agent-runtime `tests/__init__.py` 已在
+        `7edb0f3` 删除（CI 三包同名撞车），但 4 个文件仍用
+        `from .test_trace_recorder import` 相对导入 → 根目录跑全量
+        收集失败。改平级导入 + 新增 tests/conftest.py 插入自身目录
+        到 sys.path（importlib 模式不自动加）。根目录 332 全绿。
 - **P1 · dogfood 暴露的真实问题**
   - [ ] **压缩提频治理（本轮头号新发现）**：22 次 compact / 5 trace 是
         病理值——每次压缩全量重写 transcript，打掉 prompt cache 前缀

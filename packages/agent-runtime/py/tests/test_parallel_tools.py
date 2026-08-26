@@ -17,7 +17,7 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.llm import LLMMessage
 
-from .test_trace_recorder import make_provider, tc
+from test_trace_recorder import make_provider, tc
 
 
 def _kinds_for(events: list[LoopEvent], *kinds: str) -> list[LoopEvent]:

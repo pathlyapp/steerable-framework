@@ -122,6 +122,32 @@ def test_openai_parse_stream_chunk_usage_only() -> None:
     assert parsed.usage.total_tokens == 19
 
 
+def test_openai_stream_requests_usage_chunk() -> None:
+    """Streaming must ask for the final usage chunk — without it budget
+    accounting (loop consumes chunk.usage) and usage calibration are blind."""
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(name="t", model="m", base_url="http://x/v1")
+    stream_body = provider._build_body(
+        messages=[LLMMessage(role="user", content="hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert stream_body["stream_options"] == {"include_usage": True}
+    complete_body = provider._build_body(
+        messages=[LLMMessage(role="user", content="hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={},
+    )
+    assert "stream_options" not in complete_body
+
+
 def test_openai_parse_stream_chunk_tool_call_delta() -> None:
     chunk = {
         "choices": [

@@ -189,6 +189,12 @@ class OpenAICompatProvider:
             "messages": [_encode_message(m) for m in messages],
             "stream": stream,
         }
+        if stream:
+            # OpenAI-streaming sends no usage by default; without the final
+            # usage chunk both budget accounting (loop consumes chunk.usage)
+            # and usage calibration are blind. Supported by OpenAI, Ollama,
+            # vLLM, DeepSeek.
+            body["stream_options"] = {"include_usage": True}
         eff_temperature = temperature if temperature is not None else self.default_temperature
         if eff_temperature is not None:
             body["temperature"] = eff_temperature

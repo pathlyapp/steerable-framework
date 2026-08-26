@@ -17,7 +17,7 @@ from steerable_agent_runtime import (
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
-from .test_trace_recorder import make_provider, tc
+from test_trace_recorder import make_provider, tc
 
 
 async def _run_traced(

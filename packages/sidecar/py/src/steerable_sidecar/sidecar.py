@@ -240,11 +240,13 @@ class Sidecar:
         return health.model_dump(exclude_none=True)
 
     async def _handle_shutdown(self, _params: dict[str, Any] | None) -> None:
+        _flush_shared_calibration()
         # Schedule the actual stop so the response can be drained first.
         loop = asyncio.get_running_loop()
         loop.call_later(0.1, lambda: self._shutdown_requested.set())
 
     async def _handle_shutdown_now(self, _params: dict[str, Any] | None) -> None:
+        _flush_shared_calibration()
         self._shutdown_requested.set()
 
     async def _handle_session_create(self, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -862,6 +864,40 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
     )
 
 
+_shared_calibration: Any | None = None
+_shared_calibration_path: str | None = None
+
+
+def _get_shared_calibration() -> Any:
+    """Process-level UsageCalibration singleton.
+
+    The provider factory runs per chat-stream request; a per-request
+    calibration would accumulate samples only within one turn and rarely
+    reach the persist threshold. A process-shared singleton accumulates
+    across turns and is flushed periodically (persist_every) and on
+    shutdown.
+    """
+    global _shared_calibration, _shared_calibration_path
+    if _shared_calibration is None:
+        from steerable_agent_runtime import UsageCalibration
+
+        path = os.environ.get("STEERABLE_TOKEN_CALIBRATION_PATH") or os.path.join(
+            os.path.expanduser("~"), ".steerable", "token-calibration.json"
+        )
+        _shared_calibration = UsageCalibration.load(path)
+        _shared_calibration.register_factors()
+        _shared_calibration_path = path
+    return _shared_calibration
+
+
+def _flush_shared_calibration() -> None:
+    if _shared_calibration is not None and _shared_calibration_path is not None:
+        try:
+            _shared_calibration.save(_shared_calibration_path)
+        except OSError:
+            pass  # shutdown flush is best-effort; periodic flushes already ran
+
+
 def _wrap_with_calibration(provider: LLMProvider) -> LLMProvider:
     """Wrap the provider so every request records estimated-vs-observed usage.
 
@@ -875,14 +911,13 @@ def _wrap_with_calibration(provider: LLMProvider) -> LLMProvider:
     flag = os.environ.get("STEERABLE_TOKEN_CALIBRATION", "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
         return provider
-    from steerable_agent_runtime import CalibratingProvider, UsageCalibration
+    from steerable_agent_runtime import CalibratingProvider
 
-    path = os.environ.get("STEERABLE_TOKEN_CALIBRATION_PATH") or os.path.join(
-        os.path.expanduser("~"), ".steerable", "token-calibration.json"
+    return CalibratingProvider(
+        provider,
+        _get_shared_calibration(),
+        persist_path=_shared_calibration_path,
     )
-    calibration = UsageCalibration.load(path)
-    calibration.register_factors()
-    return CalibratingProvider(provider, calibration, persist_path=path)
 
 
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
