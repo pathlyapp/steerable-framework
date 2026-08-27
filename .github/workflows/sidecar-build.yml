@@ -21,6 +21,11 @@ jobs:
           - os: windows-2022
             target: win32-x64
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # The build/report steps use bash line continuations and quoting;
+        # on Windows the default pwsh parses `\`-continuations as errors.
+        shell: bash
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
