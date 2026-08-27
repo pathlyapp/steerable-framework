@@ -95,3 +95,35 @@ async def test_subprocess_full_handshake_and_ping() -> None:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+
+
+async def test_subprocess_frame_above_64kib_round_trips() -> None:
+    """Regression: the default 64 KiB StreamReader limit killed the read loop
+    with LimitOverrunError on large frames (big reverse-channel tool results,
+    long-conversation chat.stream requests) — the turn hung with no trace."""
+    proc = await _spawn_sidecar()
+    try:
+        await _read_ready_marker(proc)
+        await _read_lifecycle_ready(proc)
+
+        big = "x" * (256 * 1024)  # 4x the old 64 KiB default limit
+        response = await _round_trip(
+            proc,
+            {"jsonrpc": "2.0", "id": 1, "method": "system.ping",
+             "params": {"padding": big}},
+        )
+        assert response["result"]["protocolVersion"] == "0.1.0"
+
+        await _round_trip(
+            proc, {"jsonrpc": "2.0", "id": 2, "method": "system.shutdown"}
+        )
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()

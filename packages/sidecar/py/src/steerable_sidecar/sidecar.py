@@ -71,6 +71,14 @@ logger = logging.getLogger("steerable_sidecar")
 
 PROTOCOL_VERSION = "0.1.0"
 SIDECAR_VERSION = "0.1.0"
+
+# asyncio's default 64 KiB StreamReader limit kills the read loop with
+# LimitOverrunError the moment a single JSON-RPC frame exceeds it — a large
+# reverse-channel tool result (e.g. a file read) or a long conversation's
+# chat.stream request crosses it easily, and the turn then dies silently
+# (host sees a hang, no trace). 16 MiB stays bounded while covering
+# realistic frames.
+STDIO_STREAM_LIMIT = 16 * 1024 * 1024
 READY_PREFIX = "__SIDECAR_READY__:"
 
 
@@ -784,7 +792,7 @@ class Sidecar:
     @staticmethod
     async def _connect_stdio() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
+        reader = asyncio.StreamReader(limit=STDIO_STREAM_LIMIT)
         protocol = asyncio.StreamReaderProtocol(reader)
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
         transport, _ = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
