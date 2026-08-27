@@ -288,8 +288,17 @@ sidecar-budget/examples 全过）。
       （round/toolCallCount/consecutiveToolErrors/elapsedMs）；
       `tool_call_result` 失败时带 `error`。`error` 事件自 hooks 切片已 emit。
 - [ ] **MCP**：agent 侧已有 MCP client，框架侧没有。等 A4 之后按需下沉。
-- [ ] **agent 独有的反幻觉层**（这是 api 缺的，是净增益，放最后一片）：
+- [x] **agent 独有的反幻觉层**（这是 api 缺的，是净增益，放最后一片）：
       data-need 路由、grounding 判定、deferred/claimed 重试、narration round
+      ✅ 2026-08-27 核实**已在 hooks 切片全量落地**（`antihallucination.py`，
+      复选时逐项确认）：四能力齐备——data-need 路由（pre_step 首轮分类 +
+      `tool_choice="required"`，分类失败保守落 require_tool）、deferred/
+      claimed 纪律重试（检测正则 1:1 移植 TS，含 conditional-offer 豁免）、
+      grounding 判定（零成功工具调用 + ≥2 处数字才触发语义判定，fail-open）、
+      narration（上限 2 次）。sidecar 经 `antiHallucination: true` 接线
+      （agent `coreloop-stream.ts` 已传），plan 模式自动全豁免。测试 ×12
+      （路由 3 / deferred / claimed / grounding 2 / narration 3 / 重试
+      预算 / plan 豁免）。本项只是补勾，无新增代码。
 
 **测试**：runtime py 132（+18：hygiene 7 / stream strip 14 / tracing 3，
 含既有用例适配去重守卫），sidecar py 24，harness py 41，一致性 py 5 /
