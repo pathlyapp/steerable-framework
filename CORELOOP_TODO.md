@@ -682,9 +682,24 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
         TraceRecorder 现在在首个事件时以 `status="running"` upsert trace
         行（createdAt 固定于首次写入），finalize 覆写终态。完整 OTel
         collector 实时流仍推迟（事后导出够 dogfood 用）。测试 ×1。
-  - [ ] **MCP 下沉**：维持约定推迟——桌面工具经反向通道在 Electron 侧
-        执行，MCP 客户端留在 TS 层；sidecar 直连 MCP server 是独立的大
-        改动，等 api 采纳或桌面产品需求驱动。
+  - [ ] **MCP 下沉**：推迟，且 2026-08-27 复核后**理由从「大改动」升级为
+        「有硬阻塞」**（与 skills 下沉一并评估，结论相反）：
+        ① **运行时阻塞**：`mcp-executor.ts` 用 `localRequire.resolve(pkgName)`
+        从 Electron 的 node_modules 解析 MCP server npm 包，并以
+        `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 拿 Electron 二进制
+        当 Node 运行时。Python sidecar 无 Node——下沉要么往 sidecar 塞
+        Node（刚过的 320MB 包体门禁当场爆），要么依赖系统 Node（脆弱，
+        与便携运行时设计相反）。
+        ② **循环不需要知道**：MCP 工具经反向通道执行，在 loop 眼里与
+        `local_exec_shell` 无区别——抽象已到位，下沉不解决任何问题。
+        对比 skills：catalog 注入是 `pre_step` 的循环行为，留 TS 层等于
+        又写一份将来要删的循环逻辑。这是两者结论相反的根本原因。
+        ③ **失败模型**：sidecar 现在近乎无状态、重启便宜（15s boot）；
+        拥有 MCP 服务器进程树后它变成进程监管者，重启/升级/崩溃恢复全部变重。
+        ④ OAuth 流程需要窗口，属宿主职责。
+        **唯一解除条件**：api 采纳 CoreLoop **且** api 侧也需要 MCP——
+        那时 sidecar 内的 Python MCP 客户端同时服务 api（服务端无 Electron）。
+        即使那天到了，桌面端仍可保留 TS 客户端：两边 seam 都是 `params.tools`。
 
 ## A4 · desktop 切换并删码（2–3 周）
 
@@ -794,7 +809,11 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       分类器降级为沙箱内第二道提示层，对齐 codex 双层结构。
 - [ ] **第三步 · MCP client 下沉进 sidecar（严格依赖第一步结论）**：
       api 采纳则下沉（一次服务桌面+api，推迟约定自动解除）；不采纳则
-      MCP 留在 Electron TS 层，此步取消。
+      MCP 留在 Electron TS 层，此步取消。**注意**：即使 api 采纳，也存在
+      运行时硬阻塞（MCP server 是 Electron node_modules 里的 npm 包，
+      跑在 Electron 二进制上；Python sidecar 无 Node）——详见 P3 节的
+      四条复核理由。下沉的现实形态是「sidecar 内 Python MCP 客户端服务
+      api，桌面保留 TS 客户端」，不是统一成一份。
 
 **明确不抄 codex**：TUI/云任务/企业 OAuth/权限 profile（OpenAI 产品
 广度逼出来的，桌面+api 形态抄了是负资产）；Guardian 独立二审模型
