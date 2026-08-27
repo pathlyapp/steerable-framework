@@ -182,6 +182,11 @@ class ToolRouter:
             error = f"Unknown tool: {call.name}"
             if suggestions:
                 error += f". Did you mean: {', '.join(suggestions)}?"
+            elif self._tools:
+                # Garbage names (provider format-marker leaks, hallucinated
+                # qualifiers) defeat fuzzy matching — list the valid set so
+                # the model can re-issue the call correctly next round.
+                error += f". Available tools: {', '.join(self._tools)}"
             return ToolResult(
                 success=False,
                 error=error,

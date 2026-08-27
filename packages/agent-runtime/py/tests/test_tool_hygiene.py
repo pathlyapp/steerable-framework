@@ -171,7 +171,7 @@ async def test_unknown_tool_returns_suggestions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_tool_without_close_match_has_no_suggestions() -> None:
+async def test_unknown_tool_without_close_match_lists_valid_tools() -> None:
     router = ToolRouter()
 
     async def list_tasks() -> list:
@@ -181,7 +181,7 @@ async def test_unknown_tool_without_close_match_has_no_suggestions() -> None:
 
     result = await router.dispatch(ToolCall(id="c2", name="xyzzy", arguments={}))
     assert result.success is False
-    assert result.error == "Unknown tool: xyzzy"
+    assert result.error == "Unknown tool: xyzzy. Available tools: list_tasks"
     assert result.data["suggestions"] == []
 
 

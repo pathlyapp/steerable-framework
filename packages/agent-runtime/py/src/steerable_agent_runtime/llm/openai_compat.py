@@ -16,6 +16,7 @@ not need to install the heavyweight `openai` SDK.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,8 @@ from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .errors import LLMError, classify_http_status
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -212,6 +215,31 @@ class OpenAICompatProvider:
 # Wire-format helpers (kept pure functions for unit-testability)
 # ---------------------------------------------------------------------------
 
+# Harmony-format special tokens (gpt-oss family) leak into the tool name
+# field when a vendor's chat-completions shim only half-parses the format —
+# observed in production as names like "json<|channel|>commentary" or
+# "to=functions.exec_command<|channel|>commentary". A valid tool name never
+# contains "<|", so everything from the first marker on is leak (including
+# the channel word after it, e.g. "commentary"); harmony routing prefixes
+# ("to=", "functions.") come off too. This recovers the intended name when
+# the leak is partial; when the real name never reached the field (e.g. only
+# the <|constrain|> value "json" remains) the residue is garbage that
+# ToolRouter rejects with the full valid tool list.
+_HARMONY_NAME_PREFIXES = ("to=", "functions.")
+
+
+def _sanitize_tool_name(name: str) -> str:
+    if "<|" not in name and not name.startswith(_HARMONY_NAME_PREFIXES):
+        return name
+    cleaned = name.split("<|", 1)[0]
+    for prefix in _HARMONY_NAME_PREFIXES:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+    cleaned = cleaned.strip()
+    if cleaned != name:
+        logger.warning("sanitized harmony-leaked tool name %r -> %r", name, cleaned)
+    return cleaned
+
 
 def _encode_message(message: LLMMessage) -> dict[str, Any]:
     out: dict[str, Any] = {"role": message.role, "content": message.content}
@@ -247,7 +275,7 @@ def _decode_tool_calls(value: Any) -> list[ToolCall] | None:
         out.append(
             ToolCall(
                 id=item.get("id") or "",
-                name=function.get("name") or "",
+                name=_sanitize_tool_name(function.get("name") or ""),
                 arguments=arguments,
             )
         )
@@ -285,7 +313,7 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
             arguments = {}
         tool_call_delta = ToolCall(
             id=first.get("id") or "",
-            name=function.get("name") or "",
+            name=_sanitize_tool_name(function.get("name") or ""),
             arguments=arguments,
         )
     return LLMStreamChunk(

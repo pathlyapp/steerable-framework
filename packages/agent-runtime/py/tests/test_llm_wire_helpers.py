@@ -15,6 +15,7 @@ from steerable_agent_runtime.llm.openai_compat import (
     _decode_tool_calls,
     _encode_message,
     _parse_stream_chunk,
+    _sanitize_tool_name,
 )
 
 
@@ -171,6 +172,72 @@ def test_openai_parse_stream_chunk_tool_call_delta() -> None:
     assert parsed.tool_call_delta is not None
     assert parsed.tool_call_delta.name == "list_events"
     assert parsed.tool_call_delta.arguments == {"limit": 3}
+
+
+# ---------------------------------------------------------------------------
+# Harmony marker leakage (gpt-oss via OpenAI-compat shims)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_tool_name_passes_clean_names_through() -> None:
+    assert _sanitize_tool_name("exec_command") == "exec_command"
+    assert _sanitize_tool_name("") == ""
+
+
+def test_sanitize_tool_name_strips_markers_and_recovers_name() -> None:
+    assert _sanitize_tool_name("exec_command<|channel|>commentary") == "exec_command"
+    assert (
+        _sanitize_tool_name("to=functions.exec_command<|channel|>commentary")
+        == "exec_command"
+    )
+
+
+def test_sanitize_tool_name_strips_unrecoverable_leak_to_residue() -> None:
+    # Production sample: only the <|constrain|> value survived — the real tool
+    # name is unrecoverable, but the markers still come out so downstream
+    # fuzzy matching / logging see a clean token.
+    assert _sanitize_tool_name("json<|channel|>commentary") == "json"
+
+
+def test_openai_decode_tool_calls_sanitizes_harmony_leak() -> None:
+    raw = [
+        {
+            "id": "call_9",
+            "type": "function",
+            "function": {
+                "name": "to=functions.create_event<|channel|>commentary",
+                "arguments": '{"title": "hi"}',
+            },
+        }
+    ]
+    decoded = _decode_tool_calls(raw)
+    assert decoded is not None
+    assert decoded[0].name == "create_event"
+    assert decoded[0].arguments == {"title": "hi"}
+
+
+def test_openai_parse_stream_chunk_sanitizes_harmony_leak() -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": "call_y",
+                            "function": {
+                                "name": "list_events<|channel|>commentary",
+                                "arguments": "{}",
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+    parsed = _parse_stream_chunk(chunk)
+    assert parsed is not None
+    assert parsed.tool_call_delta is not None
+    assert parsed.tool_call_delta.name == "list_events"
 
 
 # ---------------------------------------------------------------------------

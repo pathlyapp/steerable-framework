@@ -79,6 +79,27 @@ async def test_unknown_tool_returns_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_tool_without_fuzzy_match_lists_valid_tools() -> None:
+    """Garbage names (e.g. provider format-marker leak residue like "json")
+    return no difflib suggestions; the error must then name the valid tools
+    so the model can re-issue the call instead of retrying blind."""
+    router = ToolRouter()
+
+    def exec_command() -> str:
+        return "ok"
+
+    def read_file() -> str:
+        return "ok"
+
+    router.register(exec_command)
+    router.register(read_file)
+    result = await router.dispatch(ToolCall(id="6", name="json", arguments={}))
+    assert result.success is False
+    assert result.needsFollowup is True
+    assert "Available tools: exec_command, read_file" in (result.error or "")
+
+
+@pytest.mark.asyncio
 async def test_handler_exception_wrapped_into_result() -> None:
     router = ToolRouter()
 
