@@ -839,10 +839,43 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
         （P1 时代已过时）在冻结 PR 重写。
       - 三个待决策点（冻结 PR 前）：工具事件字节兼容策略 / api 是否永久
         in-process / maxToolErrors 语义 + token 预算默认值。
-- [ ] **第二步 · 沙箱（分发硬门槛，与第一步可并行）**：「桌面刻意全允许」
-      只在自用 dogfood 成立。macOS Seatbelt 起步（sidecar 进程
-      sandbox-exec 包装 + 写路径白名单），Linux Landlock 跟进；61 规则
-      分类器降级为沙箱内第二道提示层，对齐 codex 双层结构。
+- [x] **第二步 · 沙箱（macOS Seatbelt 起步）** ✅ 已完成（2026-08-27）。
+      桌面「刻意全允许」时代结束：sidecar 进程现可被 Seatbelt 收容，
+      61 规则分类器降为第二道提示层（对齐 codex 双层结构）。交付：
+      - **框架侧 `steerable_sidecar/sandbox.py`**：deny-by-default
+        Seatbelt profile 生成器（策略文本唯一属主），CLI
+        `python -m steerable_sidecar.sandbox profile`。策略要点：读全开
+        （skill roots 是宿主按请求传入的动态路径）、network-outbound 全开
+        （provider baseUrl 用户可配，含 localhost Ollama）且**无
+        network-bind**、写白名单仅 `~/.steerable`（token 校准原子写）+
+        系统 scratch 目录、exec/fork 允许（子进程继承同一沙箱，非逃逸口
+        ——codex 立场）。契约文档：`docs/spec/safety.md` 新增
+        「OS sandbox: layer 1」节。
+      - **agent 侧 supervisor 接线**：`SidecarStartOptions.sandbox` /
+        环境变量 `STEERABLE_SIDECAR_SANDBOX=1`（opt-in，dogfood 后再
+        default-on）。宿主先建 `~/.steerable`（沙箱拒 $HOME 写）、设
+        `PYTHONDONTWRITEBYTECODE=1`，经
+        `sandbox-exec -p <profile> python -m steerable_sidecar` 启动；
+        非 macOS / profile 生成失败一律回退非沙箱并打日志（加固层绝不
+        砖化应用）。
+      - **测试**：框架 py 10 例（含真实 sandbox-exec 收容冒烟：受限子进程
+        可读 /etc/hosts、写 /etc 被拒）；agent 单测 7 例（spawn 计划：
+        开关门控、argv 形状、双回退路径）+ 集成 1 例（真实沙箱启动
+        ping 通）。沙箱内 HTTPS+DNS 直连验证通过。
+      - **E2E 回测（沙箱开）**：tools 6/6、multi 7/7、regen 3/3、
+        cancel 4/4、plan 2/2；single 两轮各 22/25（msg[9]/[10] 与
+        msg[9]/[11] 空回复）。四轮 A/B 归因：无沙箱基线同样抖动
+        （25/25 与 23/25，msg[11] 空回复），失败集随轮次变化、全程
+        HTTP 200 零错误、内核零沙箱拒绝日志——空回复是
+        gpt-oss:20b-cloud 在最难数据接地 prompt 上的模型抖动
+        （基线 msg[9] 需 116s 多重试才出字），非沙箱回归。
+        踩坑：E2E 须等 `[sidecar] ready` 再发车——CDP 就绪 ≠ sidecar
+        就绪，抢跑会吃 503（coreloop-stream 的 fail-loud 设计，
+        非沙箱缺陷）。
+      - **遗留**：Linux Landlock（`seatbelt_available()` 已留平台门）；
+        default-on 时机（dogfood 一周无沙箱事故后翻默认）；宿主侧工具
+        执行的沙箱化（当前工具跑在 Electron 宿主进程，由分类器+审批
+        把守——codex 的 exec 沙箱化是更后面的事）。
 - [ ] **第三步 · MCP client 下沉进 sidecar（严格依赖第一步结论）**：
       api 采纳则下沉（一次服务桌面+api，推迟约定自动解除）；不采纳则
       MCP 留在 Electron TS 层，此步取消。**注意**：即使 api 采纳，也存在

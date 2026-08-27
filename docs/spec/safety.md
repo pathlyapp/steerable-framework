@@ -73,3 +73,46 @@ substitution, …). A regex layer gives you a fast, conservative
 classifier that's easy to audit. **It is not a sandbox** — pair it with
 a real consent UI for `local`-mode tools (see
 [Tools spec](tools.md#toolmode-harness-classifier)).
+
+## OS sandbox: the sidecar process (layer 1)
+
+The classifier above is **layer 2** — an in-loop hint that gates tool
+dispatch. Layer 1 is OS-enforced confinement of the sidecar process
+itself, the codex two-layer structure: even if the loop process is
+confused or compromised (it holds the provider API key and ingests
+untrusted tool output), the kernel keeps it inside a write whitelist.
+
+macOS uses Seatbelt (`/usr/bin/sandbox-exec`); the sidecar package owns
+the policy end to end:
+
+```bash
+python -m steerable_sidecar.sandbox profile \
+    --writable-root ~/.steerable > sidecar.sb
+/usr/bin/sandbox-exec -p "$(cat sidecar.sb)" python -m steerable_sidecar
+```
+
+The profile is deny-by-default with exactly these exceptions:
+
+| Resource | Policy | Why |
+| -------- | ------ | --- |
+| Reads | open | Skill roots are host-configured per request; confinement targets writes, not reads. |
+| Network-outbound | open | Provider `baseUrl` is user-configured (cloud, LAN, localhost Ollama). No `network-bind` — the sidecar never listens. |
+| Writes | whitelist | `~/.steerable` (token calibration, atomic tmp+rename) + system scratch dirs. Nothing else. |
+| exec/fork | allowed | Children inherit the same sandbox, so this is not an escape hatch; denying it breaks Python internals. |
+
+Hosts integrating the sandbox must:
+
+1. **Create `~/.steerable` before spawn** — creating the directory needs
+   write on `$HOME`, which the profile denies.
+2. **Set `PYTHONDONTWRITEBYTECODE=1`** — the profile denies `__pycache__`
+   writes; skipping bytecode keeps boot clean.
+3. Treat sandboxing as hardening, never a correctness dependency: if the
+   platform lacks Seatbelt (Linux today — Landlock is a follow-up) or
+   profile generation fails, hosts should fall back to an unsandboxed
+   spawn with a loud log line, not brick the app.
+
+The reference integration is the desktop supervisor
+(`deeppath-agent/src/sidecar/supervisor.ts`, `STEERABLE_SIDECAR_SANDBOX=1`).
+What the sandbox deliberately does **not** confine: tool execution. In the
+desktop deployment tools run in the host process over the reverse channel,
+gated by the layer-2 classifier plus the consent UI.
