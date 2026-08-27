@@ -767,13 +767,41 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
      行为。框架 316 全绿。
 
 **通过标准**：sidecar 模式下离线 Ollama + 本地 shell/文件/MCP 工具全部跑通；
-包体过门禁。✅ 均已达成（金丝雀连续多轮 PASS；包体 darwin 实测 94.7MB，
-Linux x64 的 320MB 门禁待 CI 事故恢复后确认）。
+包体过门禁。✅ 均已达成（金丝雀连续多轮 PASS；包体 darwin 实测 94.7MB；
+四平台 CI 门禁 2026-08-27 全过——linux-x64/win32/darwin-arm64 秒过，
+darwin-x64 因 macos-13 Intel runner 退役排队，构建本身无问题）。
 **回滚**：git revert agent `298eb82` 可恢复 TS 循环；运行时开关已随
 TS 循环一并删除。
 
-## A5 · api 采纳（可选，以后）
+## A5+ · 路线图：按 codex 演进路线映射（2026-08-27，canvas `steerable-roadmap-codex-route`）
 
+codex 六阶段对照：① 单循环+执行+安全（沙箱刻意跳过）② 持久化真相源
+（✅ 全齐）③ **协议面产品化 ← 当前转折点** ④ 生态接入（MCP 推迟）
+⑤ 可观测纵深（事后导出够用）⑥ 多智能体/二审（seam 已备）。
+codex 的教训：阶段 3 的 app-server 把「循环」变成「平台」，之后 MCP、
+skills、多智能体全是挂在稳定协议面上的增量——顺序不能颠倒。
+
+接下来三步**严格按序**：
+
+- [ ] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片，本周可启动）**：
+      盘点 api 仓约 100 个 SSE 发射点相对 A2 港口规格的漂移，产出采纳
+      成本重估 + 「sidecar 协议 v1 冻结范围」（哪些 RPC/事件形状为 api
+      采纳而定版）。不动 api 代码，纯勘察。前置条件已成立：CoreLoop
+      default-on 生产验证 + 带着 api 缺失的反幻觉层。
+- [ ] **第二步 · 沙箱（分发硬门槛，与第一步可并行）**：「桌面刻意全允许」
+      只在自用 dogfood 成立。macOS Seatbelt 起步（sidecar 进程
+      sandbox-exec 包装 + 写路径白名单），Linux Landlock 跟进；61 规则
+      分类器降级为沙箱内第二道提示层，对齐 codex 双层结构。
+- [ ] **第三步 · MCP client 下沉进 sidecar（严格依赖第一步结论）**：
+      api 采纳则下沉（一次服务桌面+api，推迟约定自动解除）；不采纳则
+      MCP 留在 Electron TS 层，此步取消。
+
+**明确不抄 codex**：TUI/云任务/企业 OAuth/权限 profile（OpenAI 产品
+广度逼出来的，桌面+api 形态抄了是负资产）；Guardian 独立二审模型
+（grounding judge 已是轻量版，沙箱之前升级它是本末倒置）；多智能体
+产品化（codex 两年后才上 v2，seam 已备等真实需求）。
+
+**原 A5 备忘**（并入第一步勘察范围）：
 - [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件
 - [ ] 此时 CoreLoop 已被真实产品验证，且带着 api 缺失的反幻觉能力
 
