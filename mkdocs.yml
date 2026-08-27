@@ -80,6 +80,7 @@ nav:
   - UI Components: ui/index.md
   - Migration:
       - From DeepPath: migration/deeppath.md
+      - API SSE Drift Survey: migration/api-sse-drift.md
 
 plugins:
   - search

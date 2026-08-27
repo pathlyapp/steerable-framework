@@ -819,11 +819,26 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 
 接下来三步**严格按序**：
 
-- [ ] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片，本周可启动）**：
-      盘点 api 仓约 100 个 SSE 发射点相对 A2 港口规格的漂移，产出采纳
-      成本重估 + 「sidecar 协议 v1 冻结范围」（哪些 RPC/事件形状为 api
-      采纳而定版）。不动 api 代码，纯勘察。前置条件已成立：CoreLoop
-      default-on 生产验证 + 带着 api 缺失的反幻觉层。
+- [x] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片）** ✅ 已完成
+      （2026-08-27，纯勘察，api 零改动）。交付：
+      `docs/migration/api-sse-drift.md`（已上线 mkdocs nav）。要点：
+      - **实测 114 个发射点**（A0 估 ~100），18 种线上 wire type、
+        15 个 collaboration 事件、5 个 live orchestration 事件。
+      - **最大漂移：api 线上没有结构化工具事件**——工具以 content 标签
+        （`<dp-action>`/`<ask-user>`）+ `executed_actions` 帧呈现；
+        `tool-proposal` 前端有处理后端零发射（死代码）。采纳时 transport
+        必须把 CoreLoop 的 `tool_call_*` 渲染回 content 标签保字节兼容。
+      - **成本重估**：不是 O(100) 点改写，而是 O(20) 形状映射 +
+        1 个 FastAPISseTransport + 编排/协作直通通道；loop.py 51 点随
+        CoreLoop 采纳自动消失，resume 层的字节重解析
+        （`_extract_content_delta`）可删。
+      - **冻结范围建议**：Layer 1 LoopEvent 13 kinds 闭环（产品事件不进
+        loop，编排/协作走 transport 直通）；Layer 2 sidecar 15 方法 +
+        通知集 + 反向通道，protocolVersion 0.1.0→1.0.0；
+        `spec/sidecar.md` 方法目录（缺 steer/fork）与 `spec/events.md`
+        （P1 时代已过时）在冻结 PR 重写。
+      - 三个待决策点（冻结 PR 前）：工具事件字节兼容策略 / api 是否永久
+        in-process / maxToolErrors 语义 + token 预算默认值。
 - [ ] **第二步 · 沙箱（分发硬门槛，与第一步可并行）**：「桌面刻意全允许」
       只在自用 dogfood 成立。macOS Seatbelt 起步（sidecar 进程
       sandbox-exec 包装 + 写路径白名单），Linux Landlock 跟进；61 规则
@@ -841,9 +856,12 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 （grounding judge 已是轻量版，沙箱之前升级它是本末倒置）；多智能体
 产品化（codex 两年后才上 v2，seam 已备等真实需求）。
 
-**原 A5 备忘**（并入第一步勘察范围）：
-- [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件
-- [ ] 此时 CoreLoop 已被真实产品验证，且带着 api 缺失的反幻觉能力
+**原 A5 备忘**（并入第一步勘察范围，2026-08-27 勘察结论）：
+- [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件 —— 实测 114
+      点，但勘察重估为「O(20) 形状映射 + transport + 编排旁路」，
+      详见 `docs/migration/api-sse-drift.md` 采纳成本重估一节
+- [x] 此时 CoreLoop 已被真实产品验证，且带着 api 缺失的反幻觉能力
+      （A4 default-on + E2E 47/47，2026-08-27）
 
 ## A6 · skills 好用（产品目标，2026-08-27 立项）
 
