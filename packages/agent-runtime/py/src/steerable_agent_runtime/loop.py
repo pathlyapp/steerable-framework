@@ -467,7 +467,7 @@ class CoreLoop:
                     "hook_action",
                     {
                         "hook": "pre_step",
-                        "action": "compact",
+                        "action": pre.rewrite_action or "compact",
                         "reason": pre.reason or "transcript rewritten",
                         "round": round_index,
                     },

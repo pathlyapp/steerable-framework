@@ -55,6 +55,11 @@ class PreStepAction:
     transcript: list[LLMMessage] | None = None
     reason: str | None = None
     tool_choice: str | None = None
+    #: Label for the ``hook_action`` event when this action rewrote the
+    #: transcript. Compaction (the first rewriter) owns the "compact"
+    #: default; other rewriters (skill catalog injection, …) set their own
+    #: so traces distinguish *what* rewrote the transcript.
+    rewrite_action: str = "compact"
 
 
 @dataclass(slots=True)
@@ -190,16 +195,29 @@ class ChainHooks:
     ) -> PreStepAction:
         current = transcript
         tool_choice: str | None = None
+        # The last rewriter owns the label/reason on the emitted hook_action
+        # event (e.g. skill-catalog injection first, then compaction in the
+        # same round reports as "compact"). Identity semantics, same as the
+        # loop's own check: a pass-through (same object) is not a rewrite.
+        rewrite_action = "compact"
+        reason: str | None = None
         for hook in self._hooks:
             action = await hook.pre_step(current, ctx)
             if action.kind == "reject":
                 return action
             if action.transcript is not None:
+                if action.transcript is not current:
+                    rewrite_action = action.rewrite_action
+                    reason = action.reason
                 current = action.transcript
             if tool_choice is None and action.tool_choice is not None:
                 tool_choice = action.tool_choice
         return PreStepAction(
-            kind="proceed", transcript=current, tool_choice=tool_choice
+            kind="proceed",
+            transcript=current,
+            reason=reason,
+            tool_choice=tool_choice,
+            rewrite_action=rewrite_action,
         )
 
     async def post_tool_result(

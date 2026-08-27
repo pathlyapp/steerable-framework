@@ -43,16 +43,21 @@ from steerable_agent_runtime import (
     ChainHooks,
     CompactionHooks,
     CoreLoop,
+    FilesystemSkillProvider,
     LoopConfig,
     LoopHooks,
     PolicyDeniedError,
     RetryHooks,
     RouterToolExecutor,
+    SkillExecutor,
+    SkillHooks,
     StorageError,
     SubagentExecutor,
     ToolDispatchError,
     ToolRouter,
     TraceRecorder,
+    select_catalog,
+    skill_tool_descriptor,
     subagent_tool_descriptor,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMProvider
@@ -625,6 +630,41 @@ class Sidecar:
         if params.get("subagent"):
             executor = SubagentExecutor(executor, provider)
             tools = [*(tools or []), subagent_tool_descriptor()]
+        # skills: layered disclosure. The host injects the eager layer into
+        # the system prompt itself; the sidecar lists the catalog layer
+        # (first-round pre_step injection, recorded as a hook_action event)
+        # and answers `skill` tool calls with the full body. ``mode:
+        # "eager"`` keeps everything host-side (compat for hosts that have
+        # not adopted layered disclosure). Roots are host-local paths — the
+        # sidecar shares the filesystem with the desktop host.
+        skills_param = params.get("skills")
+        if isinstance(skills_param, dict) and skills_param.get("mode", "layered") != "eager":
+            roots = [str(r) for r in skills_param.get("roots") or []]
+            conditions = set(skills_param.get("conditions") or [])
+            exclude = list(skills_param.get("exclude") or [])
+            ignore_conditions = bool(skills_param.get("ignoreConditions"))
+            if roots:
+                skill_provider = FilesystemSkillProvider(roots)
+                if select_catalog(
+                    skill_provider.list(), conditions, exclude, ignore_conditions
+                ):
+                    hooks = ChainHooks(
+                        SkillHooks(
+                            skill_provider,
+                            conditions=conditions,
+                            exclude=exclude,
+                            ignore_conditions=ignore_conditions,
+                        ),
+                        hooks,
+                    )
+                    executor = SkillExecutor(
+                        executor,
+                        skill_provider,
+                        conditions=conditions,
+                        exclude=exclude,
+                        ignore_conditions=ignore_conditions,
+                    )
+                    tools = [*(tools or []), skill_tool_descriptor()]
         loop = CoreLoop(
             provider,
             executor,

@@ -53,6 +53,20 @@ from .replay import (
 from .otel import export_otlp_http, to_otlp_json
 from .resume import load_transcript, project_transcript
 from .retry import RetryHooks
+from .skills import (
+    EAGER_PRIORITY_THRESHOLD,
+    FilesystemSkillProvider,
+    SkillConfig,
+    SkillDefinition,
+    SkillExecutor,
+    SkillHooks,
+    SkillProvider,
+    SkillSummary,
+    matches_conditions,
+    render_skill_catalog,
+    select_catalog,
+    skill_tool_descriptor,
+)
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
 from .storage import StorageAdapter
 from .subagent import SubagentConfig, SubagentExecutor, subagent_tool_descriptor
@@ -78,7 +92,9 @@ __all__ = [
     "CompletionDecision",
     "CompletionDraft",
     "CoreLoop",
+    "EAGER_PRIORITY_THRESHOLD",
     "ExecutionBudget",
+    "FilesystemSkillProvider",
     "FilesystemSpillStore",
     "HarnessExecutionState",
     "HarnessTrajectoryEvent",
@@ -98,6 +114,12 @@ __all__ = [
     "RetryAction",
     "RetryHooks",
     "RouterToolExecutor",
+    "SkillConfig",
+    "SkillDefinition",
+    "SkillExecutor",
+    "SkillHooks",
+    "SkillProvider",
+    "SkillSummary",
     "SpillHooks",
     "SpillStore",
     "SteerableRuntimeError",
@@ -129,9 +151,13 @@ __all__ = [
     "parse_grounding_verdict",
     "parse_turn_route",
     "load_transcript",
+    "matches_conditions",
     "project_transcript",
     "reduce_execution_state",
+    "render_skill_catalog",
+    "select_catalog",
     "should_run_grounding_judge",
+    "skill_tool_descriptor",
     "subagent_tool_descriptor",
     "tool",
 ]

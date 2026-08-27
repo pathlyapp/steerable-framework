@@ -890,33 +890,48 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 **分片计划**（框架先行，与 codex 路线第一步同向——skill seam 是协议面
 产品化的一部分）：
 
-- [ ] **Slice 1 · 框架 skill seam（Python，纯新增）**：新模块 `skills.py`
-      按 capability seam 三件套——Definition（`SkillProvider` 协议：
-      `list() -> Sequence[SkillSummary]` / `get(name) -> SkillDefinition`）、
-      Provider（`FilesystemSkillProvider`：读 `<root>/<dir>/SKILL.md`，
-      frontmatter 解析与既有 TS/api 格式**逐字段兼容** + 新增 `layer`）、
+- [x] **Slice 1 · 框架 skill seam（Python，纯新增）**（2026-08-27 完成）：
+      新模块 `skills.py` 按 capability seam 三件套——Definition
+      （`SkillProvider` 协议：`list() -> Sequence[SkillSummary]` /
+      `get(name) -> SkillDefinition`）、Provider（`FilesystemSkillProvider`：
+      读 `<root>/<dir>/SKILL.md`，frontmatter 解析与既有 TS/api 格式
+      **逐字段兼容** + 新增 `layer` / `disable-model-invocation`）、
       Consumer（`skill_tool_descriptor()` + `SkillExecutor` 装饰器 +
       `SkillHooks.pre_step` 首轮注入 catalog）。严格照 `subagent.py` 的
       既有范式（descriptor 函数 + executor 装饰器 + opt-in），渲染沿用
       dsh 的 `<skill_content name="...">` 标记。测试：清单渲染 / 工具
       往返 / 未知 skill / 非 model-invocable 拒绝 / 分层判据 / frontmatter
-      兼容既有 8 个内置 skill。
-- [ ] **Slice 2 · sidecar 接线**：`params.skills = {roots: [...],
-      mode: "layered"|"eager"}`。sidecar 与 Electron 同机，直接读
-      `userData/skills` 路径，不需要反向通道。`eager` 保留为兼容模式
-      （api 采纳前不强迫它改）。catalog 注入必须落 trace（model-visible
-      ⟺ logged）：走 `hook_action` 事件。
-- [ ] **Slice 3 · agent 切换**：`coreloop-stream.ts` 传 `skillRoots`；
-      `prompt-builder.ts` 只注入 eager 层；`/` 触发从「塞系统提示词尾部」
-      改为「注入一次性 skill 消息」（保留强制语义，但不再污染系统提示词
-      前缀——顺带是 prompt cache 净收益）；TS `skill-loader.ts` 保留给
-      UI 列表/导入 REST 端点，删掉 body 注入路径。
-- [ ] **Slice 4 · 生态兼容 + UI**：导入 codex/Claude skill 时把
-      `disable-model-invocation` 映射到 catalog 层不可见；UI 标注每个
-      skill 的层级与是否 model-invocable；trace 里统计 skill 工具调用
-      频次（哪些 skill 真被用到，反哺分层判据）。**注意**：codex skill
-      正文引用它自己的工具链（`just` / `cargo-insta` / 子代理编排），
-      导入时这类指令需改写或删除，否则模型会尝试并失败。
+      兼容既有 8 个内置 skill（`test_skills.py` 22 例）。
+      顺带修了 `ChainHooks.pre_step` 的 `rewrite_action` 传递 bug
+      （后续 no-op hook 会把先前 hook 的动作标签覆盖回 "compact"——
+      现在按 transcript 引用是否变化判定谁是真正的改写者）。
+- [x] **Slice 2 · sidecar 接线**（2026-08-27 完成）：`params.skills =
+      {roots, conditions, exclude, ignoreConditions, mode}`。sidecar 与
+      Electron 同机，直接读内置 + `userData/skills` 路径，不需要反向
+      通道。`eager` 保留为兼容模式（api 采纳前不强迫它改）。catalog
+      注入落 trace（model-visible ⟺ logged）：`hook_action` 事件带
+      `action: "skill_catalog"`（`PreStepAction.rewrite_action` 新字段，
+      默认值 "compact" 保持既有事件不变）。测试
+      `test_sidecar_skills.py` 5 例（注入+广告工具 / 进程内执行 /
+      eager 空转 / 空目录 / exclude 隐藏）。
+- [x] **Slice 3 · agent 切换**（2026-08-27 完成）：`coreloop-stream.ts`
+      传 `skills: {roots, conditions, exclude, ignoreConditions}`；
+      `prompt-builder.ts` 新增 `eagerOnly`（CoreLoop 路径恒 true）只注入
+      eager 层；`/` 触发从「塞系统提示词尾部」改为 router 注入一次性
+      用户消息（`buildForcedSkillMessage` = 指令头 + 正文，并入本轮最后
+      一条用户消息——保留强制语义，不再污染系统提示词前缀，prompt
+      cache 净收益，历史消息不残留技能正文）；TS `skill-loader.ts`
+      保留给 UI 列表/导入 REST 端点与 `findSkill` 别名解析，删掉
+      `forcedSkillName` 注入路径。模式排除清单（plan 模式排执行类技能）
+      同一份下发 sidecar catalog 与 `findSkill`。
+- [x] **Slice 4 · 生态兼容 + UI**（2026-08-27 完成）：`disable-model-invocation`
+      在 TS/Python 两个 loader 都映射为 `modelInvocable=false`（不进
+      catalog、skill 工具拒绝、`/name` 仍可强制）；设置面板标注每个
+      skill 的层级（常驻/按需）与「仅手动」；trace-report 的
+      `hook_action` 通用计数自动覆盖 `skill_catalog` 与 skill 工具调用
+      频次。**注意**：codex skill 正文引用它自己的工具链（`just` /
+      `cargo-insta` / 子代理编排），导入时这类指令需改写或删除，
+      否则模型会尝试并失败。
 
 **不做**：skill 版本管理 / 远程 skill registry（dsh 的 provider 抽象已
 预留 provider 名，等真实需求）；skill 之间的依赖声明（生态三家都没有）。

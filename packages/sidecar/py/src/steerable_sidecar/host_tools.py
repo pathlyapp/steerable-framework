@@ -71,5 +71,26 @@ class HostToolExecutor:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
 
         if isinstance(payload, dict) and "success" in payload:
-            return ToolResult(**payload)
+            return _coerce_host_result(payload)
         return ToolResult(success=True, data={"value": payload})
+
+
+_KNOWN_RESULT_KEYS = frozenset(ToolResult.model_fields)
+
+
+def _coerce_host_result(payload: dict[str, Any]) -> ToolResult:
+    """Build a ``ToolResult`` from the host's reply.
+
+    The desktop host's tool router returns flat result objects (e.g.
+    ``LocalExecResult`` carries ``stdout`` / ``stderr`` / ``exitCode`` at the
+    top level). ``ToolResult`` only has ``data`` for payloads, so unknown
+    keys are folded into it — otherwise pydantic's default ``extra="ignore"``
+    silently drops the command output and the model sees only
+    ``{"success": true}``.
+    """
+    extras = {k: v for k, v in payload.items() if k not in _KNOWN_RESULT_KEYS}
+    if extras:
+        payload = {k: v for k, v in payload.items() if k in _KNOWN_RESULT_KEYS}
+        data = payload.get("data")
+        payload["data"] = {**extras, **data} if isinstance(data, dict) else extras
+    return ToolResult(**payload)

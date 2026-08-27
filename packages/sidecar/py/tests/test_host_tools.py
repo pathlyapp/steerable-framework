@@ -218,6 +218,43 @@ async def test_host_executor_unit_unanswered_host_is_tool_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_host_executor_folds_flat_host_fields_into_data() -> None:
+    # The desktop host's tool router returns flat result objects
+    # (LocalExecResult: stdout/stderr/exitCode at the top level). Those keys
+    # must reach the model under `data` — ToolResult ignores unknown fields
+    # by default, which used to hide command output from the model entirely.
+    from steerable_agent_runtime import LoopContext
+    from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
+
+    server = JsonRpcServer()
+    host = _HostWriter(
+        server,
+        {
+            "local_exec_shell": {
+                "success": True,
+                "stdout": "e2e-token\n",
+                "stderr": "",
+                "exitCode": 0,
+                "shell": "zsh",
+            }
+        },
+    )
+    server.attach_writer(host)
+    executor = HostToolExecutor(server)
+
+    result = await executor.execute(
+        ToolCall(id="c1", name="local_exec_shell", arguments={"command": "echo e2e-token"}),
+        LoopContext(),
+    )
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["stdout"] == "e2e-token\n"
+    assert result.data["exitCode"] == 0
+    assert result.data["shell"] == "zsh"
+
+
+@pytest.mark.asyncio
 async def test_host_executor_forwards_tool_context() -> None:
     from steerable_agent_runtime import LoopContext
     from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
