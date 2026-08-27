@@ -719,6 +719,29 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
 - [x] ~~把 61 条 shell 安全规则回流到框架~~（Tier 1 已完成：双语 61 条 +
      ToolRouter 接线 + 一致性测试）
 - [x] ~~解决包体门禁~~ ✅ 2026-08-26（见上方硬阻塞；框架 `1ce60d0`）
+- [x] **真实数据 E2E 全流回放** ✅ 2026-08-27（agent `scripts/e2e-real-replay.mjs`）：
+     生产库抽样 12 条真实用户消息（短/中/长）+ 1 段真实 4 轮会话，CDP 驱动真实
+     Electron 应用跑 6 阶段（单轮×12 / 多轮×4 / 工具×3 / 重生成 / 中途取消 /
+     plan 模式），47 项断言。首轮 41/47，**当场抓到 3 个脚本测试从未覆盖的
+     真实 bug 并全部修复**：
+     1. sidecar stdio 传输 64KiB `StreamReader` 上限——大工具结果（文件读取/
+        grep 输出）直接 `LimitOverrunError` 杀读循环，回合静默挂死、无 trace。
+        修复：上限提至 16MiB（有界）+ 子进程回归测试（框架侧）。
+     2. 可见终端超时级联卡死——一条 `grep -R` 超时后仍在跑，后续所有 exec 被
+        打进忙终端的 stdin 全部连锁超时。修复：非 GUI 命令超时发 SIGINT +
+        恢复探针哨兵（zsh 收到 ^C 会中断整条命令列，原哨兵不会执行，探针
+        证明 shell 已回提示符），终端立即恢复可用（agent `terminal-manager.ts`）。
+     3. 取消回合丢 traceId——abort 立即 reject，sidecar 的
+        `stream.done{cancelled,traceId}` 无人接收。修复：abort 后等取消回执
+        （10s 宽限），`cancelled` 正确映射为完成状态，取消回合也持久化 trace。
+     4. 二次 narrate 兜底——wrap-up 回合空响应（错误密集 transcript 上的
+        模型抽风）原先直接判 failed；现在空 wrap-up 会回投
+        before_completion 触发第二次更直接的 narrate（上限 2 次，防循环）。
+     最终成绩 **45/47**（单轮 11/12，其余阶段全过）。剩余失败均为
+     provider/模型层（Ollama cloud 500 抖动——重试钩子 3 次后失败 loud
+     符合设计；gpt-oss harmony 标记泄漏进工具名 `json<|channel|>commentary`），
+     非 loop/传输/终端代码问题。复跑：`node scripts/e2e-real-replay.mjs`
+     （需应用带 `--remote-debugging-port=9222` 启动）。
 
 **通过标准**：sidecar 模式下离线 Ollama + 本地 shell/文件/MCP 工具全部跑通；
 包体过门禁。✅ 均已达成（金丝雀连续多轮 PASS；包体 darwin 实测 94.7MB，

@@ -662,10 +662,16 @@ class CoreLoop:
                         reason="no tool calls and no final response",
                         confidence=0.75,
                     )
-                # A wrap-up round IS the final answer — offering it back to
-                # before_completion would loop (its content is exactly what a
-                # discipline retry would flag).
-                if not wrap_up and completion_redos < _MAX_COMPLETION_REDOS:
+                # A wrap-up round IS the final answer — offering a NON-empty
+                # wrap-up back to before_completion would loop (its content
+                # is exactly what a discipline retry would flag). An EMPTY
+                # wrap-up is different: the model glitched on the narration
+                # ask itself, so give hooks one bounded second chance
+                # (AntiHallucinationHooks caps narrations at 2).
+                if (
+                    (not wrap_up or not content.strip())
+                    and completion_redos < _MAX_COMPLETION_REDOS
+                ):
                     action = await self._hooks.before_completion(
                         CompletionDraft(
                             status=decision.status,

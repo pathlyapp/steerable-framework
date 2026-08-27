@@ -522,6 +522,73 @@ async def test_narration_round_on_empty_terminal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_narration_second_chance_on_empty_wrap_up() -> None:
+    """Real-data replay finding: the wrap-up round itself can come back empty
+    on error-heavy transcripts. A second, more direct narration recovers the
+    turn; a second empty wrap-up settles failed (bounded, no loop)."""
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("get_data", call_id="c1")]},
+            # terminal round after the tool failure: empty (triggers narrate #1)
+            {"content": ""},
+            # first narration wrap-up: empty again (model glitched)
+            {"content": ""},
+            # second narration wrap-up: answers
+            {"content": "工具失败了，没能拿到数据。"},
+        ]
+    )
+
+    router = ToolRouter()
+
+    @tool(router=router, name="get_data", description="fetch", mode="read")
+    async def get_data(source: str = "default") -> dict[str, Any]:
+        raise RuntimeError("db down")
+
+    hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage(role="user", content="取数")], tools=TOOLS))
+
+    final = final_completion(events)
+    assert final["status"] == "completed"
+    assert final["textLength"] == len("工具失败了，没能拿到数据。")
+    narrations = [
+        e for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "narrate"
+    ]
+    assert len(narrations) == 2
+
+
+@pytest.mark.asyncio
+async def test_narration_bounded_when_wrap_ups_stay_empty() -> None:
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("get_data", call_id="c1")]},
+            {"content": ""},
+            {"content": ""},
+            {"content": ""},
+        ]
+    )
+
+    router = ToolRouter()
+
+    @tool(router=router, name="get_data", description="fetch", mode="read")
+    async def get_data(source: str = "default") -> dict[str, Any]:
+        raise RuntimeError("db down")
+
+    hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage(role="user", content="取数")], tools=TOOLS))
+
+    final = final_completion(events)
+    assert final["status"] == "failed"
+    narrations = [
+        e for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "narrate"
+    ]
+    assert len(narrations) == 2  # bounded — never a third
+
+
+@pytest.mark.asyncio
 async def test_retry_budget_bounds_discipline_loops() -> None:
     # 模型每次都"光说不做"——重试预算（默认 2）用完后必须放行收尾
     provider = make_provider(

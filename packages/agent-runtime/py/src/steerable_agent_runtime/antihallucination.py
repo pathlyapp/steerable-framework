@@ -398,6 +398,19 @@ _NARRATION_REQUEST = "\n".join([
     "showed, and give the user a clear final answer now.",
 ])
 
+# Second-chance narration when the first wrap-up round itself came back
+# empty (observed on real-data replay: models occasionally return an empty
+# completion on error-heavy transcripts; a more direct ask recovers some).
+_NARRATION_REQUEST_RETRY = "\n".join([
+    "[system notice] You still have not answered the user. Do NOT call any",
+    "tools. Reply with at least one plain sentence telling the user what",
+    "happened, even if it is just that the attempts failed.",
+])
+
+# Narration rounds per turn. One-shot proved too brittle against stochastic
+# empty completions; more than two just burns tokens on a wedged model.
+_MAX_NARRATIONS = 2
+
 
 # ---------------------------------------------------------------------------
 # The hooks implementation
@@ -442,7 +455,7 @@ class AntiHallucinationHooks(NoopHooks):
         self._config = config or AntiHallucinationConfig()
         self._route: DataNeedRoute | None = None
         self._retries = 0
-        self._narrated = False
+        self._narrations = 0
 
     # -- pre_step: data-need routing → tool_choice on the first round ------
 
@@ -500,17 +513,24 @@ class AntiHallucinationHooks(NoopHooks):
 
         # Narration: terminal with tool activity but no text. Only when there
         # is something to summarize (a naked no-tool no-content failure gains
-        # nothing from a summary round).
+        # nothing from a summary round). Bounded at two rounds: the first
+        # wrap-up occasionally comes back empty on error-heavy transcripts.
         if (
             cfg.enable_narration
             and not content
-            and not self._narrated
+            and self._narrations < _MAX_NARRATIONS
             and draft.status in ("failed", "budget_exhausted")
             and draft.tool_calls_used > 0
         ):
-            self._narrated = True
+            self._narrations += 1
             return CompletionAction(
-                kind="narrate", message=_NARRATION_REQUEST, reason="narration"
+                kind="narrate",
+                message=(
+                    _NARRATION_REQUEST
+                    if self._narrations == 1
+                    else _NARRATION_REQUEST_RETRY
+                ),
+                reason="narration",
             )
 
         # The retry checks below apply to the no-tool-calls terminal with
