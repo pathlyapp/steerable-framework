@@ -170,6 +170,23 @@ graph BT
 | [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) | 3 | Portable CPython binary — boots in <1s, macOS notarised, Windows signed |
 | [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`, `MessageList`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` + hooks + Tailwind preset |
 
+<h2 class="sf-section">How it compares</h2>
+
+<p class="sf-lede" markdown>
+Steerable isn't the only way to ship an agent. The short, honest version against the frameworks you're probably also evaluating:
+</p>
+
+| Dimension | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Agent SDK |
+| --------- | --------- | ------------ | ---------------- | --------- | ----------------- | ---------------- |
+| **Form factor** | Layered library — the same loop in a desktop sidecar and a server | Product family: CLI, IDE, cloud | Plugin-based harness (pre-release) | Orchestration library | Lightweight framework over the Responses API | The Claude Code loop as a library |
+| **Event model** | Structured `LoopEvent` taxonomy over one typed wire protocol | Session-owned turn loop + hooks | Inbox-driven ReactLoop with steer/inject | You design the graph | Handoffs; no mid-run steer | Steer via messages; hooks intercept tools |
+| **Sandbox / isolation** | OS-sandboxed sidecar (macOS Seatbelt today) + command classifier with dozens of rules | Approval policies + platform sandbox | `sandbox.confine`, fail-closed | None built-in | Guardrails; no sandbox | Permission modes + hooks |
+| **Maturity** | Early-stage (`0.2.x`); one production consumer | Massive real-world usage | Pre-release; internal use | Widely adopted in production | Production, OpenAI-tied | Production, Anthropic-only |
+
+<p class="sf-lede" markdown>
+Where Steerable genuinely differs, where it lags, and how to choose: [Full comparison](comparison.md).
+</p>
+
 <h2 class="sf-section">Who's using it</h2>
 
 <p class="sf-lede" markdown>
