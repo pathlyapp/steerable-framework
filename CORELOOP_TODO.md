@@ -742,6 +742,11 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
      符合设计；gpt-oss harmony 标记泄漏进工具名 `json<|channel|>commentary`），
      非 loop/传输/终端代码问题。复跑：`node scripts/e2e-real-replay.mjs`
      （需应用带 `--remote-debugging-port=9222` 启动）。
+     **复跑 47/47（2026-08-27 10:08，harmony 修复后）**：单轮 12/12、
+     多轮/工具/重生成/取消/plan 全过，全程 6.6 分钟（无 240s 超时 stall）。
+     工具阶段模型另一次吐出垃圾工具名（非 harmony 标记，纯乱码），
+     派发层兜底按设计工作：unknown tool + 全量合法工具名反馈 → 模型
+     下轮自我纠正 → 回合正常完成——兜底路径获真实流量验证。
 - [x] **harmony 泄漏治理** ✅ 2026-08-27（E2E 遗留项收口）：双层修复——
      ① 解码层 `_sanitize_tool_name`（openai_compat.py）：合法工具名永不
      含 `<|`，从首个标记截断 + 去 `to=`/`functions.` 路由前缀，部分泄漏
