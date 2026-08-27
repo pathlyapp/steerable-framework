@@ -682,24 +682,45 @@ Guardian v2 与企业 MCP OAuth，不影响轴级对比；dsh 停在 0.1.1-rc.2�
         TraceRecorder 现在在首个事件时以 `status="running"` upsert trace
         行（createdAt 固定于首次写入），finalize 覆写终态。完整 OTel
         collector 实时流仍推迟（事后导出够 dogfood 用）。测试 ×1。
-  - [ ] **MCP 下沉**：推迟，且 2026-08-27 复核后**理由从「大改动」升级为
-        「有硬阻塞」**（与 skills 下沉一并评估，结论相反）：
-        ① **运行时阻塞**：`mcp-executor.ts` 用 `localRequire.resolve(pkgName)`
-        从 Electron 的 node_modules 解析 MCP server npm 包，并以
-        `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 拿 Electron 二进制
-        当 Node 运行时。Python sidecar 无 Node——下沉要么往 sidecar 塞
-        Node（刚过的 320MB 包体门禁当场爆），要么依赖系统 Node（脆弱，
-        与便携运行时设计相反）。
-        ② **循环不需要知道**：MCP 工具经反向通道执行，在 loop 眼里与
-        `local_exec_shell` 无区别——抽象已到位，下沉不解决任何问题。
+  - [ ] **MCP 下沉**：推迟（与 skills 下沉一并评估，结论相反）。2026-08-27
+        实勘 codex + dsh 后的准确理由：
+        ① **产品权衡，不是技术不可能**：`mcp-executor.ts` 用
+        `localRequire.resolve(pkgName)` 从 Electron 的 node_modules 解析
+        MCP server npm 包，并以 `process.execPath` +
+        `ELECTRON_RUN_AS_NODE=1` 拿 Electron 二进制当 Node 运行时——
+        换来「用户零前置条件就能跑 npm MCP 服务器」。**codex 与 dsh
+        都不打包 Node**（都要求用户声明 `command: npx` 并继承 PATH；
+        codex 无 Node 发现逻辑，dsh 连自己的 subprocess capability 都
+        不用、让 MCP SDK 自己 spawn 且文档写明豁免）。所以下沉的真实
+        代价是放弃这个零前置条件体验、退回两家的水平，而不是「做不到」。
+        往 sidecar 塞 Node 则当场爆刚过的 320MB 包体门禁。
+        ② **循环不需要知道，且三家一致**：MCP 工具经反向通道执行，在 loop
+        眼里与 `local_exec_shell` 无区别。codex 把每个 MCP 工具注册成
+        `McpHandler`、实现与原生工具**同一个** `ToolExecutor` trait；dsh 走
+        纯 `ctx.tools.register()`、循环层零 MCP 代码（连提示词里的
+        「via MCP」标注都刻意不加）。命名约定三家也相同：
+        `mcp__<server>__<tool>`（codex SHA1 冲突后缀 + 128 字节上限，
+        dsh 64 字节 + 哈希后缀）。抽象已到位，下沉不解决任何问题。
         对比 skills：catalog 注入是 `pre_step` 的循环行为，留 TS 层等于
         又写一份将来要删的循环逻辑。这是两者结论相反的根本原因。
         ③ **失败模型**：sidecar 现在近乎无状态、重启便宜（15s boot）；
         拥有 MCP 服务器进程树后它变成进程监管者，重启/升级/崩溃恢复全部变重。
-        ④ OAuth 流程需要窗口，属宿主职责。
+        ④ OAuth 流程需要窗口，属宿主职责——codex 的分工可直接参照：
+        app-server 返回 `authorization_url`，**客户端开浏览器**，app-server
+        完成流程后发 `mcpServer/oauthLogin/completed` 通知。（dsh 干脆没有
+        OAuth：用户自己塞 env/headers。）
         **唯一解除条件**：api 采纳 CoreLoop **且** api 侧也需要 MCP——
         那时 sidecar 内的 Python MCP 客户端同时服务 api（服务端无 Electron）。
         即使那天到了，桌面端仍可保留 TS 客户端：两边 seam 都是 `params.tools`。
+        **两个可抄的细节（届时或做 MCP 懒加载时）**：dsh 的重连预算重置
+        （指数退避 500ms→30s、单次故障 10 次上限，但连接存活超过 maxDelay
+        就重置预算——一个判据区分「服务器恢复」与「崩溃循环」）；codex 的
+        工具目录进程级 LRU（32 条 / 30 分钟 TTL，键=服务器身份+环境+客户端
+        能力）配合 `LazyWhenCached` 启动策略，省掉冷启动 30s 超时窗口。
+        **两家的分歧供参考**：`tools/list_changed` codex 只记日志不刷新、
+        dsh 序列化重同步；自己当 MCP server codex 做了
+        （`codex-mcp-server` 暴露 `codex`/`codex-reply`）、dsh 明确拒绝
+        （ACP 已覆盖「把 harness 暴露成 agent」，再加是同事换协议）。
 
 ## A4 · desktop 切换并删码（2–3 周）
 
