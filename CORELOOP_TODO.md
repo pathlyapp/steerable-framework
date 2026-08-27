@@ -805,6 +805,82 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 - [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件
 - [ ] 此时 CoreLoop 已被真实产品验证，且带着 api 缺失的反幻觉能力
 
+## A6 · skills 好用（产品目标，2026-08-27 立项）
+
+**这是第三份三仓重复实现**，与当初驱动 CoreLoop 下沉的模式同构：
+`deeppath-api/app/services/harness/skill_loader.py`（Python 原版）、
+`deeppath-agent/src/local-backend/skill-loader.ts`（注释明写是 port）、
+框架侧**零**。同时机制上落后生态一整代。
+
+**实勘现状（2026-08-27）**：
+- agent 8 个内置 skill（identity 424 / plan-mode 1513 / tool-usage 1117 /
+  anti-deferred 1544 / data-grounding 1325 / local-exec 3795 /
+  proactive-coding 1431 / cflog 3449 字符），**按 conditions 门控后全量
+  注入系统提示词**，`DEFAULT_CHAR_BUDGET=60_000`，超预算按 priority
+  从低到高丢弃。
+- 无模型可见的 skill 加载工具（确定性结论）：按需 = 用户 `/name` 强制
+  把整段正文塞进系统提示词尾部。
+- UI 已完整（`SkillsSettingsPanel` 导入/列表/删除 + ChatInput `/` 选择器
+  + 三个 REST 端点），**只缺渐进披露的加载机制**。
+- 框架侧无任何 skill 概念；系统提示词就是 `messages[0]`，无独立参数。
+- `ChatAgent.skillIds` / `allowExternalSkills` 字段在三仓都有定义但
+  **没人读**（死 schema，等这次接线）。
+
+**要解决的三个真实问题**：
+1. **装不多**：现在装 20 个 skill 就撞 60k 预算，开始按 priority 丢——
+   丢的是用户刚导入的领域 skill（priority 默认 500，低于全部基座）。
+2. **生态不通**：codex / Claude / Cursor 的 SKILL.md 格式上兼容（frontmatter
+   是我们字段的子集，name 校验全过，`{scripts}` 也支持），但直接导入
+   会每轮全量注入且互相干扰——「能加载」不等于「好用」。
+3. **三仓重复**：任何 skill 机制改进要写三遍（api Python / agent TS /
+   框架无），与 CoreLoop 迁移前的处境完全一样。
+
+**设计要点 · 分层披露（不是全盘改渐进）**：
+渐进披露把「skill 一定被看到」换成「模型可能不加载」。生态三家都接受
+这个权衡，但**基座类 skill 不能交给模型自选**——identity / tool-usage /
+反幻觉三件套是行为约束，模型不会主动去加载约束自己的规则。所以分两层：
+- **eager 层**（保持现状）：identity / tool-usage / anti-deferred /
+  data-grounding / plan-mode——系统提示词常驻，总量约 6k 字符有界。
+- **catalog 层**（新增）：local-exec / cflog / proactive-coding + 全部
+  用户导入 skill——系统提示词只出 `- name: description` 清单（约 600
+  字符），模型调 `skill` 工具或用户 `/name` 才注入正文。
+分层判据写进 frontmatter：新增 `layer: eager|catalog`（缺省按 priority
+≥850 判 eager，兼容既有 8 个内置 skill 的现有行为）。
+
+**分片计划**（框架先行，与 codex 路线第一步同向——skill seam 是协议面
+产品化的一部分）：
+
+- [ ] **Slice 1 · 框架 skill seam（Python，纯新增）**：新模块 `skills.py`
+      按 capability seam 三件套——Definition（`SkillProvider` 协议：
+      `list() -> Sequence[SkillSummary]` / `get(name) -> SkillDefinition`）、
+      Provider（`FilesystemSkillProvider`：读 `<root>/<dir>/SKILL.md`，
+      frontmatter 解析与既有 TS/api 格式**逐字段兼容** + 新增 `layer`）、
+      Consumer（`skill_tool_descriptor()` + `SkillExecutor` 装饰器 +
+      `SkillHooks.pre_step` 首轮注入 catalog）。严格照 `subagent.py` 的
+      既有范式（descriptor 函数 + executor 装饰器 + opt-in），渲染沿用
+      dsh 的 `<skill_content name="...">` 标记。测试：清单渲染 / 工具
+      往返 / 未知 skill / 非 model-invocable 拒绝 / 分层判据 / frontmatter
+      兼容既有 8 个内置 skill。
+- [ ] **Slice 2 · sidecar 接线**：`params.skills = {roots: [...],
+      mode: "layered"|"eager"}`。sidecar 与 Electron 同机，直接读
+      `userData/skills` 路径，不需要反向通道。`eager` 保留为兼容模式
+      （api 采纳前不强迫它改）。catalog 注入必须落 trace（model-visible
+      ⟺ logged）：走 `hook_action` 事件。
+- [ ] **Slice 3 · agent 切换**：`coreloop-stream.ts` 传 `skillRoots`；
+      `prompt-builder.ts` 只注入 eager 层；`/` 触发从「塞系统提示词尾部」
+      改为「注入一次性 skill 消息」（保留强制语义，但不再污染系统提示词
+      前缀——顺带是 prompt cache 净收益）；TS `skill-loader.ts` 保留给
+      UI 列表/导入 REST 端点，删掉 body 注入路径。
+- [ ] **Slice 4 · 生态兼容 + UI**：导入 codex/Claude skill 时把
+      `disable-model-invocation` 映射到 catalog 层不可见；UI 标注每个
+      skill 的层级与是否 model-invocable；trace 里统计 skill 工具调用
+      频次（哪些 skill 真被用到，反哺分层判据）。**注意**：codex skill
+      正文引用它自己的工具链（`just` / `cargo-insta` / 子代理编排），
+      导入时这类指令需改写或删除，否则模型会尝试并失败。
+
+**不做**：skill 版本管理 / 远程 skill registry（dsh 的 provider 抽象已
+预留 provider 名，等真实需求）；skill 之间的依赖声明（生态三家都没有）。
+
 ---
 
 ## 中途停靠点
