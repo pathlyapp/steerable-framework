@@ -248,6 +248,8 @@ There is no "best agent framework" — there's the right one for your shape of p
 
 **Don't reach for Steerable when** your agent lives entirely inside one Python process with no FE, you're happy with cloud-hosted Assistants, or you want a high-level `prompt -> answer` SDK with batteries included for every model — Steerable is closer to "Express for agents" than "Rails for agents".
 
+For a comparison with agent-specific frameworks and products (Codex, DeepSeek Harness, LangGraph, OpenAI Agents SDK, Claude Agent SDK), see [the docs comparison page](https://steerableframework.com/comparison/).
+
 ---
 
 ## Who's using it in production
