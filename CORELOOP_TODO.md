@@ -956,6 +956,23 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     内核拒绝 Operation not permitted）+ provider factory 2 + loop config
     接线 1；全量 433 过。agent 侧 supervisor 沙箱测试 11 过（+4：
     默认无 flag / option 透传 / env 兜底 / option 压 env）。
+  - **E2E 回测（2026-08-28 晚，框架 `23b0c92` + agent `869eea7`，
+    gpt-oss:20b-cloud）**：五轮有效全量——沙箱关 44/47、45/47；
+    沙箱开 46/47（single 阶段 25/25 全过）、44/47、44/47。全部失败
+    均为已知模型抖动签名（空/短回复，失败消息下标逐轮漂移
+    msg[0]/[6]/[7]/[9]/[10]，一次 ollama HTTP 500，一次慢推理触发
+    cancel 兜底），落在 W0 之前基线（22/25～25/25 同款失败集）包络
+    内，**零回归**。`tool_timeout` 五轮零触发（300s 兜底未被任何
+    正常消息触及）。录制链路双沙箱态端到端验证：共录 233 个真实
+    请求，`assert_stable_prefix` 对全部 62 条重建回合链通过
+    （回合内追加-only 成立）；`assert_bounded_items` **如期触发**
+    ——`local_exec_shell` 对 node_modules 跑 `grep -R` 产出
+    ~68k token 结果（宿主工具截断上限远高于 10k），正是 tripwire
+    要暴露的既有问题。**意外收获（既有 app 侧问题，W1 素材）**：
+    多轮回合的当前用户消息在下一回合首个请求里被重复注入
+    （`router.ts:1606` 去重时序——上一条 assistant 回复在新用户
+    消息落库后才写入）；另见一条 assistant 消息跨回合内容变化
+    （321→102ch，hygiene-n 续写所致）。
   - **遗留（Wave 1+）**：`assert_stable_prefix` 对压缩/重试改写的失败
     是刻意的 tripwire，Wave 1 落追加式历史后翻默认；hook 输出设界与
     逐注入项设界（roadmap 另两行）未动；按主机名出网 enforcement 等
