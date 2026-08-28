@@ -94,22 +94,13 @@ class AnthropicProvider:
                         arguments=getattr(block, "input", {}) or {},
                     )
                 )
-        usage = getattr(message, "usage", None)
-        out_usage = LLMUsage(
-            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            total_tokens=int(
-                (getattr(usage, "input_tokens", 0) or 0)
-                + (getattr(usage, "output_tokens", 0) or 0)
-            ),
-        )
         return (
             LLMMessage.text_of(
                 "assistant",
                 "".join(text_chunks),
                 tool_calls=tool_calls or None,
             ),
-            out_usage,
+            _usage_of(getattr(message, "usage", None)),
         )
 
     async def stream(  # type: ignore[override]
@@ -139,14 +130,7 @@ class AnthropicProvider:
                 usage = getattr(final, "usage", None)
                 if usage is not None:
                     yield LLMStreamChunk(
-                        usage=LLMUsage(
-                            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-                            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-                            total_tokens=int(
-                                (getattr(usage, "input_tokens", 0) or 0)
-                                + (getattr(usage, "output_tokens", 0) or 0)
-                            ),
-                        ),
+                        usage=_usage_of(usage),
                         finish_reason="stop",
                     )
         except Exception as exc:  # noqa: BLE001 - normalized into the taxonomy
@@ -197,6 +181,25 @@ class AnthropicProvider:
 # ---------------------------------------------------------------------------
 # Helpers (pure functions kept module-level for unit-testability)
 # ---------------------------------------------------------------------------
+
+
+def _usage_of(usage: Any) -> LLMUsage:
+    """Build LLMUsage from an Anthropic usage object.
+
+    Anthropic reports prompt-cache accounting explicitly:
+    ``cache_read_input_tokens`` (served from cache) and
+    ``cache_creation_input_tokens`` (written to cache). Note ``input_tokens``
+    excludes both, so cached tokens are additive context, not a subset.
+    """
+    prompt = int(getattr(usage, "input_tokens", 0) or 0)
+    completion = int(getattr(usage, "output_tokens", 0) or 0)
+    return LLMUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=prompt + completion,
+        cached_prompt_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+        cache_creation_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+    )
 
 
 def _encode_content_blocks(message: LLMMessage) -> str | list[dict[str, Any]]:

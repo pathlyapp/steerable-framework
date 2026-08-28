@@ -68,6 +68,15 @@ class LLMUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    #: Prompt tokens served from the provider's prompt cache — OpenAI
+    #: ``prompt_tokens_details.cached_tokens``, DeepSeek
+    #: ``prompt_cache_hit_tokens``, Anthropic ``cache_read_input_tokens``.
+    #: Zero when the provider does not report cache accounting.
+    cached_prompt_tokens: int = 0
+    #: Tokens written into the provider's cache by this request — Anthropic
+    #: ``cache_creation_input_tokens``. OpenAI-compatible caches are
+    #: implicit and report no creation accounting, so this stays zero there.
+    cache_creation_tokens: int = 0
 
 
 @dataclass(slots=True)

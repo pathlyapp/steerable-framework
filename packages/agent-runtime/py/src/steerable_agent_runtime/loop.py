@@ -189,6 +189,12 @@ class LoopContext:
     #: rewrite the transcript must reset both — the indices go stale.
     last_prompt_tokens: int | None = None
     last_prompt_transcript_len: int = 0
+    #: Prompt-cache accounting of the last completed request (zero when the
+    #: provider reports none). Telemetry only — surfaced on stage_complete so
+    #: cache stability is measurable; unlike the pressure indices above these
+    #: describe one request, not a projection, so rewrites don't stale them.
+    last_cached_prompt_tokens: int = 0
+    last_cache_creation_tokens: int = 0
 
 
 @dataclass(slots=True)
@@ -714,6 +720,10 @@ class CoreLoop:
                             # Ground-truth context size for compaction pressure.
                             ctx.last_prompt_tokens = chunk.usage.prompt_tokens
                             ctx.last_prompt_transcript_len = len(manager.projection)
+                            ctx.last_cached_prompt_tokens = chunk.usage.cached_prompt_tokens
+                            ctx.last_cache_creation_tokens = (
+                                chunk.usage.cache_creation_tokens
+                            )
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
                                 budget_state, self._config.budget, tokens=chunk.usage.total_tokens
@@ -1169,6 +1179,12 @@ class CoreLoop:
                     "toolCallCount": len(tool_calls),
                     "consecutiveToolErrors": ctx.consecutive_tool_errors,
                     "elapsedMs": int((time.monotonic() - started) * 1000),
+                    # Cache telemetry (Wave 2): the hit ratio
+                    # cachedPromptTokens / promptTokens is the observable
+                    # world-state diffing (next Wave-2 item) has to move.
+                    "promptTokens": ctx.last_prompt_tokens or 0,
+                    "cachedPromptTokens": ctx.last_cached_prompt_tokens,
+                    "cacheCreationTokens": ctx.last_cache_creation_tokens,
                 },
             )
             decision = CompletionDecision(

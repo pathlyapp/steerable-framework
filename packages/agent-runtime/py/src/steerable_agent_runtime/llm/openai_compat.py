@@ -88,17 +88,12 @@ class OpenAICompatProvider:
 
         choice = payload["choices"][0]
         message = choice["message"]
-        usage = payload.get("usage") or {}
         out = LLMMessage.text_of(
             "assistant",
             message.get("content") or "",
             tool_calls=_decode_tool_calls(message.get("tool_calls")),
         )
-        return out, LLMUsage(
-            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-            total_tokens=int(usage.get("total_tokens", 0) or 0),
-        )
+        return out, _parse_usage(payload.get("usage") or {})
 
     async def stream(  # type: ignore[override]
         self,
@@ -307,17 +302,32 @@ def _decode_tool_calls(value: Any) -> list[ToolCall] | None:
     return out or None
 
 
+def _parse_usage(usage: dict[str, Any]) -> LLMUsage:
+    """Build LLMUsage from an OpenAI-compatible usage object.
+
+    Cache hits come from OpenAI's ``prompt_tokens_details.cached_tokens``;
+    DeepSeek reports them at the top level as ``prompt_cache_hit_tokens``
+    instead. Providers without cache accounting yield zero.
+    """
+    details = usage.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens", 0) or 0)
+    if not cached:
+        cached = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
+    return LLMUsage(
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        total_tokens=int(usage.get("total_tokens", 0) or 0),
+        cached_prompt_tokens=cached,
+    )
+
+
 def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     choices = chunk.get("choices") or []
     if not choices:
         usage = chunk.get("usage")
         if usage:
             return LLMStreamChunk(
-                usage=LLMUsage(
-                    prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-                    completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-                    total_tokens=int(usage.get("total_tokens", 0) or 0),
-                ),
+                usage=_parse_usage(usage),
                 raw=chunk,
             )
         return None
