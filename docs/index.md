@@ -10,10 +10,11 @@ hide:
 
 # Steerable
 
-<p class="sf-tagline">The agent plumbing you'd otherwise rewrite.</p>
+<p class="sf-tagline">The model-quality layer that makes local, quantized, and cheap models behave.</p>
 
 <p class="sf-sub" markdown>
-Typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI.
+Recovers and executes malformed tool calls · vetoes bad completion drafts · catches fabricated data · self-calibrates token estimates.
+Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI.
 Pick any subset, skip the rest — every layer ships on its own.
 </p>
 
@@ -36,14 +37,18 @@ Pick any subset, skip the rest — every layer ships on its own.
 <h2 class="sf-section">Why Steerable</h2>
 
 <p class="sf-lede" markdown>
-Building an LLM agent product means rewriting the same five things every time.
-Steerable is the layered library you'd build on day 30 — shipped on day 0.
+Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, quantized, and cheap models don't.
+Steerable is the model-quality layer that closes that gap — plus the plumbing layers you'd otherwise rewrite, each shippable on its own.
 </p>
 
 <div class="sf-grid" markdown>
 <div class="sf-card" markdown>
+### The model-quality layer
+Local, quantized, and cheap models break the structured-`tool_calls` assumptions every SDK makes. Steerable recovers *and executes* malformed calls (MiniMax XML, DeepSeek `<function=>`, markdown), vetoes completion drafts (`accept` / `retry` / `narrate`), judges grounding, and self-calibrates token estimates. [Why this is the differentiator](roadmap.md#the-differentiator-the-model-quality-layer).
+</div>
+<div class="sf-card" markdown>
 ### One wire protocol
-One JSON Schema → generated **TypeScript types + Pydantic models**, released in lockstep. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` — all standardised, with a conformance suite keeping both SDKs byte-compatible.
+One JSON Schema → generated **TypeScript types + Pydantic models**. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` — all standardised, with a conformance suite keeping both SDKs byte-compatible. All 7 publishable packages share one lockstep `X.Y.Z`; npm tarballs ship **sigstore provenance** attestations.
 </div>
 <div class="sf-card" markdown>
 ### Pure-function harness
@@ -60,10 +65,6 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <div class="sf-card" markdown>
 ### Headless React UI
 5 components + 3 hooks + Tailwind preset. Every state covered by Storybook, axe a11y, and visual-regression baselines locked in CI.
-</div>
-<div class="sf-card" markdown>
-### Lockstep releases
-All 7 publishable packages share one `X.Y.Z`, gated by CI on every tag push. npm tarballs ship **sigstore provenance** attestations.
 </div>
 </div>
 

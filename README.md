@@ -2,10 +2,10 @@
 
 # Steerable
 
-**The agent plumbing you'd otherwise rewrite.**
+**The model-quality layer that makes local, quantized, and cheap models behave.**
 
-Typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI.
-Pick any subset, skip the rest.
+Recovers and executes malformed tool calls · vetoes bad completion drafts · catches fabricated data · self-calibrates token estimates.
+Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI. Pick any subset, skip the rest.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml)
@@ -51,7 +51,7 @@ Pick any subset, skip the rest.
 
 ## Why Steerable
 
-Building an LLM agent product means rewriting the same five things every time. Steerable is the layered library you'd build on day 30 — shipped on day 0.
+Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, quantized, and cheap models don't. Steerable is the model-quality layer that closes that gap — plus the plumbing layers you'd otherwise rewrite, each shippable on its own.
 
 | The problem you've already solved twice | Steerable's answer |
 |---|---|

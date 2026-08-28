@@ -1,5 +1,5 @@
 site_name: Steerable Framework
-site_description: Spec-first agent framework for TypeScript + Python.
+site_description: The model-quality layer that makes local, quantized, and cheap models behave — spec-first agent framework for TypeScript + Python.
 site_url: https://steerableframework.com/
 repo_url: https://github.com/pathlyapp/steerable-framework
 repo_name: pathlyapp/steerable-framework

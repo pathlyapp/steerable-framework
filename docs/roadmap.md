@@ -56,14 +56,12 @@ for the differentiator, not the differentiator itself.**
 ### Positioning consequence
 
 The "Why Steerable" table in `README.md` now leads with the model-quality
-layer. Everything around it still sells plumbing: the tagline ("The agent
-plumbing you'd otherwise rewrite"), the docs hero, and the six feature
-cards on the landing page are all capabilities every competitor has. Two
-changes remain, and neither is a one-line edit:
+layer, and the surrounding repositioning has landed: the tagline ("The
+model-quality layer that makes local, quantized, and cheap models
+behave"), the docs hero, and the landing-page feature cards were
+rewritten in one pass across `README.md`, `docs/index.md`, and
+`mkdocs.yml`'s `site_description` so the three agree. One change remains:
 
-- **Rewrite the tagline and hero** across `README.md`, `docs/index.md`,
-  and `mkdocs.yml`'s `site_description` in one pass — they have to agree,
-  which is why it is a deliberate change rather than a drive-by one.
 - **Add `docs/spec/model-quality.md`** as the reference page for the
   layer: each mechanism, the failure mode it addresses, and the
   production evidence. The mechanisms are currently documented only as
