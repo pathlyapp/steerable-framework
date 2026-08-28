@@ -23,6 +23,13 @@ from .errors import (
 from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
+from .history import (
+    CompactionBoundary,
+    ContextFragment,
+    ContextManager,
+    HistoryItem,
+    RecordEntry,
+)
 from .hooks import (
     ChainHooks,
     CompletionAction,
@@ -98,10 +105,13 @@ __all__ = [
     "BudgetExhaustedError",
     "CalibratingProvider",
     "ChainHooks",
+    "CompactionBoundary",
     "CompactionHooks",
     "CompletionAction",
     "CompletionDecision",
     "CompletionDraft",
+    "ContextFragment",
+    "ContextManager",
     "CoreLoop",
     "DEFAULT_MAX_ITEM_TOKENS",
     "EAGER_PRIORITY_THRESHOLD",
@@ -110,6 +120,7 @@ __all__ = [
     "FilesystemSpillStore",
     "HarnessExecutionState",
     "HarnessTrajectoryEvent",
+    "HistoryItem",
     "InMemoryRequestSink",
     "InMemorySpillStore",
     "JsonlRequestSink",
@@ -124,6 +135,7 @@ __all__ = [
     "NoopHooks",
     "PolicyDeniedError",
     "PreStepAction",
+    "RecordEntry",
     "RecordedRequest",
     "RecordingProvider",
     "RegisteredTool",

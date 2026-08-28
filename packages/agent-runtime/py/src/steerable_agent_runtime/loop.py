@@ -21,6 +21,10 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     as hook implementations, not as more branches here
   * single write path: completion events carry their full step summary and
     the compact trajectory is derived from them (no separate record channel)
+  * typed append-only history (see history.py): the transcript the provider
+    sees is a projection of the record; every mutation is an append, and
+    hook rewrites go through the declared ``ContextManager.replace_all``
+    path (the only rewrite, itself append-only)
   * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
     round boundaries; once exceeded the loop stops offering tools and asks
     the model for a final answer instead of hard-killing the run
@@ -51,6 +55,7 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
+from .history import ContextFragment, ContextManager
 from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
 from .pseudo import (
@@ -254,8 +259,10 @@ class CoreLoop:
         async for event in loop.run(messages):
             transport.emit(encode(event))  # encoding is the adapter's job
 
-    The loop owns the message transcript: it appends the assistant message and
-    each tool result so the next round sees fresh observations.
+    The loop owns the model-visible record (a typed, append-only
+    ``ContextManager`` log — see history.py): every transcript mutation is
+    an append, and hook rewrites go through the declared ``replace_all``
+    path, so each round's projection reflects everything recorded so far.
     """
 
     def __init__(
@@ -277,6 +284,10 @@ class CoreLoop:
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
         self.trajectory: list[HarnessTrajectoryEvent] = []
+        # The append-only model-visible record for the current run (the
+        # transcript is its projection). Rebuilt per run() from the seed
+        # messages; exposed for tests, persistence, and resume.
+        self.history = ContextManager()
 
     def steer(self, content: str) -> None:
         """Inject a user message into a running turn.
@@ -367,7 +378,10 @@ class CoreLoop:
         chat_id: str | None = None,
     ) -> AsyncIterator[LoopEvent]:
         ctx = LoopContext(chat_id=chat_id)
-        transcript: list[LLMMessage] = list(messages)
+        # The transcript is a projection of the append-only record; nothing
+        # mutates a list in place anymore (see history.py).
+        manager = ContextManager(messages, token_model=self._provider.model)
+        self.history = manager
         budget_state = BudgetState()
         tool_call_signatures: set[tuple[str, str]] = set()
         started = time.monotonic()
@@ -405,6 +419,20 @@ class CoreLoop:
                 consecutive_tool_errors=ctx.consecutive_tool_errors,
             )
 
+        def record_terminal_content(content: str, tool_calls: list[ToolCall]) -> None:
+            """Append the terminal assistant message to the record.
+
+            Rounds that produced tool calls recorded their assistant message
+            in the act phase; only no-tool-call terminals (the final answer,
+            or partial content on an error/budget exit) are missing. The
+            append happens after the last provider request of the run, so
+            request bytes are unaffected — the record simply becomes
+            complete enough to resume from.
+            """
+            if tool_calls or not content.strip():
+                return
+            manager.append(LLMMessage(role="assistant", content=content))
+
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
         decision = CompletionDecision(status="failed", reason="loop did not run")
@@ -421,7 +449,9 @@ class CoreLoop:
             # same transcript the provider will receive.
             while not self._inbox.empty():
                 injected = self._inbox.get_nowait()
-                transcript.append(LLMMessage(role="user", content=injected))
+                manager.append(
+                    LLMMessage(role="user", content=injected), kind="steer.inject"
+                )
                 yield LoopEvent(
                     "steer", {"content": injected, "round": round_index}
                 )
@@ -447,7 +477,7 @@ class CoreLoop:
                     prompt, reason = narrate
                     completion_redos += 1
                     wrap_up = True
-                    transcript.append(LLMMessage(role="user", content=prompt))
+                    manager.append_fragment(NarrationRequest(prompt))
                     yield LoopEvent(
                         "hook_action",
                         {
@@ -486,12 +516,13 @@ class CoreLoop:
                         "softTimeoutMs": self._config.soft_timeout_ms,
                     },
                 )
-                transcript.append(
-                    LLMMessage(role="user", content=_SOFT_TIMEOUT_NOTICE)
-                )
+                manager.append_fragment(SoftTimeoutNotice())
 
             # ── hook: pre_step (compaction / turn rejection / tool_choice) ──
-            pre = await self._hooks.pre_step(transcript, ctx)
+            # Hooks receive a throwaway projection list; the record can only
+            # change through the manager (append / declared replace_all).
+            projection = manager.projection
+            pre = await self._hooks.pre_step(projection, ctx)
             if pre.kind == "reject":
                 decision = CompletionDecision(
                     status="failed",
@@ -511,8 +542,12 @@ class CoreLoop:
             # Identity, not just non-None: ChainHooks always returns a
             # transcript (the unchanged input when no hook rewrote it), so a
             # non-None check would emit a spurious "compact" every round.
-            if pre.transcript is not None and pre.transcript is not transcript:
-                transcript = pre.transcript
+            if pre.transcript is not None and pre.transcript is not projection:
+                manager.replace_all(
+                    pre.transcript,
+                    reason=pre.reason or "transcript rewritten",
+                    action=pre.rewrite_action,
+                )
                 yield LoopEvent(
                     "hook_action",
                     {
@@ -550,7 +585,7 @@ class CoreLoop:
             while True:
                 try:
                     async for chunk in self._provider.stream(
-                        transcript,
+                        manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
                         # cannot start another act phase.
                         tools=None if wrap_up else tools,
@@ -581,7 +616,7 @@ class CoreLoop:
                         if chunk.usage is not None:
                             # Ground-truth context size for compaction pressure.
                             ctx.last_prompt_tokens = chunk.usage.prompt_tokens
-                            ctx.last_prompt_transcript_len = len(transcript)
+                            ctx.last_prompt_transcript_len = len(manager.projection)
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
                                 budget_state, self._config.budget, tokens=chunk.usage.total_tokens
@@ -594,6 +629,7 @@ class CoreLoop:
                                 decision = CompletionDecision(
                                     status="budget_exhausted", reason="token budget exceeded"
                                 )
+                                record_terminal_content("".join(content_parts), tool_calls)
                                 yield emit_completion(
                                     step_summary(
                                         round_index=round_index,
@@ -606,7 +642,8 @@ class CoreLoop:
                                 return
                     break  # stream completed without error
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
-                    action = await self._hooks.on_request_error(exc, transcript, ctx)
+                    projection = manager.projection
+                    action = await self._hooks.on_request_error(exc, projection, ctx)
                     if action.kind == "retry":
                         yield LoopEvent(
                             "hook_action",
@@ -630,9 +667,14 @@ class CoreLoop:
                         content_carry = ""
                         reasoning_carry = ""
                         # A hook may rewrite the transcript for the retry
-                        # (context-overflow recovery compacts first).
+                        # (context-overflow recovery compacts first) — the
+                        # declared replace_all path records the boundary.
                         if action.transcript is not None:
-                            transcript = action.transcript
+                            manager.replace_all(
+                                action.transcript,
+                                reason=action.reason or "retry with rewritten transcript",
+                                action="overflow_recovery",
+                            )
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)
                         continue
@@ -645,6 +687,7 @@ class CoreLoop:
                         reason=action.reason or f"llm stream error: {exc}",
                         confidence=0.9,
                     )
+                    record_terminal_content("".join(content_parts), tool_calls)
                     yield emit_completion(
                         step_summary(
                             round_index=round_index,
@@ -740,15 +783,8 @@ class CoreLoop:
                         # what it said, then the discipline notice corrects it.
                         completion_redos += 1
                         if content.strip():
-                            transcript.append(
-                                LLMMessage(role="assistant", content=content)
-                            )
-                        transcript.append(
-                            LLMMessage(
-                                role="user",
-                                content=action.message or _DISCIPLINE_RETRY_NOTICE,
-                            )
-                        )
+                            manager.append(LLMMessage(role="assistant", content=content))
+                        manager.append_fragment(DisciplineRetryNotice(action.message))
                         yield LoopEvent(
                             "hook_action",
                             {
@@ -770,12 +806,7 @@ class CoreLoop:
                     if action.kind == "narrate":
                         completion_redos += 1
                         wrap_up = True
-                        transcript.append(
-                            LLMMessage(
-                                role="user",
-                                content=action.message or _NARRATION_REQUEST,
-                            )
-                        )
+                        manager.append_fragment(NarrationRequest(action.message))
                         yield LoopEvent(
                             "hook_action",
                             {
@@ -786,6 +817,7 @@ class CoreLoop:
                             },
                         )
                         continue
+                record_terminal_content(content, tool_calls)
                 yield emit_completion(
                     step_summary(
                         round_index=round_index,
@@ -798,7 +830,7 @@ class CoreLoop:
                 return
 
             # ── act: append assistant turn, then run each tool ───────────
-            transcript.append(
+            manager.append(
                 LLMMessage(role="assistant", content=content, tool_calls=tool_calls)
             )
 
@@ -937,7 +969,7 @@ class CoreLoop:
                             **({"error": result.error} if result.error else {}),
                         },
                     )
-                    transcript.append(
+                    manager.append(
                         LLMMessage(
                             role="tool",
                             name=call.name,
@@ -963,7 +995,7 @@ class CoreLoop:
                             prompt, reason = narrate
                             completion_redos += 1
                             wrap_up = True
-                            transcript.append(LLMMessage(role="user", content=prompt))
+                            manager.append_fragment(NarrationRequest(prompt))
                             yield LoopEvent(
                                 "hook_action",
                                 {
@@ -995,15 +1027,21 @@ class CoreLoop:
                                     skip_content = _result_content(results[skip_idx])
                                 else:
                                     skip_content = _BREAKER_SKIP_MESSAGE
-                                transcript.append(
+                                manager.append(
                                     LLMMessage(
                                         role="tool",
                                         name=skipped.name,
                                         tool_call_id=skipped.id,
                                         content=skip_content,
-                                    )
+                                    ),
+                                    kind=(
+                                        "loop.breaker_skip"
+                                        if skip_content is _BREAKER_SKIP_MESSAGE
+                                        else "tool"
+                                    ),
                                 )
                             break  # leave the tool loop; wrap-up round runs next
+                        record_terminal_content(content, tool_calls)
                         yield emit_completion(
                             step_summary(
                                 round_index=round_index,
@@ -1071,6 +1109,52 @@ _NARRATION_REQUEST = (
     "NOT call any tools. Summarize what was done and what the tool results "
     "showed, and give the user a clear final answer now."
 )
+
+
+class SoftTimeoutNotice(ContextFragment):
+    """The soft-timeout wrap-up ask as a marked, self-recognisable fragment."""
+
+    content_kind = "loop.soft_timeout_notice"
+
+    def body(self) -> str:
+        return _SOFT_TIMEOUT_NOTICE
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] The time budget", "")
+
+
+class DisciplineRetryNotice(ContextFragment):
+    """The before_completion discipline correction as a marked fragment."""
+
+    content_kind = "loop.discipline_retry_notice"
+
+    def __init__(self, message: str | None = None) -> None:
+        self._message = message or _DISCIPLINE_RETRY_NOTICE
+
+    def body(self) -> str:
+        return self._message
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] The previous reply", "")
+
+
+class NarrationRequest(ContextFragment):
+    """The narration-round ask as a marked fragment (default or hook text)."""
+
+    content_kind = "loop.narration_request"
+
+    def __init__(self, message: str | None = None) -> None:
+        self._message = message or _NARRATION_REQUEST
+
+    def body(self) -> str:
+        return self._message
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] The task ended", "")
+
 
 _DUPLICATE_CALL_MESSAGE = (
     "You already called `{name}` with identical arguments in this turn; the "

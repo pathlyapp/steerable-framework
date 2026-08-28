@@ -984,6 +984,125 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     第三阶段 `SandboxedToolExecutor` / 代理方案；`SandboxEnforcement`
     返回值化（dsh 借鉴）未做。
 
+- [ ] **Wave 1 · 地基实施设计**（2026-08-29 成文，待评审后开工）。
+  范围按 roadmap「一个项目不是三个」：append-only 历史、ContextFragment、
+  持久记录、resume O(tail)、`content: str` → parts 同波落地。现状勘察与
+  影响面已核（全部 `file:line` 经 2026-08-29 双人复核）：
+
+  - **根因复述**：模型可见 transcript 是可变 `list[LLMMessage]`
+    （`loop.py:370` 建表后就地改写 11 处：steer `:424`、软超时 `:489`、
+    pre_step 整表替换 `:514`、overflow 重试替换 `:634`、纪律重试
+    `:743-751`、narration `:773/:966`、assistant `:801`、tool 结果
+    `:940/:998`）；`self.trajectory` 与 trace 展示流各走一路，
+    `resume.py:71` 再从展示流重建**第三份**（300 字符 preview 有损）。
+    三份记录无强制一致。
+
+  - **设计六件**：
+
+    1. **`HistoryItem` 信封 + `ContextManager`**（新建
+       `agent-runtime/py/.../history.py`）：`HistoryItem` 冻结 dataclass
+       ——`seq`（记录内单调序号）/ `turn_id` / `kind`（`<feature>.<name>`
+       分类，对应 codex `ContentItemKind`）/ `message: LLMMessage` /
+       `token_estimate`（追加时用 compaction 同一估算器算好，设界与
+       压缩压力零重算）。`ContextManager` 拥有记录并产出投影：
+       `append()` / `projection()` / **`replace_all(items, *, reason)`
+       是唯一声明式重写路径**——它不修改记录，而是追加一条
+       `compaction_boundary` marker item（记录本身永远只追加），投影时
+       跳过被 supersede 的区间。loop 内 11 处就地改写全部改为
+       manager 调用；`ctx.last_prompt_transcript_len` 改为
+       「上次请求时的 item seq」，重写不再让索引漂移（boundary 自带
+       seq 区间）。
+    2. **`ContextFragment`**（同模块，对应 codex
+       `ContextualUserFragment`，`codex-rs/context-fragments/src/fragment.rs:64-119`）：
+       Protocol——`role` / `content_kind` / `markers()`（首尾稳定标记）
+       / `body()` / `render()` / `matches_text()`（在保留历史里认出
+       自己的渲染）。loop 全部内建注入改为带标记 fragment：
+       `_SOFT_TIMEOUT_NOTICE` / `_DISCIPLINE_RETRY_NOTICE` /
+       `_NARRATION_REQUEST` / `_BREAKER_SKIP_MESSAGE` / 压缩
+       `_SUMMARY_MARKER` / `_FOLDED_TOOL_MARKER` / steer 注入。
+       收益：resume 可识别、压缩可感知、测试可断言「模型看到了什么」。
+    3. **`pre_step` 只追加化**：`PreStepAction` 去掉 `transcript` 整表
+       替换，改为 `appends: list[...]`（只增）+ `rewrite: RewriteRequest
+       | None`（声明式：新 items + reason + action 标签）。loop 是唯一
+       写者：appends 经 `manager.append`，rewrite 经
+       `manager.replace_all`（自动落 boundary marker）。ChainHooks 保持
+       纯组合：工作投影在线程内传递，每个 hook 看到前序效应后的投影，
+       最终合并为（rewrite?, appends）——「hook1 改写、hook2 追加」
+       语义等价于先 replace_all 再 append。`RetryAction.transcript`
+       同理改为 `rewrite`。skills 注入（`skills.py:521`，首轮改写
+       system）改为**追加一条独立 system fragment**（首轮、任何请求
+       发出前，cache 安全；OpenAI/Ollama 原生接受多 system，
+       Anthropic 侧本就把 system 拼接为单独参数）。
+    4. **持久模型可见记录**（对应 codex rollout + 持久化策略
+       `codex-rs/rollout/src/policy.rs`；通道按决策②走专用方法组）：
+       `StorageAdapter` 新增 `append_history(record_id, entries)` /
+       `list_history(record_id, *, after_seq, until_seq, limit, reverse)`
+       ——ContextManager 每次 append/replace_all 时以全保真落盘
+       （完整 content，不是 300 字符 preview），与展示流
+       （content_delta 等）**数据各自写、互不推导**。记录按 chat
+       一条连续 append-only 日志（`record_id` 默认取 chat_id），
+       跨 run 不碎；standalone run（无 store）纯内存，行为不变。
+    5. **resume O(tail) + 全保真**：`load_transcript` 改走
+       `list_history` 反向扫描，到最近 `compaction_boundary` 即停，
+       从该 boundary 投影尾部——模型续跑看到的历史与它上次所见
+       **逐字节一致**（不再有 preview 失真）。fork/regenerate 开新
+       record_id，以 `until_seq` 前缀投影作为首条 `history_seed`
+       条目内联播种（有界——压缩保证工作集有界），任何 record
+       都自包含、单日志可读、无引用链。
+    6. **`content: str` → content parts**（Tier 1 同波）：
+       `LLMMessage.content` 改为 `list[ContentPart]`（`TextPart` /
+       `ImagePart` 起步，冻结 dataclass + 判别标签）；提供
+       `LLMMessage.text_of()` 便捷构造与 `content_text` 投影属性覆盖
+       纯文本常客。provider 序列化：OpenAI 兼容侧**纯文本退化为
+       string 简写**（与今日线上字节一致，prompt cache 与录制对比
+       零扰动），多模态才用数组形；Anthropic 侧本已用 blocks，顺直。
+       tokens.py / recording.py / compaction / spill / resume 全部
+       改在 parts 上操作。
+
+  - **三个决策点（2026-08-29 已拍板）**：
+    ① **wire `ChatMessage` 加性扩展**（采纳建议）——schema 增加可选
+    `parts` 字段，`content: string` 保留为纯文本投影（agent-ui /
+    deeppath 零破坏；sidecar `_coerce_messages` 优先读 parts）。
+    破坏性只落在 Python 运行时 `LLMMessage`（deeppath-api 一个消费者，
+    随框架升级迁移一次）。
+    ② **记录通道：新开 StorageAdapter 方法组**（物理分离，不复用
+    trace 事件流）——`append_history` / `list_history`（支持
+    `after_seq` / `until_seq` / `limit` / `reverse` 尾部扫描），
+    InMemory + SQLAlchemy 两实现仓内同步；下游适配成本已接受。
+    ③ **跨回合记录：连续日志 + 内联播种**——记录按 chat 一条连续
+    append-only 日志（跨 run 不碎），resume 反向扫同一条日志即停，
+    无跨 trace 递归；fork/regenerate 开新 record_id，以前缀投影
+    （有界，压缩保证）作为首条 `history_seed` 条目内联播种。
+
+  - **落地序列**（每步独立 commit、测试全绿才进下一步——roadmap
+    「incremental but one project」）：
+    1. `history.py`：HistoryItem / ContextManager / ContextFragment
+       基建 + loop 内部行为不变接入（事件流零变化）；
+    2. content parts：LLMMessage + 两个 provider + tokens + recording +
+       compaction/resume/skills/spill 适配（纯文本字节等价）；
+    3. wire 加性 `parts` + 双端 codegen + sidecar  coercion + 一致性测试；
+    4. hooks 翻转：PreStepAction/RetryAction 只追加 + 声明式 rewrite，
+       compaction 与 skills 迁移，loop 11 处改写点收口；
+    5. 持久记录 + resume O(tail)：history_item 事件、持久化策略、
+       storage 尾部扫描、sidecar fork/resume 切换；
+    6. tripwire 翻绿：`assert_stable_prefix` 默认零声明边界通过
+       （压缩回合的 boundary 从记录自动导出，不再手工传下标）；
+       文档（docs/spec/core-loop.md 等）+ 本文件条目勾选。
+
+  - **测试计划**（新增集中在 `agent-runtime/py/tests/`）：
+    manager 单测（append/projection/replace_all boundary 语义）；
+    fragment render/matches 往返；parts 序列化（OpenAI 纯文本 string
+    简写等价、多模态数组、Anthropic blocks）；resume 保真（续跑投影
+    == 上次所见）与 O(tail)（大 trace 只读尾部）；**集成 money test**：
+    干净 CoreLoop 全程录制 → `assert_stable_prefix` 零边界声明通过、
+    压缩回合 boundary 自动对齐；`assert_bounded_items` 覆盖全部
+    fragment 注入。既有 433 测试随步骤 2/4 适配迁移。
+
+  - **明确不做（本 wave）**：cache_control 逐 block 注解与 cache 仪表
+    （Wave 2 第一件事，parts 为它开好门）；world-state diff；MCP；
+    `SSEEvent.content` 保持 string（展示流 delta 不是历史 parts）；
+    agent-ui 渲染层不动。
+
 接下来三步**严格按序**（第一步的冻结建议已于本轮撤销，见其条目内注）：
 
 - [x] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片）** ✅ 已完成
