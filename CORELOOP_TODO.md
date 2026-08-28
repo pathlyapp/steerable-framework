@@ -968,11 +968,16 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     （回合内追加-only 成立）；`assert_bounded_items` **如期触发**
     ——`local_exec_shell` 对 node_modules 跑 `grep -R` 产出
     ~68k token 结果（宿主工具截断上限远高于 10k），正是 tripwire
-    要暴露的既有问题。**意外收获（既有 app 侧问题，W1 素材）**：
-    多轮回合的当前用户消息在下一回合首个请求里被重复注入
-    （`router.ts:1606` 去重时序——上一条 assistant 回复在新用户
-    消息落库后才写入）；另见一条 assistant 消息跨回合内容变化
-    （321→102ch，hygiene-n 续写所致）。
+    要暴露的既有问题。**意外收获（既有 app 侧问题）**：多轮回合的
+    当前用户消息在下一回合首个请求里被重复注入（`router.ts` 去重
+    时序——上一条 assistant 回复在新用户消息落库后才写入）；另见
+    一条 assistant 消息跨回合内容变化（321→102ch，hygiene-n 续写
+    所致）。**两问题已于当日晚修复**（agent `develop`）：用户消息
+    改按 id 剔除（`history-helper.dropCurrentUserMessage`，竞态
+    免疫），工具结果在反向通道边界复用 `compactToolResultJson`
+    封顶 8000 字符；修复后录制复验：82 请求零重复、
+    `assert_bounded_items` 通过。assistant 跨回合内容变化留 W1
+    （持久记录与展示流分离后自然消解）。
   - **遗留（Wave 1+）**：`assert_stable_prefix` 对压缩/重试改写的失败
     是刻意的 tripwire，Wave 1 落追加式历史后翻默认；hook 输出设界与
     逐注入项设界（roadmap 另两行）未动；按主机名出网 enforcement 等
