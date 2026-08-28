@@ -39,7 +39,7 @@ from typing import Any, Literal, Protocol, Sequence, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .hooks import NoopHooks, PreStepAction
+from .hooks import NoopHooks, PreStepAction, TranscriptAppend
 from .llm import LLMMessage
 from .loop import LoopContext, ToolExecutor
 
@@ -494,12 +494,14 @@ class SkillExecutor:
 
 
 class SkillHooks(NoopHooks):
-    """LoopHooks: inject the skill catalog into the system message, once.
+    """LoopHooks: inject the skill catalog as a system message, once.
 
-    The injection is a first-round ``pre_step`` transcript rewrite, so the
-    loop records it as a ``hook_action`` event (``action: skill_catalog``)
-    and the catalog is reconstructable from the trace. Compaction preserves
-    system messages, so the catalog survives later rewrites.
+    The injection is a first-round ``pre_step`` append (Wave 1: hooks never
+    rewrite in place), so the loop records it as a ``hook_action`` event
+    (``action: skill_catalog``) and the catalog is reconstructable from the
+    trace. The appended message lands right after the first user message,
+    where compaction's head rule (leading system messages + first user)
+    preserves it across later rewrites.
     """
 
     def __init__(
@@ -530,19 +532,13 @@ class SkillHooks(NoopHooks):
         if not catalog:
             return PreStepAction(kind="proceed")
         section = render_skill_catalog(catalog, tool_name=self._config.tool_name)
-        rewritten = list(transcript)
-        if rewritten and rewritten[0].role == "system":
-            first = rewritten[0]
-            rewritten[0] = LLMMessage.text_of(
-                "system",
-                f"{first.content_text}\n\n{section}",
-                name=first.name,
-            )
-        else:
-            rewritten.insert(0, LLMMessage.text_of("system", section))
         return PreStepAction(
             kind="proceed",
-            transcript=rewritten,
+            appends=[
+                TranscriptAppend(
+                    LLMMessage.text_of("system", section), kind="skills.catalog"
+                )
+            ],
             reason=f"skill catalog injected ({len(catalog)} skills)",
-            rewrite_action="skill_catalog",
+            append_action="skill_catalog",
         )

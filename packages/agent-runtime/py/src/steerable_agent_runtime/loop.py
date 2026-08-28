@@ -15,10 +15,10 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     unknown-tool suggestions and schema argument coercion (tools.py)
   * token budget counters + completion decision
   * pseudo / markdown tool-call recovery (see pseudo.py)
-  * LoopHooks extension points (see hooks.py): pre_step (transcript rewrite +
-    tool_choice) / post_tool_result / on_request_error / before_completion
-    (terminal veto: discipline retry or narration round) — capabilities land
-    as hook implementations, not as more branches here
+  * LoopHooks extension points (see hooks.py): pre_step (declared rewrite /
+    appends + tool_choice) / post_tool_result / on_request_error /
+    before_completion (terminal veto: discipline retry or narration round) —
+    capabilities land as hook implementations, not as more branches here
   * single write path: completion events carry their full step summary and
     the compact trajectory is derived from them (no separate record channel)
   * typed append-only history (see history.py): the transcript the provider
@@ -519,8 +519,9 @@ class CoreLoop:
                 manager.append_fragment(SoftTimeoutNotice())
 
             # ── hook: pre_step (compaction / turn rejection / tool_choice) ──
-            # Hooks receive a throwaway projection list; the record can only
-            # change through the manager (append / declared replace_all).
+            # Hooks receive a throwaway projection list and return
+            # declarations; the record can only change through the manager
+            # (append / declared replace_all), applied here by the loop.
             projection = manager.projection
             pre = await self._hooks.pre_step(projection, ctx)
             if pre.kind == "reject":
@@ -539,21 +540,30 @@ class CoreLoop:
                     decision,
                 )
                 return
-            # Identity, not just non-None: ChainHooks always returns a
-            # transcript (the unchanged input when no hook rewrote it), so a
-            # non-None check would emit a spurious "compact" every round.
-            if pre.transcript is not None and pre.transcript is not projection:
+            if pre.rewrite is not None:
                 manager.replace_all(
-                    pre.transcript,
-                    reason=pre.reason or "transcript rewritten",
-                    action=pre.rewrite_action,
+                    pre.rewrite.messages,
+                    reason=pre.rewrite.reason,
+                    action=pre.rewrite.action,
                 )
                 yield LoopEvent(
                     "hook_action",
                     {
                         "hook": "pre_step",
-                        "action": pre.rewrite_action or "compact",
-                        "reason": pre.reason or "transcript rewritten",
+                        "action": pre.rewrite.action,
+                        "reason": pre.rewrite.reason,
+                        "round": round_index,
+                    },
+                )
+            if pre.appends:
+                for item in pre.appends:
+                    manager.append(item.message, kind=item.kind)
+                yield LoopEvent(
+                    "hook_action",
+                    {
+                        "hook": "pre_step",
+                        "action": pre.append_action or "append",
+                        "reason": pre.reason or "context appended",
                         "round": round_index,
                     },
                 )
@@ -652,9 +662,10 @@ class CoreLoop:
                                 "action": "retry",
                                 "reason": action.reason or str(exc),
                                 "delayMs": action.delay_ms,
-                                # True when the hook rewrote the transcript for
-                                # the retry (context-overflow recovery).
-                                "compacted": action.transcript is not None,
+                                # True when the hook declared a transcript
+                                # rewrite for the retry (context-overflow
+                                # recovery).
+                                "compacted": action.rewrite is not None,
                                 "round": round_index,
                             },
                         )
@@ -666,14 +677,14 @@ class CoreLoop:
                         stripper = PseudoStreamStripper()
                         content_carry = ""
                         reasoning_carry = ""
-                        # A hook may rewrite the transcript for the retry
-                        # (context-overflow recovery compacts first) — the
-                        # declared replace_all path records the boundary.
-                        if action.transcript is not None:
+                        # A hook may declare a transcript rewrite for the
+                        # retry (context-overflow recovery compacts first) —
+                        # the declared replace_all path records the boundary.
+                        if action.rewrite is not None:
                             manager.replace_all(
-                                action.transcript,
-                                reason=action.reason or "retry with rewritten transcript",
-                                action="overflow_recovery",
+                                action.rewrite.messages,
+                                reason=action.rewrite.reason,
+                                action=action.rewrite.action,
                             )
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)

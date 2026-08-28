@@ -8,15 +8,22 @@ instead of more branches in ``loop.py``.
 
 Hook points and their intended consumers:
 
-- ``pre_step`` — before each LLM stream. Compaction rewrites the transcript
-  here; a hook may also reject the step (turn ends blocked).
+- ``pre_step`` — before each LLM stream. Compaction declares its rewrite
+  here; a hook may also append context (skill catalog) or reject the step
+  (turn ends blocked).
 - ``post_tool_result`` — after each tool execution, before the result enters
   the transcript. Large-result externalization rewrites oversized results to
   a preview + locator here.
 - ``on_request_error`` — when the LLM stream raises. Retry policy decides
   retry-with-backoff vs fail here; the hook receives the current transcript
   so recovery strategies that rewrite it (context-overflow compaction) can
-  return the replacement alongside the retry decision.
+  declare the replacement alongside the retry decision.
+
+Wave 1: hooks never mutate or replace the transcript directly. They return
+*declarations* — ``TranscriptAppend`` (append-only growth) and
+``RewriteRequest`` (the one declared rewrite) — and the loop applies them
+through the ``ContextManager``, so the record stays append-only and every
+rewrite lands as an auditable ``CompactionBoundary``.
 
 All hooks default to no-op (``NoopHooks``), so wiring them in changes no
 existing behavior.
@@ -38,12 +45,43 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptAppend:
+    """One append-only contribution from a hook.
+
+    ``kind`` is the record's ``<feature>.<name>`` classification (defaults
+    to the role-derived kind when None) so injected content is attributable
+    in the record — e.g. the skill catalog lands as ``skills.catalog``.
+    """
+
+    message: LLMMessage
+    kind: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RewriteRequest:
+    """The one declared rewrite: replace the visible projection wholesale.
+
+    The loop applies it via ``ContextManager.replace_all``, which records a
+    ``CompactionBoundary`` carrying ``reason`` / ``action`` — the record
+    itself only grows. ``action`` is the ``hook_action`` label
+    (``"compact"``, ``"overflow_recovery"``, …) so traces attribute the
+    boundary without guessing.
+    """
+
+    messages: list[LLMMessage]
+    reason: str
+    action: str = "compact"
+
+
 @dataclass(slots=True)
 class PreStepAction:
     """Outcome of a ``pre_step`` hook.
 
-    ``proceed`` (default) continues with ``transcript`` (possibly rewritten,
-    e.g. compacted). ``reject`` ends the turn without calling the model.
+    ``proceed`` (default) continues; the loop applies ``rewrite`` (declared
+    wholesale replacement) then ``appends`` (append-only growth) to the
+    record before the LLM call. ``reject`` ends the turn without calling
+    the model.
 
     ``tool_choice`` (e.g. ``"required"``) is forwarded to the provider for
     this step's LLM call — the data-need router uses it to force a tool call
@@ -52,14 +90,15 @@ class PreStepAction:
     """
 
     kind: Literal["proceed", "reject"] = "proceed"
-    transcript: list[LLMMessage] | None = None
+    appends: list[TranscriptAppend] | None = None
+    rewrite: RewriteRequest | None = None
     reason: str | None = None
     tool_choice: str | None = None
-    #: Label for the ``hook_action`` event when this action rewrote the
-    #: transcript. Compaction (the first rewriter) owns the "compact"
-    #: default; other rewriters (skill catalog injection, …) set their own
-    #: so traces distinguish *what* rewrote the transcript.
-    rewrite_action: str = "compact"
+    #: Label for the ``hook_action`` event when this action appended context
+    #: (a rewrite is labelled by its own ``RewriteRequest.action``). Skill
+    #: catalog injection owns ``"skill_catalog"``; the generic default is
+    #: ``"append"``.
+    append_action: str | None = None
 
 
 @dataclass(slots=True)
@@ -105,16 +144,16 @@ class RetryAction:
     """Outcome of an ``on_request_error`` hook.
 
     ``fail`` (default) surfaces the error and ends the turn. ``retry``
-    re-issues the request after ``delay_ms`` — with ``transcript`` when the
-    hook rewrote it (the context-overflow recovery compacts before
-    retrying; the loop adopts the replacement for the retried request and
-    the rest of the run).
+    re-issues the request after ``delay_ms`` — with ``rewrite`` when the
+    hook declares a transcript replacement (the context-overflow recovery
+    compacts before retrying; the loop applies it through the declared
+    ``replace_all`` path for the retried request and the rest of the run).
     """
 
     kind: Literal["fail", "retry"] = "fail"
     delay_ms: int = 0
     reason: str | None = None
-    transcript: list[LLMMessage] | None = None
+    rewrite: RewriteRequest | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +192,7 @@ class NoopHooks:
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: LoopContext
     ) -> PreStepAction:
-        return PreStepAction(kind="proceed", transcript=transcript)
+        return PreStepAction(kind="proceed")
 
     async def post_tool_result(
         self, result: ToolResult, call: ToolCall, ctx: LoopContext
@@ -174,13 +213,16 @@ class NoopHooks:
 class ChainHooks:
     """Compose several hooks into one ``LoopHooks``.
 
-    - ``pre_step``: applied in order, the transcript threading through each;
-      the first ``reject`` wins; the first non-``None`` ``tool_choice`` wins.
+    - ``pre_step``: applied in order, the working projection threading
+      through each so every hook sees the effects of its predecessors. The
+      chain merges to one declaration: a rewrite folds earlier appends into
+      its message list (the rewriter computed against them), and appends
+      after a rewrite fold into that rewrite — "hook1 rewrites, hook2
+      appends" is exactly ``replace_all`` then ``append``. The first
+      ``reject`` wins; the first non-``None`` ``tool_choice`` wins.
     - ``post_tool_result``: the result threads through each hook in order.
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
-      says ``fail``, the first failure reason is surfaced. The transcript
-      threads through unchanged — hooks that rewrite it (overflow
-      compaction) return the replacement on their ``retry`` action.
+      says ``fail``, the first failure reason is surfaced.
     - ``before_completion``: the first non-``accept`` action wins.
 
     This is how a product stacks e.g. compaction + spill + retry without the
@@ -195,29 +237,45 @@ class ChainHooks:
     ) -> PreStepAction:
         current = transcript
         tool_choice: str | None = None
-        # The last rewriter owns the label/reason on the emitted hook_action
-        # event (e.g. skill-catalog injection first, then compaction in the
-        # same round reports as "compact"). Identity semantics, same as the
-        # loop's own check: a pass-through (same object) is not a rewrite.
-        rewrite_action = "compact"
+        rewrite: RewriteRequest | None = None
+        appends: list[TranscriptAppend] = []
+        append_action: str | None = None
         reason: str | None = None
         for hook in self._hooks:
             action = await hook.pre_step(current, ctx)
             if action.kind == "reject":
                 return action
-            if action.transcript is not None:
-                if action.transcript is not current:
-                    rewrite_action = action.rewrite_action
+            if action.rewrite is not None:
+                # The rewriter computed against the current projection, so
+                # its message list already contains any earlier appends.
+                rewrite = action.rewrite
+                appends = []
+                current = list(action.rewrite.messages)
+            if action.appends:
+                current = [*current, *(a.message for a in action.appends)]
+                if rewrite is not None:
+                    # Fold into the pending rewrite: one replace_all covers
+                    # both, and the projection is identical.
+                    rewrite = RewriteRequest(
+                        messages=current, reason=rewrite.reason, action=rewrite.action
+                    )
+                else:
+                    appends.extend(action.appends)
+                if action.append_action is not None:
+                    append_action = action.append_action
+                if reason is None:
                     reason = action.reason
-                current = action.transcript
+            if action.rewrite is not None:
+                reason = action.rewrite.reason
             if tool_choice is None and action.tool_choice is not None:
                 tool_choice = action.tool_choice
         return PreStepAction(
             kind="proceed",
-            transcript=current,
+            appends=appends or None,
+            rewrite=rewrite,
             reason=reason,
             tool_choice=tool_choice,
-            rewrite_action=rewrite_action,
+            append_action=append_action,
         )
 
     async def post_tool_result(

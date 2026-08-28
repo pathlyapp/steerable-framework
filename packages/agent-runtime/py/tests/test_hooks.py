@@ -14,13 +14,16 @@ import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from steerable_agent_runtime import (
+    ChainHooks,
     CoreLoop,
     LoopEvent,
     NoopHooks,
     PreStepAction,
     RetryAction,
+    RewriteRequest,
     RouterToolExecutor,
     ToolRouter,
+    TranscriptAppend,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
 
@@ -110,7 +113,10 @@ async def test_pre_step_rewrite_transcript_is_seen_by_model() -> None:
             # simulate compaction: collapse to a single summary message
             return PreStepAction(
                 kind="proceed",
-                transcript=[LLMMessage.text_of("user", "[compacted summary]")],
+                rewrite=RewriteRequest(
+                    messages=[LLMMessage.text_of("user", "[compacted summary]")],
+                    reason="test compaction",
+                ),
             )
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=_Compact())
@@ -118,6 +124,134 @@ async def test_pre_step_rewrite_transcript_is_seen_by_model() -> None:
 
     # the model saw the rewritten (compacted) transcript, not the original
     assert provider.calls[0][0].content_text == "[compacted summary]"
+
+
+# ---------------------------------------------------------------------------
+# Wave 1 declarations: appends + RewriteRequest composition
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_step_appends_land_on_record_with_kind() -> None:
+    provider = make_provider([{"content": "ok"}])
+
+    class _Inject(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            return PreStepAction(
+                kind="proceed",
+                appends=[
+                    TranscriptAppend(
+                        LLMMessage.text_of("system", "catalog here"),
+                        kind="skills.catalog",
+                    )
+                ],
+                reason="catalog injected",
+                append_action="skill_catalog",
+            )
+
+    loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=_Inject())
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
+
+    # The appended message reaches the model after the seeded user message…
+    assert [m.content_text for m in provider.calls[0]] == ["hi", "catalog here"]
+    # …carries its record kind…
+    kinds = [item.kind for item in loop.history.projection_items]
+    assert kinds == ["user", "skills.catalog", "assistant"]
+    # …and is observable as a labelled hook_action.
+    assert any(
+        e.kind == "hook_action"
+        and e.data.get("action") == "skill_catalog"
+        and e.data.get("reason") == "catalog injected"
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_chain_hooks_rewrite_then_append_is_one_boundary() -> None:
+    """hook1 rewrites, hook2 appends ≡ replace_all then append (one boundary)."""
+
+    class _Rewrite(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            return PreStepAction(
+                kind="proceed",
+                rewrite=RewriteRequest(
+                    messages=[LLMMessage.text_of("user", "compacted")],
+                    reason="compact",
+                ),
+            )
+
+    class _Append(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            # sees the post-rewrite projection
+            assert [m.content_text for m in transcript] == ["compacted"]
+            return PreStepAction(
+                kind="proceed",
+                appends=[TranscriptAppend(LLMMessage.text_of("system", "extra"))],
+            )
+
+    hooks = ChainHooks(_Rewrite(), _Append())
+    action = await hooks.pre_step([LLMMessage.text_of("user", "original")], ctx=None)  # type: ignore[arg-type]
+
+    # Folded into a single rewrite; no separate appends remain.
+    assert action.appends is None
+    assert action.rewrite is not None
+    assert [m.content_text for m in action.rewrite.messages] == ["compacted", "extra"]
+
+
+@pytest.mark.asyncio
+async def test_chain_hooks_append_then_rewrite_folds_earlier_appends() -> None:
+    """A later rewrite already computed against earlier appends — drop them."""
+
+    class _Append(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            return PreStepAction(
+                kind="proceed",
+                appends=[TranscriptAppend(LLMMessage.text_of("system", "catalog"))],
+            )
+
+    class _Rewrite(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            # The rewriter saw the appended catalog and kept it in its output.
+            return PreStepAction(
+                kind="proceed",
+                rewrite=RewriteRequest(
+                    messages=list(transcript), reason="compact"
+                ),
+            )
+
+    hooks = ChainHooks(_Append(), _Rewrite())
+    action = await hooks.pre_step([LLMMessage.text_of("user", "original")], ctx=None)  # type: ignore[arg-type]
+
+    assert action.appends is None
+    assert action.rewrite is not None
+    assert [m.content_text for m in action.rewrite.messages] == [
+        "original",
+        "catalog",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chain_hooks_appends_only_compose_in_order() -> None:
+    class _AppendA(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            return PreStepAction(
+                kind="proceed",
+                appends=[TranscriptAppend(LLMMessage.text_of("user", "A"))],
+            )
+
+    class _AppendB(NoopHooks):
+        async def pre_step(self, transcript, ctx):
+            return PreStepAction(
+                kind="proceed",
+                appends=[TranscriptAppend(LLMMessage.text_of("user", "B"))],
+            )
+
+    hooks = ChainHooks(_AppendA(), _AppendB())
+    action = await hooks.pre_step([LLMMessage.text_of("user", "seed")], ctx=None)  # type: ignore[arg-type]
+
+    assert action.rewrite is None
+    assert action.appends is not None
+    assert [a.message.content_text for a in action.appends] == ["A", "B"]
 
 
 # ---------------------------------------------------------------------------

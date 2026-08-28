@@ -23,6 +23,7 @@ from steerable_agent_runtime import (
     NoopHooks,
     PreStepAction,
     RecordingProvider,
+    RewriteRequest,
     RouterToolExecutor,
     ToolRouter,
     assert_stable_prefix,
@@ -288,10 +289,12 @@ class _RewriteOnceHooks(NoopHooks):
             self.rewrites += 1
             return PreStepAction(
                 kind="proceed",
-                transcript=[_msg("user", "compacted goal")],
-                reason="test compaction",
+                rewrite=RewriteRequest(
+                    messages=[_msg("user", "compacted goal")],
+                    reason="test compaction",
+                ),
             )
-        return PreStepAction(kind="proceed", transcript=transcript)
+        return PreStepAction(kind="proceed")
 
 
 @pytest.mark.asyncio

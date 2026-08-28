@@ -370,20 +370,33 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
         )
     )
 
-    # First request carries the catalog appended to the system message.
-    first_system = provider.calls[0][0]
-    assert first_system.role == "system"
-    assert first_system.content_text.startswith("BASE PROMPT")
-    assert "# Available skills" in first_system.content_text
-    assert "- local-exec:" in first_system.content_text
-    # Injection is a transcript rewrite → hook_action with the skill label.
+    # Wave 1: the catalog is an appended standalone system message (hooks
+    # never rewrite in place) — the base prompt stays byte-identical and the
+    # catalog lands right after the first user message.
+    first_request = provider.calls[0]
+    assert first_request[0].role == "system"
+    assert first_request[0].content_text == "BASE PROMPT"
+    catalog_msgs = [
+        m
+        for m in first_request
+        if m.role == "system" and "# Available skills" in m.content_text
+    ]
+    assert len(catalog_msgs) == 1
+    assert "- local-exec:" in catalog_msgs[0].content_text
+    # Injection is a declared append → hook_action with the skill label.
     actions = [e for e in events if e.kind == "hook_action"]
     assert any(
         e.data.get("action") == "skill_catalog" and e.data.get("round") == 0
         for e in actions
     ), [e.data for e in actions]
     # Second round: not re-appended (single catalog copy, identical prompt).
-    assert provider.calls[1][0].content_text == first_system.content_text
+    second_catalog = [
+        m
+        for m in provider.calls[1]
+        if m.role == "system" and "# Available skills" in m.content_text
+    ]
+    assert len(second_catalog) == 1
+    assert second_catalog[0].content_text == catalog_msgs[0].content_text
 
 
 async def test_catalog_injected_without_system_message(skills_root: Path) -> None:
@@ -398,9 +411,12 @@ async def test_catalog_injected_without_system_message(skills_root: Path) -> Non
         ),
     )
     await collect(loop.run([LLMMessage.text_of("user", "hi")]))
-    first = provider.calls[0][0]
-    assert first.role == "system"
-    assert "# Available skills" in first.content_text
+    # No base system message: the catalog is appended after the user message.
+    first_request = provider.calls[0]
+    assert first_request[0].role == "user"
+    catalog = first_request[1]
+    assert catalog.role == "system"
+    assert "# Available skills" in catalog.content_text
 
 
 async def test_empty_catalog_leaves_transcript_untouched(skills_root: Path) -> None:

@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .hooks import NoopHooks, PreStepAction, RetryAction
+from .hooks import NoopHooks, PreStepAction, RetryAction, RewriteRequest
 from .llm import LLMMessage, LLMProvider
 from .llm.errors import classify_error
 from .tokens import estimate_tokens
@@ -130,25 +130,39 @@ class CompactionHooks(NoopHooks):
     ) -> PreStepAction:
         pressure = self._pressure(transcript, ctx)
         if pressure < self._threshold * self._max_tokens:
-            return PreStepAction(kind="proceed", transcript=transcript)
+            return PreStepAction(kind="proceed")
         if (
             self._last_compaction_pressure is not None
             and pressure < self._last_compaction_pressure + self._recompact_margin
         ):
-            return PreStepAction(kind="proceed", transcript=transcript)
+            return PreStepAction(kind="proceed")
 
         compacted = self._fold_old_tool_results(transcript)
         if self._estimate(compacted) < self._threshold * self._max_tokens:
             self.compactions += 1
             self._last_compaction_pressure = pressure
             self._reset_observed(ctx)
-            return PreStepAction(kind="proceed", transcript=compacted)
+            return PreStepAction(
+                kind="proceed",
+                rewrite=RewriteRequest(
+                    messages=compacted,
+                    reason="context pressure: folded old tool results",
+                    action="compact",
+                ),
+            )
 
         compacted = await self._summarize_middle(compacted)
         self.compactions += 1
         self._last_compaction_pressure = pressure
         self._reset_observed(ctx)
-        return PreStepAction(kind="proceed", transcript=compacted)
+        return PreStepAction(
+            kind="proceed",
+            rewrite=RewriteRequest(
+                messages=compacted,
+                reason="context pressure: summarized middle",
+                action="compact",
+            ),
+        )
 
     async def on_request_error(
         self, error: Exception, transcript: list[LLMMessage], ctx: Any
@@ -187,7 +201,11 @@ class CompactionHooks(NoopHooks):
             kind="retry",
             delay_ms=0,
             reason="context overflow: compacted transcript before retry",
-            transcript=compacted,
+            rewrite=RewriteRequest(
+                messages=compacted,
+                reason="context overflow: compacted transcript before retry",
+                action="overflow_recovery",
+            ),
         )
 
     # ------------------------------------------------------------------

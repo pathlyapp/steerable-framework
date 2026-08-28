@@ -471,15 +471,14 @@ class AntiHallucinationHooks(NoopHooks):
             or not self._config.force_tool_choice
             or not self._config.tools_available
         ):
-            return PreStepAction(kind="proceed", transcript=transcript)
+            return PreStepAction(kind="proceed")
         self._route = await self._classify_route()
         if self._route == "require_tool":
             return PreStepAction(
                 kind="proceed",
-                transcript=transcript,
                 tool_choice=self._config.force_tool_choice,
             )
-        return PreStepAction(kind="proceed", transcript=transcript)
+        return PreStepAction(kind="proceed")
 
     async def _classify_route(self) -> DataNeedRoute:
         from .llm import LLMMessage

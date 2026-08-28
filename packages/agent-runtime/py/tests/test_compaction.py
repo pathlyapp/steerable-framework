@@ -199,7 +199,7 @@ async def test_observed_usage_overrides_heuristic_overestimate() -> None:
 
     action = await hooks.pre_step(transcript, _Ctx())
     assert hooks.compactions == 0
-    assert action.transcript is transcript
+    assert action.rewrite is None
 
 
 @pytest.mark.asyncio
@@ -286,7 +286,8 @@ async def test_compaction_resets_observed_state() -> None:
     assert hooks.compactions == 1
     assert ctx.last_prompt_tokens is None
     assert ctx.last_prompt_transcript_len == 0
-    assert any("[tool output folded" in m.content_text for m in action.transcript)
+    assert action.rewrite is not None
+    assert any("[tool output folded" in m.content_text for m in action.rewrite.messages)
 
 
 @pytest.mark.asyncio

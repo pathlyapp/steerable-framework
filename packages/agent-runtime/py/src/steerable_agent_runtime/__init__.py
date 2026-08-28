@@ -38,6 +38,8 @@ from .hooks import (
     NoopHooks,
     PreStepAction,
     RetryAction,
+    RewriteRequest,
+    TranscriptAppend,
 )
 from .llm import (
     ContentPart,
@@ -153,6 +155,7 @@ __all__ = [
     "RequestSink",
     "RetryAction",
     "RetryHooks",
+    "RewriteRequest",
     "RouterToolExecutor",
     "SkillConfig",
     "SkillDefinition",
@@ -174,6 +177,7 @@ __all__ = [
     "ModelCalibration",
     "ToolRouter",
     "TraceRecorder",
+    "TranscriptAppend",
     "estimate_text_tokens",
     "estimate_tokens",
     "export_otlp_http",
