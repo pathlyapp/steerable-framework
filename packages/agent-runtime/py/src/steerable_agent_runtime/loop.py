@@ -431,7 +431,7 @@ class CoreLoop:
             """
             if tool_calls or not content.strip():
                 return
-            manager.append(LLMMessage(role="assistant", content=content))
+            manager.append(LLMMessage.text_of("assistant", content))
 
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
@@ -450,7 +450,7 @@ class CoreLoop:
             while not self._inbox.empty():
                 injected = self._inbox.get_nowait()
                 manager.append(
-                    LLMMessage(role="user", content=injected), kind="steer.inject"
+                    LLMMessage.text_of("user", injected), kind="steer.inject"
                 )
                 yield LoopEvent(
                     "steer", {"content": injected, "round": round_index}
@@ -783,7 +783,7 @@ class CoreLoop:
                         # what it said, then the discipline notice corrects it.
                         completion_redos += 1
                         if content.strip():
-                            manager.append(LLMMessage(role="assistant", content=content))
+                            manager.append(LLMMessage.text_of("assistant", content))
                         manager.append_fragment(DisciplineRetryNotice(action.message))
                         yield LoopEvent(
                             "hook_action",
@@ -831,7 +831,7 @@ class CoreLoop:
 
             # ── act: append assistant turn, then run each tool ───────────
             manager.append(
-                LLMMessage(role="assistant", content=content, tool_calls=tool_calls)
+                LLMMessage.text_of("assistant", content, tool_calls=tool_calls)
             )
 
             # Parallel batching: consecutive concurrency-safe calls run under
@@ -970,11 +970,11 @@ class CoreLoop:
                         },
                     )
                     manager.append(
-                        LLMMessage(
-                            role="tool",
+                        LLMMessage.text_of(
+                            "tool",
+                            _result_content(result),
                             name=call.name,
                             tool_call_id=call.id,
-                            content=_result_content(result),
                         )
                     )
 
@@ -1028,11 +1028,11 @@ class CoreLoop:
                                 else:
                                     skip_content = _BREAKER_SKIP_MESSAGE
                                 manager.append(
-                                    LLMMessage(
-                                        role="tool",
+                                    LLMMessage.text_of(
+                                        "tool",
+                                        skip_content,
                                         name=skipped.name,
                                         tool_call_id=skipped.id,
-                                        content=skip_content,
                                     ),
                                     kind=(
                                         "loop.breaker_skip"

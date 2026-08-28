@@ -99,7 +99,7 @@ class _FailNTimes:
 async def test_auth_error_fails_fast_without_retry() -> None:
     provider = _FailNTimes(LLMError("bad key", kind="auth"), n=5)
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=RetryHooks())
-    events = [e async for e in loop.run([LLMMessage(role="user", content="hi")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "hi")])]
     assert provider.attempts == 1  # no retries on auth
     assert events[-1].data["status"] == "failed"
     assert "non-retryable" in events[-1].data["reason"]
@@ -110,7 +110,7 @@ async def test_transport_error_retries_then_recovers() -> None:
     provider = _FailNTimes(LLMError("reset", kind="transport"), n=2)
     hooks = RetryHooks()
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=hooks)
-    events = [e async for e in loop.run([LLMMessage(role="user", content="hi")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "hi")])]
     assert provider.attempts == 3
     assert hooks.retries == 2
     assert events[-1].data["status"] == "completed"
@@ -122,7 +122,7 @@ async def test_retry_hooks_alone_do_not_retry_overflow() -> None:
     retrying the identical over-long request is a guaranteed re-fail."""
     provider = _FailNTimes(LLMError("too long", kind="context_overflow"), n=5)
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=RetryHooks())
-    events = [e async for e in loop.run([LLMMessage(role="user", content="hi")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "hi")])]
     assert provider.attempts == 1
     assert events[-1].data["status"] == "failed"
 
@@ -145,13 +145,13 @@ async def test_overflow_triggers_compaction_retry() -> None:
 
     # A transcript with several tool messages so folding has something to fold.
     messages = [
-        LLMMessage(role="user", content="goal"),
-        LLMMessage(role="assistant", content="calling tools"),
+        LLMMessage.text_of("user", "goal"),
+        LLMMessage.text_of("assistant", "calling tools"),
         *[
-            LLMMessage(role="tool", name=f"t{i}", tool_call_id=f"c{i}", content="x" * 500)
+            LLMMessage.text_of("tool", "x" * 500, name=f"t{i}", tool_call_id=f"c{i}")
             for i in range(5)
         ],
-        LLMMessage(role="user", content="continue"),
+        LLMMessage.text_of("user", "continue"),
     ]
     events = [e async for e in loop.run(messages)]
 
@@ -159,7 +159,7 @@ async def test_overflow_triggers_compaction_retry() -> None:
     assert events[-1].data["status"] == "completed"
     # The retried request saw a compacted transcript (old tool output folded).
     retried = provider.seen[1]
-    folded = [m for m in retried if m.role == "tool" and "folded" in (m.content or "")]
+    folded = [m for m in retried if m.role == "tool" and "folded" in m.content_text]
     assert folded, "expected folded tool markers in the retried transcript"
 
 
@@ -169,7 +169,7 @@ async def test_overflow_recovery_is_bounded_per_round() -> None:
     compaction = CompactionHooks(max_context_tokens=100_000)
     hooks = ChainHooks(compaction, RetryHooks())
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=hooks)
-    events = [e async for e in loop.run([LLMMessage(role="user", content="hi")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "hi")])]
 
     # initial + max_overflow_retries(2) recovery attempts, then fail
     assert provider.attempts == 3

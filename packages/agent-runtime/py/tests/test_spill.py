@@ -76,12 +76,12 @@ async def test_small_result_passes_through_unchanged() -> None:
         RouterToolExecutor(router),
         hooks=SpillHooks(store, max_inline_bytes=16_000),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
 
     # nothing spilled; the transcript carries the raw result
     assert store._items == {}
     tool_msgs = [m for m in provider.calls[1] if m.role == "tool"]
-    assert '"value": 3' in tool_msgs[0].content
+    assert '"value": 3' in tool_msgs[0].content_text
     assert any(e.kind == "tool_call_result" for e in events)
 
 
@@ -103,7 +103,7 @@ async def test_large_result_is_spilled_with_preview_and_locator() -> None:
         RouterToolExecutor(router),
         hooks=SpillHooks(store, max_inline_bytes=1_000, preview_bytes=200),
     )
-    await collect(loop.run([LLMMessage(role="user", content="run")]))
+    await collect(loop.run([LLMMessage.text_of("user", "run")]))
 
     # full content landed in the store
     assert len(store._items) == 1
@@ -113,7 +113,7 @@ async def test_large_result_is_spilled_with_preview_and_locator() -> None:
     # the transcript carries preview + locator, not the 40k blob
     tool_msgs = [m for m in provider.calls[1] if m.role == "tool"]
     assert len(tool_msgs) == 1
-    body = tool_msgs[0].content
+    body = tool_msgs[0].content_text
     assert '"spilled": true' in body
     assert locator in body
     assert "chars omitted" in body
@@ -137,7 +137,7 @@ async def test_spill_preserves_failure_results() -> None:
         RouterToolExecutor(router),
         hooks=SpillHooks(store, max_inline_bytes=1_000),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     # failure results pass through (error field is short; data may be absent)
     failed = [e for e in events if e.kind == "tool_call_result" and not e.data["success"]]

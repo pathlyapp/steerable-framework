@@ -23,12 +23,16 @@ import json
 import math
 from collections.abc import Sequence
 
-from .llm import LLMMessage
+from .llm import LLMMessage, TextPart
 
 #: CJK char → token, everything else → token (TS parity: 0.6 / 0.25).
 _CJK_FACTOR = 0.6
 _OTHER_FACTOR = 0.25
 _MESSAGE_OVERHEAD = 8
+#: Flat per-image estimate (order of magnitude of a high-detail image tile
+#: set; exact accounting is provider- and size-dependent). Shared by the
+#: recording layer's per-item cap heuristic.
+IMAGE_PART_TOKEN_ESTIMATE = 1024
 
 
 def _is_cjk(code: int) -> bool:
@@ -99,7 +103,10 @@ def estimate_tokens(messages: Sequence[LLMMessage], model: str | None = None) ->
     total = 0
     for m in messages:
         total += _MESSAGE_OVERHEAD
-        total += estimate_text_tokens(m.content or "")
+        total += estimate_text_tokens(m.content_text)
+        total += IMAGE_PART_TOKEN_ESTIMATE * sum(
+            1 for part in m.content if not isinstance(part, TextPart)
+        )
         if m.tool_calls:
             for call in m.tool_calls:
                 total += estimate_text_tokens(call.name)

@@ -17,18 +17,50 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall
 
+from .parts import ContentPart, ImagePart, TextPart, content_text, text_parts
+
 LLMRole = Literal["system", "user", "assistant", "tool"]
 
 
 @dataclass(slots=True)
 class LLMMessage:
-    """A single chat-message item passed to an LLMProvider."""
+    """A single chat-message item passed to an LLMProvider.
+
+    ``content`` is a list of typed parts (Wave 1). Text-only messages — the
+    common case — are built with ``text_of`` and read back with
+    ``content_text``; providers serialize them in the legacy string
+    shorthand, so text-only wire bytes are unchanged.
+    """
 
     role: LLMRole
-    content: str
+    content: list[ContentPart]
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
+
+    @classmethod
+    def text_of(
+        cls,
+        role: LLMRole,
+        text: str,
+        *,
+        name: str | None = None,
+        tool_call_id: str | None = None,
+        tool_calls: list[ToolCall] | None = None,
+    ) -> LLMMessage:
+        """Build a text-only message (single ``TextPart``)."""
+        return cls(
+            role=role,
+            content=text_parts(text),
+            name=name,
+            tool_call_id=tool_call_id,
+            tool_calls=tool_calls,
+        )
+
+    @property
+    def content_text(self) -> str:
+        """Plain-text projection of the content parts (images elided)."""
+        return content_text(self.content)
 
 
 @dataclass(slots=True)
@@ -102,11 +134,16 @@ from .openai_compat import OpenAICompatProvider  # noqa: E402
 from .anthropic_native import AnthropicProvider  # noqa: E402
 
 __all__ = [
+    "ContentPart",
+    "ImagePart",
     "LLMMessage",
     "LLMProvider",
     "LLMRole",
     "LLMStreamChunk",
     "LLMUsage",
+    "TextPart",
+    "content_text",
+    "text_parts",
     "OpenAICompatProvider",
     "AnthropicProvider",
     "LLMError",

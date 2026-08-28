@@ -30,7 +30,7 @@ async def _run_traced(
     storage = InMemoryStorage()
     recorder = TraceRecorder(storage, max_payload_chars=max_payload_chars)
     loop = CoreLoop(provider=make_provider(script), executor=RouterToolExecutor(router), config=config)
-    async for _ in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
         pass
     return storage, recorder.trace_id
 
@@ -57,7 +57,7 @@ async def test_project_full_fidelity_roundtrip() -> None:
     messages = await load_transcript(storage, trace_id)
 
     assert [m.role for m in messages] == ["assistant", "tool", "assistant"]
-    assert messages[0].content == "let me compute. "
+    assert messages[0].content_text == "let me compute. "
     assert messages[0].tool_calls is not None
     assert messages[0].tool_calls[0].name == "add"
     assert messages[0].tool_calls[0].arguments == {"a": 1, "b": 2}
@@ -65,9 +65,9 @@ async def test_project_full_fidelity_roundtrip() -> None:
     assert messages[1].name == "add"
     # Same envelope string the live loop put in its transcript
     # (_result_content serializes the ToolResult when no spill applies).
-    assert '"value": 3' in messages[1].content
-    assert '"success": true' in messages[1].content
-    assert messages[2].content == "sum is 3"
+    assert '"value": 3' in messages[1].content_text
+    assert '"success": true' in messages[1].content_text
+    assert messages[2].content_text == "sum is 3"
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_project_until_sequence_forks_the_transcript() -> None:
 
     forked = project_transcript(events, until_sequence=stage_done[0].sequence)
     assert [m.role for m in forked] == ["assistant", "tool"]
-    assert forked[0].content == "first "
+    assert forked[0].content_text == "first "
 
     full = project_transcript(events)
     assert [m.role for m in full] == [
@@ -125,8 +125,8 @@ async def test_project_falls_back_to_preview() -> None:
 
     messages = await load_transcript(storage, trace_id)
     tool_msg = next(m for m in messages if m.role == "tool")
-    assert tool_msg.content.endswith("…")
-    assert len(tool_msg.content) <= 301
+    assert tool_msg.content_text.endswith("…")
+    assert len(tool_msg.content_text) <= 301
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,7 @@ async def test_projected_transcript_seeds_next_turn() -> None:
     provider.stream = capturing_stream  # type: ignore[method-assign]
 
     followup = CoreLoop(provider=provider, executor=RouterToolExecutor(router))
-    async for _ in followup.run([*history, LLMMessage(role="user", content="and now?")]):
+    async for _ in followup.run([*history, LLMMessage.text_of("user", "and now?")]):
         pass
 
     assert [m.role for m in seen_messages] == [
@@ -166,7 +166,7 @@ async def test_projected_transcript_seeds_next_turn() -> None:
         "assistant",
         "user",
     ]
-    assert seen_messages[-1].content == "and now?"
+    assert seen_messages[-1].content_text == "and now?"
 
 
 @pytest.mark.asyncio
@@ -184,8 +184,8 @@ async def test_project_tool_error() -> None:
 
     messages = await load_transcript(storage, trace_id)
     tool_msg = next(m for m in messages if m.role == "tool")
-    assert "nope" in tool_msg.content
-    assert messages[-1].content == "it failed"
+    assert "nope" in tool_msg.content_text
+    assert messages[-1].content_text == "it failed"
 
 
 def test_project_empty_and_bookkeeping_only() -> None:
@@ -238,8 +238,8 @@ def test_interrupted_tool_call_is_closed_synthetically() -> None:
     assert assistant.tool_calls and len(assistant.tool_calls) == 2
     tools = [m for m in messages if m.role == "tool"]
     assert [t.tool_call_id for t in tools] == ["c1", "c2"]
-    assert tools[0].content == "contents-a"
-    assert "interrupted" in tools[1].content
+    assert tools[0].content_text == "contents-a"
+    assert "interrupted" in tools[1].content_text
     assert tools[1].name == "read_file"
 
 
@@ -253,7 +253,7 @@ def test_complete_trace_passes_through_unchanged() -> None:
     ]
     messages = project_transcript(events)
     assert [m.role for m in messages] == ["assistant", "tool", "assistant"]
-    assert all("interrupted" not in (m.content or "") for m in messages)
+    assert all("interrupted" not in m.content_text for m in messages)
 
 
 def test_all_calls_interrupted() -> None:
@@ -262,4 +262,4 @@ def test_all_calls_interrupted() -> None:
     ]
     messages = project_transcript(events)
     assert [m.role for m in messages] == ["assistant", "tool"]
-    assert "interrupted" in messages[1].content
+    assert "interrupted" in messages[1].content_text

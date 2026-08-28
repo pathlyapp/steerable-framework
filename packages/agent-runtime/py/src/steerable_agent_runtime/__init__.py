@@ -39,7 +39,16 @@ from .hooks import (
     PreStepAction,
     RetryAction,
 )
-from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
+from .llm import (
+    ContentPart,
+    ImagePart,
+    LLMMessage,
+    LLMProvider,
+    LLMStreamChunk,
+    LLMUsage,
+    TextPart,
+    text_parts,
+)
 from .loop import (
     CompletionDecision,
     CoreLoop,
@@ -110,6 +119,7 @@ __all__ = [
     "CompletionAction",
     "CompletionDecision",
     "CompletionDraft",
+    "ContentPart",
     "ContextFragment",
     "ContextManager",
     "CoreLoop",
@@ -121,6 +131,7 @@ __all__ = [
     "HarnessExecutionState",
     "HarnessTrajectoryEvent",
     "HistoryItem",
+    "ImagePart",
     "InMemoryRequestSink",
     "InMemorySpillStore",
     "JsonlRequestSink",
@@ -156,6 +167,7 @@ __all__ = [
     "StorageError",
     "SubagentConfig",
     "SubagentExecutor",
+    "TextPart",
     "ToolDispatchError",
     "ToolExecutor",
     "MODEL_TOKEN_FACTORS",
@@ -191,6 +203,7 @@ __all__ = [
     "should_run_grounding_judge",
     "skill_tool_descriptor",
     "subagent_tool_descriptor",
+    "text_parts",
     "tool",
 ]
 

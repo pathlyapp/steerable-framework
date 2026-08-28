@@ -124,9 +124,9 @@ class ContextFragment:
     def to_message(
         self, *, name: str | None = None, tool_call_id: str | None = None
     ) -> LLMMessage:
-        return LLMMessage(
-            role=self.role,
-            content=self.render(),
+        return LLMMessage.text_of(
+            self.role,
+            self.render(),
             name=name,
             tool_call_id=tool_call_id,
         )

@@ -60,7 +60,13 @@ from steerable_agent_runtime import (
     skill_tool_descriptor,
     subagent_tool_descriptor,
 )
-from steerable_agent_runtime.llm import LLMMessage, LLMProvider
+from steerable_agent_runtime.llm import (
+    ContentPart,
+    ImagePart,
+    LLMMessage,
+    LLMProvider,
+    TextPart,
+)
 from steerable_agent_runtime.resume import project_transcript
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
 from steerable_agent_runtime.transport.stdio_jsonrpc import (
@@ -878,6 +884,34 @@ def _new_stream_id() -> str:
     return f"str_{uuid.uuid4().hex}"
 
 
+def _coerce_part(item: Any) -> ContentPart:
+    """Coerce one wire ``ContentPart`` (spec/chat/ContentPart.schema.json).
+
+    The wire part is authoritative when ``parts`` is present on a
+    ChatMessage; ``content`` is then just its text projection.
+    """
+    if not isinstance(item, dict):
+        raise JsonRpcError("each part must be an object", code=-32602, kind="invalid_params")
+    kind = item.get("type")
+    if kind == "text":
+        return TextPart(str(item.get("text") or ""))
+    if kind == "image":
+        url = item.get("url")
+        if url:
+            return ImagePart.from_url(
+                str(url), media_type=str(item.get("mediaType") or "image/png")
+            )
+        data = item.get("data")
+        if data:
+            return ImagePart.from_base64(
+                str(data), media_type=str(item.get("mediaType") or "image/png")
+            )
+        raise JsonRpcError(
+            "image part needs url or data", code=-32602, kind="invalid_params"
+        )
+    raise JsonRpcError(f"invalid part type: {kind!r}", code=-32602, kind="invalid_params")
+
+
 def _coerce_messages(items: Any) -> list[LLMMessage]:
     if not isinstance(items, list):
         raise JsonRpcError("messages must be a list", code=-32602, kind="invalid_params")
@@ -892,10 +926,25 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
             raise JsonRpcError(
                 f"invalid role: {role!r}", code=-32602, kind="invalid_params"
             )
+        wire_parts = entry.get("parts")
+        if wire_parts is not None:
+            if not isinstance(wire_parts, list):
+                raise JsonRpcError(
+                    "parts must be a list", code=-32602, kind="invalid_params"
+                )
+            out.append(
+                LLMMessage(
+                    role=role,  # type: ignore[arg-type]
+                    content=[_coerce_part(p) for p in wire_parts],
+                    name=entry.get("name"),
+                    tool_call_id=entry.get("toolCallId"),
+                )
+            )
+            continue
         out.append(
-            LLMMessage(
-                role=role,  # type: ignore[arg-type]
-                content=str(entry.get("content", "")),
+            LLMMessage.text_of(
+                role,  # type: ignore[arg-type]
+                str(entry.get("content", "")),
                 name=entry.get("name"),
                 tool_call_id=entry.get("toolCallId"),
             )
@@ -939,8 +988,8 @@ def _last_message_content(
     routing/judging context). ``tail`` truncates to the trailing N chars."""
 
     for message in reversed(messages):
-        if message.role == role and message.content:
-            content = message.content
+        if message.role == role and message.content_text:
+            content = message.content_text
             return content[-tail:] if tail else content
     return ""
 

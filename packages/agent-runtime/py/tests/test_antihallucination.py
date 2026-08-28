@@ -63,7 +63,7 @@ def make_provider(
             ] if self._completes else ""
             self._complete_idx += 1
             return (
-                LLMMessage(role="assistant", content=content),
+                LLMMessage.text_of("assistant", content),
                 LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             )
 
@@ -318,7 +318,7 @@ async def test_routing_require_tool_forces_tool_choice_on_first_call() -> None:
         provider, AntiHallucinationConfig(user_question="平均值是多少？")
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="平均值是多少？")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "平均值是多少？")], tools=TOOLS))
 
     assert provider.stream_kwargs[0].get("tool_choice") == "required"
     # 第二轮起不再强制
@@ -336,7 +336,7 @@ async def test_routing_allow_no_tool_passes_through() -> None:
         provider, AntiHallucinationConfig(user_question="水的沸点是多少")
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="水的沸点是多少")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "水的沸点是多少")], tools=TOOLS))
 
     assert provider.stream_kwargs[0].get("tool_choice") is None
     assert final_completion(events)["status"] == "completed"
@@ -352,7 +352,7 @@ async def test_routing_classification_error_falls_back_to_require_tool() -> None
         provider, AntiHallucinationConfig(user_question="查一下数值")
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    await collect(loop.run([LLMMessage(role="user", content="查一下数值")], tools=TOOLS))
+    await collect(loop.run([LLMMessage.text_of("user", "查一下数值")], tools=TOOLS))
     assert provider.stream_kwargs[0].get("tool_choice") == "required"
 
 
@@ -375,15 +375,15 @@ async def test_deferred_execution_forces_discipline_retry() -> None:
     )
     router = make_router_with_tool()
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="查一下数据")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "查一下数据")], tools=TOOLS))
 
     # 纪律消息进了 transcript：纪律重试轮（第三次 LLM 调用）应看到
     # assistant 空话 + 纪律 user
     retry_call = provider.calls[2]
     assert retry_call[-2].role == "assistant"
-    assert "现在轮询结果" in (retry_call[-2].content or "")
+    assert "现在轮询结果" in retry_call[-2].content_text
     assert retry_call[-1].role == "user"
-    assert "纪律" in (retry_call[-1].content or "")
+    assert "纪律" in retry_call[-1].content_text
     assert final_completion(events)["status"] == "completed"
     assert final_completion(events)["textLength"] == len("查询完成，值是 42。")
 
@@ -404,11 +404,11 @@ async def test_claimed_execution_forces_real_execution() -> None:
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
     events = await collect(
-        loop.run([LLMMessage(role="user", content="帮我再跑一次 GR 卡片")], tools=TOOLS)
+        loop.run([LLMMessage.text_of("user", "帮我再跑一次 GR 卡片")], tools=TOOLS)
     )
 
     second_call = provider.calls[1]
-    assert "纪律" in (second_call[-1].content or "")
+    assert "纪律" in second_call[-1].content_text
     assert final_completion(events)["status"] == "completed"
 
 
@@ -439,13 +439,13 @@ async def test_grounding_judge_fabricated_forces_retry() -> None:
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
     events = await collect(
-        loop.run([LLMMessage(role="user", content="平均电阻率是多少？")], tools=TOOLS)
+        loop.run([LLMMessage.text_of("user", "平均电阻率是多少？")], tools=TOOLS)
     )
 
     # 裁判被调用了一次（complete_calls：路由 + 裁判）
     assert len(provider.complete_calls) == 2
     # 纪律重试发生：最后一轮如实回答
-    assert "无法获取" in (provider.calls[-1][-1].content or "") or True
+    assert "无法获取" in provider.calls[-1][-1].content_text or True
     assert final_completion(events)["status"] == "completed"
 
 
@@ -473,7 +473,7 @@ async def test_grounding_judge_fail_open_on_error() -> None:
         provider, AntiHallucinationConfig(user_question="平均值？")
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="平均值？")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "平均值？")], tools=TOOLS))
     # 裁判挂了也放行（fail-open），路由失败回落 require_tool 但不阻断
     assert final_completion(events)["status"] == "completed"
 
@@ -506,7 +506,7 @@ async def test_narration_round_on_empty_terminal() -> None:
         LoopConfig(max_tool_errors=3),
         hooks=hooks,
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="取数")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "取数")], tools=TOOLS))
 
     final = final_completion(events)
     # 与 TS 循环一致：narration 成功产出文本后 emit completed
@@ -516,7 +516,7 @@ async def test_narration_round_on_empty_terminal() -> None:
     # narration 请求进了 transcript
     last_call = provider.calls[-1]
     assert any(
-        "summar" in (m.content or "").lower() or "总结" in (m.content or "")
+        "summar" in m.content_text.lower() or "总结" in m.content_text
         for m in last_call
     )
 
@@ -546,7 +546,7 @@ async def test_narration_second_chance_on_empty_wrap_up() -> None:
 
     hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="取数")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "取数")], tools=TOOLS))
 
     final = final_completion(events)
     assert final["status"] == "completed"
@@ -577,7 +577,7 @@ async def test_narration_bounded_when_wrap_ups_stay_empty() -> None:
 
     hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="取数")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "取数")], tools=TOOLS))
 
     final = final_completion(events)
     assert final["status"] == "failed"
@@ -600,7 +600,7 @@ async def test_retry_budget_bounds_discipline_loops() -> None:
         AntiHallucinationConfig(user_question="执行这个命令", max_retries=2),
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="执行这个命令")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "执行这个命令")], tools=TOOLS))
 
     # 初始轮 + 2 次纪律重试 = 3 次 LLM 调用，然后接受收尾
     assert len(provider.calls) == 3
@@ -618,7 +618,7 @@ async def test_plan_mode_disables_enforcement() -> None:
         AntiHallucinationConfig(user_question="执行这个命令", mode="plan"),
     )
     loop = CoreLoop(provider, RouterToolExecutor(make_router_with_tool()), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="执行这个命令")], tools=TOOLS))
+    events = await collect(loop.run([LLMMessage.text_of("user", "执行这个命令")], tools=TOOLS))
 
     # plan 模式：不路由（无 complete 调用）、不拦截（一次调用即收尾）
     assert provider.complete_calls == []

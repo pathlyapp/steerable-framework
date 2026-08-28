@@ -533,13 +533,13 @@ class SkillHooks(NoopHooks):
         rewritten = list(transcript)
         if rewritten and rewritten[0].role == "system":
             first = rewritten[0]
-            rewritten[0] = LLMMessage(
-                role="system",
-                content=f"{first.content}\n\n{section}",
+            rewritten[0] = LLMMessage.text_of(
+                "system",
+                f"{first.content_text}\n\n{section}",
                 name=first.name,
             )
         else:
-            rewritten.insert(0, LLMMessage(role="system", content=section))
+            rewritten.insert(0, LLMMessage.text_of("system", section))
         return PreStepAction(
             kind="proceed",
             transcript=rewritten,

@@ -137,7 +137,7 @@ async def test_loop_recovers_markdown_pseudo_and_executes() -> None:
     router.register(add)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
 
     # the recovered call actually executed
     starts = [e for e in events if e.kind == "tool_call_start"]
@@ -169,7 +169,7 @@ async def test_loop_recovers_xml_pseudo_and_executes() -> None:
     router.register(ping)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     starts = [e for e in events if e.kind == "tool_call_start"]
     assert len(starts) == 1 and starts[0].data["name"] == "ping"
     assert final_completion(events)["status"] == "completed"
@@ -196,7 +196,7 @@ async def test_loop_does_not_recover_when_real_tool_calls_present() -> None:
     router.register(add)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
     starts = [e for e in events if e.kind == "tool_call_start"]
     # exactly one execution (the real call), no recovered duplicate
     assert len(starts) == 1
@@ -209,7 +209,7 @@ async def test_loop_plain_text_still_completes_without_recovery() -> None:
     router = ToolRouter()
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="2+2?")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "2+2?")]))
     assert final_completion(events)["status"] == "completed"
     # no tool was executed
     assert not [e for e in events if e.kind == "tool_call_start"]

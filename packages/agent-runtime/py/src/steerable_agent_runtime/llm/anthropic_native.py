@@ -21,6 +21,7 @@ from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .errors import LLMError, classify_http_status
+from .parts import ImagePart, TextPart
 
 
 def _classify_anthropic_error(exc: Exception, *, provider: str) -> Exception:
@@ -103,9 +104,9 @@ class AnthropicProvider:
             ),
         )
         return (
-            LLMMessage(
-                role="assistant",
-                content="".join(text_chunks),
+            LLMMessage.text_of(
+                "assistant",
+                "".join(text_chunks),
                 tool_calls=tool_calls or None,
             ),
             out_usage,
@@ -198,6 +199,33 @@ class AnthropicProvider:
 # ---------------------------------------------------------------------------
 
 
+def _encode_content_blocks(message: LLMMessage) -> str | list[dict[str, Any]]:
+    """Serialize content parts to Anthropic blocks.
+
+    Text-only content stays a plain string (Anthropic accepts both forms);
+    any non-text part switches to the block array form.
+    """
+    parts = message.content
+    if all(isinstance(part, TextPart) for part in parts):
+        return message.content_text
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            blocks.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImagePart):
+            source = (
+                {"type": "url", "url": part.source}
+                if part.is_url
+                else {
+                    "type": "base64",
+                    "media_type": part.media_type,
+                    "data": part.source,
+                }
+            )
+            blocks.append({"type": "image", "source": source})
+    return blocks
+
+
 def _split_system_and_messages(
     messages: Sequence[LLMMessage],
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -205,8 +233,8 @@ def _split_system_and_messages(
     out: list[dict[str, Any]] = []
     for message in messages:
         if message.role == "system":
-            if message.content:
-                system_chunks.append(message.content)
+            if message.content_text:
+                system_chunks.append(message.content_text)
             continue
         if message.role == "tool":
             out.append(
@@ -216,7 +244,7 @@ def _split_system_and_messages(
                         {
                             "type": "tool_result",
                             "tool_use_id": message.tool_call_id or "",
-                            "content": message.content,
+                            "content": message.content_text,
                         }
                     ],
                 }
@@ -224,8 +252,8 @@ def _split_system_and_messages(
             continue
         if message.tool_calls:
             blocks: list[dict[str, Any]] = []
-            if message.content:
-                blocks.append({"type": "text", "text": message.content})
+            if message.content_text:
+                blocks.append({"type": "text", "text": message.content_text})
             for tc in message.tool_calls:
                 blocks.append(
                     {
@@ -237,7 +265,7 @@ def _split_system_and_messages(
                 )
             out.append({"role": "assistant", "content": blocks})
             continue
-        out.append({"role": message.role, "content": message.content})
+        out.append({"role": message.role, "content": _encode_content_blocks(message)})
     system = "\n\n".join(system_chunks) if system_chunks else None
     return system, out
 

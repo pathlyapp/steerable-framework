@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Collection, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
-from .tokens import estimate_text_tokens
+from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage, TextPart
+from .tokens import IMAGE_PART_TOKEN_ESTIMATE, estimate_text_tokens
 
 #: Default per-item hard cap for ``assert_bounded_items`` — mirrors codex's
 #: "no items larger than 10K tokens" context rule.
@@ -127,8 +127,23 @@ def load_recorded_requests(path: str) -> list[RecordedRequest]:
     return out
 
 
+def _content_for_record(message: LLMMessage) -> str | list[dict[str, Any]]:
+    """Serialize content parts for the record.
+
+    Text-only content records as a plain string so existing recordings and
+    their consumers (E2E harness comparisons, ``assert_stable_prefix``) keep
+    byte-identical output; non-text parts record as typed dicts.
+    """
+    if all(isinstance(part, TextPart) for part in message.content):
+        return message.content_text
+    return [asdict(part) for part in message.content]
+
+
 def _message_to_dict(message: LLMMessage) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": message.role, "content": message.content}
+    out: dict[str, Any] = {
+        "role": message.role,
+        "content": _content_for_record(message),
+    }
     if message.name is not None:
         out["name"] = message.name
     if message.tool_call_id is not None:
@@ -310,7 +325,17 @@ def assert_bounded_items(
 
 
 def _item_tokens(message: dict[str, Any]) -> int:
-    total = estimate_text_tokens(str(message.get("content") or ""))
+    content = message.get("content")
+    if isinstance(content, list):  # structured parts: text runs + per-image flat
+        total = sum(
+            estimate_text_tokens(str(part.get("text") or ""))
+            if part.get("type") == "text"
+            else IMAGE_PART_TOKEN_ESTIMATE
+            for part in content
+            if isinstance(part, dict)
+        )
+    else:
+        total = estimate_text_tokens(str(content or ""))
     if message.get("tool_calls"):
         total += estimate_text_tokens(
             json.dumps(message["tool_calls"], ensure_ascii=False, default=str)

@@ -84,7 +84,7 @@ async def test_hung_tool_returns_failed_result_and_turn_completes() -> None:
         RouterToolExecutor(router),
         LoopConfig(tool_timeout_ms=20),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert events[-1].data["status"] == "completed"
     results = results_of(events)
@@ -113,7 +113,7 @@ async def test_timeout_feeds_the_consecutive_error_breaker() -> None:
         RouterToolExecutor(router),
         LoopConfig(tool_timeout_ms=20, max_tool_errors=1),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert events[-1].data["status"] == "failed"
     assert events[-1].data["reason"] == "too many consecutive tool errors"
@@ -137,7 +137,7 @@ async def test_timeout_applies_to_any_executor_including_remote() -> None:
         _HungRemoteExecutor(),
         LoopConfig(tool_timeout_ms=20),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert events[-1].data["status"] == "completed"
     results = results_of(events)
@@ -171,7 +171,7 @@ async def test_parallel_batch_isolates_the_hung_call() -> None:
         RouterToolExecutor(router),
         LoopConfig(tool_timeout_ms=20, parallel_tools=True),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert events[-1].data["status"] == "completed"
     results = results_of(events)
@@ -201,7 +201,7 @@ async def test_none_disables_the_timeout() -> None:
         RouterToolExecutor(router),
         LoopConfig(tool_timeout_ms=None),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     assert finished == ["slow"]
     assert results_of(events)[0].data["success"] is True
 
@@ -223,7 +223,7 @@ async def test_slow_tool_under_the_limit_is_untouched() -> None:
         RouterToolExecutor(router),
         LoopConfig(tool_timeout_ms=5_000),
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     assert results_of(events)[0].data["success"] is True
 
 

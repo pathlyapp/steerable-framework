@@ -110,7 +110,7 @@ class SubagentExecutor:
         )
         answer_parts: list[str] = []
         status = "completed"
-        async for event in child.run([LLMMessage(role="user", content=task)]):
+        async for event in child.run([LLMMessage.text_of("user", task)]):
             if event.kind == "content_delta":
                 answer_parts.append(str(event.data.get("delta") or ""))
             elif event.kind == "completion":

@@ -91,7 +91,7 @@ async def test_pre_step_reject_ends_turn_without_calling_model() -> None:
             return PreStepAction(kind="reject", reason="context over pressure")
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=_Reject())
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     decision = final_completion(events)
     assert decision["status"] == "failed"
@@ -110,14 +110,14 @@ async def test_pre_step_rewrite_transcript_is_seen_by_model() -> None:
             # simulate compaction: collapse to a single summary message
             return PreStepAction(
                 kind="proceed",
-                transcript=[LLMMessage(role="user", content="[compacted summary]")],
+                transcript=[LLMMessage.text_of("user", "[compacted summary]")],
             )
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=_Compact())
-    await collect(loop.run([LLMMessage(role="user", content="original long history")]))
+    await collect(loop.run([LLMMessage.text_of("user", "original long history")]))
 
     # the model saw the rewritten (compacted) transcript, not the original
-    assert provider.calls[0][0].content == "[compacted summary]"
+    assert provider.calls[0][0].content_text == "[compacted summary]"
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ async def test_post_tool_result_rewrites_result_before_transcript() -> None:
 
     hooks = _Spill()
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    await collect(loop.run([LLMMessage(role="user", content="add")]))
+    await collect(loop.run([LLMMessage.text_of("user", "add")]))
 
     # hook saw the original result
     assert len(hooks.seen) == 1 and hooks.seen[0].success is True
@@ -159,7 +159,7 @@ async def test_post_tool_result_rewrites_result_before_transcript() -> None:
     second_call_messages = provider.calls[1]
     tool_msgs = [m for m in second_call_messages if m.role == "tool"]
     assert len(tool_msgs) == 1
-    assert "preview" in tool_msgs[0].content
+    assert "preview" in tool_msgs[0].content_text
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ async def test_on_request_error_retry_recovers() -> None:
 
     hooks = _Retry()
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert hooks.calls == 1
     assert final_completion(events)["status"] == "completed"
@@ -205,7 +205,7 @@ async def test_on_request_error_fail_emits_error_event_and_ends() -> None:
             return RetryAction(kind="fail", reason=f"giving up: {error}")
 
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=_Fail())
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     # the previously-never-emitted "error" kind now fires
     assert any(e.kind == "error" for e in events)
@@ -235,7 +235,7 @@ async def test_noop_hooks_preserve_default_behavior() -> None:
     router.register(add)
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=NoopHooks())
 
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
     assert final_completion(events)["status"] == "completed"
     starts = [e for e in events if e.kind == "tool_call_start"]
     assert len(starts) == 1 and starts[0].data["name"] == "add"
@@ -264,7 +264,7 @@ async def test_trajectory_matches_completion_event_stream() -> None:
     router.register(add)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
 
     completions = [e.data for e in events if e.kind == "completion"]
     # completion events now carry the full step summary

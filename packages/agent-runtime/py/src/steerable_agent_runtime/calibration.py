@@ -229,7 +229,7 @@ class CalibratingProvider:
         message, usage = await self.inner.complete(
             messages, tools=tools, temperature=temperature, max_tokens=max_tokens, **kwargs
         )
-        self._recorded(est_prompt, usage, message.content or "")
+        self._recorded(est_prompt, usage, message.content_text)
         return message, usage
 
     async def stream(

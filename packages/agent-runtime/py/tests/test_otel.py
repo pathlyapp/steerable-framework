@@ -40,7 +40,7 @@ async def _recorded_trace():
         {"content": "", "tool_calls": [tc("add", {"a": 1, "b": 2})]},
         {"content": "3"},
     ]), RouterToolExecutor(router))
-    async for _ in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
         pass
     trace = await storage.get_trace(recorder.trace_id)
     spans = await storage.list_spans(recorder.trace_id)
@@ -98,7 +98,7 @@ async def test_otlp_error_status_mapping() -> None:
         make_provider([{"content": "", "tool_calls": [tc("boom")]}, {"content": "x"}]),
         RouterToolExecutor(router),
     )
-    async for _ in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
         pass
 
     payload = to_otlp_json(

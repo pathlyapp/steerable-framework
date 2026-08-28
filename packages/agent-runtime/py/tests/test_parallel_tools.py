@@ -52,7 +52,7 @@ async def test_safe_calls_run_concurrently() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
     events: list[LoopEvent] = []
-    async for event in loop.run([LLMMessage(role="user", content="go")]):
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
         events.append(event)
 
     results = _kinds_for(events, "tool_call_result")
@@ -84,7 +84,7 @@ async def test_result_events_follow_call_order_not_completion_order() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
     events: list[LoopEvent] = []
-    async for event in loop.run([LLMMessage(role="user", content="go")]):
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
         events.append(event)
 
     ordered = _kinds_for(events, "tool_call_start", "tool_call_result")
@@ -138,7 +138,7 @@ async def test_unsafe_call_forms_barrier() -> None:
     )
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    async for _ in loop.run([LLMMessage(role="user", content="go")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "go")]):
         pass
 
     # the write ran alone (no read active alongside it)
@@ -165,7 +165,7 @@ async def test_dedup_still_applies_inside_parallel_batch() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
     events: list[LoopEvent] = []
-    async for event in loop.run([LLMMessage(role="user", content="go")]):
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
         events.append(event)
 
     assert calls == 1  # second identical call deduped, not executed
@@ -198,7 +198,7 @@ async def test_parallel_error_and_success_counters_in_order() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
     events: list[LoopEvent] = []
-    async for event in loop.run([LLMMessage(role="user", content="go")]):
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
         events.append(event)
 
     # RouterToolExecutor converts handler exceptions into failed ToolResults
@@ -241,7 +241,7 @@ async def test_executor_without_safety_check_stays_serial() -> None:
             return ToolResult(success=True, data={"value": call.name})
 
     loop = CoreLoop(provider, SerialExecutor())  # no concurrency_safe method
-    async for _ in loop.run([LLMMessage(role="user", content="go")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "go")]):
         pass
 
     assert overlap == 1
@@ -271,7 +271,7 @@ async def test_parallel_tools_disabled_by_config() -> None:
     loop = CoreLoop(
         provider, RouterToolExecutor(router), LoopConfig(parallel_tools=False)
     )
-    async for _ in loop.run([LLMMessage(role="user", content="go")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "go")]):
         pass
 
     assert overlap == 1

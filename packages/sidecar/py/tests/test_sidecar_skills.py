@@ -139,9 +139,9 @@ async def test_skills_param_injects_catalog_and_advertises_tool(
 
     system = provider.seen_messages[0][0]
     assert system.role == "system"
-    assert system.content.startswith("BASE")
-    assert "# Available skills" in system.content
-    assert "- local-exec:" in system.content
+    assert system.content_text.startswith("BASE")
+    assert "# Available skills" in system.content_text
+    assert "- local-exec:" in system.content_text
 
     tools = provider.stream_kwargs[0].get("tools") or []
     assert any(t["function"]["name"] == "skill" for t in tools)
@@ -174,7 +174,7 @@ async def test_skills_param_executes_skill_call_in_process(skills_root: Path) ->
     assert results[0]["success"] is True
     # The body reached the model's second-round transcript.
     tool_messages = [m for m in provider.seen_messages[1] if m.role == "tool"]
-    assert "本地执行" in tool_messages[0].content
+    assert "本地执行" in tool_messages[0].content_text
 
 
 @pytest.mark.asyncio
@@ -185,7 +185,7 @@ async def test_skills_eager_mode_is_a_noop(skills_root: Path) -> None:
         sidecar,
         _params(skills_root, skills={"roots": [str(skills_root)], "mode": "eager"}),
     )
-    assert provider.seen_messages[0][0].content == "BASE"
+    assert provider.seen_messages[0][0].content_text == "BASE"
     tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "skill" for t in tools)
 
@@ -200,7 +200,7 @@ async def test_skills_empty_catalog_adds_nothing(skills_root: Path) -> None:
         "roots": [str(skills_root)],
         "conditions": [],
     }))
-    assert provider.seen_messages[0][0].content == "BASE"
+    assert provider.seen_messages[0][0].content_text == "BASE"
     tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "skill" for t in tools)
 
@@ -217,6 +217,6 @@ async def test_skills_exclude_hides_from_catalog(skills_root: Path) -> None:
             "exclude": ["local-exec"],
         }),
     )
-    assert provider.seen_messages[0][0].content == "BASE"
+    assert provider.seen_messages[0][0].content_text == "BASE"
     tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "skill" for t in tools)

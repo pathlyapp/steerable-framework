@@ -71,7 +71,7 @@ async def test_recorder_persists_events_spans_and_trace() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
     seen: list[LoopEvent] = []
-    async for event in recorder.tee(loop.run([LLMMessage(role="user", content="add")])):
+    async for event in recorder.tee(loop.run([LLMMessage.text_of("user", "add")])):
         seen.append(event)
 
     # events flowed through untouched
@@ -120,7 +120,7 @@ async def test_recorder_marks_failed_tool_span() -> None:
     recorder = TraceRecorder(storage)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    async for _ in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
         pass
 
     trace = await storage.get_trace(recorder.trace_id)
@@ -137,7 +137,7 @@ async def test_recorder_truncates_huge_payloads() -> None:
     recorder = TraceRecorder(storage, max_payload_chars=100)
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
 
-    async for _ in recorder.tee(loop.run([LLMMessage(role="user", content="hi")])):
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "hi")])):
         pass
 
     events = await storage.list_events(recorder.trace_id)
@@ -157,7 +157,7 @@ async def test_trace_row_is_live_mid_turn() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
 
     seen_running = None
-    async for event in recorder.tee(loop.run([LLMMessage(role="user", content="go")])):
+    async for event in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
         if seen_running is None:
             mid = await storage.get_trace(recorder.trace_id)
             assert mid is not None

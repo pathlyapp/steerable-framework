@@ -60,8 +60,8 @@ async def collect(loop_run: AsyncIterator[LoopEvent]) -> list[LoopEvent]:
 
 
 def test_estimate_tokens_scales_with_content() -> None:
-    small = [LLMMessage(role="user", content="hi")]
-    big = [LLMMessage(role="user", content="x" * 40_000)]
+    small = [LLMMessage.text_of("user", "hi")]
+    big = [LLMMessage.text_of("user", "x" * 40_000)]
     assert estimate_tokens(big) > estimate_tokens(small)
 
 
@@ -72,9 +72,9 @@ async def test_under_threshold_transcript_unchanged() -> None:
     hooks = CompactionHooks(max_context_tokens=60_000, threshold_ratio=0.8)
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
 
-    await collect(loop.run([LLMMessage(role="user", content="2+2?")]))
+    await collect(loop.run([LLMMessage.text_of("user", "2+2?")]))
     assert hooks.compactions == 0
-    assert provider.calls[0][0].content == "2+2?"
+    assert provider.calls[0][0].content_text == "2+2?"
 
 
 @pytest.mark.asyncio
@@ -104,16 +104,16 @@ async def test_over_threshold_folds_old_tool_results() -> None:
         keep_last_tool_results=1,
     )
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert hooks.compactions >= 1
     # some later model call saw folded tool output instead of the raw blob,
     # keeping a short excerpt as a clue about what the tool returned
     folded = [
-        m.content
+        m.content_text
         for call in provider.calls[1:]
         for m in call
-        if m.role == "tool" and "[tool output folded" in (m.content or "")
+        if m.role == "tool" and "[tool output folded" in m.content_text
     ]
     assert folded
     assert "excerpt: " in folded[0]
@@ -148,11 +148,11 @@ async def test_over_threshold_summarizes_middle_when_still_over() -> None:
         keep_last_tool_results=0,
     )
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert hooks.compactions >= 1
     summarized_seen = any(
-        "[context compacted" in (m.content or "")
+        "[context compacted" in m.content_text
         for call in provider.calls[1:]
         for m in call
     )
@@ -163,9 +163,9 @@ async def test_over_threshold_summarizes_middle_when_still_over() -> None:
 def test_pressure_blends_observed_usage_with_delta_estimate() -> None:
     hooks = CompactionHooks(max_context_tokens=60_000)
     transcript = [
-        LLMMessage(role="user", content="a" * 400),  # ~108 est
-        LLMMessage(role="assistant", content="b" * 40),
-        LLMMessage(role="tool", name="t", tool_call_id="c", content="c" * 40),
+        LLMMessage.text_of("user", "a" * 400),  # ~108 est
+        LLMMessage.text_of("assistant", "b" * 40),
+        LLMMessage.text_of("tool", "c" * 40, name="t", tool_call_id="c"),
     ]
 
     class _Ctx:
@@ -191,7 +191,7 @@ async def test_observed_usage_overrides_heuristic_overestimate() -> None:
     # appended since — ground truth wins, no compaction. This is the
     # production 41%-overestimate class (dogfood: 22 compacts / 5 traces).
     hooks = CompactionHooks(max_context_tokens=1_000, threshold_ratio=0.8)
-    transcript = [LLMMessage(role="user", content="x" * 4_000)]
+    transcript = [LLMMessage.text_of("user", "x" * 4_000)]
 
     class _Ctx:
         last_prompt_tokens = 100
@@ -223,7 +223,7 @@ async def test_observed_usage_triggers_compaction_when_heuristic_calm() -> None:
     router.register(emit)
     hooks = CompactionHooks(max_context_tokens=2_000, threshold_ratio=0.8)
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert hooks.compactions >= 1
     assert events[-1].data["status"] == "completed"
@@ -258,7 +258,7 @@ async def test_hysteresis_blocks_recompaction_without_pressure_growth() -> None:
         recompact_margin_ratio=0.2,
     )
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     assert hooks.compactions == 1
     assert events[-1].data["status"] == "completed"
@@ -272,9 +272,9 @@ async def test_compaction_resets_observed_state() -> None:
         max_context_tokens=1_000, threshold_ratio=0.5, keep_last_tool_results=0
     )
     transcript = [
-        LLMMessage(role="user", content="go"),
-        LLMMessage(role="tool", name="t", tool_call_id="c1", content="y" * 3_000),
-        LLMMessage(role="tool", name="t", tool_call_id="c2", content="y" * 3_000),
+        LLMMessage.text_of("user", "go"),
+        LLMMessage.text_of("tool", "y" * 3_000, name="t", tool_call_id="c1"),
+        LLMMessage.text_of("tool", "y" * 3_000, name="t", tool_call_id="c2"),
     ]
 
     class _Ctx:
@@ -286,7 +286,7 @@ async def test_compaction_resets_observed_state() -> None:
     assert hooks.compactions == 1
     assert ctx.last_prompt_tokens is None
     assert ctx.last_prompt_transcript_len == 0
-    assert any("[tool output folded" in (m.content or "") for m in action.transcript)
+    assert any("[tool output folded" in m.content_text for m in action.transcript)
 
 
 @pytest.mark.asyncio
@@ -315,13 +315,13 @@ async def test_compaction_preserves_system_and_first_user_message() -> None:
     await collect(
         loop.run(
             [
-                LLMMessage(role="system", content="you are helpful"),
-                LLMMessage(role="user", content="the original goal"),
+                LLMMessage.text_of("system", "you are helpful"),
+                LLMMessage.text_of("user", "the original goal"),
             ]
         )
     )
 
     # every call after compaction still starts with system + original goal
     for call in provider.calls[1:]:
-        assert call[0].role == "system" and call[0].content == "you are helpful"
-        assert call[1].role == "user" and call[1].content == "the original goal"
+        assert call[0].role == "system" and call[0].content_text == "you are helpful"
+        assert call[1].role == "user" and call[1].content_text == "the original goal"

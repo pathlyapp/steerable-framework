@@ -36,7 +36,7 @@ class FakeProvider:
 
     async def complete(self, messages, **kwargs):
         self.requests.append(list(messages))
-        return LLMMessage(role="assistant", content=self.reply), self.usage
+        return LLMMessage.text_of("assistant", self.reply), self.usage
 
     async def stream(self, messages, **kwargs):
         self.requests.append(list(messages))
@@ -116,9 +116,9 @@ class TestCalibratingProvider:
         inner = FakeProvider(usage=LLMUsage(prompt_tokens=50, completion_tokens=5, total_tokens=55))
         cal = UsageCalibration(min_samples=1, auto_register=False)
         provider = CalibratingProvider(inner, cal)
-        messages = [LLMMessage(role="user", content="a" * 40)]
+        messages = [LLMMessage.text_of("user", "a" * 40)]
         message, usage = await provider.complete(messages)
-        assert message.content == "ok"
+        assert message.content_text == "ok"
         assert usage.prompt_tokens == 50
         entry = cal.models["fake-1"]
         assert entry.est_prompt == estimate_tokens(messages)  # base estimate, no factor
@@ -130,7 +130,7 @@ class TestCalibratingProvider:
         inner = FakeProvider(usage=LLMUsage(prompt_tokens=42, completion_tokens=2, total_tokens=44))
         cal = UsageCalibration(min_samples=1, auto_register=False)
         provider = CalibratingProvider(inner, cal)
-        chunks = [c async for c in provider.stream([LLMMessage(role="user", content="hi")])]
+        chunks = [c async for c in provider.stream([LLMMessage.text_of("user", "hi")])]
         assert [c.content_delta for c in chunks if c.content_delta] == ["ok"]
         assert chunks[-1].usage is not None and chunks[-1].usage.prompt_tokens == 42
         assert cal.models["fake-1"].obs_prompt == 42
@@ -145,7 +145,7 @@ class TestCalibratingProvider:
 
         cal = UsageCalibration(min_samples=1, auto_register=False)
         provider = CalibratingProvider(NoUsage(), cal)
-        async for _ in provider.stream([LLMMessage(role="user", content="hi")]):
+        async for _ in provider.stream([LLMMessage.text_of("user", "hi")]):
             pass
         assert cal.models == {}
 
@@ -156,9 +156,9 @@ class TestCalibratingProvider:
         inner = FakeProvider(usage=LLMUsage(prompt_tokens=20, completion_tokens=2, total_tokens=22))
         cal = UsageCalibration(min_samples=1, auto_register=False)
         provider = CalibratingProvider(inner, cal, persist_path=path, persist_every=2)
-        await provider.complete([LLMMessage(role="user", content="a" * 40)])
+        await provider.complete([LLMMessage.text_of("user", "a" * 40)])
         assert not (tmp_path / "cal.json").exists()  # below persist_every
-        await provider.complete([LLMMessage(role="user", content="a" * 40)])
+        await provider.complete([LLMMessage.text_of("user", "a" * 40)])
         assert (tmp_path / "cal.json").exists()
         loaded = UsageCalibration.load(path, min_samples=1, auto_register=False)
         assert loaded.models["fake-1"].requests == 2

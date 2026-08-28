@@ -24,7 +24,7 @@ from steerable_agent_runtime import (
     assert_stable_prefix,
     load_recorded_requests,
 )
-from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
+from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage, text_parts
 
 
 class _FakeProvider:
@@ -37,7 +37,7 @@ class _FakeProvider:
         self._idx = 0
 
     async def complete(self, messages, *, tools=None, **kw):
-        return LLMMessage(role="assistant", content="done"), LLMUsage(total_tokens=1)
+        return LLMMessage.text_of("assistant", "done"), LLMUsage(total_tokens=1)
 
     def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
         entry = self._script[min(self._idx, len(self._script) - 1)]
@@ -85,7 +85,7 @@ async def test_records_stream_request_with_params() -> None:
     chunks = [
         chunk
         async for chunk in provider.stream(
-            [LLMMessage(role="user", content="hello")],
+            [LLMMessage.text_of("user", "hello")],
             tools=tools,
             temperature=0.2,
             max_tokens=64,
@@ -111,13 +111,13 @@ async def test_records_stream_request_with_params() -> None:
 async def test_recorded_messages_are_snapshots() -> None:
     sink = InMemoryRequestSink()
     provider = RecordingProvider(_FakeProvider([{"content": "hi"}]), sink)
-    transcript = [LLMMessage(role="user", content="one")]
+    transcript = [LLMMessage.text_of("user", "one")]
     async for _ in provider.stream(transcript):
         pass
     # The loop appends to its transcript after the request; the record must
     # not observe later mutations.
-    transcript.append(LLMMessage(role="assistant", content="later"))
-    transcript[0].content = "mutated"
+    transcript.append(LLMMessage.text_of("assistant", "later"))
+    transcript[0].content = text_parts("mutated")
     assert sink.requests[0].messages == [{"role": "user", "content": "one"}]
 
 
@@ -125,8 +125,8 @@ async def test_recorded_messages_are_snapshots() -> None:
 async def test_records_complete_and_increments_seq() -> None:
     sink = InMemoryRequestSink()
     provider = RecordingProvider(_FakeProvider([]), sink)
-    await provider.complete([LLMMessage(role="user", content="a")])
-    await provider.complete([LLMMessage(role="user", content="b")])
+    await provider.complete([LLMMessage.text_of("user", "a")])
+    await provider.complete([LLMMessage.text_of("user", "b")])
     assert [r.seq for r in sink.requests] == [1, 2]
     assert all(r.kind == "complete" for r in sink.requests)
 
@@ -136,7 +136,7 @@ async def test_records_request_even_when_provider_raises() -> None:
     sink = InMemoryRequestSink()
     provider = RecordingProvider(_BoomProvider([]), sink)
     with pytest.raises(ConnectionError):
-        async for _ in provider.stream([LLMMessage(role="user", content="go")]):
+        async for _ in provider.stream([LLMMessage.text_of("user", "go")]):
             pass
     assert len(sink.requests) == 1
 
@@ -334,7 +334,7 @@ async def test_clean_coreloop_run_satisfies_both_invariants() -> None:
 
     router.register(echo)
     loop = CoreLoop(provider, RouterToolExecutor(router))
-    events = [event async for event in loop.run([LLMMessage(role="user", content="go")])]
+    events = [event async for event in loop.run([LLMMessage.text_of("user", "go")])]
 
     assert events[-1].data["status"] == "completed"
     assert len(sink.requests) == 2

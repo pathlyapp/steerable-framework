@@ -78,7 +78,7 @@ async def test_no_tool_calls_completes() -> None:
     router = ToolRouter()
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="2+2?")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "2+2?")]))
     decision = final_completion(events)
     assert decision["status"] == "completed"
     # content streamed through
@@ -102,7 +102,7 @@ async def test_tool_round_then_completion() -> None:
     router.register(add)
     loop = CoreLoop(provider, RouterToolExecutor(router))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="add")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
     decision = final_completion(events)
     assert decision["status"] == "completed"
 
@@ -116,7 +116,7 @@ async def test_tool_round_then_completion() -> None:
     second_call_messages = provider.calls[1]
     tool_msgs = [m for m in second_call_messages if m.role == "tool"]
     assert len(tool_msgs) == 1 and tool_msgs[0].name == "add"
-    assert '"success": true' in tool_msgs[0].content
+    assert '"success": true' in tool_msgs[0].content_text
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_consecutive_tool_errors_trip_breaker() -> None:
         LoopConfig(max_tool_errors=2, max_rounds=10),
     )
 
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     decision = final_completion(events)
     assert decision["status"] == "failed"
     assert "consecutive tool errors" in decision["reason"]
@@ -161,7 +161,7 @@ async def test_max_rounds_runaway_guard() -> None:
     router.register(ping)
     loop = CoreLoop(provider, RouterToolExecutor(router), LoopConfig(max_rounds=3))
 
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     decision = final_completion(events)
     assert decision["status"] == "budget_exhausted"
     assert "maxRounds" in decision["reason"]
@@ -179,7 +179,7 @@ async def test_token_budget_exhausted() -> None:
         LoopConfig(budget=BudgetLimit(max_tokens=10, max_steps=100, max_tool_calls=100)),
     )
 
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
     decision = final_completion(events)
     assert decision["status"] == "budget_exhausted"
     assert any(e.kind == "budget_exhausted" and e.data["kind"] == "tokens" for e in events)
@@ -201,7 +201,7 @@ async def test_tool_exception_is_surfaced_not_raised() -> None:
             raise ValueError("executor blew up")
 
     loop = CoreLoop(provider, _ExplodingExecutor())
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
     assert any(e.kind == "tool_error" for e in events)
     # loop recovered and completed on the next turn
     assert final_completion(events)["status"] == "completed"
@@ -222,7 +222,7 @@ async def test_stage_complete_emitted_after_tool_rounds() -> None:
 
     router.register(echo)
     loop = CoreLoop(provider, RouterToolExecutor(router))
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     stages = [e for e in events if e.kind == "stage_complete"]
     assert len(stages) == 1  # only the tool round, not the final no-tool round

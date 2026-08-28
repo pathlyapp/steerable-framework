@@ -486,13 +486,13 @@ class AntiHallucinationHooks(NoopHooks):
 
         try:
             messages = [
-                LLMMessage(role=m["role"], content=m["content"])
+                LLMMessage.text_of(m["role"], m["content"])
                 for m in build_turn_route_messages(
                     self._config.user_question, self._config.last_assistant_tail
                 )
             ]
             reply, _usage = await self._provider.complete(messages, temperature=0)
-            parsed = parse_turn_route(reply.content or "")
+            parsed = parse_turn_route(reply.content_text)
             if parsed:
                 return parsed["route"]  # type: ignore[return-value]
         except Exception:
@@ -594,11 +594,11 @@ class AntiHallucinationHooks(NoopHooks):
 
         try:
             messages = [
-                LLMMessage(role=m["role"], content=m["content"])
+                LLMMessage.text_of(m["role"], m["content"])
                 for m in build_grounding_messages(user_question, assistant_reply)
             ]
             reply, _usage = await self._provider.complete(messages, temperature=0)
-            return parse_grounding_verdict(reply.content or "")
+            return parse_grounding_verdict(reply.content_text)
         except Exception:
             return None
 

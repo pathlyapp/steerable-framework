@@ -21,7 +21,7 @@ async def _run_parent(script, router: ToolRouter, *, config: SubagentConfig | No
     provider = make_provider(script)
     executor = SubagentExecutor(RouterToolExecutor(router), provider, config)
     loop = CoreLoop(provider, executor, LoopConfig())
-    events = [e async for e in loop.run([LLMMessage(role="user", content="go")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
     return events
 
 

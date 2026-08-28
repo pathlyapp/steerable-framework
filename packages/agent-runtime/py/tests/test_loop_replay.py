@@ -56,7 +56,7 @@ def tc(name: str) -> ToolCall:
 
 
 async def run_and_replay(loop: CoreLoop) -> tuple[list[LoopEvent], HarnessExecutionState]:
-    events = [e async for e in loop.run([LLMMessage(role="user", content="go")])]
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
     # Round-trip the trajectory through JSON like a persisted payload would.
     import json
 

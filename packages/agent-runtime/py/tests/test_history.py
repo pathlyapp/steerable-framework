@@ -42,7 +42,7 @@ class _FakeProvider:
         self._idx = 0
 
     async def complete(self, messages, *, tools=None, **kw):
-        return LLMMessage(role="assistant", content="done"), LLMUsage(total_tokens=1)
+        return LLMMessage.text_of("assistant", "done"), LLMUsage(total_tokens=1)
 
     def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
         entry = self._script[min(self._idx, len(self._script) - 1)]
@@ -62,7 +62,7 @@ class _FakeProvider:
 
 
 def _msg(role: str, content: str) -> LLMMessage:
-    return LLMMessage(role=role, content=content)  # type: ignore[arg-type]
+    return LLMMessage.text_of(role, content)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -82,14 +82,14 @@ def test_seed_and_append_assign_monotonic_envelopes() -> None:
     assert item.turn_id == manager.turn_id
     assert item.token_estimate > 0
     assert [type(e) for e in manager.record] == [HistoryItem] * 3
-    assert [m.content for m in manager.projection] == ["sys", "goal", "hi"]
+    assert [m.content_text for m in manager.projection] == ["sys", "goal", "hi"]
 
 
 def test_projection_is_a_throwaway_copy() -> None:
     manager = ContextManager([_msg("user", "one")])
     projection = manager.projection
     projection.append(_msg("user", "sneaky"))
-    assert [m.content for m in manager.projection] == ["one"]
+    assert [m.content_text for m in manager.projection] == ["one"]
 
 
 def test_replace_all_records_boundary_and_supersedes() -> None:
@@ -104,7 +104,7 @@ def test_replace_all_records_boundary_and_supersedes() -> None:
     )
 
     # Projection is exactly the replacement…
-    assert [m.content for m in manager.projection] == ["sys", "goal", "summary"]
+    assert [m.content_text for m in manager.projection] == ["sys", "goal", "summary"]
     # …but the record kept the superseded span plus the boundary marker.
     kinds = [
         e.kind if isinstance(e, HistoryItem) else e.kind for e in manager.record
@@ -130,7 +130,7 @@ def test_second_replace_all_narrows_projection_to_newest_span() -> None:
     manager.replace_all([_msg("user", "v1")], reason="first")
     manager.replace_all([_msg("user", "v2")], reason="second")
 
-    assert [m.content for m in manager.projection] == ["v2"]
+    assert [m.content_text for m in manager.projection] == ["v2"]
     assert len(manager.record) == 1 + 2 + 2  # item + (boundary+item) x2
     assert manager.latest_boundary is not None
     assert manager.latest_boundary.reason == "second"
@@ -150,8 +150,8 @@ def test_append_fragment_renders_under_its_content_kind() -> None:
     item = manager.append_fragment(SoftTimeoutNotice())
     assert item.kind == "loop.soft_timeout_notice"
     assert item.message.role == "user"
-    assert SoftTimeoutNotice.matches_text(item.message.content)
-    assert manager.projection[-1].content == item.message.content
+    assert SoftTimeoutNotice.matches_text(item.message.content_text)
+    assert manager.projection[-1].content_text == item.message.content_text
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ async def test_clean_run_record_matches_what_the_model_saw() -> None:
     # One request; the record replays exactly what was sent.
     assert len(sink.requests) == 1
     sent = sink.requests[0].messages
-    assert [m.content for m in loop.history.projection] == [
+    assert [m.content_text for m in loop.history.projection] == [
         "hello",
         "final answer",
     ]
@@ -323,7 +323,7 @@ async def test_hook_rewrite_goes_through_a_recorded_boundary() -> None:
     boundary = loop.history.latest_boundary
     assert boundary is not None
     assert boundary.reason == "test compaction"
-    assert [m.content for m in loop.history.projection] == ["compacted goal", "done"]
+    assert [m.content_text for m in loop.history.projection] == ["compacted goal", "done"]
 
     # The recording shows the rewrite: the prefix assertion must fail
     # without the declared boundary and pass with it.
@@ -350,7 +350,7 @@ async def test_soft_timeout_notice_lands_as_marked_fragment() -> None:
     kinds = [item.kind for item in loop.history.projection_items]
     assert "loop.soft_timeout_notice" in kinds
     notice = loop.history.projection_items[kinds.index("loop.soft_timeout_notice")]
-    assert SoftTimeoutNotice.matches_text(notice.message.content)
+    assert SoftTimeoutNotice.matches_text(notice.message.content_text)
 
 
 @pytest.mark.asyncio

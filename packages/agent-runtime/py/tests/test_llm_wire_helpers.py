@@ -25,14 +25,14 @@ from steerable_agent_runtime.llm.openai_compat import (
 
 
 def test_openai_encode_simple_message() -> None:
-    encoded = _encode_message(LLMMessage(role="user", content="hi"))
+    encoded = _encode_message(LLMMessage.text_of("user", "hi"))
     assert encoded == {"role": "user", "content": "hi"}
 
 
 def test_openai_encode_message_with_tool_calls() -> None:
-    msg = LLMMessage(
-        role="assistant",
-        content="working on it",
+    msg = LLMMessage.text_of(
+        "assistant",
+        "working on it",
         tool_calls=[ToolCall(id="call_1", name="list_events", arguments={"limit": 5})],
     )
     encoded = _encode_message(msg)
@@ -43,11 +43,11 @@ def test_openai_encode_message_with_tool_calls() -> None:
 
 
 def test_openai_encode_tool_response_message() -> None:
-    msg = LLMMessage(
-        role="tool",
+    msg = LLMMessage.text_of(
+        "tool",
+        '{"items": []}',
         tool_call_id="call_1",
         name="list_events",
-        content='{"items": []}',
     )
     encoded = _encode_message(msg)
     assert encoded["tool_call_id"] == "call_1"
@@ -130,7 +130,7 @@ def test_openai_stream_requests_usage_chunk() -> None:
 
     provider = OpenAICompatProvider(name="t", model="m", base_url="http://x/v1")
     stream_body = provider._build_body(
-        messages=[LLMMessage(role="user", content="hi")],
+        messages=[LLMMessage.text_of("user", "hi")],
         tools=None,
         temperature=None,
         max_tokens=None,
@@ -139,7 +139,7 @@ def test_openai_stream_requests_usage_chunk() -> None:
     )
     assert stream_body["stream_options"] == {"include_usage": True}
     complete_body = provider._build_body(
-        messages=[LLMMessage(role="user", content="hi")],
+        messages=[LLMMessage.text_of("user", "hi")],
         tools=None,
         temperature=None,
         max_tokens=None,
@@ -247,9 +247,9 @@ def test_openai_parse_stream_chunk_sanitizes_harmony_leak() -> None:
 
 def test_anthropic_split_system_and_messages_collects_system() -> None:
     messages = [
-        LLMMessage(role="system", content="be concise"),
-        LLMMessage(role="user", content="hi"),
-        LLMMessage(role="system", content="also be friendly"),
+        LLMMessage.text_of("system", "be concise"),
+        LLMMessage.text_of("user", "hi"),
+        LLMMessage.text_of("system", "also be friendly"),
     ]
     system, formatted = _split_system_and_messages(messages)
     assert system == "be concise\n\nalso be friendly"
@@ -258,10 +258,10 @@ def test_anthropic_split_system_and_messages_collects_system() -> None:
 
 def test_anthropic_split_handles_tool_response() -> None:
     messages = [
-        LLMMessage(
-            role="tool",
+        LLMMessage.text_of(
+            "tool",
+            '{"ok": true}',
             tool_call_id="call_1",
-            content='{"ok": true}',
         )
     ]
     _, formatted = _split_system_and_messages(messages)
@@ -272,9 +272,9 @@ def test_anthropic_split_handles_tool_response() -> None:
 
 def test_anthropic_split_handles_assistant_with_tool_calls() -> None:
     messages = [
-        LLMMessage(
-            role="assistant",
-            content="working",
+        LLMMessage.text_of(
+            "assistant",
+            "working",
             tool_calls=[ToolCall(id="call_1", name="list_events", arguments={"limit": 1})],
         )
     ]

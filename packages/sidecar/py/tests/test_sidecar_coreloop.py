@@ -497,8 +497,8 @@ async def test_chat_fork_seeds_from_trace_projection() -> None:
 
     fork_call = provider.seen_messages[-1]
     assert [m.role for m in fork_call] == ["assistant", "user"]
-    assert fork_call[0].content == "first answer"
-    assert fork_call[1].content == "q2"
+    assert fork_call[0].content_text == "first answer"
+    assert fork_call[1].content_text == "q2"
 
 
 @pytest.mark.asyncio
@@ -622,8 +622,8 @@ async def test_chat_fork_seeds_from_trace_projection() -> None:
 
     fork_call = provider.seen_messages[-1]
     assert [m.role for m in fork_call] == ["assistant", "user"]
-    assert fork_call[0].content == "first answer"
-    assert fork_call[1].content == "q2"
+    assert fork_call[0].content_text == "first answer"
+    assert fork_call[1].content_text == "q2"
 
 
 @pytest.mark.asyncio

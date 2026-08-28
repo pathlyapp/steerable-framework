@@ -79,7 +79,7 @@ async def test_transient_error_is_retried_and_run_completes() -> None:
     hooks = RetryHooks(_policy())
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=hooks)
 
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
 
     assert provider.attempts == 3  # 2 failures + 1 success
     assert hooks.retries == 2
@@ -93,7 +93,7 @@ async def test_persistent_error_fails_after_max_attempts() -> None:
     hooks = RetryHooks(_policy())
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=hooks)
 
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
 
     assert provider.attempts == 3  # max_attempts
     errors = [e for e in events if e.kind == "error"]
@@ -108,7 +108,7 @@ async def test_non_retryable_error_fails_immediately() -> None:
     hooks = RetryHooks(_policy(), retryable=lambda exc: False)
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()), hooks=hooks)
 
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
 
     assert provider.attempts == 1  # no retry
     assert events[-1].data["status"] == "failed"
@@ -132,7 +132,7 @@ async def test_retry_budget_resets_each_round() -> None:
     hooks = RetryHooks(_policy())
     loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
 
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     # attempts: round0 fails x2 + success, round1 fails x2 + success = 6
     assert provider.attempts == 6

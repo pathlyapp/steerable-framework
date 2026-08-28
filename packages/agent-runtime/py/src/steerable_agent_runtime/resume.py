@@ -106,9 +106,9 @@ def project_transcript(
         if not content and not calls:
             return
         messages.append(
-            LLMMessage(
-                role="assistant",
-                content=content,
+            LLMMessage.text_of(
+                "assistant",
+                content,
                 tool_calls=calls or None,
             )
         )
@@ -151,11 +151,11 @@ def project_transcript(
                 if not data.get("success", True) and data.get("error"):
                     content = content or f"Error: {data['error']}"
             messages.append(
-                LLMMessage(
-                    role="tool",
+                LLMMessage.text_of(
+                    "tool",
+                    content,
                     name=str(data.get("name") or ""),
                     tool_call_id=str(data.get("id") or ""),
-                    content=content,
                 )
             )
 
@@ -198,11 +198,11 @@ def _close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
         for call in message.tool_calls:
             if call.id not in answered:
                 out.append(
-                    LLMMessage(
-                        role="tool",
+                    LLMMessage.text_of(
+                        "tool",
+                        _INTERRUPTED_RESULT,
                         name=call.name,
                         tool_call_id=call.id,
-                        content=_INTERRUPTED_RESULT,
                     )
                 )
     return out

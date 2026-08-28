@@ -199,11 +199,11 @@ class CompactionHooks(NoopHooks):
             return transcript
         fold_set = set(tool_idx[:fold_before])
         return [
-            LLMMessage(
-                role="tool",
+            LLMMessage.text_of(
+                "tool",
+                _fold_content(m.content_text),
                 name=m.name,
                 tool_call_id=m.tool_call_id,
-                content=_fold_content(m.content),
             )
             if i in fold_set
             else m
@@ -227,33 +227,29 @@ class CompactionHooks(NoopHooks):
             return transcript
 
         summary = await self._summarize(middle)
-        summary_msg = LLMMessage(role="user", content=f"{_SUMMARY_MARKER}\n{summary}")
+        summary_msg = LLMMessage.text_of("user", f"{_SUMMARY_MARKER}\n{summary}")
         return [*transcript[:head_end], summary_msg, *transcript[tail_start:]]
 
     async def _summarize(self, middle: list[LLMMessage]) -> str:
         if self._summarizer is not None:
             prompt = [
-                LLMMessage(
-                    role="system",
-                    content=(
-                        "Summarize this conversation segment for an agent that "
-                        "needs to continue the task. Preserve: the user's goal, "
-                        "actions taken, tool outcomes, and any decisions. Be terse."
-                    ),
+                LLMMessage.text_of(
+                    "system",
+                    "Summarize this conversation segment for an agent that "
+                    "needs to continue the task. Preserve: the user's goal, "
+                    "actions taken, tool outcomes, and any decisions. Be terse.",
                 ),
-                LLMMessage(
-                    role="user",
-                    content="\n".join(
-                        f"[{m.role}] {(m.content or '')[:2000]}" for m in middle
-                    ),
+                LLMMessage.text_of(
+                    "user",
+                    "\n".join(f"[{m.role}] {m.content_text[:2000]}" for m in middle),
                 ),
             ]
             message, _usage = await self._summarizer.complete(prompt)
-            return message.content
+            return message.content_text
         # No summarizer configured: deterministic fallback keeps role + a short
         # excerpt per message so the thread of actions survives.
         lines = []
         for m in middle:
-            excerpt = (m.content or "").replace("\n", " ")[:200]
+            excerpt = m.content_text.replace("\n", " ")[:200]
             lines.append(f"[{m.role}] {excerpt}")
         return "\n".join(lines)

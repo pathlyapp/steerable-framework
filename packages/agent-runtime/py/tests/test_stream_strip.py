@@ -175,7 +175,7 @@ async def test_loop_display_stream_strips_pseudo_but_recovers_call() -> None:
 
     router.register(get_weather)
     loop = CoreLoop(provider, RouterToolExecutor(router))
-    events = await collect(loop.run([LLMMessage(role="user", content="weather?")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "weather?")]))
 
     displayed = "".join(
         e.data["delta"] for e in events if e.kind == "content_delta"
@@ -193,7 +193,7 @@ async def test_loop_display_stream_strips_echo_blocks() -> None:
     pieces = ["answer: ", "<function_results>{'fake': 1}</function_results>", " 42"]
     provider = make_provider([{"content_pieces": pieces}])
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
 
     displayed = "".join(e.data["delta"] for e in events if e.kind == "content_delta")
     assert displayed == "answer:  42"
@@ -206,7 +206,7 @@ async def test_loop_content_deltas_reassemble_emoji_split_across_chunks() -> Non
     pieces = ["look \ud83d", "\ude00 done"]  # 😀 split mid-pair
     provider = make_provider([{"content_pieces": pieces}])
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
 
     displayed = "".join(e.data["delta"] for e in events if e.kind == "content_delta")
     assert displayed == "look \ud83d\ude00 done"

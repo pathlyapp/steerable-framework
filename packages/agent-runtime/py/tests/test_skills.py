@@ -363,8 +363,8 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
     events = await collect(
         loop.run(
             [
-                LLMMessage(role="system", content="BASE PROMPT"),
-                LLMMessage(role="user", content="hi"),
+                LLMMessage.text_of("system", "BASE PROMPT"),
+                LLMMessage.text_of("user", "hi"),
             ],
             tools=[{"type": "function", "function": {"name": "get_data"}}],
         )
@@ -373,9 +373,9 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
     # First request carries the catalog appended to the system message.
     first_system = provider.calls[0][0]
     assert first_system.role == "system"
-    assert first_system.content.startswith("BASE PROMPT")
-    assert "# Available skills" in first_system.content
-    assert "- local-exec:" in first_system.content
+    assert first_system.content_text.startswith("BASE PROMPT")
+    assert "# Available skills" in first_system.content_text
+    assert "- local-exec:" in first_system.content_text
     # Injection is a transcript rewrite → hook_action with the skill label.
     actions = [e for e in events if e.kind == "hook_action"]
     assert any(
@@ -383,7 +383,7 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
         for e in actions
     ), [e.data for e in actions]
     # Second round: not re-appended (single catalog copy, identical prompt).
-    assert provider.calls[1][0].content == first_system.content
+    assert provider.calls[1][0].content_text == first_system.content_text
 
 
 async def test_catalog_injected_without_system_message(skills_root: Path) -> None:
@@ -397,10 +397,10 @@ async def test_catalog_injected_without_system_message(skills_root: Path) -> Non
             conditions={"tool:local_read_file"},
         ),
     )
-    await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    await collect(loop.run([LLMMessage.text_of("user", "hi")]))
     first = provider.calls[0][0]
     assert first.role == "system"
-    assert "# Available skills" in first.content
+    assert "# Available skills" in first.content_text
 
 
 async def test_empty_catalog_leaves_transcript_untouched(skills_root: Path) -> None:
@@ -415,12 +415,12 @@ async def test_empty_catalog_leaves_transcript_untouched(skills_root: Path) -> N
     events = await collect(
         loop.run(
             [
-                LLMMessage(role="system", content="BASE PROMPT"),
-                LLMMessage(role="user", content="hi"),
+                LLMMessage.text_of("system", "BASE PROMPT"),
+                LLMMessage.text_of("user", "hi"),
             ]
         )
     )
-    assert provider.calls[0][0].content == "BASE PROMPT"
+    assert provider.calls[0][0].content_text == "BASE PROMPT"
     assert not [
         e for e in events if e.kind == "hook_action" and e.data.get("action") == "skill_catalog"
     ]
@@ -446,7 +446,7 @@ async def test_skill_tool_roundtrip(skills_root: Path) -> None:
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
         loop.run(
-            [LLMMessage(role="user", content="用 cflog 技能处理")],
+            [LLMMessage.text_of("user", "用 cflog 技能处理")],
             tools=[skill_tool_descriptor()],
         )
     )
@@ -458,7 +458,7 @@ async def test_skill_tool_roundtrip(skills_root: Path) -> None:
     # logged); tool messages serialize the ToolResult payload as JSON.
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
     assert len(tool_messages) == 1
-    payload = json.loads(tool_messages[0].content)
+    payload = json.loads(tool_messages[0].content_text)
     assert payload["data"] == {"skill": "cflog"}
     assert payload["message"].startswith('<skill_content name="cflog">\n')
     assert "# CIFLog" in payload["message"]
@@ -481,13 +481,13 @@ async def test_skill_tool_unknown_name_lists_available(skills_root: Path) -> Non
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
-        loop.run([LLMMessage(role="user", content="hi")], tools=[skill_tool_descriptor()])
+        loop.run([LLMMessage.text_of("user", "hi")], tools=[skill_tool_descriptor()])
     )
     results = [e for e in events if e.kind == "tool_call_result"]
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
-    assert "Unknown skill: nosuch" in tool_messages[0].content
-    assert "cflog" in tool_messages[0].content  # available list guides the retry
+    assert "Unknown skill: nosuch" in tool_messages[0].content_text
+    assert "cflog" in tool_messages[0].content_text  # available list guides the retry
 
 
 async def test_skill_tool_rejects_non_model_invocable(tmp_path: Path) -> None:
@@ -503,12 +503,12 @@ async def test_skill_tool_rejects_non_model_invocable(tmp_path: Path) -> None:
     executor = SkillExecutor(RouterToolExecutor(ToolRouter()), FilesystemSkillProvider([root]))
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
-        loop.run([LLMMessage(role="user", content="hi")], tools=[skill_tool_descriptor()])
+        loop.run([LLMMessage.text_of("user", "hi")], tools=[skill_tool_descriptor()])
     )
     results = [e for e in events if e.kind == "tool_call_result"]
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
-    assert "user-invocable only" in tool_messages[0].content
+    assert "user-invocable only" in tool_messages[0].content_text
 
 
 async def test_skill_tool_rejects_excluded(skills_root: Path) -> None:
@@ -523,12 +523,12 @@ async def test_skill_tool_rejects_excluded(skills_root: Path) -> None:
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
-        loop.run([LLMMessage(role="user", content="hi")], tools=[skill_tool_descriptor()])
+        loop.run([LLMMessage.text_of("user", "hi")], tools=[skill_tool_descriptor()])
     )
     results = [e for e in events if e.kind == "tool_call_result"]
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
-    assert "not available in this mode" in tool_messages[0].content
+    assert "not available in this mode" in tool_messages[0].content_text
 
 
 async def test_skill_executor_passes_through_other_tools(skills_root: Path) -> None:
@@ -548,14 +548,14 @@ async def test_skill_executor_passes_through_other_tools(skills_root: Path) -> N
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
         loop.run(
-            [LLMMessage(role="user", content="hi")],
+            [LLMMessage.text_of("user", "hi")],
             tools=[{"type": "function", "function": {"name": "get_data"}}],
         )
     )
     results = [e for e in events if e.kind == "tool_call_result"]
     assert results[0].data["success"] is True
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
-    assert "real-data" in tool_messages[0].content
+    assert "real-data" in tool_messages[0].content_text
 
 
 async def test_skill_tool_missing_name_argument(skills_root: Path) -> None:
@@ -567,9 +567,9 @@ async def test_skill_tool_missing_name_argument(skills_root: Path) -> None:
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
-        loop.run([LLMMessage(role="user", content="hi")], tools=[skill_tool_descriptor()])
+        loop.run([LLMMessage.text_of("user", "hi")], tools=[skill_tool_descriptor()])
     )
     results = [e for e in events if e.kind == "tool_call_result"]
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
-    assert "missing required argument" in tool_messages[0].content
+    assert "missing required argument" in tool_messages[0].content_text

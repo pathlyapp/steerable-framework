@@ -64,7 +64,7 @@ async def collect(loop_run: AsyncIterator[LoopEvent]) -> list[LoopEvent]:
 async def test_no_soft_timeout_runs_normally() -> None:
     provider = make_provider([{"content": "answer"}])
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
-    events = await collect(loop.run([LLMMessage(role="user", content="hi")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
     assert not [e for e in events if e.kind == "soft_timeout"]
     assert events[-1].data["status"] == "completed"
 
@@ -92,7 +92,7 @@ async def test_soft_timeout_triggers_wrap_up_round() -> None:
         RouterToolExecutor(router),
         LoopConfig(soft_timeout_ms=10),  # 10ms — round 0's tool blows past it
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     soft = [e for e in events if e.kind == "soft_timeout"]
     assert len(soft) == 1
@@ -101,7 +101,7 @@ async def test_soft_timeout_triggers_wrap_up_round() -> None:
     assert provider.tools_seen[1] is None
     # the wrap-up notice was appended to the transcript
     assert any(
-        "time budget" in (m.content or "") for m in provider.calls[1]
+        "time budget" in m.content_text for m in provider.calls[1]
     )
     assert events[-1].data["status"] == "completed"
 
@@ -132,7 +132,7 @@ async def test_wrap_up_drops_tool_intent() -> None:
         RouterToolExecutor(router),
         LoopConfig(soft_timeout_ms=10),  # round 0 runs; deadline passes by round 1
     )
-    events = await collect(loop.run([LLMMessage(role="user", content="go")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
 
     # tool ran exactly once (round 0), not in the wrap-up round
     assert executed == ["noop"]
@@ -161,5 +161,5 @@ async def test_soft_timeout_never_interrupts_in_flight_tool() -> None:
         RouterToolExecutor(router),
         LoopConfig(soft_timeout_ms=1),
     )
-    await collect(loop.run([LLMMessage(role="user", content="go")]))
+    await collect(loop.run([LLMMessage.text_of("user", "go")]))
     assert finished == ["slow"]

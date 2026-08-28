@@ -25,6 +25,7 @@ from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .errors import LLMError, classify_http_status
+from .parts import ImagePart, TextPart
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,9 @@ class OpenAICompatProvider:
         choice = payload["choices"][0]
         message = choice["message"]
         usage = payload.get("usage") or {}
-        out = LLMMessage(
-            role="assistant",
-            content=message.get("content") or "",
+        out = LLMMessage.text_of(
+            "assistant",
+            message.get("content") or "",
             tool_calls=_decode_tool_calls(message.get("tool_calls")),
         )
         return out, LLMUsage(
@@ -241,8 +242,32 @@ def _sanitize_tool_name(name: str) -> str:
     return cleaned
 
 
+def _encode_content(message: LLMMessage) -> str | list[dict[str, Any]]:
+    """Serialize content parts to the OpenAI wire shape.
+
+    Text-only content uses the legacy string shorthand so existing
+    conversations keep byte-identical wire bytes; any non-text part switches
+    the message to the structured array form.
+    """
+    parts = message.content
+    if all(isinstance(part, TextPart) for part in parts):
+        return message.content_text
+    out: list[dict[str, Any]] = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            out.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImagePart):
+            url = (
+                part.source
+                if part.is_url
+                else f"data:{part.media_type};base64,{part.source}"
+            )
+            out.append({"type": "image_url", "image_url": {"url": url}})
+    return out
+
+
 def _encode_message(message: LLMMessage) -> dict[str, Any]:
-    out: dict[str, Any] = {"role": message.role, "content": message.content}
+    out: dict[str, Any] = {"role": message.role, "content": _encode_content(message)}
     if message.name is not None:
         out["name"] = message.name
     if message.tool_call_id is not None:

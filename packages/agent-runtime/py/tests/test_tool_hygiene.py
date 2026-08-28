@@ -83,7 +83,7 @@ async def test_duplicate_call_is_blocked_without_executing() -> None:
 
     router.register(get_weather)
     loop = CoreLoop(provider, RouterToolExecutor(router))
-    events = await collect(loop.run([LLMMessage(role="user", content="weather?")]))
+    events = await collect(loop.run([LLMMessage.text_of("user", "weather?")]))
 
     assert executions == [{"city": "Berlin"}]  # ran exactly once
     results = [e for e in events if e.kind == "tool_call_result"]
@@ -92,7 +92,7 @@ async def test_duplicate_call_is_blocked_without_executing() -> None:
     assert results[1].data["success"] is False
     # the model sees the soft signal in the transcript
     tool_msgs = [m for m in provider.calls[2] if m.role == "tool"]
-    assert "duplicate_call" in tool_msgs[-1].content
+    assert "duplicate_call" in tool_msgs[-1].content_text
     assert events[-1].data["status"] == "completed"
 
 
@@ -114,7 +114,7 @@ async def test_same_tool_different_args_not_blocked() -> None:
 
     router.register(get_weather)
     loop = CoreLoop(provider, RouterToolExecutor(router))
-    await collect(loop.run([LLMMessage(role="user", content="weather?")]))
+    await collect(loop.run([LLMMessage.text_of("user", "weather?")]))
 
     assert executions == ["Berlin", "Paris"]
 
@@ -139,7 +139,7 @@ async def test_dedup_can_be_disabled() -> None:
     loop = CoreLoop(
         provider, RouterToolExecutor(router), LoopConfig(tool_dedup=False)
     )
-    await collect(loop.run([LLMMessage(role="user", content="poll")]))
+    await collect(loop.run([LLMMessage.text_of("user", "poll")]))
 
     assert executions == [1, 1]
 

@@ -50,10 +50,10 @@ def test_mixed_content() -> None:
 
 def test_message_overhead_and_tool_calls() -> None:
     messages = [
-        LLMMessage(role="user", content="a" * 40),  # 8 + 10
-        LLMMessage(
-            role="assistant",
-            content="",
+        LLMMessage.text_of("user", "a" * 40),  # 8 + 10
+        LLMMessage.text_of(
+            "assistant",
+            "",
             tool_calls=[ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})],
         ),
     ]
@@ -66,7 +66,7 @@ def test_tool_args_serialized_compactly() -> None:
     """json.dumps default adds spaces and escapes non-ASCII — both would
     inflate the estimate vs what goes over the wire."""
     call = ToolCall(id="c1", name="查询", arguments={"关键词": "北京"})
-    messages = [LLMMessage(role="assistant", content="", tool_calls=[call])]
+    messages = [LLMMessage.text_of("assistant", "", tool_calls=[call])]
     # name: 2 CJK → 2 (ceil 1.2); args '{"关键词":"北京"}' = 5 CJK + 7 other
     # → ceil(5*0.6 + 7*0.25) = ceil(4.75) = 5
     assert estimate_tokens(messages) == 8 + 2 + 5
@@ -74,7 +74,7 @@ def test_tool_args_serialized_compactly() -> None:
 
 def test_model_calibration_factor() -> None:
     register_model_factor("qwen", 2.0)
-    messages = [LLMMessage(role="user", content="a" * 40)]  # base 18
+    messages = [LLMMessage.text_of("user", "a" * 40)]  # base 18
     assert estimate_tokens(messages) == 18
     assert estimate_tokens(messages, model="qwen3-32b") == 36
     assert estimate_tokens(messages, model="gpt-5") == 18
@@ -102,7 +102,7 @@ def test_builtin_deepseek_calibration() -> None:
     ~41% on real CJK-heavy traffic."""
     assert factor_for_model("deepseek-v4") == 0.71
     assert factor_for_model("deepseek-v3") == 0.71
-    messages = [LLMMessage(role="user", content="a" * 40)]  # base 18
+    messages = [LLMMessage.text_of("user", "a" * 40)]  # base 18
     assert estimate_tokens(messages, model="deepseek-v4") == math.ceil(18 * 0.71)
 
 

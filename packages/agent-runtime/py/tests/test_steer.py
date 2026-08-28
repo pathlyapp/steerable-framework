@@ -47,7 +47,7 @@ async def test_steer_consumed_at_next_round() -> None:
     loop = CoreLoop(provider, RouterToolExecutor(router))
     loop_holder["loop"] = loop
     events: list[LoopEvent] = []
-    async for event in loop.run([LLMMessage(role="user", content="查数据")]):
+    async for event in loop.run([LLMMessage.text_of("user", "查数据")]):
         events.append(event)
 
     # steer event surfaced
@@ -58,7 +58,7 @@ async def test_steer_consumed_at_next_round() -> None:
     # second LLM round saw the injected user message at the end
     assert len(seen) == 2
     assert seen[1][-1].role == "user"
-    assert seen[1][-1].content == "补充：只要最近一周的数据"
+    assert seen[1][-1].content_text == "补充：只要最近一周的数据"
 
     assert events[-1].data["status"] == "completed"
 
@@ -88,10 +88,10 @@ async def test_multiple_steers_append_in_order() -> None:
 
     loop = CoreLoop(provider, RouterToolExecutor(router))
     loop_holder["loop"] = loop
-    async for _ in loop.run([LLMMessage(role="user", content="查数据")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "查数据")]):
         pass
 
-    tail = [m.content for m in seen[1] if m.role == "user"]
+    tail = [m.content_text for m in seen[1] if m.role == "user"]
     assert tail[-2:] == ["第一条补充", "第二条补充"]
 
 
@@ -111,17 +111,17 @@ async def test_steer_before_run_lands_in_first_round() -> None:
 
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
     loop.steer("提前补充")
-    async for _ in loop.run([LLMMessage(role="user", content="hi")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "hi")]):
         pass
 
-    assert seen[0][-1].content == "提前补充"
+    assert seen[0][-1].content_text == "提前补充"
 
 
 @pytest.mark.asyncio
 async def test_steer_after_run_is_harmless() -> None:
     provider = make_provider([{"content": "ok"}])
     loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
-    async for _ in loop.run([LLMMessage(role="user", content="hi")]):
+    async for _ in loop.run([LLMMessage.text_of("user", "hi")]):
         pass
     loop.steer("太晚了")  # no consumer — must not raise
     loop.steer("")  # empty content ignored
