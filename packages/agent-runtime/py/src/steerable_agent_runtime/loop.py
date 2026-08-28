@@ -24,6 +24,9 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
   * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
     round boundaries; once exceeded the loop stops offering tools and asks
     the model for a final answer instead of hard-killing the run
+  * per-tool timeout (LoopConfig.tool_timeout_ms): a hung tool returns a
+    failed ToolResult instead of hanging the turn; the consecutive-error
+    breaker treats it like any other tool failure
 
 The anti-hallucination layer (data-need routing, grounding judge,
 deferred/claimed retry, narration round) lives in antihallucination.py as a
@@ -221,6 +224,20 @@ class LoopConfig:
     #: serial. Event order stays deterministic: start events in call order,
     #: result events in call order after each batch completes.
     parallel_tools: bool = True
+    #: Per-tool-execution wall-clock limit. ``soft_timeout_ms`` is only
+    #: checked at round boundaries, so without this a hung tool (a dead
+    #: remote server, a stuck reverse-channel call) hangs the whole turn.
+    #: On expiry the call returns a failed ``ToolResult`` (error
+    #: ``tool_timeout``) instead of raising through the loop, so the
+    #: consecutive-error breaker handles it like any other tool failure.
+    #: Applies to every executor, in-process or remote. The default is a
+    #: backstop against *hung* tools, not a budget — products with fast
+    #: tools should set a tighter value. ``None`` disables.
+    tool_timeout_ms: int | None = 300_000
+
+    def __post_init__(self) -> None:
+        if self.tool_timeout_ms is not None and self.tool_timeout_ms <= 0:
+            raise ValueError("tool_timeout_ms must be positive (or None to disable)")
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +288,39 @@ class CoreLoop:
         """
         if content:
             self._inbox.put_nowait(content)
+
+    async def _execute_tool(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        """Run one tool call under the per-tool timeout.
+
+        A timeout returns a failed ``ToolResult`` rather than raising, so the
+        call flows through the normal result path (post_tool_result hooks,
+        transcript append, consecutive-error breaker) like any other tool
+        failure. The wrapped coroutine is cancelled on expiry; a remote
+        executor's late reply is dropped by its own pending-call table (see
+        ``JsonRpcServer._resolve_reverse_response``), so the turn is never
+        blocked by a hung peer again.
+        """
+
+        timeout_ms = self._config.tool_timeout_ms
+        if timeout_ms is None:
+            return await self._executor.execute(call, ctx)
+        try:
+            return await asyncio.wait_for(
+                self._executor.execute(call, ctx), timeout=timeout_ms / 1000
+            )
+        except asyncio.TimeoutError:
+            return ToolResult(
+                success=False,
+                error="tool_timeout",
+                needsFollowup=True,
+                data={
+                    "timeout": True,
+                    "timeoutMs": timeout_ms,
+                    "message": _TOOL_TIMEOUT_MESSAGE.format(
+                        name=call.name, timeout_ms=timeout_ms
+                    ),
+                },
+            )
 
     async def _offer_narration(
         self,
@@ -824,7 +874,7 @@ class CoreLoop:
                 if pending:
                     if batch_safe and len(pending) > 1:
                         outcomes = await asyncio.gather(
-                            *(self._executor.execute(call, ctx) for _, call, _ in pending),
+                            *(self._execute_tool(call, ctx) for _, call, _ in pending),
                             return_exceptions=True,
                         )
                         for (call_idx, _, _), outcome in zip(pending, outcomes):
@@ -835,7 +885,7 @@ class CoreLoop:
                     else:
                         for call_idx, call, _ in pending:
                             try:
-                                results[call_idx] = await self._executor.execute(call, ctx)
+                                results[call_idx] = await self._execute_tool(call, ctx)
                             except Exception as exc:  # noqa: BLE001 — tool_error event
                                 errors[call_idx] = str(exc)
 
@@ -1027,6 +1077,12 @@ _DUPLICATE_CALL_MESSAGE = (
     "result will not change. Continue from the existing tool result: use "
     "different arguments or a different tool, or reply to the user directly "
     "with your conclusion — do not repeat the same call."
+)
+
+_TOOL_TIMEOUT_MESSAGE = (
+    "`{name}` produced no result within {timeout_ms}ms and was cancelled. Do "
+    "not claim it succeeded; retry with different arguments, use a different "
+    "tool, or continue without it."
 )
 
 #: Synthetic tool message appended for calls skipped when the consecutive-

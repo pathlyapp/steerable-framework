@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from steerable_agent_runtime import CalibratingProvider
+from steerable_agent_runtime import CalibratingProvider, RecordingProvider
 from steerable_sidecar import sidecar as sidecar_module
 from steerable_sidecar.sidecar import default_llm_provider_factory
 
@@ -21,6 +21,7 @@ def _calibration_off(monkeypatch: pytest.MonkeyPatch):
     real ~/.steerable/token-calibration.json, no global factor registration,
     no shared-singleton leakage across tests."""
     monkeypatch.setenv("STEERABLE_TOKEN_CALIBRATION", "0")
+    monkeypatch.delenv("STEERABLE_REQUEST_RECORD_PATH", raising=False)
     monkeypatch.setattr(sidecar_module, "_shared_calibration", None)
     monkeypatch.setattr(sidecar_module, "_shared_calibration_path", None)
 
@@ -92,6 +93,21 @@ def test_calibration_wrapper_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STEERABLE_TOKEN_CALIBRATION", "0")
     provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
     assert not isinstance(provider, CalibratingProvider)
+
+
+def test_recording_wrapper_default_off() -> None:
+    provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert not isinstance(provider, RecordingProvider)
+
+
+def test_recording_wrapper_opt_in(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("STEERABLE_REQUEST_RECORD_PATH", str(tmp_path / "req.jsonl"))
+    provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert isinstance(provider, RecordingProvider)
+    # transparent attribute delegation still exposes the inner provider
+    assert provider.base_url == "http://127.0.0.1:11434/v1"  # type: ignore[attr-defined]
 
 
 def test_calibration_shared_across_requests(

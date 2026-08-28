@@ -110,6 +110,16 @@ Notifications emitted by the sidecar:
 The sidecar replies with `{"streamId":"s_42"}` immediately, then pushes
 `stream.chunk` notifications until `stream.done`.
 
+CoreLoop tunables accepted in `params` (all optional): `maxRounds`,
+`maxToolErrors`, `budgetTokens`, `softTimeoutMs`, `toolTimeoutMs`.
+`toolTimeoutMs` is the per-tool-execution backstop: a tool that produces
+no result within the budget is cancelled and returns a failed
+`ToolResult` (`error: "tool_timeout"`) instead of hanging the turn — the
+consecutive-error breaker treats it like any other tool failure. It
+applies to every executor, in-process or remote (reverse channel, future
+MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
+budget — set a tighter value for fast tools.
+
 ## Health snapshot
 
 ```json

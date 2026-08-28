@@ -707,6 +707,14 @@ def test_build_loop_config_default_budget_scales_with_window() -> None:
     assert cfg_explicit.budget.max_tokens == 50_000
 
 
+def test_build_loop_config_tool_timeout_wiring() -> None:
+    """toolTimeoutMs overrides the LoopConfig default; absent keeps it."""
+    from steerable_sidecar.sidecar import _build_loop_config
+
+    assert _build_loop_config({}).tool_timeout_ms == 300_000
+    assert _build_loop_config({"toolTimeoutMs": 5_000}).tool_timeout_ms == 5_000
+
+
 @pytest.mark.asyncio
 async def test_subagent_optin_advertises_and_executes_delegation() -> None:
     """params.subagent wraps the executor and appends the tool descriptor;

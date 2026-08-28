@@ -910,6 +910,58 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；
   启发式 token 估算的进一步投入（本地模型场景之外，厂商正在服务端吸收）。
 
+- [x] **Wave 0 · 三个前置（全 S）** ✅ 已完成（2026-08-28）。交付：
+  - **W0-1 `RecordingProvider` + 提示词断言**（`agent-runtime/py`
+    `recording.py`）：包装任意 `LLMProvider`，发送前快照每次出站请求
+    （messages + params，provider 报错也留痕）；sink 两枚——
+    `InMemoryRequestSink`（测试）与 `JsonlRequestSink`（JSONL 追加，
+    房屋格式，供 E2E harness tail）。断言即「不重写历史」的可执行形式：
+    `assert_stable_prefix`（第 n 次请求须为第 n+1 次的前缀，
+    `compaction_boundaries` 声明压缩豁口——**今天的压缩/重试改写路径
+    会触发它，这是刻意的**，Wave 1 靠它防静默劣化）与
+    `assert_bounded_items`（逐项硬顶，默认 10k token，用压缩层同一个
+    估算器）。sidecar 侧经 `STEERABLE_REQUEST_RECORD_PATH` 环境变量
+    挂载（默认关，录制含完整提示词），与校准包装同一模式。
+  - **W0-2 逐工具超时**：`LoopConfig.tool_timeout_ms`（默认 300_000，
+    挂死兜底而非预算；`None` 关闭；非正值 `ValueError`）。loop 在
+    executor 端口上包 `asyncio.wait_for`（串行与并行 gather 两个调用点
+    都包），超时**返回**失败 `ToolResult`（`error="tool_timeout"`）而
+    不上抛——走正常结果路径，连续错误熔断原样生效；对一切 executor
+    生效（进程内 / 反向通道 / 未来 MCP）。迟到响应由
+    `JsonRpcServer` 的 pending 表自然丢弃，已核实无泄漏。sidecar 经
+    `toolTimeoutMs` 请求参数覆盖（与 `softTimeoutMs` 同一通道）；
+    agent 侧 `SidecarChatStreamRequest` 类型镜像同步补字段。
+  - **W0-3 出网白名单（安全第一阶段）**：`build_seatbelt_profile(
+    allowed_hosts=...)` + CLI `--allow-host HOST[:PORT]`。语义：未配置
+    （`None`）→ 全开（默认不变，老用户不破）；已配置（含空列表）→
+    fail-closed，除声明端点外全部拒出网；裸 host 放 443+80；非法条目
+    生成期 `ValueError`（profile 注入按主机名字母表拒绝）。DNS/TLS 的
+    mach 服务保留（本地服务非出网，否则连白名单主机都解析不了）。
+    **对 roadmap 的一处偏差**：sbpl 的 `remote` 过滤器只接受 `*` 或
+    `localhost`（macOS 26 实测：主机名与 IP 字面量在编译期即被拒），
+    按主机名的出网控制在 Seatbelt 里**不可表达**——localhost 条目精确
+    钉 `localhost:PORT`，其余条目降级为按端口（`*:PORT`），生成的
+    profile 自带注释声明此限制。该限制已写进 `docs/spec/safety.md`：
+    真按主机名 enforcement 的正解是本地白名单 egress 代理 + 只声明
+    `localhost:<proxy 端口>`（白名单把 sidecar 钉到代理，代理持有主机
+    列表）。agent 侧 `SidecarStartOptions.sandboxAllowedHosts` / 环境
+    变量 `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`（逗号分隔）透传。
+  - **测试**：框架 py 新增 34 例——recording 15（快照语义 / 出错也录 /
+    JSONL 往返 / 前缀断言通过+改写+收缩+边界豁免 / 上限断言 / 干净
+    CoreLoop 双不变量集成）、tool timeout 8（挂死工具→失败结果且整轮
+    完成 / 熔断仍触发 / 任意 executor 含远程 / 并行批隔离 / None 关闭 /
+    限内慢工具 / 默认值 / 非正值拒绝）、sandbox 8（未配置全开 /
+    localhost 精确钉 / 远程降级端口 / 去重 / 空列表全拒 / 非法条目 /
+    CLI / **真实 sandbox-exec 冒烟**：声明端口连通、同机未声明端口被
+    内核拒绝 Operation not permitted）+ provider factory 2 + loop config
+    接线 1；全量 433 过。agent 侧 supervisor 沙箱测试 11 过（+4：
+    默认无 flag / option 透传 / env 兜底 / option 压 env）。
+  - **遗留（Wave 1+）**：`assert_stable_prefix` 对压缩/重试改写的失败
+    是刻意的 tripwire，Wave 1 落追加式历史后翻默认；hook 输出设界与
+    逐注入项设界（roadmap 另两行）未动；按主机名出网 enforcement 等
+    第三阶段 `SandboxedToolExecutor` / 代理方案；`SandboxEnforcement`
+    返回值化（dsh 借鉴）未做。
+
 接下来三步**严格按序**（第一步的冻结建议已于本轮撤销，见其条目内注）：
 
 - [x] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片）** ✅ 已完成

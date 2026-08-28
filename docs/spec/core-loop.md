@@ -121,6 +121,10 @@ These stay in the product and are injected via `LoopConfig` / ports:
 - LLM stream consumption, UTF-16 surrogate fix, reasoning extraction
 - pseudo / inline / markdown tool-call recovery
 - budget counters, soft-timeout, compaction-continue, round extension
+- per-tool timeout (`LoopConfig.tool_timeout_ms`): a hung tool returns a
+  failed `ToolResult` (`tool_timeout`) instead of hanging the turn —
+  `soft_timeout_ms` only gates round boundaries, so without this a dead
+  remote executor hangs forever
 - large-result externalization to artifacts
 - tool dedup, unknown-tool suggestion, arg schema coercion
 - deeppath-agent's anti-hallucination layer (data-need routing, grounding

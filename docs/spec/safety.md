@@ -96,9 +96,47 @@ The profile is deny-by-default with exactly these exceptions:
 | Resource | Policy | Why |
 | -------- | ------ | --- |
 | Reads | open | Skill roots are host-configured per request; confinement targets writes, not reads. |
-| Network-outbound | open | Provider `baseUrl` is user-configured (cloud, LAN, localhost Ollama). No `network-bind` — the sidecar never listens. |
+| Network-outbound | open by default; allow-listable | Provider `baseUrl` is user-configured (cloud, LAN, localhost Ollama). Hosts that know their endpoints can fail closed — see below. No `network-bind` — the sidecar never listens. |
 | Writes | whitelist | `~/.steerable` (token calibration, atomic tmp+rename) + system scratch dirs. Nothing else. |
 | exec/fork | allowed | Children inherit the same sandbox, so this is not an escape hatch; denying it breaks Python internals. |
+
+### Egress allow-list
+
+Open egress means the process holding the provider API key also ingests
+untrusted tool output and can send anywhere — the lethal trifecta. Hosts
+that know their provider endpoints can declare them and the profile fails
+closed instead:
+
+```bash
+python -m steerable_sidecar.sandbox profile \
+    --writable-root ~/.steerable \
+    --allow-host api.deepseek.com \
+    --allow-host localhost:11434 > sidecar.sb
+```
+
+Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
+
+- **Unconfigured (`None`) → open.** The default is unchanged; existing
+  hosts are unaffected.
+- **Configured (any list, even empty) → fail-closed.** Outbound is denied
+  except to the declared endpoints. Entries are `host` or `host:port`;
+  bare hosts allow ports 443 and 80. Invalid entries raise `ValueError`
+  at generation time — a malformed entry never produces a malformed
+  profile. DNS/TLS platform services stay allowed (they are local mach
+  services, not egress), or resolving the allowed hosts would break.
+- **Seatbelt cannot match hostnames.** The `remote` filter accepts only
+  `*` or `localhost` (verified on macOS 26: hostnames and IP literals are
+  rejected at profile compile time). A localhost entry therefore pins
+  `localhost:PORT` exactly; any other entry degrades to its port
+  (`*:PORT`), and the generated profile says so in a comment. This still
+  breaks the common exfiltration channels — reverse shells, beacons, and
+  DNS tunnelling live on non-443 ports — but it does **not** stop
+  exfiltration to an attacker HTTPS endpoint on 443. For true per-host
+  enforcement, run a local allow-listing egress proxy and declare only
+  `localhost:<proxy port>`; Seatbelt then pins the sidecar to the proxy
+  and the proxy owns the host list.
+
+The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 
 Hosts integrating the sandbox must:
 

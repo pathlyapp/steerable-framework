@@ -11,9 +11,18 @@ is the first, OS-enforced one — the codex two-layer structure).
 
 What the sidecar legitimately needs:
 
-- **Network-outbound**: provider baseUrl is user-configurable (cloud
-  endpoints, LAN, localhost Ollama), so egress stays open. The sidecar
-  never listens — no ``network-bind``.
+- **Network-outbound**: open by default — provider baseUrl is
+  user-configurable (cloud endpoints, LAN, localhost Ollama). Hosts that
+  know their provider endpoints can declare an egress allow-list
+  (``allowed_hosts``) and the profile fails closed instead: outbound is
+  denied except to the declared endpoints. Seatbelt's ``remote`` filter
+  only accepts ``*`` or ``localhost`` as the host (verified on macOS 26:
+  hostnames and IP literals are rejected at profile compile time), so a
+  localhost entry pins ``localhost:PORT`` exactly while any other entry
+  degrades to its port (``*:PORT``). True per-hostname egress enforcement
+  is inexpressible in sbpl — run a local allow-listing egress proxy and
+  declare only ``localhost:<proxy port>`` when that guarantee is required.
+  The sidecar never listens — no ``network-bind``.
 - **Reads**: open. Skill roots are host-configured paths passed per
   request; the Python runtime and user config must be readable too.
 - **Writes**: a whitelist — ``~/.steerable`` (token calibration, atomic
@@ -35,7 +44,9 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import sys
+from collections.abc import Sequence
 
 MACOS_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec"
 
@@ -80,12 +91,13 @@ _BASE_POLICY = """\
 (allow file-read* file-write* (subpath "/private/var/tmp"))
 """
 
-# From codex's seatbelt_network_policy.sbpl: outbound plus the platform
-# services HTTPS/DNS clients actually consult (OpenSSL still needs
-# configd for resolver state; trustd/ocspd cover TLS validation paths
-# some Python builds hit through the system APIs).
-_NETWORK_POLICY = """\
-(allow network-outbound)
+# From codex's seatbelt_network_policy.sbpl: the platform services
+# HTTPS/DNS clients actually consult (OpenSSL still needs configd for
+# resolver state; trustd/ocspd cover TLS validation paths some Python
+# builds hit through the system APIs). These are local mach services, not
+# egress — they stay allowed even when outbound is allow-listed, or DNS
+# resolution of the *allowed* hosts would break.
+_NETWORK_SERVICES = """\
 (allow system-socket
   (require-all
     (socket-domain AF_SYSTEM)
@@ -109,6 +121,68 @@ _NETWORK_POLICY = """\
 )
 """
 
+_NETWORK_POLICY = "(allow network-outbound)\n" + _NETWORK_SERVICES
+
+#: Entries naming a local endpoint get an exact ``localhost:PORT`` rule —
+#: the only host Seatbelt's ``remote`` filter can pin besides ``*``.
+_LOCALHOST_NAMES = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+#: Bare hosts (no port) allow the two plausible LLM endpoint schemes.
+_DEFAULT_EGRESS_PORTS = (443, 80)
+
+#: ``host`` or ``host:port``. Deliberately stricter than DNS: the entry is
+#: interpolated into sbpl, so anything outside this alphabet (quotes,
+#: whitespace, parens) is a profile-injection attempt, not a hostname.
+_HOST_ENTRY_RE = re.compile(r"^(?P<host>[A-Za-z0-9._-]+)(?::(?P<port>[0-9]+))?$")
+
+
+def _parse_host_entry(entry: str) -> tuple[str, tuple[int, ...]]:
+    match = _HOST_ENTRY_RE.match(entry.strip())
+    if match is None:
+        raise ValueError(
+            f"invalid allow-list entry {entry!r}: expected host or host:port "
+            "(letters, digits, dot, dash, underscore)"
+        )
+    host = match.group("host")
+    if match.group("port") is None:
+        return host, _DEFAULT_EGRESS_PORTS
+    port = int(match.group("port"))
+    if not 1 <= port <= 65535:
+        raise ValueError(f"invalid allow-list entry {entry!r}: port out of range")
+    return host, (port,)
+
+
+def _egress_policy(allowed_hosts: Sequence[str]) -> str:
+    """Fail-closed network rules: deny outbound except declared endpoints.
+
+    Seatbelt cannot match hostnames (only ``*``/``localhost``), so remote
+    entries degrade to their port — declared in the profile comment so the
+    generated policy documents its own limitation.
+    """
+
+    rules: list[str] = []
+    seen: set[str] = set()
+    degraded = False
+    for entry in allowed_hosts:
+        host, ports = _parse_host_entry(entry)
+        for port in ports:
+            if host in _LOCALHOST_NAMES:
+                rule = f'(allow network-outbound (remote tcp "localhost:{port}"))'
+            else:
+                degraded = True
+                rule = f'(allow network-outbound (remote tcp "*:{port}"))'
+            if rule not in seen:
+                seen.add(rule)
+                rules.append(rule)
+    header = "; egress allow-list (fail-closed): outbound denied except the endpoints below."
+    if degraded:
+        header += (
+            "\n; NOTE: sbpl cannot match hostnames — non-localhost entries are"
+            "\n; enforced by port only. For per-host enforcement, proxy egress"
+            "\n; through a local allow-listing proxy and declare localhost:<port>."
+        )
+    return header + "\n" + "\n".join(rules) + "\n\n" + _NETWORK_SERVICES
+
 
 def seatbelt_available() -> bool:
     """True on macOS when Apple's sandbox-exec is present.
@@ -130,6 +204,7 @@ def build_seatbelt_profile(
     *,
     writable_roots: list[str] | None = None,
     network: bool = True,
+    allowed_hosts: Sequence[str] | None = None,
 ) -> str:
     """Render a complete Seatbelt profile for the sidecar process.
 
@@ -139,6 +214,13 @@ def build_seatbelt_profile(
     the profile deliberately does not grant. Paths are normalized
     (``~`` expansion, absolutized) and symlink-free; a symlinked component
     would make the subpath rule match nothing real.
+
+    ``allowed_hosts`` is the egress allow-list (entries ``host`` or
+    ``host:port``; bare hosts allow ports 443 and 80). ``None`` keeps
+    outbound fully open — the default, so existing hosts are unaffected.
+    A list (even empty) fails closed: outbound is denied except to the
+    declared endpoints. Invalid entries raise ``ValueError`` at generation
+    time, never a malformed profile.
     """
 
     parts = [_BASE_POLICY]
@@ -149,7 +231,9 @@ def build_seatbelt_profile(
             f"(allow file-read* file-write* (subpath {_sbpl_string(normalized)}))\n"
         )
     if network:
-        parts.append(_NETWORK_POLICY)
+        parts.append(
+            _NETWORK_POLICY if allowed_hosts is None else _egress_policy(allowed_hosts)
+        )
     return "\n".join(parts)
 
 
@@ -184,6 +268,17 @@ def main() -> int:
         action="store_true",
         help="Deny network access (for embedders that proxy LLM traffic).",
     )
+    profile_cmd.add_argument(
+        "--allow-host",
+        action="append",
+        default=[],
+        metavar="HOST[:PORT]",
+        help=(
+            "Egress allow-list entry (repeatable). Once any entry is given, "
+            "outbound is denied except to the declared endpoints; bare hosts "
+            "allow ports 443 and 80. Omit entirely to keep outbound open."
+        ),
+    )
     args = parser.parse_args()
 
     if args.command == "profile":
@@ -191,6 +286,7 @@ def main() -> int:
             build_seatbelt_profile(
                 writable_roots=list(args.writable_root),
                 network=not args.no_network,
+                allowed_hosts=list(args.allow_host) or None,
             )
         )
         return 0

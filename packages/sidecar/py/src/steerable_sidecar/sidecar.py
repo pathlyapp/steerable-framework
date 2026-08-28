@@ -1010,6 +1010,13 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         soft_timeout_ms=(
             int(params["softTimeoutMs"]) if params.get("softTimeoutMs") is not None else None
         ),
+        # Per-tool backstop against hung executors (in-process or remote).
+        # LoopConfig carries the default; the param only overrides.
+        **(
+            {"tool_timeout_ms": int(params["toolTimeoutMs"])}
+            if params.get("toolTimeoutMs") is not None
+            else {}
+        ),
     )
 
 
@@ -1069,6 +1076,23 @@ def _wrap_with_calibration(provider: LLMProvider) -> LLMProvider:
     )
 
 
+def _wrap_with_recording(provider: LLMProvider) -> LLMProvider:
+    """Wrap the provider so every outbound request lands in a JSONL record.
+
+    Opt-in via ``STEERABLE_REQUEST_RECORD_PATH=<file.jsonl>`` — the E2E
+    harness and dogfood runs set it to assert the prompt invariants
+    (``assert_stable_prefix`` / ``assert_bounded_items``) on real traffic.
+    Off by default: the record carries full prompt contents.
+    """
+
+    path = os.environ.get("STEERABLE_REQUEST_RECORD_PATH", "").strip()
+    if not path:
+        return provider
+    from steerable_agent_runtime import JsonlRequestSink, RecordingProvider
+
+    return RecordingProvider(provider, JsonlRequestSink(path))
+
+
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     """Construct an LLMProvider from a chat-stream request payload.
 
@@ -1096,20 +1120,24 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             if not base_url.endswith("/v1"):
                 base_url = f"{base_url}/v1"
 
-        return _wrap_with_calibration(
-            OpenAICompatProvider(
-                name=provider_kind or "openai_compat",
-                base_url=base_url or "https://api.openai.com/v1",
-                api_key=api_key,
-                model=str(model),
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                OpenAICompatProvider(
+                    name=provider_kind or "openai_compat",
+                    base_url=base_url or "https://api.openai.com/v1",
+                    api_key=api_key,
+                    model=str(model),
+                )
             )
         )
     if provider_kind in {"anthropic", "claude"}:
         from steerable_agent_runtime.llm import AnthropicProvider
 
-        return _wrap_with_calibration(
-            AnthropicProvider(
-                name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                AnthropicProvider(
+                    name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+                )
             )
         )
 
