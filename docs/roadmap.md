@@ -286,7 +286,7 @@ Ordered by dependency, not by appeal. Each wave assumes the one before it.
    *will* hang.
 3. **The egress allow-list** from [the safety section](#safety-the-sandbox-confines-the-wrong-process).
 
-### Wave 1 — the foundation (L, one project, not three)
+### Wave 1 — the foundation (L, one project, not three) ✅ landed 2026-08-29
 
 Typed append-only history: `HistoryItem` envelopes carrying ordinal, turn
 id, content kind, and token estimate; a `ContextFragment` concept for
@@ -307,6 +307,19 @@ This can land incrementally — introduce `HistoryItem` / `ContextManager`
 behaviour-identically first, migrate skill injection to a fragment, then
 compaction, then flip `PreStepAction` to append-only — but it is one
 project with one migration.
+
+**As landed** (`history.py`, `hooks.py`, `recording.py`, `resume.py`,
+`storage/`): the record is one continuous append-only log per chat
+(`record_id` = `chat_id`), persisted via `StorageAdapter.append_history`
+at full fidelity; hooks declare `appends` / `rewrite` and the loop is the
+only writer; fork/regenerate opens a fresh record seeded inline with a
+`HistorySeed` entry carrying provenance; the tripwire is
+`assert_requests_match_record` — every recorded request must equal a
+projection of the record, with declared compaction boundaries aligning
+automatically (no manual boundary indices). `LLMMessage.content` is
+`list[ContentPart]` with `text_of()` / `content_text` covering the
+text-only common case; the wire schema gained an additive optional
+`parts` field with `content` retained as its plain-text projection.
 
 ### Wave 2 — the payoff
 

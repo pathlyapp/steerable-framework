@@ -114,10 +114,24 @@ class StorageAdapter(Protocol):
         active_only: bool = False,
     ) -> list[AgentSession]: ...
     # … plus harness trace + chat-message persistence methods
+
+    # The model-visible record channel (Wave 1): a per-chat append-only log
+    # of typed history entries (HistoryItem / CompactionBoundary /
+    # HistorySeed), written at full fidelity and read back for resume.
+    async def append_history(
+        self, record_id: str, entries: Iterable[dict[str, Any]]
+    ) -> None: ...
+    async def list_history(
+        self, record_id: str, *, after_seq: int | None = None,
+        until_seq: int | None = None, limit: int | None = None,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]: ...
 ```
 
 Reference implementations: `InMemoryStorage` (for tests / sidecar) and
-`SqlAlchemyStorage` (for the FastAPI server).
+`SqlAlchemyStorage` (for the FastAPI server). Resume reads the record
+tail-first (`reverse=True` paging) and stops at the newest compaction
+boundary — O(tail), never the superseded prefix.
 
 ### `TransportAdapter`
 

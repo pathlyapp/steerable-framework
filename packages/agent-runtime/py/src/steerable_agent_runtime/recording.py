@@ -13,9 +13,11 @@ that gap:
   format) for the E2E harness and dogfooding.
 - ``assert_stable_prefix`` is the executable form of "no history rewrite":
   request *n*'s messages must be a prefix of request *n+1*'s, except at
-  declared compaction boundaries. It WILL fail on today's compaction/retry
-  rewrite paths — that is the point. Declare the boundary, and Wave 1 flips
-  the default to append-only.
+  declared compaction boundaries. Wave 1 flipped the default to append-only,
+  so a clean run passes with zero declared boundaries.
+- ``assert_requests_match_record`` is the Wave 1 form of the tripwire: every
+  recorded request must equal a projection of the append-only record, with
+  declared rewrites (compaction boundaries) aligning automatically.
 - ``assert_bounded_items`` pins the "no unbounded injected items" rule: every
   message in every request must stay under a hard token cap (the same
   heuristic estimator the compaction layer uses).
@@ -297,6 +299,107 @@ def assert_stable_prefix(
                     f"if this is a declared compaction, add {i} to "
                     f"compaction_boundaries"
                 )
+
+
+def assert_requests_match_record(
+    requests: Sequence[RecordedRequest],
+    entries: Sequence[Any],
+) -> None:
+    """Assert every recorded request equals a projection of the record.
+
+    The Wave 1 tripwire — the record (``ContextManager``'s append-only log,
+    durable via ``StorageAdapter.append_history``) is the source of truth
+    for what the model saw. Each request's messages must equal the visible
+    projection at some point in the record's timeline, in timeline order.
+    Declared rewrites (``CompactionBoundary`` entries) reset the projection,
+    so alignment is automatic — no manual ``compaction_boundaries`` indices
+    like ``assert_stable_prefix`` needs on the raw request stream.
+
+    ``entries`` accepts ``RecordEntry`` objects or their persisted dict form
+    (``history.entry_to_dict`` output, e.g. straight from ``list_history``).
+    Raises ``AssertionError`` naming the request index and the record
+    position where alignment broke.
+    """
+
+    from .history import CompactionBoundary, HistoryItem, HistorySeed, entry_from_dict
+
+    parsed = [
+        entry_from_dict(e) if isinstance(e, dict) else e for e in entries
+    ]
+    # The projection timeline: visible message tuples after each entry.
+    timeline: list[list[tuple[Any, ...]]] = []
+    visible: list[tuple[Any, ...]] = []
+    for entry in parsed:
+        if isinstance(entry, CompactionBoundary):
+            visible = []
+        elif isinstance(entry, HistoryItem):
+            visible = [*visible, _record_message_key(entry.message)]
+        elif isinstance(entry, HistorySeed):
+            visible = [*visible, *(_record_message_key(m) for m in entry.messages)]
+        timeline.append(visible)
+
+    cursor = 0  # requests never go backwards in the timeline
+    for i, request in enumerate(requests):
+        want = [_wire_message_key(m) for m in request.messages]
+        while True:
+            if cursor < len(timeline) and timeline[cursor] == want:
+                break  # aligned; a later identical request may reuse it
+            cursor += 1
+            if cursor >= len(timeline):
+                raise AssertionError(
+                    f"request #{i} (seq {request.seq}) matches no record "
+                    f"projection: {len(want)} messages, last is "
+                    f"{_preview(request.messages[-1]) if want else '<empty>'}; "
+                    f"the record's final projection has "
+                    f"{len(timeline[-1]) if timeline else 0} messages — an "
+                    f"undeclared rewrite or an unrecorded mutation happened"
+                )
+
+
+def _wire_message_key(message: dict[str, Any]) -> tuple[Any, ...]:
+    """Canonical comparison form for a recorded (wire-shaped) message."""
+    content = message.get("content")
+    if isinstance(content, list):  # structured parts → text projection
+        text = "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    else:
+        text = str(content or "")
+    tool_calls = message.get("tool_calls") or []
+    return (
+        message.get("role"),
+        text,
+        message.get("name") or "",
+        message.get("tool_call_id") or "",
+        tuple(
+            (str(c.get("id") or ""), str(c.get("name") or ""), _json(c.get("arguments")))
+            for c in tool_calls
+            if isinstance(c, dict)
+        ),
+    )
+
+
+def _record_message_key(message: Any) -> tuple[Any, ...]:
+    """Canonical comparison form for a record entry's LLMMessage."""
+    tool_calls = message.tool_calls or []
+    return (
+        message.role,
+        message.content_text,
+        message.name or "",
+        message.tool_call_id or "",
+        tuple(
+            (str(c.id or ""), str(c.name or ""), _json(c.arguments))
+            for c in tool_calls
+        ),
+    )
+
+
+def _json(value: Any) -> str:
+    import json
+
+    return json.dumps(value or {}, ensure_ascii=False, sort_keys=True)
 
 
 def assert_bounded_items(

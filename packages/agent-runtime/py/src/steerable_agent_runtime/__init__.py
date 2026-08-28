@@ -75,6 +75,7 @@ from .recording import (
     RecordingProvider,
     RequestSink,
     assert_bounded_items,
+    assert_requests_match_record,
     assert_stable_prefix,
     load_recorded_requests,
 )
@@ -196,6 +197,7 @@ __all__ = [
     "TransportError",
     "UsageCalibration",
     "assert_bounded_items",
+    "assert_requests_match_record",
     "assert_stable_prefix",
     "build_step_decision_event",
     "detect_claimed_execution",

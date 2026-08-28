@@ -470,3 +470,104 @@ async def test_no_store_keeps_loop_in_memory() -> None:
     )
     await _collect(loop.run([_msg("user", "hello")]))
     assert [m.content_text for m in loop.history.projection] == ["hello", "hi"]
+
+
+# ---------------------------------------------------------------------------
+# Step 6 tripwire: recorded requests vs the record (auto boundary alignment)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recorded_requests_match_record_across_declared_compaction() -> None:
+    """The W1 tripwire: with a declared rewrite mid-run, the recorded
+    requests still align with the record — zero manual boundary indices."""
+
+    from steerable_agent_runtime import (
+        InMemoryRequestSink,
+        RecordingProvider,
+        assert_requests_match_record,
+    )
+
+    class _CompactOnce(NoopHooks):
+        def __init__(self) -> None:
+            self.done = False
+
+        async def pre_step(self, transcript, ctx):
+            if self.done or ctx.round_index == 0:
+                return PreStepAction(kind="proceed")
+            self.done = True
+            return PreStepAction(
+                kind="proceed",
+                rewrite=RewriteRequest(
+                    messages=[_msg("user", "compacted summary")],
+                    reason="test compaction",
+                ),
+            )
+
+    router = ToolRouter()
+
+    @tool(router=router, description="Echo text")
+    async def echo(text: str) -> dict[str, str]:
+        return {"echo": text}
+
+    sink = InMemoryRequestSink()
+    provider = RecordingProvider(
+        _provider(
+            [
+                {"tool_calls": [ToolCall(id="c1", name="echo", arguments={"text": "x"})]},
+                {"tool_calls": [ToolCall(id="c2", name="echo", arguments={"text": "y"})]},
+                {"content": "done"},
+            ]
+        ),
+        sink,
+    )
+    storage = InMemoryStorage()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        hooks=_CompactOnce(),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop.run([_msg("user", "start")], chat_id="chat_1"))
+
+    assert len(sink.requests) == 3
+    entries = await storage.list_history("chat_1")
+    # Passes with NO manual boundary declarations — the record's own
+    # CompactionBoundary aligns request 2 (the post-compaction request).
+    assert_requests_match_record(sink.requests, entries)
+    # Dicts straight from storage and RecordEntry objects both work.
+    assert_requests_match_record(sink.requests, [entry_from_dict(e) for e in entries])
+
+
+@pytest.mark.asyncio
+async def test_assert_requests_match_record_catches_undeclared_rewrite() -> None:
+    """A request that matches no record projection fails loudly — the
+    tripwire for mutations that bypassed the declared paths."""
+
+    from steerable_agent_runtime import (
+        InMemoryRequestSink,
+        RecordingProvider,
+        assert_requests_match_record,
+    )
+
+    sink = InMemoryRequestSink()
+    provider = RecordingProvider(_provider([{"content": "hi"}]), sink)
+    storage = InMemoryStorage()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(ToolRouter()),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop.run([_msg("user", "hello")], chat_id="chat_1"))
+    entries = await storage.list_history("chat_1")
+    assert_requests_match_record(sink.requests, entries)
+
+    # Simulate an undeclared rewrite: the recorded request's user message
+    # was tampered with after the fact.
+    tampered = [dict(m) for m in sink.requests[0].messages]
+    tampered[0] = {**tampered[0], "content": "edited behind the record's back"}
+    sink.requests[0].messages = tampered
+    with pytest.raises(AssertionError, match="matches no record projection"):
+        assert_requests_match_record(sink.requests, entries)

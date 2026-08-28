@@ -984,7 +984,7 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     第三阶段 `SandboxedToolExecutor` / 代理方案；`SandboxEnforcement`
     返回值化（dsh 借鉴）未做。
 
-- [ ] **Wave 1 · 地基实施设计**（2026-08-29 成文，待评审后开工）。
+- [x] **Wave 1 · 地基** ✅ 已完成（2026-08-29 成文当日落地，六步全绿）。
   范围按 roadmap「一个项目不是三个」：append-only 历史、ContextFragment、
   持久记录、resume O(tail)、`content: str` → parts 同波落地。现状勘察与
   影响面已核（全部 `file:line` 经 2026-08-29 双人复核）：
@@ -1102,6 +1102,47 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     （Wave 2 第一件事，parts 为它开好门）；world-state diff；MCP；
     `SSEEvent.content` 保持 string（展示流 delta 不是历史 parts）；
     agent-ui 渲染层不动。
+
+  - **交付记录（2026-08-29，六步各独立 commit）**：
+    - **步骤 1 `history.py` 基建 + loop 接入**（`318b93f`）：`HistoryItem`
+      信封（seq/turn_id/kind/token_estimate）+ `ContextManager`
+      （`append`/`projection`/`replace_all` 唯一声明式重写路径，落
+      `CompactionBoundary` marker）+ `ContextFragment`（markers/body/
+      render/matches_text，内建注入全部带稳定标记）；loop 11 处就地
+      改写全部收口为 manager 调用，事件流零变化。
+    - **步骤 2 content parts**：`LLMMessage.content: list[ContentPart]`
+      （`TextPart`/`ImagePart` 冻结 dataclass），`text_of()`/
+      `content_text` 覆盖纯文本常客；tokens/recording/compaction/
+      resume/skills/spill 全适配；27 个测试文件迁移（425 过）。
+    - **步骤 3 wire 加性 `parts`**：`docs/spec/chat.md` schema 增可选
+      `parts`（`content` 保留为纯文本投影），双端 codegen + sidecar
+      `_coerce_messages` 优先读 parts + 一致性测试。
+    - **步骤 4 hooks 翻转**：`PreStepAction`/`RetryAction` 去掉整表
+      `transcript`，改 `appends: list[TranscriptAppend]` + 声明式
+      `rewrite: RewriteRequest`；loop 是唯一写者；ChainHooks 纯组合
+      （rewrite 后 append 折叠为单 boundary）；compaction/skills 迁移
+      （skills 目录改追加独立 system 消息，`kind="skills.catalog"`，
+      仍落在压缩 head 保留区内）。
+    - **步骤 5 持久记录 + resume O(tail)**：`StorageAdapter` 新增
+      `append_history`/`list_history`（after/until/limit/reverse），
+      InMemory + SQLAlchemy 两实现；全保真 codec（`entry_to_dict` 等，
+      与 recording 的展示向格式解耦）；loop 在每次请求前、工具批后、
+      回合末 `_flush_history`；连续日志语义——`_plan_record_seeding`
+      识别已持久前缀只落增量，宿主改历史则先声明 `host_revision`
+      boundary；`HistorySeed` 内联播种 fork（带 source provenance，
+      新 record 自包含）；`load_history_transcript` 反向分页扫到最近
+      boundary 即停（测试以 monkeypatch 页大小验证 O(tail)）；sidecar
+      `chat/stream` 接 `history_store` + `recordId`，`chat/fork` 支持
+      record 播种。
+    - **步骤 6 tripwire 翻绿**：新增 `assert_requests_match_record`
+      ——每个录制请求须等于记录时间线上某投影，声明的 boundary 自动
+      对齐（不再手工传下标），未声明改写报「matches no record
+      projection」；文档同步（roadmap Wave 1 标记落地 +
+      `docs/spec/runtime.md` 记录通道）。
+    - **测试**：`test_history_persistence.py` 16 例（codec 往返 /
+      drain_pending / 前缀去重 / 连续日志增量 / host_revision /
+      resume 保真与 O(tail) / tripwire 对齐与抓篡改）+ hooks 组合
+      3 例 + compaction/skills 断言迁移；全量 425 过。
 
 接下来三步**严格按序**（第一步的冻结建议已于本轮撤销，见其条目内注）：
 
