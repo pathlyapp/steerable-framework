@@ -10,6 +10,11 @@
     "chatId": { "type": "string" },
     "role": { "type": "string", "enum": ["user", "assistant", "tool", "system"] },
     "content": { "type": "string" },
+    "parts": {
+      "type": "array",
+      "items": { "$ref": "./ContentPart.schema.json" },
+      "description": "Structured content (Wave 1). Optional and additive: when present it is authoritative and `content` is its plain-text projection; when absent the message is text-only and `content` is the payload. Producers that emit multimodal messages MUST also fill `content` so text-only consumers keep working."
+    },
     "agentId": { "type": "string" },
     "toolCalls": {
       "type": "array",

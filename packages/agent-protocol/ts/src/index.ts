@@ -2,6 +2,7 @@ export * from "./generated/SSEEvent.js";
 export * from "./generated/ToolCall.js";
 export * from "./generated/ToolResult.js";
 export * from "./generated/ChatMessage.js";
+export * from "./generated/ContentPart.js";
 export * from "./generated/ChatAgent.js";
 export * from "./generated/CommandSafetyPattern.js";
 

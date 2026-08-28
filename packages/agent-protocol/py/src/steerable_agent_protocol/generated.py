@@ -108,11 +108,19 @@ class ChatMessage(BaseModel):
     chatId: str | None = None
     role: str
     content: str
+    parts: list[Any] | None = None
     agentId: str | None = None
     toolCalls: list[Any] | None = None
     toolResult: Any | None = None
     createdAt: str
     updatedAt: str | None = None
+
+class ContentPart(BaseModel):
+    type: str
+    text: str | None = None
+    url: str | None = None
+    data: str | None = None
+    mediaType: str | None = None
 
 class SSEEvent(BaseModel):
     type: str

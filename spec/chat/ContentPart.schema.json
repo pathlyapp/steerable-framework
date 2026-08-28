@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/chat/ContentPart.schema.json",
+  "title": "ContentPart",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["text", "image"],
+      "description": "Part discriminant. `text` carries `text`; `image` carries either `url` or (`data`, `mediaType`)."
+    },
+    "text": {
+      "type": "string",
+      "description": "Text payload; present iff type == \"text\"."
+    },
+    "url": {
+      "type": "string",
+      "description": "Image URL; present iff type == \"image\" and the image is remote."
+    },
+    "data": {
+      "type": "string",
+      "description": "Base64 image payload; present iff type == \"image\" and the image is inline."
+    },
+    "mediaType": {
+      "type": "string",
+      "description": "MIME type of the image (e.g. image/png); accompanies `data`, advisory for `url`."
+    }
+  }
+}

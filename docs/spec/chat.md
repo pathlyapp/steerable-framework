@@ -10,6 +10,7 @@ both the protocol-level wire stream and the UI's `ChatMessage[]` state.
 | `id`          | `string`                    | yes      | Stable identity across re-renders                      |
 | `role`        | `'user' \| 'assistant' \| 'tool' \| 'system'` | yes | UI-rendered role                                       |
 | `content`     | `string`                    | yes      | Plain-text body (UI may render as Markdown)            |
+| `parts`       | `ContentPart[]`             | no       | Structured content (Wave 1). When present it is authoritative and `content` is its plain-text projection; when absent the message is text-only. Producers of multimodal messages MUST still fill `content` |
 | `createdAt`   | `string` (ISO 8601)         | yes      | UTC timestamp                                          |
 | `chatId`      | `string`                    | no       | Owning chat                                            |
 | `agentId`     | `string`                    | no       | Owning agent (multi-agent mode)                        |
@@ -20,6 +21,21 @@ both the protocol-level wire stream and the UI's `ChatMessage[]` state.
 `additionalProperties` is **enabled**. UI consumers (e.g.
 `deeppath/apps/web`) layer additional render-only fields on top via
 intersection types — those don't go on the wire.
+
+## ContentPart
+
+| Field       | Type                  | Required | Notes                                                        |
+| ----------- | --------------------- | -------- | ------------------------------------------------------------ |
+| `type`      | `'text' \| 'image'`   | yes      | Part discriminant                                            |
+| `text`      | `string`              | no       | Text payload; present iff `type == "text"`                   |
+| `url`       | `string`              | no       | Remote image source (`type == "image"`)                      |
+| `data`      | `string`              | no       | Base64 image payload (`type == "image"`, inline)             |
+| `mediaType` | `string`              | no       | Image MIME type; accompanies `data`, advisory for `url`      |
+
+An image part carries exactly one of `url` / `data`. The runtime's
+`LLMMessage.content` mirrors this as `list[ContentPart]` (`TextPart` /
+`ImagePart`); providers serialize text-only messages in the legacy string
+shorthand, so text-only wire bytes are unchanged.
 
 ## ChatAgent
 
