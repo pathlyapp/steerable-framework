@@ -69,6 +69,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Comparison: comparison.md
+  - Roadmap: roadmap.md
   - Spec:
       - Overview: spec/overview.md
       - Architecture: spec/architecture.md

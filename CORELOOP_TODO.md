@@ -817,7 +817,100 @@ codex 六阶段对照：① 单循环+执行+安全（沙箱刻意跳过）② �
 codex 的教训：阶段 3 的 app-server 把「循环」变成「平台」，之后 MCP、
 skills、多智能体全是挂在稳定协议面上的增量——顺序不能颠倒。
 
-接下来三步**严格按序**：
+#### 第五轮复审（2026-08-28，三方对照：codex 深潜 / dsh 深潜 / 2026 生态审计）
+
+英文全文已进文档站：[`docs/roadmap.md`](docs/roadmap.md)
+（nav「Roadmap」，https://steerableframework.com/roadmap/）——含差距记分卡、
+按依赖排序的 wave 计划、协议定位决策与明确不做清单。本节只记结论与它对
+上面「三步严格按序」的改动。
+
+- **差异化项被三方独立确认是「模型质量工程层」**，不是协议也不是 sidecar：
+  伪调用恢复（`pseudo.py:7-9`，三族 + 流式剥离）、`before_completion`
+  三态否决（`loop.py:688-730`，codex / Claude SDK 均无对应物；生产证据
+  646 次 "no tool calls and no final response" 硬失败可转重试）、
+  经验 token 校准（`calibration.py`，6,605 桶得 0.708）、反幻觉判定
+  （`antihallucination.py`）、软超时收尾、去重软反馈、breaker 跳过的
+  合成 tool 消息。**结构性护城河**：厂商 SDK 的商业目的是让自家前沿模型
+  发光，把量化本地模型做可靠与之相悖；LangGraph 是底座不拥有循环，没地方
+  放这层；codex / dsh 拥有循环但面向前沿模型。双形态交付（Electron 签名
+  sidecar + FastAPI）正好服务需要这层的市场（本地/离线/成本敏感/受监管
+  桌面软件）。**双形态是交付渠道，不是差异化本身**——`README.md` 现在
+  以 wire 协议和 headless React 开篇（人人都有的能力），把这层埋了。
+- **根因是一处倒置，衍生五个后果**：模型可见 transcript 是**可变
+  `list[LLMMessage]`**（`loop.py:320` 建列表就地改写；steer `:374`、
+  grounding `:400`、软超时 `:440`、纪律重试 `:699`、narration `:726`；
+  hook 可整体替换 `:464-465`），而不是持久追加记录的投影；
+  `self.trajectory` 另走一路，`resume.py:71` 再重建**第三份**。三者无
+  强制一致且实际不一致。五个后果：① 续跑失真（喂模型一份它没见过的
+  历史，慢漂移；且默认 300 字符预览 `loop.py:871-873`，模型记录反倒
+  下游于展示记录）；② **prompt cache 破坏（最贵）**——`recompact_margin`
+  滞后（`compaction.py:83-88`）是让前缀失效**更便宜**而非阻止它，是
+  dogfood 病理（22 compact / 5 trace）的疤痕组织；且**当前无法测量**：
+  `cached_tokens` / `cache_control` 全 `packages/` 零匹配，`LLMUsage`
+  只有三个字段；③ 注入内容无法设界（skill catalog / steer / 三方 hook
+  输出都无上限，对比 codex 的 2500 token + 落盘）；④ **MCP 无法安全落
+  地**（见下）；⑤ 测试证明不了任何事（无录制 provider，没有一条测试断言
+  模型实际看到了什么）。**`LLMMessage.content: str`（`llm/__init__.py:28`）
+  是全仓最贵的一行**——挡住多模态、结构化输出、以及 `cache_control`
+  （逐 block 注解），Tier 1 破坏性变更，必须在 1.0 前落。
+- **MCP 时序分歧的裁决：采纳 codex 侧论点——基础设施之前不做 MCP。**
+  生态审计（2026-07-28 spec 把 core 改成无状态 HTTP，无握手/无 session
+  id，「sidecar 变进程监管者」的旧理由确实失效）与 dsh 侧论点（装饰器链
+  里加个 `McpToolExecutor`，架构上是琐事）都成立，但它们回答的是「贵不
+  贵」，不是「什么时候」。MCP 是任何 agent 系统里**最大的无界、第三方、
+  可变的模型可见上下文源**；落在可变列表 + 无逐项设界 + 无曝光分层 +
+  无状态 diff 上，会精确复现已记录的 cache 抖动病理，且更难诊断（成因在
+  另一个进程里）。届时的前置：逐工具超时、逐服务器目录上限、确定性名字
+  限定（`mcp__<server>__<tool>`，三方一致）、逐 step 不可变工具绑定、
+  曝光分层（Direct / Deferred / Hidden，注册 ≠ 曝光）。架构位置不变：
+  host 侧（Electron 主进程）启动，经既有 `ToolRouter.register_remote`
+  （`tools.py:110-149`）接入，**不**由 Seatbelt 收容的 sidecar spawn。
+- **安全：沙箱收容了错误的进程（三方一致）**。`docs/spec/safety.md` 诚实
+  写明 layer 1 收容 sidecar、工具执行刻意不收容——但 sidecar 是**低风险**
+  那个。更糟的是 profile 读全开（`safety.md:98`）+ `network-outbound`
+  全开（`:99`），私有数据 + 不可信内容（工具输出与网页结果进 transcript）
+  + 出网三者同进程 = lethal trifecta，OWASP Agentic Top 10 2026 第一位，
+  61 条正则分类器不解决它。分阶段：(a) 出网白名单（由 provider `baseUrl`
+  + 显式配置推导，profile 生成器约 30 行）；(b) 子代理独立工具域——
+  `SubagentExecutor` 现在把子代理派发给**父自己的 executor**
+  （`subagent.py:107`，要么全父工具要么无工具），只读研究型子代理可按
+  构造打断 trifecta；(c) `SandboxedToolExecutor` 端口（桌面逐 exec
+  Seatbelt / 服务端 E2B 类沙箱）。另采纳 dsh 的
+  `SandboxEnforcement: full | partial | none` 作为**返回值**而非日志行
+  （`dsh docs/subsystems/sandbox.md:30`），要求绝对边界的调用方可以拒绝；
+  steerable 现在是让宿主「大声记日志并继续」（`safety.md:109-112`）。
+- **新的 wave 排序（按依赖，不按吸引力）**：
+  - **Wave 0（全 S，先做）**：① `RecordingProvider` + 断言
+    （`assert_stable_prefix`：第 n 次请求的消息是第 n+1 次的前缀，除声明
+    的压缩边界外——「不重写历史」的可执行形式，**今天就会失败**；
+    `assert_bounded_items`）。这是**前置**，没有它 Wave 1 会写对然后
+    静默劣化；② 逐工具超时（`soft_timeout_ms` 只在轮次边界检查
+    `loop.py:425-429`，挂死的工具会挂死整轮；也是 MCP 硬前置）；
+    ③ 出网白名单。
+  - **Wave 1（L，地基，一个项目不是三个）**：带类型的追加式历史
+    （`HistoryItem` 信封：序号 / turn id / content kind / token 估值）
+    + `ContextFragment`（注入内容带稳定标记，可在保留历史里认出自己的
+    渲染，对应 codex `ContextualUserFragment`）+ `pre_step` 改为只追加、
+    `ContextManager.replace_all` 是唯一声明式重写路径 + 与展示流分离的
+    持久模型可见记录 + 续跑改为反向扫描到最近压缩检查点（O(tail)）。
+    **`content: str` → content parts 在同一个 wave 落**——两者都是 Tier 1
+    破坏性变更，分开做等于让消费者断两次。
+  - **Wave 2（回报）**：cache 仪表（`LLMUsage` 加
+    `cached_prompt_tokens` / `cache_creation_tokens`，从
+    `prompt_tokens_details.cached_tokens` 与 `cache_read_input_tokens`
+    解析，挂既有 `stage_complete` 事件零新增管道）→ world-state 分节 +
+    RFC 7386 merge-patch diff → 工具曝光分层 → **然后**才是 MCP。
+    顺序本身就是论证：先有仪表才能验证 diff 有效，先有分层 MCP 才能规模化。
+  - **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
+    回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
+    → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →
+    金轨迹评测门禁（复用既有 `replay.py` fixtures）。
+- **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
+  抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
+  journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；
+  启发式 token 估算的进一步投入（本地模型场景之外，厂商正在服务端吸收）。
+
+接下来三步**严格按序**（第一步的冻结建议已于本轮撤销，见其条目内注）：
 
 - [x] **第一步 · sidecar RPC 面 app-server 化（A5 勘察切片）** ✅ 已完成
       （2026-08-27，纯勘察，api 零改动）。交付：
@@ -832,13 +925,55 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
         1 个 FastAPISseTransport + 编排/协作直通通道；loop.py 51 点随
         CoreLoop 采纳自动消失，resume 层的字节重解析
         （`_extract_content_delta`）可删。
-      - **冻结范围建议**：Layer 1 LoopEvent 13 kinds 闭环（产品事件不进
+      - ~~**冻结范围建议**：Layer 1 LoopEvent 13 kinds 闭环（产品事件不进
         loop，编排/协作走 transport 直通）；Layer 2 sidecar 15 方法 +
         通知集 + 反向通道，protocolVersion 0.1.0→1.0.0；
         `spec/sidecar.md` 方法目录（缺 steer/fork）与 `spec/events.md`
-        （P1 时代已过时）在冻结 PR 重写。
-      - 三个待决策点（冻结 PR 前）：工具事件字节兼容策略 / api 是否永久
-        in-process / maxToolErrors 语义 + token 预算默认值。
+        （P1 时代已过时）在冻结 PR 重写。~~
+      - **⚠️ 冻结已撤销（2026-08-28 决策，第五轮复审）**。上面那条保留作
+        历史记录：勘察本身（114 发射点、O(20) 形状映射、字节兼容策略）
+        全部有效，**只有「把自研 15 方法面冻结到 protocolVersion 1.0.0」
+        这个动作被取消**。
+        - **撤销理由**：协议层与 sidecar 层在 2026 年都撞上了已经收敛的
+          标准。AG-UI 是 Microsoft Agent Framework / Google ADK / AWS
+          Strands / Bedrock AgentCore / Mastra / Pydantic AI 的一等公民；
+          ACP（JSON-RPC over stdio，编辑器↔agent）**正是 sidecar 的传输
+          方式和问题陈述**，已有 25+ agent、JetBrains、Google、GitHub 与
+          官方 Python SDK，stable v1。在多厂商标准落进同一个位置的当口，
+          把一个只有 DeepPath 一个消费者的自研面冻起来是反方向。
+        - **改为四件事**：
+          ① **修真正的并发 bug**：逐 RPC 方法声明串行化域（照 codex 的
+          `ClientRequestSerializationScope`，
+          `codex-rs/app-server-protocol/src/protocol/common.rs:128-139`）。
+          同一 session 上的 `agent.chat.stream` / `steer` / `cancel` /
+          `fork` 有真实顺序要求，而 `docs/spec/sidecar.md:162-163` 现在
+          只承诺「按 JSON-RPC id 排序」——那不是顺序保证。派发器按域上锁，
+          表本身可脱离 server 单测。
+          ② **AG-UI 与 ACP transport 与既有传输并列**，自研 `SSEEvent`
+          路径保留给 DeepPath 字节兼容（`docs/migration/api-sse-drift.md`
+          已经确立「transport 负责渲染 wire 格式」，这只是把该规则向外用）。
+          第二个协议消费者也是「事件分类法真的与传输无关」的唯一真检验。
+          ③ **Tier 1 定位改口**：从「我们的信封」改成「codegen 一致性
+          纪律 + 映射进生态的信封」。纪律可辩护，信封不可辩护。
+          ④ **list 方法加游标分页**：`trace.fetch` 把长会话的全部事件从
+          stdio 管道倒出来是真实隐患（`docs/spec/sidecar.md:164-166` 已
+          自承无背压）。
+        - **不变的部分**：spec 漂移仍要修，但作为上述工作的一部分，不再
+          作为「冻结 PR」的一部分——`docs/spec/events.md` 记着
+          `orchestration`（`:35`）/ `loader-hint`（`:36`）/ `keepalive`
+          （`:37`）这些 `LoopEventKind`（`loop.py:71-92`）根本没有的变体，
+          而 `hook_action` / `steer` / `soft_timeout` / `reasoning_delta` /
+          `stage_complete` 在规格里一个字都没有；`docs/spec/sidecar.md:65-82`
+          列 13 个方法而 `sidecar.py:147-161` 注册了 15 个（缺
+          `agent.chat.steer` / `agent.chat.fork`）。
+        - 另一处需要修的事实源倒置：`MODEL_CONTEXT_WINDOWS`
+          （`tokens.py:121-132`）已过期（`claude: 200_000`，而 Opus 4.6
+          是 1M），且镜像下游产品的表
+          （`deeppath-api/app/core/models_config.py`）——框架依赖消费者的
+          数据表是反的，而压缩阈值由它派生，过期会静默误触发压缩。
+      - 三个待决策点（原为冻结 PR 前）：工具事件字节兼容策略（**仍然
+        有效**，是 api 采纳的必答题）/ api 是否永久 in-process /
+        maxToolErrors 语义 + token 预算默认值。
 - [x] **第二步 · 沙箱（macOS Seatbelt 起步）** ✅ 已完成（2026-08-27）。
       桌面「刻意全允许」时代结束：sidecar 进程现可被 Seatbelt 收容，
       61 规则分类器降为第二道提示层（对齐 codex 双层结构）。交付：
@@ -883,6 +1018,13 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       跑在 Electron 二进制上；Python sidecar 无 Node）——详见 P3 节的
       四条复核理由。下沉的现实形态是「sidecar 内 Python MCP 客户端服务
       api，桌面保留 TS 客户端」，不是统一成一份。
+      **2026-08-28 补正（第五轮复审）**：P3 的理由 ③「sidecar 变进程
+      监管者」已被 2026-07-28 的 MCP spec 作废（core 改无状态 HTTP：无
+      握手、无 session id、请求自描述），理由 ① 也只对 stdio 服务器成立
+      ——即「建的时候确实便宜了」。但**时序判据换成了别的东西**：不是
+      「api 是否采纳」，而是「Wave 1 地基是否已落」。MCP 是最大的无界
+      第三方可变模型可见上下文源，落在可变 transcript 上会复现已记录的
+      cache 抖动病理。排序见上方第五轮复审的 Wave 2。
 
 **明确不抄 codex**：TUI/云任务/企业 OAuth/权限 profile（OpenAI 产品
 广度逼出来的，桌面+api 形态抄了是负资产）；Guardian 独立二审模型

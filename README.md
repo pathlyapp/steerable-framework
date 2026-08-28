@@ -55,6 +55,7 @@ Building an LLM agent product means rewriting the same five things every time. S
 
 | The problem you've already solved twice | Steerable's answer |
 |---|---|
+| **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. See the [roadmap](https://steerableframework.com/roadmap/#the-differentiator-the-model-quality-layer). |
 | **"What shape is this SSE stream?"** Every team invents their own envelope; FE and BE drift. | One JSON Schema → generated **TypeScript types + Pydantic models**, in lockstep release. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` all standardised; conformance test suite verifies the two language SDKs stay byte-compatible. |
 | **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 105 unit + golden tests. |
 | **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface, adapters for **Ollama / OpenAI-compatible / Anthropic**, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
@@ -270,6 +271,8 @@ If you're using Steerable in production, send a PR adding your project here.
 | **0.3+ Trusted Publishing** | 🟡 next | PyPI auth migrates from API token → OIDC; cross-platform sidecar build matrix in GHA |
 | **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
+
+Where the architecture is headed, what's genuinely missing, and what's explicitly out of scope: **[Architecture Review & Roadmap](https://steerableframework.com/roadmap/)** — a gap scorecard against Codex and DeepSeek Harness, with the honest negatives.
 
 Full open-follow-up list: [`TODO.md`](./TODO.md). Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.
 
