@@ -66,6 +66,36 @@ class StorageAdapter(Protocol):
 
     async def list_events(self, trace_id: str) -> list[TraceEvent]: ...
 
+    # -- History record (Wave 1) -----------------------------------------
+    #
+    # The typed append-only record behind ContextManager (history.py).
+    # Entries are the JSON dicts produced by ``history.entry_to_dict``;
+    # storage stays shape-agnostic beyond the ``seq`` ordering field.
+
+    async def append_history(
+        self, record_id: str, entries: Iterable[dict[str, Any]]
+    ) -> None:
+        """Append record entries (already seq-ordered by the manager)."""
+        ...
+
+    async def list_history(
+        self,
+        record_id: str,
+        *,
+        after_seq: int | None = None,
+        until_seq: int | None = None,
+        limit: int | None = None,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Read record entries in seq order.
+
+        ``after_seq`` / ``until_seq`` bound the (inclusive) seq range;
+        ``reverse`` returns newest-first (bounded by ``until_seq``), which
+        with ``limit`` is the O(tail) resume scan: page backwards until the
+        newest ``compaction.boundary`` entry, then project forward.
+        """
+        ...
+
 
 from .in_memory import InMemoryStorage  # noqa: E402
 

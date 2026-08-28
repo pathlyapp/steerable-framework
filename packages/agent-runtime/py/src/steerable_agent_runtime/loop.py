@@ -55,7 +55,7 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .history import ContextFragment, ContextManager
+from .history import ContextFragment, ContextManager, HistoryStore, entry_to_dict
 from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
 from .pseudo import (
@@ -271,11 +271,20 @@ class CoreLoop:
         executor: ToolExecutor,
         config: LoopConfig | None = None,
         hooks: LoopHooks | None = None,
+        history_store: HistoryStore | None = None,
+        record_id: str | None = None,
     ) -> None:
         self._provider = provider
         self._executor = executor
         self._config = config or LoopConfig()
         self._hooks: LoopHooks = hooks if hooks is not None else NoopHooks()
+        # Durable record channel (Wave 1 step 5). When set, the loop flushes
+        # the manager's pending entries before each LLM request, after each
+        # tool batch, and at turn end — everything the model saw is durable
+        # before the next request depends on it. ``record_id`` defaults to
+        # the run's ``chat_id`` (the continuous per-chat log).
+        self._history_store = history_store
+        self._record_id = record_id
         # Mid-turn user messages land here via steer() and are drained into
         # the transcript at the next round boundary (dsh-style "inject":
         # consumed at the next step, no separate wakeup semantics).
@@ -299,6 +308,60 @@ class CoreLoop:
         """
         if content:
             self._inbox.put_nowait(content)
+
+    async def _flush_history(
+        self, manager: ContextManager, chat_id: str | None
+    ) -> None:
+        """Persist the record's new entries (no-op without a history store).
+
+        ``record_id`` defaults to the run's ``chat_id`` — the continuous
+        per-chat log (decision ② of the W1 design). Flush points: before
+        each LLM request, after each tool batch, and at turn end, so a
+        crash never loses more than the in-flight round.
+        """
+        if self._history_store is None:
+            return
+        record_id = self._record_id or chat_id
+        if record_id is None:
+            return
+        pending = manager.drain_pending()
+        if pending:
+            await self._history_store.append_history(
+                record_id, [entry_to_dict(entry) for entry in pending]
+            )
+
+    async def _plan_record_seeding(
+        self, record_id: str, messages: list[LLMMessage]
+    ) -> tuple[int, int, dict[str, Any] | None]:
+        """Plan how this run's seed joins the durable per-chat record.
+
+        Returns ``(first_seq, persisted_prefix, pre_boundary)``:
+
+        - empty record → ``(0, 0, None)``: the whole seed flushes as new.
+        - seed extends the durable projection (the normal next turn) → only
+          the tail past ``persisted_prefix`` flushes; seq continues the log.
+        - anything else (host edited/truncated history) → a declared
+          ``host_revision`` boundary persists first, then the whole seed
+          flushes after it, keeping the durable projection coherent.
+        """
+        from .history import CompactionBoundary
+        from .resume import load_history_transcript
+
+        store = self._history_store
+        assert store is not None  # caller guards on it
+        latest = await store.list_history(record_id, limit=1, reverse=True)
+        if not latest:
+            return (0, 0, None)
+        next_seq = int(latest[0].get("seq", 0)) + 1
+        prior = await load_history_transcript(store, record_id)
+        if prior is not None and list(prior) == messages[: len(prior)]:
+            return (next_seq, len(prior), None)
+        boundary = CompactionBoundary(
+            seq=next_seq,
+            reason="host revised history upstream of this run",
+            action="host_revision",
+        )
+        return (next_seq + 1, 0, entry_to_dict(boundary))
 
     async def _execute_tool(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         """Run one tool call under the per-tool timeout.
@@ -380,7 +443,28 @@ class CoreLoop:
         ctx = LoopContext(chat_id=chat_id)
         # The transcript is a projection of the append-only record; nothing
         # mutates a list in place anymore (see history.py).
-        manager = ContextManager(messages, token_model=self._provider.model)
+        record_id = self._record_id or chat_id
+        first_seq = 0
+        persisted_prefix = 0
+        pre_boundary: dict[str, Any] | None = None
+        if self._history_store is not None and record_id is not None:
+            first_seq, persisted_prefix, pre_boundary = await self._plan_record_seeding(
+                record_id, list(messages)
+            )
+        manager = ContextManager(
+            messages, token_model=self._provider.model, first_seq=first_seq
+        )
+        if persisted_prefix:
+            manager.mark_persisted_prefix(persisted_prefix)
+        if (
+            pre_boundary is not None
+            and self._history_store is not None
+            and record_id is not None
+        ):
+            # The host revised history upstream of this run — declare the
+            # rewrite in the durable log before the fresh seed lands, so the
+            # record's projection stays coherent (append-only, auditable).
+            await self._history_store.append_history(record_id, [pre_boundary])
         self.history = manager
         budget_state = BudgetState()
         tool_call_signatures: set[tuple[str, str]] = set()
@@ -594,6 +678,9 @@ class CoreLoop:
             reasoning_carry = ""
             while True:
                 try:
+                    # Everything the model is about to see is durable first
+                    # (also covers the overflow-recovery rewrite on retries).
+                    await self._flush_history(manager, chat_id)
                     async for chunk in self._provider.stream(
                         manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
@@ -640,6 +727,7 @@ class CoreLoop:
                                     status="budget_exhausted", reason="token budget exceeded"
                                 )
                                 record_terminal_content("".join(content_parts), tool_calls)
+                                await self._flush_history(manager, chat_id)
                                 yield emit_completion(
                                     step_summary(
                                         round_index=round_index,
@@ -699,6 +787,7 @@ class CoreLoop:
                         confidence=0.9,
                     )
                     record_terminal_content("".join(content_parts), tool_calls)
+                    await self._flush_history(manager, chat_id)
                     yield emit_completion(
                         step_summary(
                             round_index=round_index,
@@ -829,6 +918,7 @@ class CoreLoop:
                         )
                         continue
                 record_terminal_content(content, tool_calls)
+                await self._flush_history(manager, chat_id)
                 yield emit_completion(
                     step_summary(
                         round_index=round_index,
@@ -1053,6 +1143,7 @@ class CoreLoop:
                                 )
                             break  # leave the tool loop; wrap-up round runs next
                         record_terminal_content(content, tool_calls)
+                        await self._flush_history(manager, chat_id)
                         yield emit_completion(
                             step_summary(
                                 round_index=round_index,
@@ -1069,6 +1160,8 @@ class CoreLoop:
             # "executing" bookkeeping and run the wrap-up round directly.
             if wrap_up:
                 continue
+            # Tool results are durable before the next round builds on them.
+            await self._flush_history(manager, chat_id)
             yield LoopEvent(
                 "stage_complete",
                 {

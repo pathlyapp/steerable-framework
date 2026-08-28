@@ -30,9 +30,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable, Protocol, runtime_checkable
+
+from steerable_agent_protocol.generated import ToolCall
 
 from .llm import LLMMessage, LLMRole
+from .llm.parts import ImagePart, TextPart
 from .tokens import estimate_tokens
 
 #: Content-kind classification, stable ``<feature>.<name>`` strings (the
@@ -44,6 +47,7 @@ KIND_ASSISTANT = "assistant"
 KIND_TOOL = "tool"
 KIND_STEER = "steer.inject"
 KIND_COMPACTION_BOUNDARY = "compaction.boundary"
+KIND_HISTORY_SEED = "history.seed"
 
 _KIND_BY_ROLE: dict[str, str] = {
     "system": KIND_SYSTEM,
@@ -82,8 +86,31 @@ class CompactionBoundary:
     kind: str = KIND_COMPACTION_BOUNDARY
 
 
-#: The record is a linear log of items and declared-rewrite markers.
-RecordEntry = HistoryItem | CompactionBoundary
+@dataclass(frozen=True, slots=True)
+class HistorySeed:
+    """An inline-seeded prefix — the fork/regenerate primitive.
+
+    Carries a projected prefix copied from a source record (or assembled by
+    the embedder) as ONE entry, with provenance. Projection expands it
+    inline: a forked record reads as ``[seed, live items…]`` and never
+    dereferences the source record — the seed is self-contained.
+
+    ``source_record_id`` / ``source_until_seq`` name where the prefix came
+    from (None for an embedder-assembled seed); they are audit metadata,
+    never read at projection time.
+    """
+
+    seq: int
+    messages: tuple[LLMMessage, ...]
+    token_estimate: int
+    source_record_id: str | None = None
+    source_until_seq: int | None = None
+    turn_id: str | None = None
+    kind: str = KIND_HISTORY_SEED
+
+
+#: The record is a linear log of items, declared-rewrite markers, and seeds.
+RecordEntry = HistoryItem | CompactionBoundary | HistorySeed
 
 
 class ContextFragment:
@@ -172,6 +199,9 @@ class ContextManager:
         self._record: list[RecordEntry] = []
         self._next_seq = first_seq
         self._boundary_index = -1
+        #: Entries appended since the last ``drain_pending`` — the loop
+        #: flushes them to the durable channel at request/turn boundaries.
+        self._pending: list[RecordEntry] = []
         for message in messages:
             self.append(message)
 
@@ -194,6 +224,7 @@ class ContextManager:
             turn_id=turn_id or self.turn_id,
         )
         self._record.append(item)
+        self._pending.append(item)
         self._next_seq += 1
         return item
 
@@ -233,11 +264,64 @@ class ContextManager:
             turn_id=turn_id or self.turn_id,
         )
         self._record.append(boundary)
+        self._pending.append(boundary)
         self._next_seq += 1
         self._boundary_index = len(self._record) - 1
         for message in messages:
             self.append(message, turn_id=turn_id)
         return boundary
+
+    def seed(
+        self,
+        messages: Iterable[LLMMessage],
+        *,
+        source_record_id: str | None = None,
+        source_until_seq: int | None = None,
+        turn_id: str | None = None,
+    ) -> HistorySeed:
+        """Inline-seed a projected prefix as ONE entry (fork/regenerate).
+
+        The seed is visible to the projection (it lands after the newest
+        boundary — on a fresh record, at the head) and self-contained:
+        resume of the forked record never touches the source.
+        """
+        seeded = tuple(messages)
+        entry = HistorySeed(
+            seq=self._next_seq,
+            messages=seeded,
+            token_estimate=estimate_tokens(list(seeded), model=self._token_model),
+            source_record_id=source_record_id,
+            source_until_seq=source_until_seq,
+            turn_id=turn_id or self.turn_id,
+        )
+        self._record.append(entry)
+        self._pending.append(entry)
+        self._next_seq += 1
+        return entry
+
+    def drain_pending(self) -> list[RecordEntry]:
+        """Return and clear the entries appended since the last drain.
+
+        The loop drains at request/turn boundaries and persists the batch to
+        the durable channel; the manager itself stays sync and storage-free.
+        """
+        pending = self._pending
+        self._pending = []
+        return pending
+
+    def mark_persisted_prefix(self, count: int) -> None:
+        """Drop the first ``count`` pending entries — they are already durable.
+
+        The continuous per-chat log (decision ② of the W1 design): a new
+        turn's seed messages are the previous turn's projection plus the new
+        user message; the loop verifies the prefix against the durable
+        record and marks it here, so only genuinely new entries flush.
+        """
+        if count < 0 or count > len(self._pending):
+            raise ValueError(
+                f"persisted prefix {count} outside pending span {len(self._pending)}"
+            )
+        self._pending = self._pending[count:]
 
     @property
     def record(self) -> list[RecordEntry]:
@@ -251,6 +335,8 @@ class ContextManager:
         for entry in self._record[self._boundary_index + 1 :]:
             if isinstance(entry, HistoryItem):
                 out.append(entry.message)
+            elif isinstance(entry, HistorySeed):
+                out.extend(entry.messages)
         return out
 
     @property
@@ -271,5 +357,172 @@ class ContextManager:
 
     @property
     def projection_token_estimate(self) -> int:
-        """Sum of per-item estimates for the visible span (no recompute)."""
-        return sum(item.token_estimate for item in self.projection_items)
+        """Sum of per-entry estimates for the visible span (no recompute)."""
+        return sum(
+            entry.token_estimate
+            for entry in self._record[self._boundary_index + 1 :]
+            if isinstance(entry, (HistoryItem, HistorySeed))
+        )
+
+
+# ---------------------------------------------------------------------------
+# Durable serialization — the record channel's JSON shape
+# ---------------------------------------------------------------------------
+#
+# Entries persist as plain JSON dicts (the SQLAlchemy reference store keeps
+# them in a JSON column). The shape is runtime-fidelity — full content
+# parts, tool calls, and estimates — NOT the lossy display/record shape of
+# recording.py. ``entry`` is the envelope discriminant; ``kind`` stays the
+# content classification.
+
+
+def message_to_dict(message: LLMMessage) -> dict[str, Any]:
+    """Full-fidelity message serialization for the durable record."""
+    content: list[dict[str, Any]] = []
+    for part in message.content:
+        if isinstance(part, TextPart):
+            content.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImagePart):
+            content.append(
+                {
+                    "type": "image",
+                    "source": part.source,
+                    "is_url": part.is_url,
+                    "media_type": part.media_type,
+                }
+            )
+    out: dict[str, Any] = {"role": message.role, "content": content}
+    if message.name is not None:
+        out["name"] = message.name
+    if message.tool_call_id is not None:
+        out["tool_call_id"] = message.tool_call_id
+    if message.tool_calls is not None:
+        out["tool_calls"] = [
+            {"id": call.id, "name": call.name, "arguments": call.arguments or {}}
+            for call in message.tool_calls
+        ]
+    return out
+
+
+def message_from_dict(data: dict[str, Any]) -> LLMMessage:
+    """Inverse of ``message_to_dict``."""
+    content = []
+    for part in data.get("content") or []:
+        ptype = part.get("type")
+        if ptype == "text":
+            content.append(TextPart(text=str(part.get("text") or "")))
+        elif ptype == "image":
+            content.append(
+                ImagePart(
+                    source=str(part.get("source") or ""),
+                    is_url=bool(part.get("is_url")),
+                    media_type=str(part.get("media_type") or "image/png"),
+                )
+            )
+    tool_calls = data.get("tool_calls")
+    return LLMMessage(
+        role=data["role"],
+        content=content,
+        name=data.get("name"),
+        tool_call_id=data.get("tool_call_id"),
+        tool_calls=(
+            [
+                ToolCall(
+                    id=str(call.get("id") or ""),
+                    name=str(call.get("name") or ""),
+                    arguments=call.get("arguments") or {},
+                )
+                for call in tool_calls
+            ]
+            if tool_calls is not None
+            else None
+        ),
+    )
+
+
+def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
+    """Serialize one record entry for ``StorageAdapter.append_history``."""
+    if isinstance(entry, HistoryItem):
+        return {
+            "entry": "item",
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "turn_id": entry.turn_id,
+            "token_estimate": entry.token_estimate,
+            "message": message_to_dict(entry.message),
+        }
+    if isinstance(entry, CompactionBoundary):
+        return {
+            "entry": "boundary",
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "turn_id": entry.turn_id,
+            "reason": entry.reason,
+            "action": entry.action,
+        }
+    if isinstance(entry, HistorySeed):
+        return {
+            "entry": "seed",
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "turn_id": entry.turn_id,
+            "token_estimate": entry.token_estimate,
+            "source_record_id": entry.source_record_id,
+            "source_until_seq": entry.source_until_seq,
+            "messages": [message_to_dict(m) for m in entry.messages],
+        }
+    raise TypeError(f"unknown record entry type: {type(entry).__name__}")
+
+
+def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
+    """Inverse of ``entry_to_dict``; raises ``ValueError`` on unknown shapes."""
+    envelope = data.get("entry")
+    if envelope == "item":
+        return HistoryItem(
+            seq=int(data["seq"]),
+            kind=str(data["kind"]),
+            message=message_from_dict(data["message"]),
+            token_estimate=int(data.get("token_estimate") or 0),
+            turn_id=data.get("turn_id"),
+        )
+    if envelope == "boundary":
+        return CompactionBoundary(
+            seq=int(data["seq"]),
+            reason=str(data.get("reason") or ""),
+            action=str(data.get("action") or "compact"),
+            turn_id=data.get("turn_id"),
+        )
+    if envelope == "seed":
+        return HistorySeed(
+            seq=int(data["seq"]),
+            messages=tuple(message_from_dict(m) for m in data.get("messages") or []),
+            token_estimate=int(data.get("token_estimate") or 0),
+            source_record_id=data.get("source_record_id"),
+            source_until_seq=data.get("source_until_seq"),
+            turn_id=data.get("turn_id"),
+        )
+    raise ValueError(f"unknown record entry envelope: {envelope!r}")
+
+
+@runtime_checkable
+class HistoryStore(Protocol):
+    """The durable record channel the loop depends on.
+
+    Structurally satisfied by ``StorageAdapter``; kept narrow so a product
+    can persist the record without adopting the full storage interface.
+    Entries are the JSON dicts from ``entry_to_dict``.
+    """
+
+    async def append_history(
+        self, record_id: str, entries: Iterable[dict[str, Any]]
+    ) -> None: ...
+
+    async def list_history(
+        self,
+        record_id: str,
+        *,
+        after_seq: int | None = None,
+        until_seq: int | None = None,
+        limit: int | None = None,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]: ...

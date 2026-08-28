@@ -36,6 +36,7 @@ from steerable_agent_protocol.generated import ToolCall
 from .llm import LLMMessage
 
 if TYPE_CHECKING:
+    from .history import HistoryStore
     from .storage import StorageAdapter
 
 #: Event kinds that carry transcript content.
@@ -222,3 +223,72 @@ async def load_transcript(
     events = await storage.list_events(trace_id)
     events.sort(key=lambda e: getattr(e, "sequence", 0))
     return project_transcript(events, until_sequence=until_sequence)
+
+
+#: Page size for the reverse boundary scan. A run that compacted recently
+#: finds its boundary in the first page; a never-compacted long record pages
+#: back to the start — bounded work, and the common case stays O(tail).
+_RESUME_PAGE = 256
+
+
+async def load_history_transcript(
+    storage: "HistoryStore",
+    record_id: str,
+    *,
+    until_seq: int | None = None,
+) -> list[LLMMessage] | None:
+    """Resume from the durable record (Wave 1) — O(tail), boundary-aware.
+
+    Scans backwards (newest-first pages) for the newest
+    ``compaction.boundary`` entry, then projects only the entries after it —
+    the superseded span is never read. Returns ``None`` when the record has
+    no entries (caller falls back to the trace-event projection or starts
+    fresh).
+
+    ``until_seq`` (inclusive) truncates the record before projecting — the
+    record-level fork primitive: seed a new record with the returned prefix
+    (``ContextManager.seed``) and continue there.
+    """
+
+    from .history import (  # local: keeps the trace path import-light
+        CompactionBoundary,
+        HistoryItem,
+        HistorySeed,
+        entry_from_dict,
+    )
+
+    boundary_seq = -1
+    cursor = until_seq
+    while True:
+        page = await storage.list_history(
+            record_id,
+            until_seq=cursor,
+            limit=_RESUME_PAGE,
+            reverse=True,
+        )
+        if not page:
+            return None
+        for raw in page:
+            if raw.get("entry") == "boundary":
+                boundary_seq = int(raw["seq"])
+                break
+        if boundary_seq >= 0 or len(page) < _RESUME_PAGE:
+            break
+        cursor = int(page[-1]["seq"]) - 1
+
+    entries = await storage.list_history(
+        record_id, after_seq=boundary_seq, until_seq=until_seq
+    )
+    messages: list[LLMMessage] = []
+    for raw in entries:
+        entry = entry_from_dict(raw)
+        if isinstance(entry, HistoryItem):
+            messages.append(entry.message)
+        elif isinstance(entry, HistorySeed):
+            messages.extend(entry.messages)
+        elif isinstance(entry, CompactionBoundary):
+            # A boundary inside the forward range means the reverse scan's
+            # boundary wasn't the newest (concurrent writer) — restart the
+            # projection from here; the tail after it is the visible span.
+            messages = []
+    return messages

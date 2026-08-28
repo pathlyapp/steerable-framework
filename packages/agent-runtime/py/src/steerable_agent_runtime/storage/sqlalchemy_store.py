@@ -142,6 +142,19 @@ events_table = Table(
     UniqueConstraint("traceId", "sequence", name="steerable_trace_event_seq_uniq"),
 )
 
+# Wave 1 durable record: one row per RecordEntry (history.entry_to_dict
+# payload), append-only, (recordId, seq) unique so a retried flush fails
+# loud instead of double-writing.
+history_table = Table(
+    "steerable_history_entry",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("recordId", String(191), nullable=False, index=True),
+    Column("seq", Integer, nullable=False),
+    Column("payload", JSON, nullable=False),
+    UniqueConstraint("recordId", "seq", name="steerable_history_entry_seq_uniq"),
+)
+
 
 def _model_to_row(model: Any) -> dict[str, Any]:
     return model.model_dump()
@@ -278,6 +291,44 @@ class SqlAlchemyStorage:
             order_by=[events_table.c.sequence.asc()],
         )
         return [TraceEvent(**row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # History record (Wave 1)
+    # ------------------------------------------------------------------
+
+    async def append_history(
+        self, record_id: str, entries: Iterable[dict[str, Any]]
+    ) -> None:
+        rows = [
+            {"recordId": record_id, "seq": int(entry["seq"]), "payload": entry}
+            for entry in entries
+        ]
+        if rows:
+            await self._insert_many(history_table, rows)
+
+    async def list_history(
+        self,
+        record_id: str,
+        *,
+        after_seq: int | None = None,
+        until_seq: int | None = None,
+        limit: int | None = None,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        clauses = [history_table.c.recordId == record_id]
+        if after_seq is not None:
+            clauses.append(history_table.c.seq > after_seq)
+        if until_seq is not None:
+            clauses.append(history_table.c.seq <= until_seq)
+        rows = await self._select_many(
+            history_table,
+            clauses=clauses,
+            order_by=[
+                history_table.c.seq.desc() if reverse else history_table.c.seq.asc()
+            ],
+            limit=limit,
+        )
+        return [dict(row["payload"]) for row in rows]
 
     # ------------------------------------------------------------------
     # Internal helpers

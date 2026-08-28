@@ -28,7 +28,13 @@ from .history import (
     ContextFragment,
     ContextManager,
     HistoryItem,
+    HistorySeed,
+    HistoryStore,
     RecordEntry,
+    entry_from_dict,
+    entry_to_dict,
+    message_from_dict,
+    message_to_dict,
 )
 from .hooks import (
     ChainHooks,
@@ -80,7 +86,7 @@ from .replay import (
     reduce_execution_state,
 )
 from .otel import export_otlp_http, to_otlp_json
-from .resume import load_transcript, project_transcript
+from .resume import load_history_transcript, load_transcript, project_transcript
 from .retry import RetryHooks
 from .skills import (
     EAGER_PRIORITY_THRESHOLD,
@@ -133,6 +139,8 @@ __all__ = [
     "HarnessExecutionState",
     "HarnessTrajectoryEvent",
     "HistoryItem",
+    "HistorySeed",
+    "HistoryStore",
     "ImagePart",
     "InMemoryRequestSink",
     "InMemorySpillStore",
@@ -197,9 +205,14 @@ __all__ = [
     "extract_inline_tool_calls",
     "parse_grounding_verdict",
     "parse_turn_route",
+    "entry_from_dict",
+    "entry_to_dict",
+    "load_history_transcript",
     "load_recorded_requests",
     "load_transcript",
     "matches_conditions",
+    "message_from_dict",
+    "message_to_dict",
     "project_transcript",
     "reduce_execution_state",
     "render_skill_catalog",

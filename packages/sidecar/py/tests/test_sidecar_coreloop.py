@@ -767,3 +767,91 @@ async def test_subagent_off_by_default() -> None:
     )
     first_tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
+
+
+@pytest.mark.asyncio
+async def test_chat_fork_from_record_seeds_a_fresh_log() -> None:
+    """Wave 1 record fork: the variant runs under a fresh record id seeded
+    by one provenance-carrying history.seed entry; the source chat's log is
+    never polluted by the variant."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+            _text_round("forked answer"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    source_before = await sidecar.storage.list_history("chat_1")
+    assert len(source_before) == 4  # user, assistant(c1), tool, assistant
+    # Fork after the tool result (seq 2), cutting the "sum is 3" answer.
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.fork",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "recordId": "chat_1",
+                "untilSeq": 2,
+                "messages": [{"role": "user", "content": "try again"}],
+            },
+        )
+    )
+    assert "error" not in resp, resp
+    assert resp["result"]["seedMessages"] == 4  # 3 seeded + re-asked user
+    fork_stream = resp["result"]["streamId"]
+    task = sidecar._streams.get(fork_stream)
+    if task is not None:
+        await task
+
+    # The model saw the truncated prefix + the re-asked user message.
+    fork_call = provider.seen_messages[-1]
+    assert [m.role for m in fork_call] == ["user", "assistant", "tool", "user"]
+    assert fork_call[3].content_text == "try again"
+
+    # The fork's record: one provenance seed + only the genuinely new items
+    # (the seed entry already covers the prefix, so the run's seed items
+    # keep their in-memory seqs 1-3 unpersisted — seq is monotonic, not
+    # dense).
+    fork_record = await sidecar.storage.list_history(f"chat_1:fork:{fork_stream}")
+    assert fork_record[0]["entry"] == "seed"
+    assert fork_record[0]["source_record_id"] == "chat_1"
+    assert fork_record[0]["source_until_seq"] == 2
+    assert [e["seq"] for e in fork_record] == [0, 4, 5]
+    assert fork_record[1]["message"]["content"] == [
+        {"type": "text", "text": "try again"}
+    ]
+    assert fork_record[2]["message"]["content"] == [
+        {"type": "text", "text": "forked answer"}
+    ]
+    # And the fork's record resumes self-contained (never reads chat_1).
+    from steerable_agent_runtime import load_history_transcript
+
+    resumed = await load_history_transcript(
+        sidecar.storage, f"chat_1:fork:{fork_stream}"
+    )
+    assert [m.content_text for m in resumed] == [
+        "add",
+        fork_call[1].content_text,
+        fork_call[2].content_text,
+        "try again",
+        "forked answer",
+    ]
+
+    # The source chat's log is untouched by the variant.
+    assert await sidecar.storage.list_history("chat_1") == source_before

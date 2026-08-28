@@ -44,6 +44,7 @@ from steerable_agent_runtime import (
     CompactionHooks,
     CoreLoop,
     FilesystemSkillProvider,
+    HistorySeed,
     LoopConfig,
     LoopHooks,
     PolicyDeniedError,
@@ -56,6 +57,8 @@ from steerable_agent_runtime import (
     ToolDispatchError,
     ToolRouter,
     TraceRecorder,
+    entry_to_dict,
+    estimate_tokens,
     select_catalog,
     skill_tool_descriptor,
     subagent_tool_descriptor,
@@ -67,7 +70,7 @@ from steerable_agent_runtime.llm import (
     LLMProvider,
     TextPart,
 )
-from steerable_agent_runtime.resume import project_transcript
+from steerable_agent_runtime.resume import load_history_transcript, project_transcript
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
 from steerable_agent_runtime.transport.stdio_jsonrpc import (
     JsonRpcError,
@@ -450,16 +453,24 @@ class Sidecar:
         variant/regenerate primitive for trace-sourced sessions.
 
         Params: everything ``agent.chat.stream`` takes (provider/model are
-        required), plus::
+        required), plus ONE fork source::
 
             {
-              "traceId": "tr_...",         # required — the trace to fork from
+              "recordId": "chat_...",       # Wave 1: fork the durable record
+              "untilSeq": 41,               # optional inclusive record-seq bound
+                                            # (see resume.load_history_transcript)
+              # — or, legacy trace source —
+              "traceId": "tr_...",          # the trace to fork from
               "untilSequence": 41,          # optional inclusive event-sequence
                                             # bound (see resume.project_transcript)
               "messages": [...],            # optional messages appended after
                                             # the projected seed (e.g. the
                                             # re-asked user turn)
             }
+
+        A record fork runs under a fresh ``<recordId>:fork:<streamId>``
+        record seeded by one provenance-carrying ``history.seed`` entry, so
+        the variant never pollutes the source chat's log.
 
         Returns ``{"streamId", "seedMessages"}``. The fork always runs the
         CoreLoop path (projection is a CoreLoop concept) and records its own
@@ -473,19 +484,54 @@ class Sidecar:
             raise JsonRpcError(
                 "transport not ready", code=-32099, kind="internal"
             )
-        trace_id = params.get("traceId")
-        if not trace_id:
-            raise JsonRpcError("traceId required", code=-32602, kind="invalid_params")
-        events = await self.storage.list_events(str(trace_id))
-        if not events:
-            raise JsonRpcError(
-                f"trace not found: {trace_id}", code=-32004, kind="invalid_request"
+        stream_id = params.get("streamId") or _new_stream_id()
+        source_record = params.get("recordId")
+        if source_record is not None:
+            # Wave 1 record fork: seed from the durable record (optionally
+            # truncated at a record seq) into a FRESH record id, so the
+            # variant never pollutes the source chat's log. The seed entry
+            # is persisted up front with provenance; the run's own
+            # continuous-log seeding then recognises the prefix and only
+            # appends genuinely new items.
+            until_seq = params.get("untilSeq")
+            seed_msgs = await load_history_transcript(
+                self.storage,
+                str(source_record),
+                until_seq=int(until_seq) if until_seq is not None else None,
             )
-        events.sort(key=lambda e: getattr(e, "sequence", 0))
-        until = params.get("untilSequence")
-        seed = project_transcript(
-            events, until_sequence=int(until) if until is not None else None
-        )
+            if seed_msgs is None:
+                raise JsonRpcError(
+                    f"record not found: {source_record}",
+                    code=-32004,
+                    kind="invalid_request",
+                )
+            record_id = f"{source_record}:fork:{stream_id}"
+            seed_entry = HistorySeed(
+                seq=0,
+                messages=tuple(seed_msgs),
+                token_estimate=estimate_tokens(seed_msgs),
+                source_record_id=str(source_record),
+                source_until_seq=int(until_seq) if until_seq is not None else None,
+            )
+            await self.storage.append_history(record_id, [entry_to_dict(seed_entry)])
+            seed = list(seed_msgs)
+            params = {**params, "recordId": record_id}
+        else:
+            trace_id = params.get("traceId")
+            if not trace_id:
+                raise JsonRpcError(
+                    "traceId or recordId required", code=-32602, kind="invalid_params"
+                )
+            events = await self.storage.list_events(str(trace_id))
+            if not events:
+                raise JsonRpcError(
+                    f"trace not found: {trace_id}", code=-32004, kind="invalid_request"
+                )
+            events.sort(key=lambda e: getattr(e, "sequence", 0))
+            until = params.get("untilSequence")
+            seed = project_transcript(
+                events, until_sequence=int(until) if until is not None else None
+            )
         seed.extend(_coerce_messages(params.get("messages") or []))
 
         try:
@@ -497,7 +543,6 @@ class Sidecar:
                 kind="invalid_params",
             ) from exc
 
-        stream_id = params.get("streamId") or _new_stream_id()
         transport = self._transport
         task = asyncio.create_task(
             self._run_chat_stream_coreloop(provider, seed, params, stream_id, transport)
@@ -676,6 +721,11 @@ class Sidecar:
             executor,
             _build_loop_config(params),
             hooks=hooks,
+            # Wave 1 durable record: the continuous per-chat log. An
+            # explicit recordId (the fork path's fresh log) wins over the
+            # default chat_id-derived one.
+            history_store=self.storage,
+            record_id=params.get("recordId") or params.get("chatId"),
         )
         # Persist the run as it streams so the host can inspect it afterwards
         # via trace.fetch (and so a future resume projection has the events).

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from copy import deepcopy
+from typing import Any
 
 from steerable_agent_protocol.generated import (
     AgentSession,
@@ -30,6 +31,7 @@ class InMemoryStorage:
         self._traces: dict[str, HarnessTrace] = {}
         self._spans: dict[str, list[TraceSpan]] = {}
         self._events: dict[str, list[TraceEvent]] = {}
+        self._history: dict[str, list[dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Sessions
@@ -149,3 +151,35 @@ class InMemoryStorage:
                 [deepcopy(event) for event in self._events.get(trace_id, [])],
                 key=lambda event: event.sequence,
             )
+
+    # ------------------------------------------------------------------
+    # History record (Wave 1)
+    # ------------------------------------------------------------------
+
+    async def append_history(
+        self, record_id: str, entries: Iterable[dict[str, Any]]
+    ) -> None:
+        async with self._lock:
+            bucket = self._history.setdefault(record_id, [])
+            for entry in entries:
+                bucket.append(deepcopy(entry))
+
+    async def list_history(
+        self,
+        record_id: str,
+        *,
+        after_seq: int | None = None,
+        until_seq: int | None = None,
+        limit: int | None = None,
+        reverse: bool = False,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            bucket = [deepcopy(e) for e in self._history.get(record_id, [])]
+        bucket.sort(key=lambda e: e.get("seq", 0), reverse=reverse)
+        if after_seq is not None:
+            bucket = [e for e in bucket if e.get("seq", 0) > after_seq]
+        if until_seq is not None:
+            bucket = [e for e in bucket if e.get("seq", 0) <= until_seq]
+        if limit is not None:
+            bucket = bucket[:limit]
+        return bucket
