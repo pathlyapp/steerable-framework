@@ -321,21 +321,34 @@ automatically (no manual boundary indices). `LLMMessage.content` is
 text-only common case; the wire schema gained an additive optional
 `parts` field with `content` retained as its plain-text projection.
 
-### Wave 2 — the payoff
+### Wave 2 — the payoff (in flight)
 
 Cache instrumentation → world-state diffing → tool exposure tiers → MCP.
 The order is the argument:
 
-1. **Cache instrumentation.** Add `cached_prompt_tokens` and
-   `cache_creation_tokens` to `LLMUsage`, parsed from
-   `prompt_tokens_details.cached_tokens` (OpenAI-compatible) and
-   `cache_read_input_tokens` (Anthropic), surfaced on the existing
-   `stage_complete` event so `TraceRecorder` persists it with no new
-   plumbing. First, so diffing can be verified rather than assumed.
-2. **World-state sections with RFC 7386 merge-patch diffing.** An
-   unchanged section costs zero tokens; a changed one costs a small tail
-   patch. This is what makes cache stability permanent instead of a
-   tuning exercise.
+1. **Cache instrumentation** ✅ landed 2026-08-29. `LLMUsage` gained
+   `cached_prompt_tokens` / `cache_creation_tokens`, parsed from
+   `prompt_tokens_details.cached_tokens` (OpenAI-compatible; DeepSeek's
+   top-level `prompt_cache_hit_tokens` as fallback) and
+   `cache_read_input_tokens` / `cache_creation_input_tokens` (Anthropic),
+   surfaced on the existing `stage_complete` event so `TraceRecorder`
+   persists it with no new plumbing. First, so diffing can be verified
+   rather than assumed.
+2. **World-state sections with RFC 7386 merge-patch diffing** ✅ landed
+   2026-08-29 (`world_state.py`). An unchanged section costs zero tokens;
+   a changed one costs a small tail patch. The full snapshot rides inside
+   every fragment (base64url comment), so resume/fork diff against what
+   the model actually saw with no side channel; compaction folding the
+   last fragment self-heals into a full re-injection. Landing it surfaced
+   a Wave 1 seeding gap: production hosts rebuild a lossy per-turn view
+   (no tool rounds, no injected fragments, display-transformed assistant
+   texts), which the strict prefix check misread as a `host_revision`
+   every turn. Seeding is now record-aware — on continuation the run
+   seeds from the record's projection plus the host's new tail (user/
+   system compared exactly, assistant tolerant of host-appended display
+   suffixes), so the model keeps its tool work across turns and the diff
+   actually engages in production. This is what makes cache stability
+   permanent instead of a tuning exercise.
 3. **Tool exposure tiers.** Registration and exposure become orthogonal,
    so the tool list stays bounded once it is no longer authored
    in-house.

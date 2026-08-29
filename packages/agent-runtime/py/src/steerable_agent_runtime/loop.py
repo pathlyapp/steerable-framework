@@ -55,7 +55,16 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .history import ContextFragment, ContextManager, HistoryStore, entry_to_dict
+from .history import (
+    KIND_ASSISTANT,
+    KIND_SYSTEM,
+    KIND_USER,
+    ContextFragment,
+    ContextManager,
+    HistoryItem,
+    HistoryStore,
+    entry_to_dict,
+)
 from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider
 from .pseudo import (
@@ -338,36 +347,48 @@ class CoreLoop:
 
     async def _plan_record_seeding(
         self, record_id: str, messages: list[LLMMessage]
-    ) -> tuple[int, int, dict[str, Any] | None]:
+    ) -> tuple[list[LLMMessage], int, int, dict[str, Any] | None]:
         """Plan how this run's seed joins the durable per-chat record.
 
-        Returns ``(first_seq, persisted_prefix, pre_boundary)``:
+        Returns ``(seed, first_seq, persisted_prefix, pre_boundary)``:
 
-        - empty record → ``(0, 0, None)``: the whole seed flushes as new.
-        - seed extends the durable projection (the normal next turn) → only
-          the tail past ``persisted_prefix`` flushes; seq continues the log.
+        - empty record → the host seed as-is, all of it flushes as new.
+        - seed extends the durable projection exactly (projection-echoing
+          hosts, tests) → seed as-is; only the tail past
+          ``persisted_prefix`` flushes; seq continues the log.
+        - seed reconciles with the record's host-visible view (production
+          hosts rebuild a lossy per-turn view: final user/assistant texts
+          only, assistant text display-transformed) → the run seeds from
+          the RECORD's projection plus the host's new tail, so the model
+          keeps the full history (tool rounds, injected fragments) and the
+          record stays delta-only.
         - anything else (host edited/truncated history) → a declared
-          ``host_revision`` boundary persists first, then the whole seed
-          flushes after it, keeping the durable projection coherent.
+          ``host_revision`` boundary persists first, then the whole host
+          seed flushes after it, keeping the durable projection coherent.
         """
         from .history import CompactionBoundary
-        from .resume import load_history_transcript
+        from .resume import load_history_items
 
         store = self._history_store
         assert store is not None  # caller guards on it
         latest = await store.list_history(record_id, limit=1, reverse=True)
         if not latest:
-            return (0, 0, None)
+            return (messages, 0, 0, None)
         next_seq = int(latest[0].get("seq", 0)) + 1
-        prior = await load_history_transcript(store, record_id)
-        if prior is not None and list(prior) == messages[: len(prior)]:
-            return (next_seq, len(prior), None)
+        items = await load_history_items(store, record_id)
+        if items:
+            prior = [item.message for item in items]
+            if list(prior) == messages[: len(prior)]:
+                return (messages, next_seq, len(prior), None)
+            new_tail = _reconcile_host_seed(items, messages)
+            if new_tail is not None:
+                return ([*prior, *new_tail], next_seq, len(prior), None)
         boundary = CompactionBoundary(
             seq=next_seq,
             reason="host revised history upstream of this run",
             action="host_revision",
         )
-        return (next_seq + 1, 0, entry_to_dict(boundary))
+        return (messages, next_seq + 1, 0, entry_to_dict(boundary))
 
     async def _execute_tool(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         """Run one tool call under the per-tool timeout.
@@ -450,15 +471,16 @@ class CoreLoop:
         # The transcript is a projection of the append-only record; nothing
         # mutates a list in place anymore (see history.py).
         record_id = self._record_id or chat_id
+        seed = list(messages)
         first_seq = 0
         persisted_prefix = 0
         pre_boundary: dict[str, Any] | None = None
         if self._history_store is not None and record_id is not None:
-            first_seq, persisted_prefix, pre_boundary = await self._plan_record_seeding(
-                record_id, list(messages)
+            seed, first_seq, persisted_prefix, pre_boundary = (
+                await self._plan_record_seeding(record_id, list(messages))
             )
         manager = ContextManager(
-            messages, token_model=self._provider.model, first_seq=first_seq
+            seed, token_model=self._provider.model, first_seq=first_seq
         )
         if persisted_prefix:
             manager.mark_persisted_prefix(persisted_prefix)
@@ -1318,6 +1340,44 @@ def _decision_data(decision: CompletionDecision) -> dict[str, Any]:
         "reason": decision.reason,
         "confidence": decision.confidence,
     }
+
+
+def _reconcile_host_seed(
+    items: list[HistoryItem], seed: list[LLMMessage]
+) -> list[LLMMessage] | None:
+    """Reconcile a production host's per-turn seed against the record.
+
+    Hosts rebuild history from their own store each turn: final
+    user/assistant texts only (no tool rounds, no loop-injected
+    fragments), with assistant text display-transformed (trimmed, host
+    sections appended). The seed reconciles when its history part matches
+    the record's host-visible view — bare ``system``/``user`` kinds plus
+    terminal assistant messages (tool-call rounds are loop-internal) —
+    comparing user/system text exactly and assistant text up to a
+    host-appended suffix. Returns the seed's new tail on match; None means
+    the history genuinely changed (edit/truncate/regenerate) and the
+    caller declares a ``host_revision`` boundary.
+    """
+    host_view = [
+        item.message
+        for item in items
+        if item.kind in (KIND_SYSTEM, KIND_USER)
+        or (item.kind == KIND_ASSISTANT and not item.message.tool_calls)
+    ]
+    if len(seed) <= len(host_view):
+        return None
+    history_part, new_tail = seed[: len(host_view)], seed[len(host_view) :]
+    for expected, actual in zip(host_view, history_part):
+        if expected.role != actual.role:
+            return None
+        want = expected.content_text.strip()
+        got = actual.content_text.strip()
+        if expected.role == "assistant":
+            if got != want and not (want and got.startswith(want)):
+                return None
+        elif got != want:
+            return None
+    return list(new_tail)
 
 
 def _step_summary(

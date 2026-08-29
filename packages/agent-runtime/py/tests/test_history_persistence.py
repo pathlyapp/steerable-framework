@@ -346,6 +346,202 @@ async def test_host_revision_declares_a_boundary_before_reseeding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_host_shaped_reseed_reconciles_without_a_boundary() -> None:
+    """Production hosts rebuild a lossy view per turn (final user/assistant
+    texts only — no tool rounds, no injected fragments). The seed
+    reconciles against the record's host-visible view: no spurious
+    host_revision, the record stays delta-only, and the model keeps the
+    full history (tool rounds included)."""
+    storage = InMemoryStorage()
+    router = ToolRouter()
+
+    @tool(router=router, description="Echo text")
+    async def echo(text: str) -> dict[str, str]:
+        return {"echo": text}
+
+    provider1 = _provider(
+        [
+            {"tool_calls": [ToolCall(id="c1", name="echo", arguments={"text": "x"})]},
+            {"content": "final answer one"},
+        ]
+    )
+    loop1 = CoreLoop(
+        provider1,
+        RouterToolExecutor(router),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run([_msg("user", "question one")], chat_id="chat_1"))
+    # user, assistant(tool_calls), tool result, terminal assistant.
+    assert len(await storage.list_history("chat_1")) == 4
+
+    # Turn 2's seed is the host-DB view: the tool round is absent, plus the
+    # new user input.
+    provider2 = _provider([{"content": "answer two"}])
+    loop2 = CoreLoop(
+        provider2,
+        RouterToolExecutor(router),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(
+        loop2.run(
+            [
+                _msg("user", "question one"),
+                _msg("assistant", "final answer one"),
+                _msg("user", "question two"),
+            ],
+            chat_id="chat_1",
+        )
+    )
+
+    entries = await storage.list_history("chat_1")
+    assert not [e for e in entries if e["entry"] == "boundary"]
+    # Only the genuinely new items flushed: the new user message and turn
+    # 2's terminal answer.
+    assert len(entries) == 6
+    # The model saw the full record history — turn 1's tool round included.
+    request2 = provider2.calls[0]
+    assert [m.role for m in request2] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert request2[1].tool_calls is not None
+    assert request2[-1].content_text == "question two"
+
+
+@pytest.mark.asyncio
+async def test_host_assistant_display_suffix_reconciles() -> None:
+    """Hosts append display sections (executed actions, tool summaries) to
+    recent assistant texts; reconciliation tolerates the appended suffix."""
+    storage = InMemoryStorage()
+    loop1 = CoreLoop(
+        _provider([{"content": "answer one"}]),
+        RouterToolExecutor(ToolRouter()),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run([_msg("user", "question one")], chat_id="chat_1"))
+
+    loop2 = CoreLoop(
+        _provider([{"content": "answer two"}]),
+        RouterToolExecutor(ToolRouter()),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(
+        loop2.run(
+            [
+                _msg("user", "question one"),
+                _msg("assistant", "answer one\n\n---\n**已执行**: echo"),
+                _msg("user", "question two"),
+            ],
+            chat_id="chat_1",
+        )
+    )
+
+    entries = await storage.list_history("chat_1")
+    assert not [e for e in entries if e["entry"] == "boundary"]
+    assert len(entries) == 4  # turn 1's pair + turn 2's pair
+
+
+@pytest.mark.asyncio
+async def test_truncated_host_seed_still_declares_a_boundary() -> None:
+    """Regenerate/edit truncate the host history — a shorter seed is a
+    genuine revision, not a continuation."""
+    storage = InMemoryStorage()
+    loop1 = CoreLoop(
+        _provider([{"content": "answer one"}]),
+        RouterToolExecutor(ToolRouter()),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run([_msg("user", "question one")], chat_id="chat_1"))
+
+    loop2 = CoreLoop(
+        _provider([{"content": "answer two"}]),
+        RouterToolExecutor(ToolRouter()),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop2.run([_msg("user", "different question")], chat_id="chat_1"))
+
+    entries = await storage.list_history("chat_1")
+    boundary = [e for e in entries if e["entry"] == "boundary"]
+    assert len(boundary) == 1
+    assert boundary[0]["action"] == "host_revision"
+    resumed = await load_history_transcript(storage, "chat_1")
+    assert [m.content_text for m in resumed] == ["different question", "answer two"]
+
+
+@pytest.mark.asyncio
+async def test_forked_record_reconciles_host_shaped_seeds() -> None:
+    """A fork's seed carries per-message kinds, so the next host-shaped
+    turn on the forked record reconciles instead of declaring a spurious
+    revision."""
+    from steerable_agent_runtime.resume import load_history_items
+
+    storage = InMemoryStorage()
+    router = ToolRouter()
+
+    @tool(router=router, description="Echo text")
+    async def echo(text: str) -> dict[str, str]:
+        return {"echo": text}
+
+    provider1 = _provider(
+        [
+            {"tool_calls": [ToolCall(id="c1", name="echo", arguments={"text": "x"})]},
+            {"content": "final answer one"},
+        ]
+    )
+    loop1 = CoreLoop(
+        provider1,
+        RouterToolExecutor(router),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run([_msg("user", "question one")], chat_id="chat_1"))
+
+    # Fork: seed a fresh record from the source projection, kinds preserved.
+    items = await load_history_items(storage, "chat_1")
+    assert items is not None
+    seed = HistorySeed(
+        seq=0,
+        messages=tuple(item.message for item in items),
+        token_estimate=0,
+        source_record_id="chat_1",
+        message_kinds=tuple(item.kind for item in items),
+    )
+    await storage.append_history("chat_1:fork", [entry_to_dict(seed)])
+
+    # The host-shaped turn (no tool round in the seed) reconciles.
+    loop2 = CoreLoop(
+        _provider([{"content": "answer two"}]),
+        RouterToolExecutor(router),
+        history_store=storage,
+        record_id="chat_1:fork",
+    )
+    await _collect(
+        loop2.run(
+            [
+                _msg("user", "question one"),
+                _msg("assistant", "final answer one"),
+                _msg("user", "try again"),
+            ],
+            chat_id="chat_1:fork",
+        )
+    )
+
+    entries = await storage.list_history("chat_1:fork")
+    assert not [e for e in entries if e["entry"] == "boundary"]
+    resumed = await load_history_transcript(storage, "chat_1:fork")
+    assert [m.content_text for m in resumed][-2:] == ["try again", "answer two"]
+
+
+@pytest.mark.asyncio
 async def test_resume_after_compaction_reads_only_the_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

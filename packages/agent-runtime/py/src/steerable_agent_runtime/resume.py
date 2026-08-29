@@ -231,23 +231,19 @@ async def load_transcript(
 _RESUME_PAGE = 256
 
 
-async def load_history_transcript(
+async def load_history_items(
     storage: "HistoryStore",
     record_id: str,
     *,
     until_seq: int | None = None,
-) -> list[LLMMessage] | None:
-    """Resume from the durable record (Wave 1) — O(tail), boundary-aware.
+) -> "list[HistoryItem] | None":
+    """Kind-preserving variant of ``load_history_transcript``: the visible
+    span as ``HistoryItem`` envelopes.
 
-    Scans backwards (newest-first pages) for the newest
-    ``compaction.boundary`` entry, then projects only the entries after it —
-    the superseded span is never read. Returns ``None`` when the record has
-    no entries (caller falls back to the trace-event projection or starts
-    fresh).
-
-    ``until_seq`` (inclusive) truncates the record before projecting — the
-    record-level fork primitive: seed a new record with the returned prefix
-    (``ContextManager.seed``) and continue there.
+    ``HistorySeed`` entries expand to one item per message, carrying the
+    seed's per-message kinds when recorded (role-derived otherwise) and the
+    seed's own seq — accurate enough for content-kind classification (the
+    loop's host-view reconciliation), not for seq addressing.
     """
 
     from .history import (  # local: keeps the trace path import-light
@@ -255,6 +251,7 @@ async def load_history_transcript(
         HistoryItem,
         HistorySeed,
         entry_from_dict,
+        kind_for_role,
     )
 
     boundary_seq = -1
@@ -279,16 +276,55 @@ async def load_history_transcript(
     entries = await storage.list_history(
         record_id, after_seq=boundary_seq, until_seq=until_seq
     )
-    messages: list[LLMMessage] = []
+    items: list[HistoryItem] = []
     for raw in entries:
         entry = entry_from_dict(raw)
         if isinstance(entry, HistoryItem):
-            messages.append(entry.message)
+            items.append(entry)
         elif isinstance(entry, HistorySeed):
-            messages.extend(entry.messages)
+            for index, message in enumerate(entry.messages):
+                kind = (
+                    entry.message_kinds[index]
+                    if index < len(entry.message_kinds)
+                    else kind_for_role(message.role)
+                )
+                items.append(
+                    HistoryItem(
+                        seq=entry.seq,
+                        kind=kind,
+                        message=message,
+                        token_estimate=0,
+                        turn_id=entry.turn_id,
+                    )
+                )
         elif isinstance(entry, CompactionBoundary):
             # A boundary inside the forward range means the reverse scan's
             # boundary wasn't the newest (concurrent writer) — restart the
             # projection from here; the tail after it is the visible span.
-            messages = []
-    return messages
+            items = []
+    return items
+
+
+async def load_history_transcript(
+    storage: "HistoryStore",
+    record_id: str,
+    *,
+    until_seq: int | None = None,
+) -> list[LLMMessage] | None:
+    """Resume from the durable record (Wave 1) — O(tail), boundary-aware.
+
+    Scans backwards (newest-first pages) for the newest
+    ``compaction.boundary`` entry, then projects only the entries after it —
+    the superseded span is never read. Returns ``None`` when the record has
+    no entries (caller falls back to the trace-event projection or starts
+    fresh).
+
+    ``until_seq`` (inclusive) truncates the record before projecting — the
+    record-level fork primitive: seed a new record with the returned prefix
+    (``ContextManager.seed``) and continue there.
+    """
+
+    items = await load_history_items(storage, record_id, until_seq=until_seq)
+    if items is None:
+        return None
+    return [item.message for item in items]

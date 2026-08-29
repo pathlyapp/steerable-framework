@@ -57,6 +57,11 @@ _KIND_BY_ROLE: dict[str, str] = {
 }
 
 
+def kind_for_role(role: LLMRole) -> str:
+    """The role-derived content kind for unclassified messages."""
+    return _KIND_BY_ROLE.get(role, role)
+
+
 @dataclass(frozen=True, slots=True)
 class HistoryItem:
     """One appended envelope in the record. Frozen: items never mutate."""
@@ -98,6 +103,13 @@ class HistorySeed:
     ``source_record_id`` / ``source_until_seq`` name where the prefix came
     from (None for an embedder-assembled seed); they are audit metadata,
     never read at projection time.
+
+    ``message_kinds`` carries the per-message content kinds of the seeded
+    prefix (parallel to ``messages``) when the source is known — the
+    host-view reconciliation in the loop needs them to tell loop-owned
+    injections (``world_state.*``, ``skills.catalog``, tool rounds) from
+    host-echoed messages. Empty means unknown; consumers fall back to
+    role-derived kinds.
     """
 
     seq: int
@@ -107,6 +119,7 @@ class HistorySeed:
     source_until_seq: int | None = None
     turn_id: str | None = None
     kind: str = KIND_HISTORY_SEED
+    message_kinds: tuple[str, ...] = ()
 
 
 #: The record is a linear log of items, declared-rewrite markers, and seeds.
@@ -470,6 +483,7 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
             "source_record_id": entry.source_record_id,
             "source_until_seq": entry.source_until_seq,
             "messages": [message_to_dict(m) for m in entry.messages],
+            "message_kinds": list(entry.message_kinds),
         }
     raise TypeError(f"unknown record entry type: {type(entry).__name__}")
 
@@ -500,6 +514,7 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             source_record_id=data.get("source_record_id"),
             source_until_seq=data.get("source_until_seq"),
             turn_id=data.get("turn_id"),
+            message_kinds=tuple(str(k) for k in data.get("message_kinds") or ()),
         )
     raise ValueError(f"unknown record entry envelope: {envelope!r}")
 

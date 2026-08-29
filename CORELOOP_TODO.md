@@ -880,14 +880,14 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
   （`dsh docs/subsystems/sandbox.md:30`），要求绝对边界的调用方可以拒绝；
   steerable 现在是让宿主「大声记日志并继续」（`safety.md:109-112`）。
 - **新的 wave 排序（按依赖，不按吸引力）**：
-  - **Wave 0（全 S，先做）**：① `RecordingProvider` + 断言
+  - [x] **Wave 0（全 S，先做）** ✅ 2026-08-28 落地：① `RecordingProvider` + 断言
     （`assert_stable_prefix`：第 n 次请求的消息是第 n+1 次的前缀，除声明
     的压缩边界外——「不重写历史」的可执行形式，**今天就会失败**；
     `assert_bounded_items`）。这是**前置**，没有它 Wave 1 会写对然后
     静默劣化；② 逐工具超时（`soft_timeout_ms` 只在轮次边界检查
     `loop.py:425-429`，挂死的工具会挂死整轮；也是 MCP 硬前置）；
     ③ 出网白名单。
-  - **Wave 1（L，地基，一个项目不是三个）**：带类型的追加式历史
+  - [x] **Wave 1（L，地基，一个项目不是三个）** ✅ 2026-08-29 落地：带类型的追加式历史
     （`HistoryItem` 信封：序号 / turn id / content kind / token 估值）
     + `ContextFragment`（注入内容带稳定标记，可在保留历史里认出自己的
     渲染，对应 codex `ContextualUserFragment`）+ `pre_step` 改为只追加、
@@ -895,13 +895,37 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     持久模型可见记录 + 续跑改为反向扫描到最近压缩检查点（O(tail)）。
     **`content: str` → content parts 在同一个 wave 落**——两者都是 Tier 1
     破坏性变更，分开做等于让消费者断两次。
-  - **Wave 2（回报）**：cache 仪表（`LLMUsage` 加
-    `cached_prompt_tokens` / `cache_creation_tokens`，从
-    `prompt_tokens_details.cached_tokens` 与 `cache_read_input_tokens`
-    解析，挂既有 `stage_complete` 事件零新增管道）→ world-state 分节 +
-    RFC 7386 merge-patch diff → 工具曝光分层 → **然后**才是 MCP。
+  - [ ] **Wave 2（回报）**：cache 仪表 → world-state 分节 diff →
+    工具曝光分层 → **然后**才是 MCP。
     顺序本身就是论证：先有仪表才能验证 diff 有效，先有分层 MCP 才能规模化。
-  - **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
+    - [x] **cache 仪表** ✅ 2026-08-29（`d111387`）：`LLMUsage` 加
+      `cached_prompt_tokens` / `cache_creation_tokens`（OpenAI
+      `prompt_tokens_details.cached_tokens`、DeepSeek 顶层
+      `prompt_cache_hit_tokens`、Anthropic `cache_read_input_tokens` /
+      `cache_creation_input_tokens`），loop 挂既有 `stage_complete`
+      事件（`promptTokens` / `cachedPromptTokens` / `cacheCreationTokens`），
+      TraceRecorder 零新增管道持久化。命中率 cached/prompt 就是 diff
+      要撬动的可观测值。
+    - [x] **world-state 分节 + RFC 7386 merge-patch diff** ✅ 2026-08-29：
+      `world_state.py`——section 协议（`id` + `snapshot()`）、RFC 7386
+      `merge_patch` / `apply_merge_patch`（spec 官方向量全过）、
+      `<world-state>` / `<world-state-patch>` 片段（完整快照以 base64url
+      HTML 注释嵌入每个片段——记录自包含，resume/fork 零侧通道）、
+      `WorldStateHooks`（每轮 round 0 注入：无基线全量、有基线只追加
+      变化节的尾部 patch、未变零 token；压缩折掉片段则自愈式全量重注）。
+      sidecar `worldState` 参数接入（宿主改传数据节，不再每轮重建系统
+      提示词）。**同波修复 W1 播种缺口**：生产宿主每轮从自身 DB 重建
+      有损视图（无 tool 轮、无注入片段、assistant 文本被展示变换），
+      严格前缀检查误判 `host_revision` 并重存全量种子——改为记录感知
+      播种：continuation 时从记录投影 + 宿主新尾巴播种（user/system
+      精确比对、assistant 前缀容忍展示追加），模型跨轮记住 tool 轮与
+      注入片段，world-state diff 在生产真正生效；`HistorySeed` 带
+      `message_kinds` 保真 fork 后的 reconciliation。
+    - [ ] **工具曝光分层**：注册 ≠ 曝光，工具列表在外部接入后保持有界。
+    - [ ] **MCP**：落到能承载它的系统里（前置：逐工具超时 ✅、每 server
+      目录上限、确定性命名 `mcp__<server>__<tool>`、逐轮不可变工具绑定、
+      曝光分层）。
+  - [ ] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
     回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
     → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →
     金轨迹评测门禁（复用既有 `replay.py` fixtures）。
@@ -1076,16 +1100,16 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 
   - **落地序列**（每步独立 commit、测试全绿才进下一步——roadmap
     「incremental but one project」）：
-    1. `history.py`：HistoryItem / ContextManager / ContextFragment
+    - [x] `history.py`：HistoryItem / ContextManager / ContextFragment
        基建 + loop 内部行为不变接入（事件流零变化）；
-    2. content parts：LLMMessage + 两个 provider + tokens + recording +
+    - [x] content parts：LLMMessage + 两个 provider + tokens + recording +
        compaction/resume/skills/spill 适配（纯文本字节等价）；
-    3. wire 加性 `parts` + 双端 codegen + sidecar  coercion + 一致性测试；
-    4. hooks 翻转：PreStepAction/RetryAction 只追加 + 声明式 rewrite，
+    - [x] wire 加性 `parts` + 双端 codegen + sidecar  coercion + 一致性测试；
+    - [x] hooks 翻转：PreStepAction/RetryAction 只追加 + 声明式 rewrite，
        compaction 与 skills 迁移，loop 11 处改写点收口；
-    5. 持久记录 + resume O(tail)：history_item 事件、持久化策略、
+    - [x] 持久记录 + resume O(tail)：history_item 事件、持久化策略、
        storage 尾部扫描、sidecar fork/resume 切换；
-    6. tripwire 翻绿：`assert_stable_prefix` 默认零声明边界通过
+    - [x] tripwire 翻绿：`assert_stable_prefix` 默认零声明边界通过
        （压缩回合的 boundary 从记录自动导出，不再手工传下标）；
        文档（docs/spec/core-loop.md 等）+ 本文件条目勾选。
 

@@ -116,6 +116,16 @@ from .tokens import (
 from .tools import RegisteredTool, ToolRouter, tool
 from .tracing import TraceRecorder
 from .transport import TransportAdapter
+from .world_state import (
+    StaticWorldStateSection,
+    WorldStateFragment,
+    WorldStateHooks,
+    WorldStatePatchFragment,
+    WorldStateSection,
+    apply_merge_patch,
+    last_world_state_snapshot,
+    merge_patch,
+)
 
 __all__ = [
     "AntiHallucinationConfig",
@@ -196,6 +206,12 @@ __all__ = [
     "TransportAdapter",
     "TransportError",
     "UsageCalibration",
+    "StaticWorldStateSection",
+    "WorldStateFragment",
+    "WorldStateHooks",
+    "WorldStatePatchFragment",
+    "WorldStateSection",
+    "apply_merge_patch",
     "assert_bounded_items",
     "assert_requests_match_record",
     "assert_stable_prefix",
@@ -209,10 +225,12 @@ __all__ = [
     "parse_turn_route",
     "entry_from_dict",
     "entry_to_dict",
+    "last_world_state_snapshot",
     "load_history_transcript",
     "load_recorded_requests",
     "load_transcript",
     "matches_conditions",
+    "merge_patch",
     "message_from_dict",
     "message_to_dict",
     "project_transcript",

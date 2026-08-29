@@ -52,11 +52,13 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     SkillExecutor,
     SkillHooks,
+    StaticWorldStateSection,
     StorageError,
     SubagentExecutor,
     ToolDispatchError,
     ToolRouter,
     TraceRecorder,
+    WorldStateHooks,
     entry_to_dict,
     estimate_tokens,
     select_catalog,
@@ -70,7 +72,7 @@ from steerable_agent_runtime.llm import (
     LLMProvider,
     TextPart,
 )
-from steerable_agent_runtime.resume import load_history_transcript, project_transcript
+from steerable_agent_runtime.resume import load_history_items, project_transcript
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
 from steerable_agent_runtime.transport.stdio_jsonrpc import (
     JsonRpcError,
@@ -490,28 +492,32 @@ class Sidecar:
             # Wave 1 record fork: seed from the durable record (optionally
             # truncated at a record seq) into a FRESH record id, so the
             # variant never pollutes the source chat's log. The seed entry
-            # is persisted up front with provenance; the run's own
-            # continuous-log seeding then recognises the prefix and only
-            # appends genuinely new items.
+            # is persisted up front with provenance and per-message kinds
+            # (the loop's host-view reconciliation needs them to keep
+            # forked records continuous); the run's own continuous-log
+            # seeding then recognises the prefix and only appends genuinely
+            # new items.
             until_seq = params.get("untilSeq")
-            seed_msgs = await load_history_transcript(
+            seed_items = await load_history_items(
                 self.storage,
                 str(source_record),
                 until_seq=int(until_seq) if until_seq is not None else None,
             )
-            if seed_msgs is None:
+            if seed_items is None:
                 raise JsonRpcError(
                     f"record not found: {source_record}",
                     code=-32004,
                     kind="invalid_request",
                 )
             record_id = f"{source_record}:fork:{stream_id}"
+            seed_msgs = [item.message for item in seed_items]
             seed_entry = HistorySeed(
                 seq=0,
                 messages=tuple(seed_msgs),
                 token_estimate=estimate_tokens(seed_msgs),
                 source_record_id=str(source_record),
                 source_until_seq=int(until_seq) if until_seq is not None else None,
+                message_kinds=tuple(item.kind for item in seed_items),
             )
             await self.storage.append_history(record_id, [entry_to_dict(seed_entry)])
             seed = list(seed_msgs)
@@ -681,6 +687,24 @@ class Sidecar:
         if params.get("subagent"):
             executor = SubagentExecutor(executor, provider)
             tools = [*(tools or []), subagent_tool_descriptor()]
+        # worldState: slow-changing host context (time, workspace, git
+        # branch, …) as plain per-section data. The loop injects it once as
+        # a <world-state> fragment; later turns diff against the snapshot
+        # embedded in the last fragment — unchanged state costs zero tokens,
+        # a change costs one small RFC 7386 tail patch. Hosts adopting this
+        # stop rebuilding the system prompt per turn, keeping the cached
+        # prefix byte-stable.
+        world_state = params.get("worldState")
+        if isinstance(world_state, dict) and world_state:
+            hooks = ChainHooks(
+                WorldStateHooks(
+                    [
+                        StaticWorldStateSection(str(key), value)
+                        for key, value in world_state.items()
+                    ]
+                ),
+                hooks,
+            )
         # skills: layered disclosure. The host injects the eager layer into
         # the system prompt itself; the sidecar lists the catalog layer
         # (first-round pre_step injection, recorded as a hook_action event)
