@@ -1,0 +1,92 @@
+{
+ "name": "basic_tool_round",
+ "description": "Clean run derived from fixtures/replay/basic.json: two tool rounds then a 42-char final answer.",
+ "tools": [
+  {
+   "name": "create_task",
+   "mode": "safe_write",
+   "result": {
+    "id": 1
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "create_task",
+     "arguments": {
+      "title": "a"
+     }
+    }
+   ]
+  },
+  {
+   "toolCalls": [
+    {
+     "id": "c2",
+     "name": "create_task",
+     "arguments": {
+      "title": "b"
+     }
+    }
+   ]
+  },
+  {
+   "content": "The task is done; all forty-two chars here"
+  }
+ ],
+ "golden": {
+  "completion": {
+   "status": "completed",
+   "reason": "assistant produced final response with no pending tools"
+  },
+  "toolOutcomes": [
+   {
+    "name": "create_task",
+    "success": true
+   },
+   {
+    "name": "create_task",
+    "success": true
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 0,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "create_task"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 0,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 2,
+    "traceStepId": "round_2",
+    "finishReason": "stop",
+    "textLength": 42,
+    "toolCalls": [],
+    "toolCallCount": 0,
+    "toolErrorCount": 0,
+    "decisionStatus": "completed"
+   }
+  ]
+ }
+}

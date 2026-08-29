@@ -281,6 +281,7 @@ Full open-follow-up list: [`TODO.md`](./TODO.md). Pre-1.0 contract: minor (`0.X`
 ## Documentation
 
 - **[Getting Started](./docs/getting-started.md)** — full walkthrough, ~5 minutes
+- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 cheap-12 via Harbor (`claude-code` / `codex` / `pi`)
 - **[Specs](./docs/spec/)** — wire-level reference for every event/envelope shape
 - **[Examples](./examples)** — 3 runnable end-to-end smoke tests:
   - [`py-minimal`](./examples/py-minimal) — protocol + harness + tool dispatch

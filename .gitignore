@@ -79,6 +79,9 @@ _site/
 .env.local
 .env.*.local
 
+# Harbor job outputs and cloned task trees (evals/run.py)
+evals/jobs/
+
 # Misc
 *.log
 .tmp/

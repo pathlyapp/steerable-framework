@@ -1,0 +1,33 @@
+name: Evals oracle
+
+on:
+  pull_request:
+    paths:
+      - "evals/**"
+      - ".github/workflows/evals-oracle.yml"
+  push:
+    branches: [main]
+    paths:
+      - "evals/**"
+      - ".github/workflows/evals-oracle.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-oracle-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oracle:
+    name: Harbor oracle × fix-git
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv tool install harbor
+      - run: docker info
+      - name: Harbor oracle canary
+        run: uv run python -m evals.run --agent oracle --split oracle-canary

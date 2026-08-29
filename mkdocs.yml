@@ -70,6 +70,7 @@ nav:
   - Getting Started: getting-started.md
   - Comparison: comparison.md
   - Roadmap: roadmap.md
+  - Evals: evals.md
   - Spec:
       - Overview: spec/overview.md
       - Architecture: spec/architecture.md

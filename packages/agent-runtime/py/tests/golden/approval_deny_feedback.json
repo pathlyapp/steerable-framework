@@ -1,0 +1,70 @@
+{
+ "name": "approval_deny_feedback",
+ "description": "AutoApprover denies the destructive call; the model sees the denial and finishes.",
+ "approval": "auto",
+ "tools": [
+  {
+   "name": "delete_file",
+   "mode": "destructive",
+   "result": {
+    "deleted": true
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "delete_file",
+     "arguments": {
+      "path": "/x"
+     }
+    }
+   ]
+  },
+  {
+   "content": "Understood — I will not delete it."
+  }
+ ],
+ "transcriptContains": [
+  "approval_denied"
+ ],
+ "golden": {
+  "completion": {
+   "status": "completed",
+   "reason": "assistant produced final response with no pending tools"
+  },
+  "toolOutcomes": [
+   {
+    "name": "delete_file",
+    "success": false,
+    "error": "approval_denied"
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "delete_file"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "stop",
+    "textLength": 34,
+    "toolCalls": [],
+    "toolCallCount": 0,
+    "toolErrorCount": 1,
+    "decisionStatus": "completed"
+   }
+  ]
+ }
+}

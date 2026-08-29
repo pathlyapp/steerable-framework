@@ -1,0 +1,64 @@
+{
+ "name": "unknown_tool_recovers",
+ "description": "An unknown tool call returns the router's error with suggestions; the model recovers and finishes.",
+ "tools": [
+  {
+   "name": "get_status",
+   "mode": "read",
+   "result": {
+    "ok": true
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "get_stats",
+     "arguments": {}
+    }
+   ]
+  },
+  {
+   "content": "Sorry, meant get_status."
+  }
+ ],
+ "golden": {
+  "completion": {
+   "status": "completed",
+   "reason": "assistant produced final response with no pending tools"
+  },
+  "toolOutcomes": [
+   {
+    "name": "get_stats",
+    "success": false,
+    "error": "Unknown tool: get_stats. Did you mean: get_status?"
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "get_stats"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 1,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "stop",
+    "textLength": 24,
+    "toolCalls": [],
+    "toolCallCount": 0,
+    "toolErrorCount": 1,
+    "decisionStatus": "completed"
+   }
+  ]
+ }
+}

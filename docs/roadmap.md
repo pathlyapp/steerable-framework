@@ -447,10 +447,24 @@ cache-friendly from day one.
    only the host-view (user/assistant texts), the record projection
    restores tool rounds. Session loading/fork and the editor-terminal
    tool bridge are the recorded follow-ups.
-4. A golden-trajectory eval gate reusing the existing `replay.py` fixtures.
-   Public capability evals (Terminal-Bench 2.1 cheap-12 via Harbor
-   `claude-code` / `codex` / `pi`) live in `evals/` and are a scheduled
-   job, not a required merge check.
+4. **Golden-trajectory eval gate** ✅ landed 2026-08-29
+   (`tests/golden/*.json` + `test_golden.py`). Each scenario drives a real
+   CoreLoop (scripted provider, tool table, optional approval/sandbox
+   decorators) and pins the emitted trajectory: per-round `step_decision`
+   entries, tool outcomes, the terminal completion, and the durable
+   record's kind sequence. Six scenarios pin the Wave 1–3 behavior surface
+   (clean run, denial feedback, abort with `loop.abort_skip` backfill,
+   sandbox enforcement marker, unknown-tool recovery, budget exhaustion);
+   `basic_tool_round` derives its golden directly from the cross-language
+   `fixtures/replay/basic.json` so the two fixture families share one
+   source of truth, with a linkage test against drift. Record mode
+   (`STEERABLE_GOLDEN_RECORD=1`) rewrites only the golden section and is
+   reviewed like a snapshot update. The division of labor: the crosslang
+   fixtures gate the *reducer* (including hand-authored and fuzzed
+   robustness cases); the golden gate pins the trajectory the *loop
+   itself* emits. Public capability evals (Terminal-Bench 2.1 cheap-12 via
+   Harbor `claude-code` / `codex` / `pi`) live in `evals/` and are a
+   scheduled job, not a required merge check.
 
 ## Protocol positioning (decided)
 

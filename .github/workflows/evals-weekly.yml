@@ -1,0 +1,85 @@
+name: Evals weekly
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-weekly
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: TB 2.1 cheap-12 × ${{ matrix.agent }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude-code, codex, pi]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv tool install harbor
+      - run: docker info
+      - name: Harbor cheap-12
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          set +e
+          uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > "eval-status-${{ matrix.agent }}.txt"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo ran > "eval-status-${{ matrix.agent }}.txt"
+            exit 0
+          fi
+          echo failed > "eval-status-${{ matrix.agent }}.txt"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-status-${{ matrix.agent }}
+          path: eval-status-${{ matrix.agent }}.txt
+          if-no-files-found: ignore
+
+  gather:
+    name: At least one live agent ran
+    needs: [eval]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eval-status-*
+          merge-multiple: true
+          path: statuses
+      - name: Fail if every live agent was skipped
+        run: |
+          shopt -s nullglob
+          files=(statuses/eval-status-*.txt)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no eval-status artifacts; live agents did not start"
+            exit 1
+          fi
+          cat statuses/eval-status-*.txt
+          if grep -qx ran statuses/eval-status-*.txt; then
+            echo "at least one live agent ran"
+            exit 0
+          fi
+          if grep -qx failed statuses/eval-status-*.txt; then
+            echo "a live agent ran and failed; the matrix job already failed"
+            exit 0
+          fi
+          echo "every live agent was skipped (set ANTHROPIC_API_KEY and/or OPENAI_API_KEY / CODEX_API_KEY)"
+          exit 1

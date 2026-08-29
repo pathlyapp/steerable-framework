@@ -1,0 +1,237 @@
+"""Load and validate `evals/suite.yaml`."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+import yaml
+
+SUITE_PATH = Path(__file__).resolve().parent / "suite.yaml"
+LIVE_AGENTS = ("claude-code", "codex", "pi")
+REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh")
+_SHA1_HEX_LEN = 40
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    name: str
+    harbor: str | None
+    model: str | None
+    env_any: tuple[str, ...]
+    kwargs: tuple[tuple[str, str], ...]
+    skipped: bool
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class Suite:
+    dataset_name: str
+    git: str
+    git_rev: str
+    catalog: tuple[str, ...]
+    splits: dict[str, tuple[str, ...]]
+    n_attempts: int
+    n_concurrent: int
+    jobs_dir: str
+    agents: dict[str, AgentSpec]
+
+    @property
+    def catalog_set(self) -> frozenset[str]:
+        return frozenset(self.catalog)
+
+
+class SuiteError(ValueError):
+    """Invalid suite YAML or an illegal task/agent selection."""
+
+
+def load_suite(path: Path | None = None) -> Suite:
+    source = path or SUITE_PATH
+    raw = yaml.safe_load(source.read_text())
+    if not isinstance(raw, dict):
+        raise SuiteError(f"{source} must be a mapping")
+    return _parse_suite(raw, source)
+
+
+def agent_ready(spec: AgentSpec, environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether `spec` can be invoked given `environ`."""
+    if spec.skipped:
+        return False
+    if not spec.env_any:
+        return True
+    env = environ if environ is not None else os.environ
+    return any((env.get(name) or "").strip() for name in spec.env_any)
+
+
+def missing_env(spec: AgentSpec, environ: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    if spec.skipped or not spec.env_any:
+        return ()
+    env = environ if environ is not None else os.environ
+    if any((env.get(name) or "").strip() for name in spec.env_any):
+        return ()
+    return spec.env_any
+
+
+def resolve_tasks(
+    suite: Suite,
+    split: str,
+    tasks: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    if tasks:
+        unknown = [task for task in tasks if task not in suite.catalog_set]
+        if unknown:
+            raise SuiteError(f"tasks not in catalog: {', '.join(unknown)}")
+        return tuple(tasks)
+    selected = suite.splits.get(split)
+    if selected is None:
+        known = ", ".join(sorted(suite.splits))
+        raise SuiteError(f"unknown split {split!r}; expected one of {known}")
+    return selected
+
+
+def harbor_argv(
+    suite: Suite,
+    *,
+    agent: str,
+    tasks: Sequence[str],
+    jobs_dir: Path,
+    model: str | None = None,
+    n_concurrent: int | None = None,
+    n_attempts: int | None = None,
+    harbor_bin: str = "harbor",
+) -> list[str]:
+    spec = suite.agents.get(agent)
+    if spec is None:
+        known = ", ".join(sorted(suite.agents))
+        raise SuiteError(f"unknown agent {agent!r}; expected one of {known}")
+    if spec.skipped or not spec.harbor:
+        reason = spec.reason or "agent is skipped"
+        raise SuiteError(f"agent {agent!r} cannot run Harbor: {reason}")
+    if not tasks:
+        raise SuiteError("task list is empty")
+
+    argv = [
+        harbor_bin,
+        "run",
+        "--dataset",
+        suite.dataset_name,
+        "--agent",
+        spec.harbor,
+    ]
+    chosen_model = model if model is not None else spec.model
+    if chosen_model:
+        argv.extend(["--model", chosen_model])
+    argv.extend(
+        [
+            "--yes",
+            "--n-attempts",
+            str(n_attempts if n_attempts is not None else suite.n_attempts),
+            "--n-concurrent",
+            str(n_concurrent if n_concurrent is not None else suite.n_concurrent),
+            "--jobs-dir",
+            str(jobs_dir),
+        ]
+    )
+    for key, value in spec.kwargs:
+        argv.extend(["--agent-kwarg", f"{key}={value}"])
+    for task in tasks:
+        argv.extend(["--include-task-name", task])
+    return argv
+
+
+def _parse_suite(raw: dict, source: Path) -> Suite:
+    dataset = raw.get("dataset") or {}
+    run = raw.get("run") or {}
+    splits_raw = raw.get("splits") or {}
+    agents_raw = raw.get("agents") or {}
+
+    dataset_name = _require_str(dataset.get("name"), "dataset.name", source)
+    git = _require_str(dataset.get("git"), "dataset.git", source)
+    git_rev = _require_str(dataset.get("git_rev"), "dataset.git_rev", source)
+    if len(git_rev) != _SHA1_HEX_LEN or any(c not in "0123456789abcdef" for c in git_rev):
+        raise SuiteError(f"{source}: dataset.git_rev must be a 40-char lowercase SHA1")
+
+    catalog = _id_tuple(splits_raw.get("catalog"), "splits.catalog", source)
+    if len(catalog) != len(set(catalog)):
+        raise SuiteError(f"{source}: splits.catalog contains duplicate ids")
+
+    splits: dict[str, tuple[str, ...]] = {}
+    catalog_set = frozenset(catalog)
+    for name, value in splits_raw.items():
+        ids = catalog if name == "catalog" else _id_tuple(value, f"splits.{name}", source)
+        extra = [task for task in ids if task not in catalog_set]
+        if extra:
+            raise SuiteError(f"{source}: splits.{name} not in catalog: {', '.join(extra)}")
+        splits[name] = ids
+
+    if "cheap-12" not in splits:
+        raise SuiteError(f"{source}: splits.cheap-12 is required")
+    if len(splits["cheap-12"]) != 12:
+        raise SuiteError(f"{source}: splits.cheap-12 must contain exactly 12 ids")
+    if "oracle-canary" not in splits:
+        raise SuiteError(f"{source}: splits.oracle-canary is required")
+
+    agents = {}
+    for name, body in agents_raw.items():
+        if not isinstance(body, dict):
+            raise SuiteError(f"{source}: agents.{name} must be a mapping")
+        kwargs_raw = body.get("kwargs") or {}
+        if not isinstance(kwargs_raw, dict):
+            raise SuiteError(f"{source}: agents.{name}.kwargs must be a mapping")
+        harbor = body.get("harbor")
+        model = body.get("model")
+        agents[name] = AgentSpec(
+            name=name,
+            harbor=None if harbor is None else _require_str(harbor, f"agents.{name}.harbor", source),
+            model=None if model is None else _require_str(model, f"agents.{name}.model", source),
+            env_any=tuple(body.get("env_any") or ()),
+            kwargs=tuple((str(k), str(v)) for k, v in kwargs_raw.items()),
+            skipped=bool(body.get("skipped")),
+            reason=body.get("reason"),
+        )
+
+    missing_agents = [name for name in REQUIRED_AGENTS if name not in agents]
+    if missing_agents:
+        raise SuiteError(f"{source}: missing agents: {', '.join(missing_agents)}")
+    dsh = agents["dsh"]
+    if not dsh.skipped:
+        raise SuiteError(f"{source}: agents.dsh must be skipped until a Harbor adapter exists")
+    if agents["pi"].harbor != "pi":
+        raise SuiteError(f"{source}: agents.pi.harbor must be 'pi' (Harbor first-party agent)")
+
+    return Suite(
+        dataset_name=dataset_name,
+        git=git,
+        git_rev=git_rev,
+        catalog=catalog,
+        splits=splits,
+        n_attempts=_require_int(run.get("n_attempts"), "run.n_attempts", source),
+        n_concurrent=_require_int(run.get("n_concurrent"), "run.n_concurrent", source),
+        jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
+        agents=agents,
+    )
+
+
+def _require_str(value: object, field: str, source: Path) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SuiteError(f"{source}: {field} must be a non-empty string")
+    return value
+
+
+def _require_int(value: object, field: str, source: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SuiteError(f"{source}: {field} must be an integer")
+    return value
+
+
+def _id_tuple(value: object, field: str, source: Path) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise SuiteError(f"{source}: {field} must be a non-empty list")
+    ids = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise SuiteError(f"{source}: {field} entries must be non-empty strings")
+        ids.append(item)
+    return tuple(ids)

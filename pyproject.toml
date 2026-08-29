@@ -43,10 +43,12 @@ steerable-sidecar = { workspace = true }
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "--import-mode=importlib"
+pythonpath = ["."]
 testpaths = [
   "packages/agent-protocol/py/tests",
   "packages/agent-harness/py/tests",
   "packages/agent-runtime/py/tests",
   "packages/sidecar/py/tests",
   "tests/conformance/py",
+  "evals/tests",
 ]

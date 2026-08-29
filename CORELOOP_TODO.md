@@ -948,10 +948,11 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       `McpStdioClient` 服务直接嵌入 runtime 的宿主（CLI / 测试）。
       测试含真实假 server 子进程 + 全链路 e2e（server → 目录 →
       deferred → tool_search 发现 → loop 调用）。
-  - [~] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
-    回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
-    → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →
-    金轨迹评测门禁（复用既有 `replay.py` fixtures）。
+  - [x] **Wave 3** ✅ 2026-08-29 全部落地：审批代数（8 变体决策 + 三种
+    持久化域，`Denied{reason}` 回喂模型且与 `Abort` 语义不同；逐类别
+    自动拒绝，headless 才不会挂起）→ 工具执行沙箱（先只做
+    shell/subprocess）→ AG-UI / ACP transport → 金轨迹评测门禁（复用
+    既有 `replay.py` fixtures）。四项交付细节见下方各子条。
     - [x] **审批代数** ✅ 2026-08-29：`approval.py`——8 变体
       `ApprovalKind`（`allow_once` / `allow_for_session` / `allow_always` /
       `deny_once` / `deny_for_session` / `deny_always` / `abort` /
@@ -1032,6 +1033,25 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       （AG-UI：生命周期/推理族/工具序列/消息边界/失败收尾/CUSTOM 映射/
       SSE 编码/全 loop 投影）+ 7（ACP：capabilities/文本流/工具转发/
       未知 session/cancel/多轮 record 播种/失败原因可见）。
+    - [x] **金轨迹评测门禁** ✅ 2026-08-29：`tests/golden/*.json` +
+      `test_golden.py`——每个场景用脚本化 provider + 工具表（+ 可选
+      approval/sandbox 装饰器）驱动**真实 CoreLoop**，钉死发出的轨迹：
+      逐轮 `step_decision`（round/traceStepId/finishReason/toolCalls/
+      toolErrorCount/textLength + 决策 status）、工具结果序列、终局
+      completion、以及（接 storage 的场景）持久记录的 kind 序列。六场
+      景钉住 Wave 1-3 行为面：basic_tool_round（**直接复用**跨语言
+      replay fixture `basic.json` 的步序列，两族 fixture 同一事实源，
+      有联动测试防漂移）/ approval_deny_feedback（Denied 回喂后继续）
+      / approval_abort（abort 收尾 + `loop.abort_skip` 补齐，不留悬空
+      tool_call）/ sandbox_marker（命令重写 + `_sandbox` enforcement
+      标记进 transcript）/ unknown_tool_recovers / budget_exhausted_
+      rounds。record 模式（`STEERABLE_GOLDEN_RECORD=1`）只重写 golden
+      段，纪律同快照：重生成必须人工 review——没人审的金轨迹是被祝福
+      的回归。与既有 replay 测试的分工：crosslang fixture 门 **reducer**
+      （含 hand-authored/fuzz 的鲁棒性场景），金轨迹门 **loop 本身**
+      发出的轨迹。审查记录：终局 stop 轮的 toolErrorCount 沿用
+      consecutive 计数（不归零）与 budget 退出轮复用 round 序号均为
+      现状语义，门禁如实钉住。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；

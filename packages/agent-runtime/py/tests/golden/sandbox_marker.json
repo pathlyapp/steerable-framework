@@ -1,0 +1,72 @@
+{
+ "name": "sandbox_marker",
+ "description": "SandboxedToolExecutor rewrites the shell command and marks the result with the enforcement value.",
+ "sandbox": {
+  "backend": "fake"
+ },
+ "tools": [
+  {
+   "name": "bash",
+   "mode": "other",
+   "result": {
+    "stdout": "ok"
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "bash",
+     "arguments": {
+      "command": "ls"
+     }
+    }
+   ]
+  },
+  {
+   "content": "listed"
+  }
+ ],
+ "transcriptContains": [
+  "golden-sandbox",
+  "enforcement"
+ ],
+ "golden": {
+  "completion": {
+   "status": "completed",
+   "reason": "assistant produced final response with no pending tools"
+  },
+  "toolOutcomes": [
+   {
+    "name": "bash",
+    "success": true
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "bash"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 0,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "stop",
+    "textLength": 6,
+    "toolCalls": [],
+    "toolCallCount": 0,
+    "toolErrorCount": 0,
+    "decisionStatus": "completed"
+   }
+  ]
+ }
+}

@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from evals.suite import (
+    LIVE_AGENTS,
+    SUITE_PATH,
+    SuiteError,
+    agent_ready,
+    harbor_argv,
+    load_suite,
+    missing_env,
+    resolve_tasks,
+)
+
+CHEAP_12 = (
+    "fix-git",
+    "openssl-selfsigned-cert",
+    "sqlite-db-truncate",
+    "nginx-request-logging",
+    "configure-git-webserver",
+    "sanitize-git-repo",
+    "polyglot-c-py",
+    "log-summary-date-ranges",
+    "filter-js-from-html",
+    "password-recovery",
+    "git-multibranch",
+    "sqlite-with-gcov",
+)
+
+
+def test_suite_yaml_exists() -> None:
+    assert SUITE_PATH.is_file()
+
+
+def test_catalog_is_89_unique_ids() -> None:
+    suite = load_suite()
+    assert len(suite.catalog) == 89
+    assert len(suite.catalog_set) == 89
+
+
+def test_cheap_12_is_pinned_subset() -> None:
+    suite = load_suite()
+    assert suite.splits["cheap-12"] == CHEAP_12
+    assert set(CHEAP_12) <= suite.catalog_set
+
+
+def test_oracle_canary_is_in_cheap_12() -> None:
+    suite = load_suite()
+    canary = suite.splits["oracle-canary"]
+    assert canary == ("fix-git",)
+    assert set(canary) <= set(suite.splits["cheap-12"])
+
+
+def test_dsh_is_skipped() -> None:
+    suite = load_suite()
+    dsh = suite.agents["dsh"]
+    assert dsh.skipped is True
+    assert dsh.harbor is None
+    assert "Harbor" in (dsh.reason or "")
+
+
+def test_pi_is_first_party_harbor_agent() -> None:
+    suite = load_suite()
+    pi = suite.agents["pi"]
+    assert pi.skipped is False
+    assert pi.harbor == "pi"
+    assert pi.model == "anthropic/claude-sonnet-4-5"
+    assert pi.env_any == ("ANTHROPIC_API_KEY",)
+
+
+def test_live_agents_are_claude_codex_pi() -> None:
+    suite = load_suite()
+    assert LIVE_AGENTS == ("claude-code", "codex", "pi")
+    for name in LIVE_AGENTS:
+        spec = suite.agents[name]
+        assert spec.skipped is False
+        assert spec.harbor == name
+        assert spec.model
+
+
+def test_oracle_needs_no_key() -> None:
+    suite = load_suite()
+    oracle = suite.agents["oracle"]
+    assert agent_ready(oracle, {}) is True
+    assert missing_env(oracle, {}) == ()
+
+
+def test_claude_code_and_pi_need_anthropic_key() -> None:
+    suite = load_suite()
+    empty: dict[str, str] = {}
+    keyed = {"ANTHROPIC_API_KEY": "sk-test"}
+    for name in ("claude-code", "pi"):
+        spec = suite.agents[name]
+        assert agent_ready(spec, empty) is False
+        assert missing_env(spec, empty) == ("ANTHROPIC_API_KEY",)
+        assert agent_ready(spec, keyed) is True
+
+
+def test_codex_accepts_either_openai_or_codex_key() -> None:
+    suite = load_suite()
+    spec = suite.agents["codex"]
+    assert agent_ready(spec, {}) is False
+    assert agent_ready(spec, {"OPENAI_API_KEY": "sk-openai"}) is True
+    assert agent_ready(spec, {"CODEX_API_KEY": "sk-codex"}) is True
+    assert missing_env(spec, {}) == ("OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def test_resolve_tasks_override_must_be_in_catalog() -> None:
+    suite = load_suite()
+    assert resolve_tasks(suite, "cheap-12", ["fix-git"]) == ("fix-git",)
+    with pytest.raises(SuiteError, match="not in catalog"):
+        resolve_tasks(suite, "cheap-12", ["not-a-task"])
+    with pytest.raises(SuiteError, match="unknown split"):
+        resolve_tasks(suite, "not-a-split")
+
+
+def test_harbor_argv_oracle_omits_model() -> None:
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="oracle",
+        tasks=["fix-git"],
+        jobs_dir=Path("evals/jobs/oracle"),
+    )
+    assert argv[0] == "harbor"
+    assert argv[1:4] == ["run", "--dataset", "terminal-bench/terminal-bench-2-1"]
+    assert "--agent" in argv
+    assert argv[argv.index("--agent") + 1] == "oracle"
+    assert "--model" not in argv
+    assert argv[argv.index("--include-task-name") + 1] == "fix-git"
+    assert "--yes" in argv
+
+
+def test_harbor_argv_pi_uses_include_task_name() -> None:
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="pi",
+        tasks=CHEAP_12,
+        jobs_dir=Path("evals/jobs/pi"),
+    )
+    assert argv[argv.index("--agent") + 1] == "pi"
+    assert argv[argv.index("--model") + 1] == "anthropic/claude-sonnet-4-5"
+    includes = [
+        argv[i + 1]
+        for i, flag in enumerate(argv)
+        if flag == "--include-task-name"
+    ]
+    assert includes == list(CHEAP_12)
+
+
+def test_harbor_argv_rejects_dsh() -> None:
+    suite = load_suite()
+    with pytest.raises(SuiteError, match="cannot run Harbor"):
+        harbor_argv(
+            suite,
+            agent="dsh",
+            tasks=["fix-git"],
+            jobs_dir=Path("evals/jobs/dsh"),
+        )

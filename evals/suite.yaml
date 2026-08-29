@@ -1,0 +1,161 @@
+# Pinned public capability evals. This file is the source of truth for
+# which Terminal-Bench 2.1 tasks and Harbor agents the regression wrapper
+# may run. Homemade prompts are not a CI gate.
+#
+# cheap-12 avoids QEMU, GPU, video, and long compiles. It must stay a
+# subset of catalog. The catalog lists the 89 task ids published at
+# git_rev; do not invent extra ids.
+
+dataset:
+  name: terminal-bench/terminal-bench-2-1
+  git: https://github.com/harbor-framework/terminal-bench-2-1
+  git_rev: 7131e4375048a0e408a8fb404b5f499d726b695b
+
+run:
+  n_attempts: 1
+  n_concurrent: 1
+  jobs_dir: evals/jobs
+
+splits:
+  catalog:
+    - adaptive-rejection-sampler
+    - bn-fit-modify
+    - break-filter-js-from-html
+    - build-cython-ext
+    - build-pmars
+    - build-pov-ray
+    - caffe-cifar-10
+    - cancel-async-tasks
+    - chess-best-move
+    - circuit-fibsqrt
+    - cobol-modernization
+    - code-from-image
+    - compile-compcert
+    - configure-git-webserver
+    - constraints-scheduling
+    - count-dataset-tokens
+    - crack-7z-hash
+    - custom-memory-heap-crash
+    - db-wal-recovery
+    - distribution-search
+    - dna-assembly
+    - dna-insert
+    - extract-elf
+    - extract-moves-from-video
+    - feal-differential-cryptanalysis
+    - feal-linear-cryptanalysis
+    - filter-js-from-html
+    - financial-document-processor
+    - fix-code-vulnerability
+    - fix-git
+    - fix-ocaml-gc
+    - gcode-to-text
+    - git-leak-recovery
+    - git-multibranch
+    - gpt2-codegolf
+    - headless-terminal
+    - hf-model-inference
+    - install-windows-3.11
+    - kv-store-grpc
+    - large-scale-text-editing
+    - largest-eigenval
+    - llm-inference-batching-scheduler
+    - log-summary-date-ranges
+    - mailman
+    - make-doom-for-mips
+    - make-mips-interpreter
+    - mcmc-sampling-stan
+    - merge-diff-arc-agi-task
+    - model-extraction-relu-logits
+    - modernize-scientific-stack
+    - mteb-leaderboard
+    - mteb-retrieve
+    - multi-source-data-merger
+    - nginx-request-logging
+    - openssl-selfsigned-cert
+    - overfull-hbox
+    - password-recovery
+    - path-tracing
+    - path-tracing-reverse
+    - polyglot-c-py
+    - polyglot-rust-c
+    - portfolio-optimization
+    - protein-assembly
+    - prove-plus-comm
+    - pypi-server
+    - pytorch-model-cli
+    - pytorch-model-recovery
+    - qemu-alpine-ssh
+    - qemu-startup
+    - query-optimize
+    - raman-fitting
+    - regex-chess
+    - regex-log
+    - reshard-c4-data
+    - rstan-to-pystan
+    - sam-cell-seg
+    - sanitize-git-repo
+    - schemelike-metacircular-eval
+    - sparql-university
+    - sqlite-db-truncate
+    - sqlite-with-gcov
+    - torch-pipeline-parallelism
+    - torch-tensor-parallelism
+    - train-fasttext
+    - tune-mjcf
+    - video-processing
+    - vulnerable-secret
+    - winning-avg-corewars
+    - write-compressor
+  cheap-12:
+    - fix-git
+    - openssl-selfsigned-cert
+    - sqlite-db-truncate
+    - nginx-request-logging
+    - configure-git-webserver
+    - sanitize-git-repo
+    - polyglot-c-py
+    - log-summary-date-ranges
+    - filter-js-from-html
+    - password-recovery
+    - git-multibranch
+    - sqlite-with-gcov
+  oracle-canary:
+    - fix-git
+
+# harbor: CLI name passed to `harbor run -a`. model is provider/model.
+# env_any: ready if any listed variable is non-empty. Empty env_any
+# means no key is required (oracle). skipped agents are never invoked.
+agents:
+  oracle:
+    harbor: oracle
+    model: null
+    env_any: []
+    skipped: false
+  claude-code:
+    harbor: claude-code
+    model: anthropic/claude-sonnet-4-5
+    env_any:
+      - ANTHROPIC_API_KEY
+    skipped: false
+  codex:
+    harbor: codex
+    model: openai/gpt-5.5
+    env_any:
+      - OPENAI_API_KEY
+      - CODEX_API_KEY
+    skipped: false
+  pi:
+    harbor: pi
+    model: anthropic/claude-sonnet-4-5
+    env_any:
+      - ANTHROPIC_API_KEY
+    skipped: false
+  dsh:
+    harbor: null
+    model: null
+    env_any: []
+    skipped: true
+    reason: >-
+      DeepSeek Harness has no Harbor BaseInstalledAgent. Headless
+      `pnpm dsh --profile headless` is not the L2 capability gate.

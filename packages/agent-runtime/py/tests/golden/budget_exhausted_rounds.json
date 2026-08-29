@@ -1,0 +1,92 @@
+{
+ "name": "budget_exhausted_rounds",
+ "description": "maxRounds=2 with a model that keeps calling tools ends budget_exhausted.",
+ "config": {
+  "maxRounds": 2
+ },
+ "tools": [
+  {
+   "name": "ping",
+   "mode": "read",
+   "result": {
+    "pong": true
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "ping",
+     "arguments": {
+      "n": 1
+     }
+    }
+   ]
+  },
+  {
+   "toolCalls": [
+    {
+     "id": "c2",
+     "name": "ping",
+     "arguments": {
+      "n": 2
+     }
+    }
+   ]
+  }
+ ],
+ "golden": {
+  "completion": {
+   "status": "budget_exhausted",
+   "reason": "reached maxRounds=2 runaway guard"
+  },
+  "toolOutcomes": [
+   {
+    "name": "ping",
+    "success": true
+   },
+   {
+    "name": "ping",
+    "success": true
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "ping"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 0,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "ping"
+    ],
+    "toolCallCount": 1,
+    "toolErrorCount": 0,
+    "decisionStatus": "executing"
+   },
+   {
+    "round": 1,
+    "traceStepId": "round_1",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [],
+    "toolCallCount": 0,
+    "toolErrorCount": 0,
+    "decisionStatus": "budget_exhausted"
+   }
+  ]
+ }
+}

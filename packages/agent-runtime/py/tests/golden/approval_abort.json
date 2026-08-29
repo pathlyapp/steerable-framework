@@ -1,0 +1,76 @@
+{
+ "name": "approval_abort",
+ "description": "Abort on the first call ends the turn failed; the second call gets a synthetic loop.abort_skip response.",
+ "approval": "abort",
+ "assertHistory": true,
+ "tools": [
+  {
+   "name": "delete_a",
+   "mode": "destructive",
+   "result": {
+    "ok": 1
+   }
+  },
+  {
+   "name": "delete_b",
+   "mode": "destructive",
+   "result": {
+    "ok": 2
+   }
+  }
+ ],
+ "providerScript": [
+  {
+   "toolCalls": [
+    {
+     "id": "c1",
+     "name": "delete_a",
+     "arguments": {}
+    },
+    {
+     "id": "c2",
+     "name": "delete_b",
+     "arguments": {}
+    }
+   ]
+  }
+ ],
+ "transcriptContains": [
+  "loop.abort_skip",
+  "golden abort"
+ ],
+ "golden": {
+  "completion": {
+   "status": "failed",
+   "reason": "approval aborted: golden abort"
+  },
+  "toolOutcomes": [
+   {
+    "name": "delete_a",
+    "success": false,
+    "error": "golden abort"
+   }
+  ],
+  "trajectory": [
+   {
+    "round": 0,
+    "traceStepId": "round_0",
+    "finishReason": "tool_calls",
+    "textLength": 0,
+    "toolCalls": [
+     "delete_a",
+     "delete_b"
+    ],
+    "toolCallCount": 2,
+    "toolErrorCount": 1,
+    "decisionStatus": "failed"
+   }
+  ],
+  "historyKinds": [
+   "user",
+   "assistant",
+   "tool",
+   "loop.abort_skip"
+  ]
+ }
+}
