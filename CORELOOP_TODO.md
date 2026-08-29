@@ -921,10 +921,19 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       精确比对、assistant 前缀容忍展示追加），模型跨轮记住 tool 轮与
       注入片段，world-state diff 在生产真正生效；`HistorySeed` 带
       `message_kinds` 保真 fork 后的 reconciliation。
-    - [ ] **工具曝光分层**：注册 ≠ 曝光，工具列表在外部接入后保持有界。
+    - [x] **工具曝光分层** ✅ 2026-08-29：`ToolExposure` 三层
+      （`direct` / `deferred` / `hidden`，codex `tool_executor.rs` 同构）
+      落在 `RegisteredTool` 上，`@tool` / `register` / `register_remote`
+      全链路透传；`describe_model()` 只出 direct 层（模型可见列表有界），
+      `describe()` 保留全量供宿主自省；dispatch 不按层设卡（发现即可调）。
+      deferred 层的发现缝是 `tool_search.py`：`register_tool_search` 注册
+      一个 direct 层搜索工具，AND 语义关键词匹配 deferred 名录（name 命中
+      权重高于 description），返回完整 schema，命中即调，结果有界
+      （默认 5，封顶 20）。hidden 层不进搜索、不进 unknown-tool 建议
+      （不再泄漏进模型可见错误文本）。
     - [ ] **MCP**：落到能承载它的系统里（前置：逐工具超时 ✅、每 server
       目录上限、确定性命名 `mcp__<server>__<tool>`、逐轮不可变工具绑定、
-      曝光分层）。
+      曝光分层 ✅）。
   - [ ] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
     回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
     → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →

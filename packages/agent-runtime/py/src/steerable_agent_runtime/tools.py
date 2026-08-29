@@ -22,7 +22,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from steerable_agent_harness.policy import ToolMode, decide_tool_mode
 from steerable_agent_harness.safety import classify_shell_command
@@ -34,6 +34,21 @@ logger = logging.getLogger(__name__)
 
 
 ToolHandler = Callable[..., Any] | Callable[..., Awaitable[Any]]
+
+#: Where a registered tool is visible to the model (codex
+#: ``tools/src/tool_executor.rs`` converged on the same three tiers):
+#:
+#: * ``"direct"``   — in the model-visible tool list (today's behavior for
+#:   everything).
+#: * ``"deferred"`` — dispatchable but omitted from the initial list;
+#:   discoverable through the ``tool_search`` seam (`tool_search.py`).
+#: * ``"hidden"``   — dispatch-only; never model-visible, excluded from
+#:   discovery and from unknown-tool suggestions.
+#:
+#: Exposure is orthogonal to registration: every registered tool dispatches
+#: by name regardless of tier, so a tool the model discovered (or a host
+#: invoked directly) runs without being re-listed.
+ToolExposure = Literal["direct", "deferred", "hidden"]
 
 
 @dataclass(slots=True)
@@ -48,6 +63,7 @@ class RegisteredTool:
     #: (no side effects, no shared mutable state). Auto-derived from ``mode``
     #: at registration (read → safe) unless explicitly overridden.
     concurrency_safe: bool = False
+    exposure: ToolExposure = "direct"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_openai_function(self) -> dict[str, Any]:
@@ -81,6 +97,7 @@ class ToolRouter:
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
         concurrency_safe: bool | None = None,
+        exposure: ToolExposure = "direct",
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
         resolved_name = name or getattr(handler, "__name__", None)
@@ -102,6 +119,7 @@ class ToolRouter:
             concurrency_safe=(
                 concurrency_safe if concurrency_safe is not None else resolved_mode == "read"
             ),
+            exposure=exposure,
             metadata=dict(metadata or {}),
         )
         self._tools[resolved_name] = tool_meta
@@ -117,6 +135,7 @@ class ToolRouter:
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
         concurrency_safe: bool | None = None,
+        exposure: ToolExposure = "direct",
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
         """Register a tool whose execution is delegated to a remote peer.
@@ -145,6 +164,7 @@ class ToolRouter:
             schema=schema,
             require_consent=require_consent,
             concurrency_safe=concurrency_safe,
+            exposure=exposure,
             metadata={**(metadata or {}), "remote": True},
         )
 
@@ -155,7 +175,30 @@ class ToolRouter:
         return list(self._tools.values())
 
     def describe(self) -> list[dict[str, Any]]:
+        """OpenAI descriptors for every registered tool (introspection).
+
+        This is the host-facing inventory (``tool/list`` RPC), not the
+        model-visible list — use `describe_model` for the loop's ``tools``.
+        """
         return [t.to_openai_function() for t in self._tools.values()]
+
+    def describe_model(self) -> list[dict[str, Any]]:
+        """OpenAI descriptors for the model-visible (``direct``) tier only.
+
+        Deferred and hidden tools stay registered and dispatchable but are
+        omitted here, so the offered list stays bounded as registrations
+        grow (MCP catalogs, host tool surfaces). Deferred tools are
+        discoverable through the ``tool_search`` seam.
+        """
+        return [
+            t.to_openai_function()
+            for t in self._tools.values()
+            if t.exposure == "direct"
+        ]
+
+    def deferred_tools(self) -> list[RegisteredTool]:
+        """Registrations in the deferred tier, in registration order."""
+        return [t for t in self._tools.values() if t.exposure == "deferred"]
 
     def get(self, name: str) -> RegisteredTool | None:
         return self._tools.get(name)
@@ -176,17 +219,24 @@ class ToolRouter:
             # Quick-fail with a nudge toward legal alternatives (ported from
             # deeppath-api's `_suggest_similar_tools`): difflib with a
             # permissive cutoff — the goal is suggestion, not auto-correction.
+            # Only model-discoverable tiers are named: hidden tools must not
+            # leak into model-visible error text.
+            discoverable = [
+                name
+                for name, registered in self._tools.items()
+                if registered.exposure != "hidden"
+            ]
             suggestions = difflib.get_close_matches(
-                call.name, list(self._tools), n=3, cutoff=0.4
+                call.name, discoverable, n=3, cutoff=0.4
             )
             error = f"Unknown tool: {call.name}"
             if suggestions:
                 error += f". Did you mean: {', '.join(suggestions)}?"
-            elif self._tools:
+            elif discoverable:
                 # Garbage names (provider format-marker leaks, hallucinated
                 # qualifiers) defeat fuzzy matching — list the valid set so
                 # the model can re-issue the call correctly next round.
-                error += f". Available tools: {', '.join(self._tools)}"
+                error += f". Available tools: {', '.join(discoverable)}"
             return ToolResult(
                 success=False,
                 error=error,
@@ -292,6 +342,7 @@ def tool(
     schema: dict[str, Any] | None = None,
     require_consent: bool | None = None,
     concurrency_safe: bool | None = None,
+    exposure: ToolExposure = "direct",
     router: ToolRouter | None = None,
 ) -> Callable[[ToolHandler], ToolHandler]:
     """Decorator form of `ToolRouter.register()`.
@@ -317,6 +368,7 @@ def tool(
             "schema": schema,
             "require_consent": require_consent,
             "concurrency_safe": concurrency_safe,
+            "exposure": exposure,
         }
         handler.__steerable_tool_meta__ = meta
         if router is not None:
@@ -328,6 +380,7 @@ def tool(
                 schema=schema,
                 require_consent=require_consent,
                 concurrency_safe=concurrency_safe,
+                exposure=exposure,
             )
         return handler
 

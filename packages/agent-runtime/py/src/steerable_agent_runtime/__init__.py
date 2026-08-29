@@ -113,7 +113,8 @@ from .tokens import (
     factor_for_model,
     register_model_factor,
 )
-from .tools import RegisteredTool, ToolRouter, tool
+from .tool_search import TOOL_SEARCH_NAME, register_tool_search, tool_search_descriptor
+from .tools import RegisteredTool, ToolExposure, ToolRouter, tool
 from .tracing import TraceRecorder
 from .transport import TransportAdapter
 from .world_state import (
@@ -189,9 +190,11 @@ __all__ = [
     "StorageError",
     "SubagentConfig",
     "SubagentExecutor",
+    "TOOL_SEARCH_NAME",
     "TextPart",
     "ToolDispatchError",
     "ToolExecutor",
+    "ToolExposure",
     "MODEL_TOKEN_FACTORS",
     "ModelCalibration",
     "ToolRouter",
@@ -235,6 +238,7 @@ __all__ = [
     "message_to_dict",
     "project_transcript",
     "reduce_execution_state",
+    "register_tool_search",
     "render_skill_catalog",
     "select_catalog",
     "should_run_grounding_judge",
@@ -242,6 +246,7 @@ __all__ = [
     "subagent_tool_descriptor",
     "text_parts",
     "tool",
+    "tool_search_descriptor",
 ]
 
 __version__ = "0.1.0"

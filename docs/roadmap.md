@@ -349,9 +349,15 @@ The order is the argument:
    suffixes), so the model keeps its tool work across turns and the diff
    actually engages in production. This is what makes cache stability
    permanent instead of a tuning exercise.
-3. **Tool exposure tiers.** Registration and exposure become orthogonal,
-   so the tool list stays bounded once it is no longer authored
-   in-house.
+3. **Tool exposure tiers** ✅ landed 2026-08-29. `RegisteredTool` carries
+   `direct` / `deferred` / `hidden`; `describe_model()` lists only the
+   direct tier while dispatch stays exposure-agnostic, so registration and
+   exposure are orthogonal and the offered list stays bounded once tools
+   are no longer authored in-house. The deferred tier is discoverable
+   through the `tool_search` seam (`tool_search.py`): one direct-tier
+   search tool over the deferred inventory, returning full schemas so a
+   match is callable the next round. Hidden tools leak nowhere — not into
+   search results, not into unknown-tool suggestions.
 4. **MCP.** Landing into a system that can hold it.
 
 #### The MCP ordering decision
