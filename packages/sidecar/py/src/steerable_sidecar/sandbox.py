@@ -45,6 +45,7 @@ import argparse
 import os
 import platform
 import re
+import shlex
 import sys
 from collections.abc import Sequence
 
@@ -245,6 +246,64 @@ def seatbelt_argv(profile: str, argv: list[str]) -> list[str]:
     """
 
     return [MACOS_SEATBELT_EXECUTABLE, "-p", profile, *argv]
+
+
+class SeatbeltExecBackend:
+    """Per-exec Seatbelt backend for ``SandboxedToolExecutor`` (layer 2).
+
+    The tool's command runs under ``sandbox-exec`` with a deny-by-default
+    profile from the same generator as the sidecar's own (layer-1) profile,
+    but with tool-execution defaults: no network unless declared, writes
+    confined to the declared roots plus system scratch. The profile travels
+    inline in the rewritten command string, so nothing is left on disk and
+    the command can be spawned by whatever process ultimately executes it
+    (the desktop's Electron host over the reverse channel, a CLI, tests).
+
+    Linux Landlock is the deliberate follow-up backend; on other platforms
+    construct nothing (``seatbelt_available()`` gates) and the executor
+    reports ``enforcement: "none"``.
+    """
+
+    name = "seatbelt"
+
+    def __init__(
+        self,
+        *,
+        writable_roots: Sequence[str] | None = None,
+        network: bool = False,
+        allowed_hosts: Sequence[str] | None = None,
+        shell: str = "/bin/sh",
+    ) -> None:
+        self._profile = build_seatbelt_profile(
+            writable_roots=list(writable_roots or []),
+            network=network,
+            allowed_hosts=allowed_hosts,
+        )
+        self._network = network
+        self._allowed_hosts = list(allowed_hosts) if allowed_hosts is not None else None
+        self._shell = shell
+
+    @property
+    def enforcement(self) -> str:
+        """``full`` when egress is denied or pinned to localhost endpoints;
+        ``partial`` when outbound is open or enforced port-only."""
+        if not self._network:
+            return "full"
+        if self._allowed_hosts is not None and all(
+            _parse_host_entry(entry)[0] in _LOCALHOST_NAMES
+            for entry in self._allowed_hosts
+        ):
+            return "full"
+        return "partial"
+
+    def wrap_command(self, command: str) -> str:
+        """Render the sandboxed shell string for one command.
+
+        Every argv part is single-quoted, so the string is safe to hand to
+        the same shell that would have run the original command.
+        """
+        argv = seatbelt_argv(self._profile, [self._shell, "-c", command])
+        return " ".join(shlex.quote(part) for part in argv)
 
 
 def main() -> int:

@@ -203,7 +203,7 @@ something a host can branch on or show in a settings panel.
 | Per-tool timeouts | Server and caller timeouts composed with `min()` | None; `soft_timeout_ms` is only checked at round boundaries (`loop.py:425-429`) | **Significant** |
 | Tool exposure tiers | `Direct / Deferred / Hidden` — registration ≠ exposure (`codex-rs/tools/src/tool_executor.rs:51-70`) | All registered tools are exposed; `tools` is a flat list | **Significant** (blocks MCP at scale) |
 | MCP | Full client with identity-keyed reuse, per-server catalog caps, name qualification, immutable per-step binding | None | **Significant** |
-| Tool-execution sandbox | Per-exec Seatbelt / seccomp / restricted token driven by per-turn policy | Sidecar process only (`docs/spec/safety.md:116`) | **Significant** |
+| Tool-execution sandbox | Per-exec Seatbelt / seccomp / restricted token driven by per-turn policy | `SandboxedToolExecutor` + `SeatbeltExecBackend` (Wave 3, shell/subprocess; enforcement reported as a value, `require_full` fails closed) | Closed for shell/subprocess; Linux Landlock pending |
 | Egress control | Allow-listed | Open `network-outbound` (`docs/spec/safety.md:99`) | **Significant** |
 | Approval algebra | 8-variant decision, 3 persistence scopes, `Denied{reason}` distinct from `Abort` | `require_consent` / `consent_granted` booleans | **Significant** |
 | Declared RPC concurrency | `ClientRequestSerializationScope` per method (`codex-rs/app-server-protocol/src/protocol/common.rs:128-139`) | "ordered by their JSON-RPC `id`" (`docs/spec/sidecar.md:162-163`) — not an ordering guarantee | **Significant** |
@@ -407,9 +407,34 @@ cache-friendly from day one.
    timeoutMs, storePath}` on `chat.stream` — absent means no approval layer
    (legacy behavior); `host` mode asks the host UI over the reverse channel
    (`approval.request`) and fails closed when the host can't answer.
-2. Tool-execution sandbox, starting with shell and subprocess only.
+2. **Tool-execution sandbox** ✅ landed 2026-08-29 (`sandboxed.py` +
+   `SeatbeltExecBackend` in the sidecar's `sandbox.py`), shell/subprocess
+   only. `SandboxedToolExecutor` is a `ToolExecutor` decorator (the same
+   seam as `ApprovalExecutor`): it rewrites a shell call's `command`
+   argument into a sandboxed invocation and delegates, so it stands in
+   front of any dispatch path — in the desktop deployment the rewritten
+   command travels over the reverse channel and the host's shell spawns it
+   confined, per-exec Seatbelt with zero sandbox mechanics in the host.
+   The `SandboxBackend` protocol is pluggable (Seatbelt today, E2B-class
+   remote sandboxes later); the Seatbelt backend reuses the layer-1 profile
+   generator with tool-execution defaults (deny-by-default, no network
+   unless declared, writes confined to declared roots plus system scratch)
+   and carries the profile inline in the command string. Enforcement is a
+   return value, not a log line (dsh's `SandboxEnforcement` lesson): the
+   result's `data["_sandbox"]` marker records `{backend, enforcement}`
+   (`full` / `partial` / `none`) in the transcript, and `require_full`
+   denies a call before execution when the available enforcement is weaker
+   than `full`. The sidecar wires it as `execSandbox: {enabled,
+   writableRoots, network, allowedHosts, shell, tools, commandArg,
+   requireFull}` on `chat.stream` — absent means unconfined (legacy
+   behavior); the wrap order is base → sandbox → approval → subagent so
+   the approver reviews the original command. Linux Landlock is the
+   deliberate follow-up backend.
 3. AG-UI and ACP transports.
 4. A golden-trajectory eval gate reusing the existing `replay.py` fixtures.
+   Public capability evals (Terminal-Bench 2.1 cheap-12 via Harbor
+   `claude-code` / `codex` / `pi`) live in `evals/` and are a scheduled
+   job, not a required merge check.
 
 ## Protocol positioning (decided)
 
@@ -475,6 +500,7 @@ part of this work rather than as part of a freeze.
 
 ## Related
 
+- [Evals](evals.md) — Terminal-Bench 2.1 cheap-12 via Harbor
 - [Framework Comparison](comparison.md) — where Steerable sits against the field
 - [CoreLoop spec](spec/core-loop.md) — the loop and its event taxonomy
 - [Safety spec](spec/safety.md) — the two-layer model this page critiques

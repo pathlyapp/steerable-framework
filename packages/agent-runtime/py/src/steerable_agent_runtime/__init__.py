@@ -79,6 +79,12 @@ from .loop import (
     ToolExecutor,
 )
 from .pseudo import extract_inline_tool_calls
+from .sandboxed import (
+    DEFAULT_SHELL_TOOLS,
+    SandboxBackend,
+    SandboxEnforcement,
+    SandboxedToolExecutor,
+)
 from .recording import (
     DEFAULT_MAX_ITEM_TOKENS,
     InMemoryRequestSink,
@@ -176,6 +182,7 @@ __all__ = [
     "CoreLoop",
     "DEFAULT_MAX_ITEM_TOKENS",
     "DEFAULT_MAX_SERVER_TOOLS",
+    "DEFAULT_SHELL_TOOLS",
     "EAGER_PRIORITY_THRESHOLD",
     "ExecutionBudget",
     "FilesystemSkillProvider",
@@ -216,6 +223,9 @@ __all__ = [
     "RetryHooks",
     "RewriteRequest",
     "RouterToolExecutor",
+    "SandboxBackend",
+    "SandboxEnforcement",
+    "SandboxedToolExecutor",
     "SessionApprovalCache",
     "SkillConfig",
     "SkillDefinition",

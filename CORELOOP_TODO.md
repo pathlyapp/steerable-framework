@@ -978,6 +978,33 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       包装在 executor 最内层，子 agent 的工具调用同样过审批。测试 20
       （框架：代数/域/超时/桥接/loop 回喂与 abort 收尾）+ 7（sidecar：
       auto/host/不可达/跨轮 session 携带/缺省不变）。
+    - [x] **工具执行沙箱（shell/subprocess）** ✅ 2026-08-29：
+      `sandboxed.py`——`SandboxedToolExecutor` 是 ToolExecutor 装饰器
+      （与 ApprovalExecutor 同缝）：把 shell 类调用的 `command` 参数重写
+      为沙箱化调用串再委托，因此立在任意分发路径之前——桌面部署下被
+      重写的命令经反向通道到宿主 shell 执行，宿主零沙箱机制知识即得逐
+      exec Seatbelt。`SandboxBackend` 协议（`name` / `enforcement` /
+      `wrap_command`）可插拔：sidecar `sandbox.py` 新增
+      `SeatbeltExecBackend` 参考实现——复用 layer-1 profile 生成器但按
+      工具执行默认收紧（deny-by-default、缺省断网、写限声明根 + 系统
+      scratch），profile 内联进命令串（`-p`），不留临时文件、命令由谁
+      spawn 都可以。采纳 dsh 的 `SandboxEnforcement: full | partial |
+      none` 作为**返回值**：结果 `data["_sandbox"]` 带
+      `{backend, enforcement}` 标记进 transcript（模型可见，沙箱拒绝
+      与命令失败可区分）；`require_full=True` 时 enforcement 不足 full
+      （无后端 / 仅 partial）在执行前拒绝（`sandbox_unavailable`），
+      替代现状「大声记日志并继续」。enforcement 判定诚实：断网或
+      egress 钉死 localhost = full；出网全开或非 localhost 条目退化为
+      按端口 = partial。sidecar 接线：`chat.stream` 新增
+      `execSandbox: {enabled, writableRoots, network, allowedHosts,
+      shell, tools, commandArg, requireFull}`（缺省 = 不收容，行为不
+      变）；包装顺序 base → sandbox → approval → subagent——审批器看到
+      的是**原始命令**而非 sandbox-exec 调用串。测试 8（框架：重写/
+      标记/透传/require_full 双向/自定义工具集/非命令形调用）+ 10
+      （sidecar backend：enforcement 三档判定、sh -n 可解析、**真实
+      sandbox-exec 冒烟**——声明根可写、$HOME 写被内核拒绝、缺省断网）
+      + 5（sidecar 接线：重写生效/缺省不变/非 shell 不动/requireFull
+      无后端拒绝/端到端内核收容）。Linux Landlock 后端是刻意的后续项。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；

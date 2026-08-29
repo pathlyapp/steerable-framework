@@ -151,6 +151,27 @@ Hosts integrating the sandbox must:
 
 The reference integration is the desktop supervisor
 (`deeppath-agent/src/sidecar/supervisor.ts`, `STEERABLE_SIDECAR_SANDBOX=1`).
-What the sandbox deliberately does **not** confine: tool execution. In the
-desktop deployment tools run in the host process over the reverse channel,
-gated by the layer-2 classifier plus the consent UI.
+
+## Tool-execution sandbox (layer 3, per-exec)
+
+Wave 3 added the opt-in third layer: `SandboxedToolExecutor`
+(`agent-runtime/sandboxed.py`), a `ToolExecutor` decorator that rewrites a
+shell/subprocess call's `command` into a sandboxed invocation before
+dispatch. Because the rewrite happens before the reverse channel, the
+desktop host's shell spawns the confined command without learning any
+sandbox mechanics — per-exec Seatbelt in the Electron deployment. The
+backend is pluggable (`SandboxBackend`); the reference
+`SeatbeltExecBackend` reuses the layer-1 profile generator with
+tool-execution defaults (deny-by-default, no network unless declared,
+writes confined to declared roots plus system scratch).
+
+Enforcement is reported as a **value**, not a log line: every sandboxed
+result carries `data["_sandbox"] = {backend, enforcement}` with
+`enforcement: full | partial | none` (full = OS-enforced deny-by-default;
+partial = documented gap such as open or port-only egress; none = no
+backend on this platform). Deployments that require an absolute boundary
+set `requireFull` and the call is denied (`sandbox_unavailable`) before
+execution instead of passing through unconfined. The sidecar wires it as
+`execSandbox: {enabled, writableRoots, network, allowedHosts, shell,
+tools, commandArg, requireFull}` on `chat.stream`; absent means unconfined
+(legacy behavior). Linux Landlock is the deliberate follow-up backend.

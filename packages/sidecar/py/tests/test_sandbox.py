@@ -17,6 +17,7 @@ from collections.abc import Iterator
 import pytest
 from steerable_sidecar.sandbox import (
     MACOS_SEATBELT_EXECUTABLE,
+    SeatbeltExecBackend,
     build_seatbelt_profile,
     main,
     seatbelt_argv,
@@ -233,3 +234,73 @@ def test_allow_list_actually_enforced_by_seatbelt(tcp_server_port: int) -> None:
         )
     assert denied.returncode != 0
     assert "Operation not permitted" in denied.stderr.decode()
+
+
+class TestSeatbeltExecBackend:
+    """The per-exec backend (layer 2): command rewriting + enforcement value."""
+
+    def test_wrapped_string_is_shell_parseable(self) -> None:
+        backend = SeatbeltExecBackend()
+        wrapped = backend.wrap_command("echo 'hello world' && ls /tmp")
+
+        # sandbox-exec with the profile inline, running sh -c <original>.
+        # (shlex.quote leaves the safe executable path unquoted.)
+        assert wrapped.startswith(f"{MACOS_SEATBELT_EXECUTABLE} -p '")
+        # sh -n -c parses without executing: the string must never be a
+        # syntax error, on any platform (quoting survives the profile's
+        # parens and the command's own quotes).
+        parsed = subprocess.run(
+            ["/bin/sh", "-n", "-c", wrapped], capture_output=True, check=False
+        )
+        assert parsed.returncode == 0, parsed.stderr.decode()
+
+    def test_enforcement_full_when_network_denied(self) -> None:
+        assert SeatbeltExecBackend().enforcement == "full"
+        assert SeatbeltExecBackend(network=False).enforcement == "full"
+
+    def test_enforcement_partial_when_egress_open_or_port_only(self) -> None:
+        assert SeatbeltExecBackend(network=True).enforcement == "partial"
+        # Non-localhost allow-list entries degrade to port-only enforcement.
+        assert (
+            SeatbeltExecBackend(network=True, allowed_hosts=["api.example.com:443"]).enforcement
+            == "partial"
+        )
+
+    def test_enforcement_full_when_egress_pinned_to_localhost(self) -> None:
+        assert (
+            SeatbeltExecBackend(network=True, allowed_hosts=["localhost:11434"]).enforcement
+            == "full"
+        )
+
+    @pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+    def test_wrapped_command_actually_runs_confined(self, tmp_path) -> None:
+        """Real sandbox-exec smoke: the wrapped command runs, can write into
+        a declared root, and is denied outside it by the kernel."""
+        writable = tmp_path / "allowed"
+        writable.mkdir()
+        backend = SeatbeltExecBackend(writable_roots=[str(writable)])
+
+        ok = subprocess.run(
+            backend.wrap_command(f"echo hi > {writable}/f.txt"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert ok.returncode == 0, ok.stderr.decode()
+        assert (writable / "f.txt").read_text().strip() == "hi"
+
+        denied = subprocess.run(
+            backend.wrap_command("echo hi > $HOME/should-not-exist-steerable"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert denied.returncode != 0
+
+    @pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+    def test_wrapped_command_denies_network_by_default(self) -> None:
+        backend = SeatbeltExecBackend()  # network=False
+        denied = subprocess.run(
+            backend.wrap_command(
+                f"{sys.executable} -c \""
+                "import socket;s=socket.create_connection(('127.0.0.1',9),timeout=2)\""
+            ),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert denied.returncode != 0
