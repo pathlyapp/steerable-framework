@@ -35,8 +35,13 @@ What the sidecar legitimately needs:
   escape hatch (the codex stance), and denying them breaks Python
   internals that fork helpers.
 
-Linux Landlock is a deliberate follow-up; ``seatbelt_available()`` gates
-the macOS path so other platforms fall back to unsandboxed today.
+Layer 2 (per-exec) has two backends: Seatbelt on macOS and bubblewrap on
+Linux (``BwrapExecBackend`` — the dsh-proven profile: read-only root bind,
+private PID namespace with its own /proc, private /tmp, network namespace
+removed unless the call declares egress). Windows has no command-rewriting
+sandbox primitive (restricted tokens need host-side spawn support, not a
+wrapper string), so it constructs no backend and ``require_full`` refuses —
+a documented follow-up, see docs/spec/safety.md.
 """
 
 from __future__ import annotations
@@ -46,8 +51,10 @@ import os
 import platform
 import re
 import shlex
+import subprocess
 import sys
 from collections.abc import Sequence
+from functools import lru_cache
 
 MACOS_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec"
 
@@ -259,9 +266,9 @@ class SeatbeltExecBackend:
     the command can be spawned by whatever process ultimately executes it
     (the desktop's Electron host over the reverse channel, a CLI, tests).
 
-    Linux Landlock is the deliberate follow-up backend; on other platforms
-    construct nothing (``seatbelt_available()`` gates) and the executor
-    reports ``enforcement: "none"``.
+    Construct via ``select_exec_backend`` — on Linux that picks
+    ``BwrapExecBackend`` instead; on platforms with no backend it returns
+    ``None`` and the executor reports ``enforcement: "none"``.
     """
 
     name = "seatbelt"
@@ -304,6 +311,182 @@ class SeatbeltExecBackend:
         """
         argv = seatbelt_argv(self._profile, [self._shell, "-c", command])
         return " ".join(shlex.quote(part) for part in argv)
+
+
+# ---------------------------------------------------------------------------
+# Linux: bubblewrap per-exec backend
+# ---------------------------------------------------------------------------
+
+#: Trusted bwrap locations. PATH lookup is deliberately not used — a
+#: PATH-relative bwrap could resolve to an attacker-planted binary (the
+#: same rule as ``seatbelt_available``). ``/bin/bwrap`` covers usrmerge
+#: systems where /bin symlinks /usr/bin.
+BWRAP_CANDIDATE_PATHS = ("/usr/bin/bwrap", "/bin/bwrap")
+
+
+def _normalize_root(root: str) -> str:
+    """Canonicalize a writable root: ``~`` expansion, absolutized,
+    symlink-free (a symlinked component would bind-mount somewhere other
+    than the path the host declared)."""
+
+    return os.path.realpath(os.path.abspath(os.path.expanduser(root)))
+
+
+class BwrapExecBackend:
+    """Per-exec bubblewrap backend for ``SandboxedToolExecutor`` (layer 2).
+
+    The profile is the dsh-proven minimal set: the host root is bind-mounted
+    read-only, writes land only in declared roots and a private ``/tmp``
+    tmpfs, and the command gets a private PID namespace with its own
+    ``/proc`` — without it, procfs magic links (``/proc/<pid>/root`` et al.)
+    cross the read-only bind into host processes' mount views.
+
+    Network: bwrap's only egress control is the network namespace, so the
+    mapping to the executor's semantics is all-or-nothing — ``network=False``
+    unshares it (``full``); ``network=True`` shares the host's (``partial``).
+    Unlike Seatbelt, bwrap cannot pin egress to an allow-list: declared
+    ``allowed_hosts`` are accepted for interface parity but are NOT enforced
+    (still ``partial``) — hosts needing per-host egress must run a local
+    allow-listing proxy, exactly as the Seatbelt port-only note advises.
+
+    Writable roots must exist at construction time: bwrap fails the whole
+    wrapped command when a bind source is missing, so a nonexistent root is
+    rejected here (``ValueError``) instead of failing every tool call.
+    """
+
+    name = "bwrap"
+
+    def __init__(
+        self,
+        *,
+        writable_roots: Sequence[str] | None = None,
+        network: bool = False,
+        allowed_hosts: Sequence[str] | None = None,
+        shell: str = "/bin/sh",
+        executable: str | None = None,
+    ) -> None:
+        self._executable = executable or bwrap_path() or BWRAP_CANDIDATE_PATHS[0]
+        self._roots = []
+        for root in writable_roots or []:
+            normalized = _normalize_root(root)
+            if not os.path.isdir(normalized):
+                raise ValueError(
+                    f"writable root {root!r} does not exist: bwrap bind sources "
+                    "must exist before the command runs"
+                )
+            self._roots.append(normalized)
+        self._network = network
+        self._allowed_hosts = list(allowed_hosts) if allowed_hosts is not None else None
+        self._shell = shell
+
+    @property
+    def enforcement(self) -> str:
+        """``full`` when the network namespace is removed; ``partial`` when
+        egress is open (bwrap has no per-host pinning)."""
+        return "partial" if self._network else "full"
+
+    def _profile_args(self) -> list[str]:
+        args = [
+            "--ro-bind", "/", "/",
+            "--dev", "/dev",
+            "--unshare-pid",
+            "--proc", "/proc",
+            "--die-with-parent",
+            "--tmpfs", "/tmp",
+        ]
+        if not self._network:
+            args.append("--unshare-net")
+        for root in self._roots:
+            args += ["--bind", root, root]
+        return args
+
+    def argv_for(self, command: str) -> list[str]:
+        """Full sandboxed argv (also used by the availability probe, so the
+        probe exercises the same profile builder as real wraps)."""
+
+        return [self._executable, *self._profile_args(), "--", self._shell, "-c", command]
+
+    def wrap_command(self, command: str) -> str:
+        return " ".join(shlex.quote(part) for part in self.argv_for(command))
+
+
+@lru_cache(maxsize=None)
+def _probe_bwrap(executable: str) -> bool:
+    """Functional availability probe: build a real maximal wrap (network
+    namespace included — the default wraps use it, so a host that cannot
+    create one must be rejected here) and run a no-op in it. Version checks
+    would miss kernels/containers that have the binary but refuse namespace
+    creation; the probe is the single availability signal, cached per path."""
+
+    try:
+        probe = BwrapExecBackend(executable=executable)
+        result = subprocess.run(
+            probe.argv_for("exit 0"),
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def bwrap_path() -> str | None:
+    """First trusted bwrap path that probes usable on Linux, else ``None``."""
+
+    if platform.system() != "Linux":
+        return None
+    seen: set[str] = set()
+    for candidate in BWRAP_CANDIDATE_PATHS:
+        if not os.path.isfile(candidate):
+            continue
+        resolved = os.path.realpath(candidate)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if _probe_bwrap(candidate):
+            return candidate
+    return None
+
+
+def bwrap_available() -> bool:
+    """True on Linux when a trusted bwrap passes the functional probe."""
+
+    return bwrap_path() is not None
+
+
+def select_exec_backend(
+    *,
+    writable_roots: Sequence[str] | None = None,
+    network: bool = False,
+    allowed_hosts: Sequence[str] | None = None,
+    shell: str = "/bin/sh",
+) -> SeatbeltExecBackend | BwrapExecBackend | None:
+    """Pick the platform's per-exec backend, fail-closed.
+
+    macOS → Seatbelt, Linux → bwrap (probe-gated: a host that cannot create
+    the namespaces gets no backend, not a weaker one). Anything else →
+    ``None`` and the executor reports ``enforcement: "none"`` (with
+    ``require_full`` the call is denied instead of running unconfined).
+    """
+
+    if seatbelt_available():
+        return SeatbeltExecBackend(
+            writable_roots=writable_roots,
+            network=network,
+            allowed_hosts=allowed_hosts,
+            shell=shell,
+        )
+    path = bwrap_path()
+    if path is not None:
+        return BwrapExecBackend(
+            writable_roots=writable_roots,
+            network=network,
+            allowed_hosts=allowed_hosts,
+            shell=shell,
+            executable=path,
+        )
+    return None
 
 
 def main() -> int:

@@ -1117,6 +1117,22 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       实盘全绿：审批请求 → 模态渲染 → 真实点击「允许一次」→ 工具执行
       （工具卡 `sandbox: {enforcement: full, backend: seatbelt}`）→ 答案
       基于真实工具输出 → trace 落库。
+    - [x] **W5-1 Linux 逐 exec 沙箱后端（bwrap）**（2026-08-29）：
+      `BwrapExecBackend` 落进 `sidecar/sandbox.py`，profile 抄 dsh 已证
+      最小集（只读根绑定 + 私有 PID ns 配自有 /proc——procfs magic link
+      逃逸必修 + 私有 /tmp tmpfs + die-with-parent + 默认 unshare-net）。
+      可用性 = **功能性 probe**（真实 maximal wrap 跑 no-op，lru_cache），
+      不是版本/平台检查——实测 Docker Desktop VM 连 CAP_SYS_ADMIN 都拒
+      pivot_root（仅 --privileged 通过），版本检查会误判。后端选择收敛为
+      `select_exec_backend` 阶梯：macOS→Seatbelt，Linux→bwrap（probe 门控），
+      其余→None（requireFull 拒绝）。bwrap 无语义化出网白名单：
+      network=false→full，true→partial，allowedHosts 接受但不执行
+      （文档写明，与 Seatbelt 端口级降级同一补救：本地 egress 代理）。
+      Windows 不构造后端（受限令牌是宿主侧 spawn 支持，不是命令包装器，
+      不适配 rewriter 架构；记录在 safety.md 待后续）。验证三层矩阵：
+      默认 Docker（probe 拒→全 none，fail-closed 正确）、SYS_ADMIN
+      （仍拒）、--privileged（4 个真禁锢测试全绿：声明根可写/越界拒/
+      断网//proc/1/root 不逃逸/宿主进程表不可见）。本机 728 全绿。
     - 记录但不排期：**供应链/发布完整性**（pi 的依赖钉死、
       `min-release-age=2`、shrinkwrap、`--ignore-scripts`、OIDC 可信发布、
       发布前隔离冒烟）——我们从未把它当作一轴考虑过，值得借鉴但不阻塞产品。

@@ -174,7 +174,41 @@ set `requireFull` and the call is denied (`sandbox_unavailable`) before
 execution instead of passing through unconfined. The sidecar wires it as
 `execSandbox: {enabled, writableRoots, network, allowedHosts, shell,
 tools, commandArg, requireFull}` on `chat.stream`; absent means unconfined
-(legacy behavior). Linux Landlock is the deliberate follow-up backend.
+(legacy behavior).
+
+**Backend ladder** (`select_exec_backend`, fail-closed): macOS → Seatbelt,
+Linux → bubblewrap (`BwrapExecBackend`), anything else → no backend
+(`enforcement: "none"`). The bwrap profile is the dsh-proven minimal set:
+read-only host-root bind, private PID namespace with its own `/proc`
+(without it, procfs magic links such as `/proc/<pid>/root` cross the
+read-only bind into host processes' mount views), private `/tmp` tmpfs,
+`--die-with-parent`, and `--unshare-net` unless the call declares egress.
+Two deliberate semantics differences from Seatbelt, both surfaced through
+the enforcement value rather than hidden:
+
+- bwrap's only egress control is the network namespace, so `network:
+  false` → `full`, `network: true` → `partial`. A declared `allowedHosts`
+  is accepted for interface parity but **not enforced** under bwrap (no
+  per-host pinning exists to degrade to) — hosts needing per-host egress
+  run a local allow-listing proxy, the same remedy as Seatbelt's
+  port-only note.
+- Writable roots must exist when the backend is constructed (bwrap fails
+  the whole wrapped command on a missing bind source), so a nonexistent
+  root raises at construction instead of failing every tool call.
+
+Availability is a **functional probe**, not a version or platform check:
+`bwrap_path()` runs a real maximal wrap (network namespace included) and
+caches the verdict. This matters in practice — Docker Desktop's VM denies
+`pivot_root` even with `CAP_SYS_ADMIN` and only passes under
+`--privileged`; a version check would misjudge all three. A host that
+cannot confine gets `enforcement: "none"` (and `requireFull` refusals),
+never a weaker wrap.
+
+Windows constructs no backend: its confinement primitive (restricted
+token + job object, cf. dsh's `sandbox-windows-acl`) is host-side spawn
+support, not a command wrapper, so it does not fit the rewriter
+architecture. That port is a documented follow-up; until then Windows
+reports `none` and `requireFull` refuses.
 
 ## Current product posture (2026-08-29, Wave 4 wired)
 
@@ -193,10 +227,14 @@ All three layers are **on by default** in the DeepPath desktop build:
   tunnelling but not exfiltration to an attacker HTTPS endpoint on 443.
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as
   `execSandbox: {enabled, writableRoots: [project root], network: true,
-  allowedHosts: [provider endpoint], requireFull: false}`. `requireFull`
-  is deliberately false: off-macOS the call still runs, marked
+  allowedHosts: [provider endpoint], requireFull: false}`. The backend is
+  picked per platform: Seatbelt on macOS, bwrap on Linux (probe-gated),
+  none on Windows — the call still runs where no backend exists, marked
   `_sandbox.enforcement: "none"` in the result and on the tool card —
-  honest degradation over silently breaking the product.
+  honest degradation over silently breaking the product. Note the
+  desktop's `network: true` + remote provider endpoint means `partial`
+  enforcement on both backends (open egress on bwrap, port-only on
+  Seatbelt); `requireFull` stays false until per-host egress exists.
   `STEERABLE_EXEC_SANDBOX=0` restores unconfined execution.
 - **Approval algebra** runs in host mode on every turn: the sidecar's
   `ApprovalExecutor` asks the Electron approval modal over the reverse

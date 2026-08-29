@@ -90,7 +90,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 )
 
 from .host_tools import HostApprover, HostToolExecutor
-from .sandbox import SeatbeltExecBackend, seatbelt_available
+from .sandbox import select_exec_backend
 
 logger = logging.getLogger("steerable_sidecar")
 
@@ -712,26 +712,24 @@ class Sidecar:
             else RouterToolExecutor(self.tools)
         )
         # execSandbox: opt-in per-exec confinement for shell/subprocess
-        # calls (Wave 3). The command is rewritten to run under the backend
-        # (Seatbelt on macOS) and then delegated — over toolsViaHost the
-        # confined command is spawned by the host's shell, giving the
-        # desktop per-exec Seatbelt without the host learning sandbox
-        # mechanics. Wrapped inside the approval layer so the approver
-        # reviews the ORIGINAL command, not the sandbox-exec invocation.
-        # Absent → commands run unconfined (legacy behavior).
+        # calls (Wave 3). The command is rewritten to run under the
+        # platform's backend (Seatbelt on macOS, bwrap on Linux) and then
+        # delegated — over toolsViaHost the confined command is spawned by
+        # the host's shell, giving the desktop per-exec confinement without
+        # the host learning sandbox mechanics. Wrapped inside the approval
+        # layer so the approver reviews the ORIGINAL command, not the
+        # sandboxed invocation. Absent → commands run unconfined (legacy
+        # behavior); enabled with no available backend → enforcement "none"
+        # (requireFull refuses instead).
         exec_sandbox = params.get("execSandbox")
         if isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled"):
-            backend = (
-                SeatbeltExecBackend(
-                    writable_roots=[
-                        str(r) for r in exec_sandbox.get("writableRoots") or []
-                    ],
-                    network=bool(exec_sandbox.get("network")),
-                    allowed_hosts=exec_sandbox.get("allowedHosts") or None,
-                    shell=str(exec_sandbox.get("shell") or "/bin/sh"),
-                )
-                if seatbelt_available()
-                else None
+            backend = select_exec_backend(
+                writable_roots=[
+                    str(r) for r in exec_sandbox.get("writableRoots") or []
+                ],
+                network=bool(exec_sandbox.get("network")),
+                allowed_hosts=exec_sandbox.get("allowedHosts") or None,
+                shell=str(exec_sandbox.get("shell") or "/bin/sh"),
             )
             executor = SandboxedToolExecutor(
                 executor,

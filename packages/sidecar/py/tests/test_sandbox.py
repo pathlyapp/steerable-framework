@@ -17,11 +17,14 @@ from collections.abc import Iterator
 import pytest
 from steerable_sidecar.sandbox import (
     MACOS_SEATBELT_EXECUTABLE,
+    BwrapExecBackend,
     SeatbeltExecBackend,
     build_seatbelt_profile,
+    bwrap_available,
     main,
     seatbelt_argv,
     seatbelt_available,
+    select_exec_backend,
 )
 
 
@@ -304,3 +307,223 @@ class TestSeatbeltExecBackend:
             shell=True, capture_output=True, check=False, executable="/bin/sh",
         )
         assert denied.returncode != 0
+
+
+class TestBwrapExecBackend:
+    """The Linux per-exec backend: command rewriting + enforcement value.
+
+    Construction and rendering are platform-independent; confinement itself
+    is verified with real-bwrap smoke tests (skipped without a usable bwrap
+    — the probe is the availability signal, not the platform alone).
+    """
+
+    def test_wrapped_string_is_shell_parseable(self, tmp_path) -> None:
+        backend = BwrapExecBackend(
+            writable_roots=[str(tmp_path)], executable="/usr/bin/bwrap"
+        )
+        wrapped = backend.wrap_command("echo 'hello world' && ls /tmp")
+
+        assert wrapped.startswith("/usr/bin/bwrap ")
+        parsed = subprocess.run(
+            ["/bin/sh", "-n", "-c", wrapped], capture_output=True, check=False
+        )
+        assert parsed.returncode == 0, parsed.stderr.decode()
+
+    def test_profile_pins_the_namespace_invariants(self) -> None:
+        args = BwrapExecBackend(executable="/usr/bin/bwrap").argv_for("true")
+
+        # dsh's bwrap invariant: a private PID namespace with its own
+        # /proc — without it, procfs magic links (/proc/<pid>/root et al.)
+        # cross the read-only root bind into host processes' mount views.
+        assert "--unshare-pid" in args
+        assert "--proc" in args
+        assert "--ro-bind" in args
+        assert "--die-with-parent" in args
+        # Command runs after the separator, under the configured shell.
+        assert args[-4:] == ["--", "/bin/sh", "-c", "true"]
+
+    def test_network_denied_by_default(self) -> None:
+        args = BwrapExecBackend(executable="/usr/bin/bwrap").argv_for("true")
+        assert "--unshare-net" in args
+
+    def test_network_declared_shares_host_network(self) -> None:
+        args = BwrapExecBackend(executable="/usr/bin/bwrap", network=True).argv_for("true")
+        assert "--unshare-net" not in args
+
+    def test_enforcement_full_when_network_denied(self) -> None:
+        assert BwrapExecBackend(executable="/usr/bin/bwrap").enforcement == "full"
+        assert (
+            BwrapExecBackend(executable="/usr/bin/bwrap", network=False).enforcement
+            == "full"
+        )
+
+    def test_enforcement_partial_when_egress_open(self) -> None:
+        assert (
+            BwrapExecBackend(executable="/usr/bin/bwrap", network=True).enforcement
+            == "partial"
+        )
+        # bwrap cannot pin egress per host: a declared allow-list is
+        # accepted for interface parity but does NOT raise enforcement.
+        assert (
+            BwrapExecBackend(
+                executable="/usr/bin/bwrap",
+                network=True,
+                allowed_hosts=["localhost:11434"],
+            ).enforcement
+            == "partial"
+        )
+
+    def test_writable_root_is_bound_read_write(self, tmp_path) -> None:
+        root = tmp_path / "ws"
+        root.mkdir()
+        args = BwrapExecBackend(
+            writable_roots=[str(root)], executable="/usr/bin/bwrap"
+        ).argv_for("true")
+        bind_at = args.index("--bind")
+        assert args[bind_at + 1] == str(root)
+        assert args[bind_at + 2] == str(root)
+        # Scratch is a private tmpfs, not the host's /tmp.
+        tmpfs_at = args.index("--tmpfs")
+        assert args[tmpfs_at + 1] == "/tmp"
+
+    def test_writable_root_must_exist(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="does not exist"):
+            BwrapExecBackend(
+                writable_roots=[str(tmp_path / "missing")], executable="/usr/bin/bwrap"
+            )
+
+    def test_symlinked_root_is_resolved(self, tmp_path) -> None:
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        backend = BwrapExecBackend(
+            writable_roots=[str(link)], executable="/usr/bin/bwrap"
+        )
+        args = backend.argv_for("true")
+        assert args[args.index("--bind") + 1] == str(real)
+
+    @pytest.mark.skipif(not bwrap_available(), reason="Linux bwrap only")
+    def test_wrapped_command_actually_runs_confined(self, tmp_path) -> None:
+        """Real bwrap smoke: the wrapped command runs, can write into a
+        declared root and the private /tmp, and is denied outside them."""
+        writable = tmp_path / "allowed"
+        writable.mkdir()
+        backend = BwrapExecBackend(writable_roots=[str(writable)])
+
+        ok = subprocess.run(
+            backend.wrap_command(f"echo hi > {writable}/f.txt && echo scratch > /tmp/s.txt"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert ok.returncode == 0, ok.stderr.decode()
+        assert (writable / "f.txt").read_text().strip() == "hi"
+
+        denied = subprocess.run(
+            backend.wrap_command("echo hi > $HOME/should-not-exist-steerable"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert denied.returncode != 0
+
+    @pytest.mark.skipif(not bwrap_available(), reason="Linux bwrap only")
+    def test_wrapped_command_denies_network_by_default(self) -> None:
+        backend = BwrapExecBackend()  # network=False
+        denied = subprocess.run(
+            backend.wrap_command(
+                f"{sys.executable} -c \""
+                "import socket;s=socket.create_connection(('127.0.0.1',9),timeout=2)\""
+            ),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert denied.returncode != 0
+
+    @pytest.mark.skipif(not bwrap_available(), reason="Linux bwrap only")
+    def test_procfs_magic_links_do_not_escape(self, tmp_path) -> None:
+        """The dsh procfs invariant: with a private PID namespace, the
+        command's /proc/1 is bwrap's own init — following /proc/1/root must
+        NOT land on the host's mount view."""
+        marker = tmp_path / "host-only-marker"
+        marker.write_text("host")
+        backend = BwrapExecBackend()
+        # /proc/1/root is the container's own root (same ro-bind view), so
+        # the host-only path is simply absent — but crucially the lookup
+        # cannot reach the HOST's /proc/1 (init/systemd) whose root would
+        # expose host mounts beyond the profile.
+        seen = subprocess.run(
+            backend.wrap_command("cat /proc/1/comm && ls /proc/1/root"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert seen.returncode == 0, seen.stderr.decode()
+        assert seen.stdout.decode().splitlines()[0] != "systemd"
+
+    @pytest.mark.skipif(not bwrap_available(), reason="Linux bwrap only")
+    def test_private_pid_namespace_hides_host_processes(self) -> None:
+        backend = BwrapExecBackend()
+        seen = subprocess.run(
+            backend.wrap_command("ls /proc | grep -c '^[0-9]'"),
+            shell=True, capture_output=True, check=False, executable="/bin/sh",
+        )
+        assert seen.returncode == 0, seen.stderr.decode()
+        # A private namespace holds only bwrap's init + the command's own
+        # descendants — a handful of entries, not the host's process table.
+        assert int(seen.stdout.decode().strip()) < 20
+
+
+class TestSelectExecBackend:
+    """The platform ladder: Seatbelt on macOS, bwrap on Linux, none else."""
+
+    def test_macos_picks_seatbelt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.seatbelt_available", lambda: True
+        )
+        backend = select_exec_backend()
+        assert isinstance(backend, SeatbeltExecBackend)
+
+    def test_linux_picks_bwrap_when_probe_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.seatbelt_available", lambda: False
+        )
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.bwrap_path", lambda: "/usr/bin/bwrap"
+        )
+        backend = select_exec_backend()
+        assert isinstance(backend, BwrapExecBackend)
+        assert backend.name == "bwrap"
+
+    def test_no_backend_when_neither_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.seatbelt_available", lambda: False
+        )
+        monkeypatch.setattr("steerable_sidecar.sandbox.bwrap_path", lambda: None)
+        assert select_exec_backend() is None
+
+    def test_bwrap_path_rejects_non_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.platform.system", lambda: "Windows"
+        )
+        from steerable_sidecar.sandbox import bwrap_path
+
+        assert bwrap_path() is None
+
+    def test_bwrap_probe_failure_means_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """A bwrap that cannot actually confine (namespace-refusing kernel
+        or container) is rejected by the functional probe — fail closed."""
+        import steerable_sidecar.sandbox as sandbox_mod
+
+        monkeypatch.setattr(sandbox_mod.platform, "system", lambda: "Linux")
+        fake = tmp_path / "bwrap"
+        fake.write_text("#!/bin/sh\nexit 1\n")
+        fake.chmod(0o755)
+        monkeypatch.setattr(
+            sandbox_mod, "BWRAP_CANDIDATE_PATHS", (str(fake),)
+        )
+        sandbox_mod._probe_bwrap.cache_clear()
+        try:
+            assert sandbox_mod.bwrap_path() is None
+        finally:
+            sandbox_mod._probe_bwrap.cache_clear()

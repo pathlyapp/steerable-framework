@@ -2,8 +2,9 @@
 
 ``execSandbox: {enabled: true, ...}`` on chat.stream wraps the tool
 executor in ``SandboxedToolExecutor``: shell commands are rewritten to run
-under the backend (Seatbelt on macOS) and results carry the
-``data._sandbox`` enforcement marker. Absent → legacy unconfined behavior.
+under the platform backend (Seatbelt on macOS, bwrap on Linux — picked by
+``select_exec_backend``) and results carry the ``data._sandbox``
+enforcement marker. Absent → legacy unconfined behavior.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime import ToolRouter
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
-from steerable_sidecar.sandbox import seatbelt_available
+from steerable_sidecar.sandbox import bwrap_available, seatbelt_available
 from steerable_sidecar.sidecar import Sidecar
 
 
@@ -139,6 +140,11 @@ async def test_exec_sandbox_rewrites_shell_command() -> None:
         assert "ls -la" in received[0]
         marker = (await _tool_payloads(sidecar))[0]["data"]["_sandbox"]
         assert marker == {"enforcement": "full", "backend": "seatbelt"}
+    elif bwrap_available():
+        assert "bwrap" in received[0]
+        assert "ls -la" in received[0]
+        marker = (await _tool_payloads(sidecar))[0]["data"]["_sandbox"]
+        assert marker == {"enforcement": "full", "backend": "bwrap"}
     else:
         # No backend on this platform: command passes through, marked none.
         assert received[0] == "ls -la"
@@ -186,7 +192,7 @@ async def test_exec_sandbox_leaves_non_shell_tools_alone() -> None:
 
 @pytest.mark.asyncio
 async def test_require_full_denies_when_no_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("steerable_sidecar.sidecar.seatbelt_available", lambda: False)
+    monkeypatch.setattr("steerable_sidecar.sidecar.select_exec_backend", lambda **_: None)
     received: list[str] = []
     provider = _ScriptedProvider(
         [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
