@@ -152,6 +152,8 @@ phase closes or a new follow-up surfaces.
 > Roughly priority-ordered. None block local Mode B development; all are
 > needed before a real public 1.0 release.
 
+- [ ] **Product capability evals** — Terminal-Bench 2.1 first (headless CoreLoop as a Harbor agent), then full SWE-bench Verified. Tracking: [`EVALS_TODO.md`](./EVALS_TODO.md).
+
 ### Publish & registry (needs credentials)
 
 - [x] **Reserve npm scope `@steerable`** — done (May 2026); all four

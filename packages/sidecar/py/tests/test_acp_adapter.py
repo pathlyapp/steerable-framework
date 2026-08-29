@@ -190,6 +190,86 @@ async def test_second_turn_seeds_from_the_record() -> None:
 
 
 @pytest.mark.asyncio
+async def test_default_workspace_bash(tmp_path, monkeypatch) -> None:
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(
+                        id="c1", name="bash", arguments={"command": "echo hi"}
+                    )
+                ),
+                LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ],
+            _text_round("said hi"),
+        ]
+    )
+    agent, client = _agent(provider)
+    session = await agent.new_session(cwd=str(tmp_path))
+    resp = await agent.prompt(session.session_id, _prompt("echo"))
+    assert resp.stop_reason == "end_turn"
+    from acp.schema import ToolCallStart
+
+    starts = [u for _, u in client.updates if isinstance(u, ToolCallStart)]
+    assert [s.title for s in starts] == ["bash"]
+
+
+@pytest.mark.asyncio
+async def test_close_session_and_in_flight() -> None:
+    import acp
+
+    never = asyncio.Event()
+
+    class _SlowProvider(_ScriptedProvider):
+        def stream(self, messages, **kwargs):
+            async def _gen():
+                yield LLMStreamChunk(content_delta="partial")
+                await never.wait()
+
+            return _gen()
+
+    agent, _ = _agent(_SlowProvider([]))
+    session = await agent.new_session(cwd="/tmp")
+    task = asyncio.ensure_future(agent.prompt(session.session_id, _prompt("go")))
+    await asyncio.sleep(0.05)
+    with pytest.raises(acp.RequestError):
+        await agent.prompt(session.session_id, _prompt("again"))
+    await agent.close_session(session.session_id)
+    resp = await task
+    assert resp.stop_reason == "cancelled"
+
+
+def test_env_provider_params_fallbacks(monkeypatch) -> None:
+    from steerable_sidecar.acp_adapter import _env_provider_params
+
+    monkeypatch.delenv("STEERABLE_API_KEY", raising=False)
+    monkeypatch.delenv("STEERABLE_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("STEERABLE_MODEL", "gpt-5.5")
+    params = _env_provider_params()
+    assert params["apiKey"] == "sk-openai"
+    assert params["baseUrl"] == "https://example.test/v1"
+    assert params["model"] == "gpt-5.5"
+
+
+def test_acp_main_serves_stdio(monkeypatch) -> None:
+    from steerable_sidecar import acp_adapter
+
+    called = {}
+
+    def _run_agent(agent) -> None:
+        called["agent"] = agent
+
+    monkeypatch.setattr(acp_adapter.acp, "run_agent", _run_agent)
+    acp_adapter.main()
+    assert called["agent"].__class__.__name__ == "SteerableAcpAgent"
+
+
+@pytest.mark.asyncio
 async def test_failed_completion_surfaces_reason_and_ends() -> None:
     class _FailingProvider(_ScriptedProvider):
         def stream(self, messages, **kwargs):

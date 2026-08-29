@@ -176,17 +176,34 @@ execution instead of passing through unconfined. The sidecar wires it as
 tools, commandArg, requireFull}` on `chat.stream`; absent means unconfined
 (legacy behavior). Linux Landlock is the deliberate follow-up backend.
 
-## Current product posture (2026-08-29)
+## Current product posture (2026-08-29, Wave 4 wired)
 
-All three layers exist as mechanisms; **none of them is on by default in
-the DeepPath desktop build.** Layer 1 requires `STEERABLE_SIDECAR_SANDBOX=1`,
-so the sidecar spawns unconfined with open egress. Layer 3 requires the
-host to send `execSandbox`, which `deeppath-agent` does not, so tool
-commands run unconfined. The approval algebra is likewise implemented and
-unwired — the desktop sends no `approval` parameter and has no approval UI,
-which is what "本地默认全部允许" in the agent's README means in practice.
+All three layers are **on by default** in the DeepPath desktop build:
 
-State this plainly rather than describing the mechanisms as the posture.
-An integrator reading only the sections above would conclude the desktop
-product is confined; it is not. Closing this is Wave 4 item 1 in
-[the roadmap](../roadmap.md).
+- **Layer 1 (sidecar process sandbox)** spawns under Seatbelt unless
+  `STEERABLE_SIDECAR_SANDBOX=0`; the egress allow-list is derived per boot
+  from the provider `baseUrl` (explicit override:
+  `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`). The hostname limitation
+  documented above applies: remote entries degrade to port-only
+  enforcement, which still breaks reverse shells / beacons / DNS
+  tunnelling but not exfiltration to an attacker HTTPS endpoint on 443.
+- **Layer 3 (per-exec sandbox)** is sent on every chat turn as
+  `execSandbox: {enabled, writableRoots: [project root], network: true,
+  allowedHosts: [provider endpoint], requireFull: false}`. `requireFull`
+  is deliberately false: off-macOS the call still runs, marked
+  `_sandbox.enforcement: "none"` in the result and on the tool card —
+  honest degradation over silently breaking the product.
+  `STEERABLE_EXEC_SANDBOX=0` restores unconfined execution.
+- **Approval algebra** runs in host mode on every turn: the sidecar's
+  `ApprovalExecutor` asks the Electron approval modal over the reverse
+  channel (`approval.request`), the user picks among the seven variants
+  (allow/deny × once/session/always + abort), and durable decisions
+  persist to `~/.steerable/approvals.json`. Unanswered prompts fail
+  closed as `timed_out` after 120s. `STEERABLE_APPROVAL=0` restores the
+  legacy ungated behavior.
+
+One wiring gap found and closed during Wave 4: the CoreLoop path used to
+drop `projectRoot` on reverse-channel tool calls, so the project-mode
+fence (cwd confinement + file-path jail) did not apply to sidecar-driven
+turns. The host now resolves the chat's project binding per `tool.invoke`
+and passes it to the `ToolRouter`.

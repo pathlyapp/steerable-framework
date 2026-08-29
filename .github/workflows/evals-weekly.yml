@@ -20,37 +20,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, codex, pi]
+        agent: [steerable, claude-code, codex, pi]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
-      - run: uv tool install harbor
+      - uses: ./.github/actions/setup-harbor
       - run: docker info
       - name: Harbor cheap-12
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
         run: |
           set +e
           uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-${{ matrix.agent }}.txt"
+            echo "${{ matrix.agent }}: skipped" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [ "$code" -eq 0 ]; then
             echo ran > "eval-status-${{ matrix.agent }}.txt"
+            echo "${{ matrix.agent }}: ran" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo failed > "eval-status-${{ matrix.agent }}.txt"
+          echo "${{ matrix.agent }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
           exit "$code"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: eval-status-${{ matrix.agent }}
-          path: eval-status-${{ matrix.agent }}.txt
+          name: eval-${{ matrix.agent }}
+          path: |
+            eval-status-${{ matrix.agent }}.txt
+            evals/jobs/${{ matrix.agent }}/**/result.json
           if-no-files-found: ignore
 
   gather:
@@ -61,7 +67,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: eval-status-*
+          pattern: eval-*
           merge-multiple: true
           path: statuses
       - name: Fail if every live agent was skipped

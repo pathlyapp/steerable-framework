@@ -61,6 +61,7 @@ from steerable_agent_runtime import (
     SkillHooks,
     StaticWorldStateSection,
     StorageError,
+    SubagentConfig,
     SubagentExecutor,
     ToolDispatchError,
     ToolRouter,
@@ -767,9 +768,22 @@ class Sidecar:
         # subagent: opt-in delegation seam — advertise the tool and answer it
         # with a bounded child CoreLoop (depth-1 by construction). Products
         # that don't want delegation (the desktop today) simply don't pass it.
+        # ``{"toolFilter": ["read_a", "read_b"]}`` narrows the child's tool
+        # domain (W4-5): filtered-out calls fail closed with
+        # tool_not_delegated, so a read-only research sub-agent cannot reach
+        # the parent's write/shell tools by construction.
         tools = params.get("tools")
         if params.get("subagent"):
-            executor = SubagentExecutor(executor, provider)
+            subagent_opts = params.get("subagent")
+            tool_filter = (
+                frozenset(str(t) for t in subagent_opts.get("toolFilter"))
+                if isinstance(subagent_opts, dict)
+                and isinstance(subagent_opts.get("toolFilter"), list)
+                else None
+            )
+            executor = SubagentExecutor(
+                executor, provider, SubagentConfig(tool_filter=tool_filter)
+            )
             tools = [*(tools or []), subagent_tool_descriptor()]
         # worldState: slow-changing host context (time, workspace, git
         # branch, …) as plain per-section data. The loop injects it once as
@@ -917,6 +931,9 @@ class Sidecar:
                 payload["error"] = data["error"]
             if "resultPreview" in data:
                 payload["resultPreview"] = data["resultPreview"]
+            if "sandbox" in data:
+                # W4-2: per-exec sandbox marker for the host's tool card.
+                payload["sandbox"] = data["sandbox"]
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "toolResult": payload}
             )
@@ -1172,8 +1189,29 @@ def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
     )
     return ChainHooks(
         CompactionHooks(max_context_tokens=max_ctx, model=params.get("model")),
+        # Spill oversized tool results to disk instead of inlining them into
+        # the transcript (W4-7: this hook existed since Wave 0 but was never
+        # on the default chain — a single megabyte-sized shell output could
+        # blow the context in one round). Opt out with
+        # STEERABLE_SIDECAR_SPILL=0; override the spill directory with
+        # STEERABLE_SPILL_DIR (default: a per-process temp dir).
+        *_spill_hooks(),
         RetryHooks(),
     )
+
+
+def _spill_hooks() -> list[LoopHooks]:
+    flag = os.environ.get("STEERABLE_SIDECAR_SPILL", "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return []
+    import tempfile
+
+    from steerable_agent_runtime import FilesystemSpillStore, SpillHooks
+
+    directory = os.environ.get("STEERABLE_SPILL_DIR") or os.path.join(
+        tempfile.gettempdir(), "steerable-spill"
+    )
+    return [SpillHooks(FilesystemSpillStore(directory))]
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
@@ -1342,10 +1380,29 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
 
         return _wrap_with_recording(
             _wrap_with_calibration(
-                AnthropicProvider(
-                    name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+                _wrap_with_cache_control(
+                    AnthropicProvider(
+                        name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+                    )
                 )
             )
         )
 
     raise ValueError(f"unknown provider: {provider_kind!r}")
+
+
+def _wrap_with_cache_control(provider: LLMProvider) -> LLMProvider:
+    """Emit prompt-cache breakpoints (Wave 4, W4-4) — default-on.
+
+    Anthropic is the only provider with an explicit breakpoint API; for the
+    implicit prefix caches (OpenAI-compatible, Ollama) the wrapper is a
+    pass-through. ``STEERABLE_CACHE_CONTROL=0`` disables it (a debugging
+    escape hatch, e.g. diffing wire bytes against a recorded fixture).
+    """
+
+    flag = os.environ.get("STEERABLE_CACHE_CONTROL", "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return provider
+    from steerable_agent_runtime import CacheControlProvider
+
+    return CacheControlProvider(provider)

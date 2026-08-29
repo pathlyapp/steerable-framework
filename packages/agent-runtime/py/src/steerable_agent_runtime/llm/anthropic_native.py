@@ -159,14 +159,25 @@ class AnthropicProvider:
         max_tokens: int | None,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
+        # Cache-shaping control keys are consumed here, never sent upstream.
+        extra = dict(extra)
+        tail_anchor = bool(extra.pop("_cache_tail_anchor", False))
         system_text, formatted = _split_system_and_messages(messages)
+        if tail_anchor:
+            _anchor_transcript_tail(formatted)
         body: dict[str, Any] = {
             "model": self.model,
             "messages": formatted,
             "max_tokens": max_tokens or self.default_max_tokens,
         }
         if system_text:
-            body["system"] = system_text
+            # Anchor 1 (system prompt) needs the block form — a bare string
+            # cannot carry a breakpoint.
+            body["system"] = (
+                [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+                if tail_anchor
+                else system_text
+            )
         eff_temperature = temperature if temperature is not None else self.default_temperature
         if eff_temperature is not None:
             body["temperature"] = eff_temperature
@@ -277,11 +288,44 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
     if "name" in tool and "input_schema" in tool:
         return tool  # already anthropic-shaped
     function = tool.get("function") or {}
-    return {
+    out: dict[str, Any] = {
         "name": function.get("name") or tool.get("name"),
         "description": function.get("description") or tool.get("description") or "",
         "input_schema": function.get("parameters") or {"type": "object", "properties": {}},
     }
+    # A cache breakpoint stamped on the OpenAI-shaped descriptor (by
+    # cache_control.place_cache_breakpoints) survives the shape transform.
+    if "cache_control" in tool:
+        out["cache_control"] = tool["cache_control"]
+    return out
+
+
+def _anchor_transcript_tail(formatted: list[dict[str, Any]]) -> None:
+    """Stamp a cache breakpoint on the tail of the transcript (pi's anchor 3).
+
+    Mutates ``formatted`` in place: the last user message's trailing content
+    block gets ``cache_control: ephemeral`` — caching the conversation
+    prefix up to that point. String content is lifted to the block form
+    first (a bare string cannot carry a breakpoint).
+    """
+    if not formatted:
+        return
+    last = formatted[-1]
+    if last.get("role") != "user":
+        return
+    marker = {"type": "ephemeral"}
+    content = last.get("content")
+    if isinstance(content, str):
+        last["content"] = [{"type": "text", "text": content, "cache_control": marker}]
+        return
+    if isinstance(content, list) and content:
+        block = content[-1]
+        if isinstance(block, dict) and block.get("type") in (
+            "text",
+            "image",
+            "tool_result",
+        ):
+            block["cache_control"] = marker
 
 
 def _parse_anthropic_event(event: Any) -> LLMStreamChunk | None:

@@ -136,6 +136,14 @@ def merge_patch(previous: Any, current: Any) -> Any | None:
 #: HTML-comment tag carrying the full snapshot inside every fragment.
 _SNAPSHOT_COMMENT = "world-state-snapshot:"
 
+#: Aggregate bound on one injected world-state fragment (Wave 4, W4-7).
+#: Sections are meant to be small comparison data; a host that stuffs a
+#: whole file listing into one would otherwise inject an unbounded blob
+#: (codex's hook-output hard-cap counterpart for this surface). An
+#: oversized section is replaced by a marker object — the injection stays
+#: bounded and the omission is visible to the model and the trace.
+DEFAULT_MAX_SECTION_BYTES = 8_192
+
 _PATCH_PREAMBLE = (
     "RFC 7386 JSON merge patch against the world state: null deletes a "
     "section, objects merge recursively, any other value replaces."
@@ -241,10 +249,33 @@ class WorldStateHooks(NoopHooks):
     state is unchanged, so a steady-state turn adds zero tokens and the
     cached prefix stays byte-stable. Stateless across runs: everything is
     derived from the transcript, so resume and fork diff correctly.
+
+    Each section's serialized snapshot is bounded at ``max_section_bytes``
+    (W4-7): an oversized section is replaced by a marker object so the
+    injection stays bounded and the omission is visible.
     """
 
-    def __init__(self, sections: Sequence[WorldStateSection]) -> None:
+    def __init__(
+        self,
+        sections: Sequence[WorldStateSection],
+        *,
+        max_section_bytes: int = DEFAULT_MAX_SECTION_BYTES,
+    ) -> None:
         self._sections = list(sections)
+        self._max_section_bytes = max_section_bytes
+
+    def _bounded_snapshot(self, section: WorldStateSection) -> Any:
+        value = _strip_nulls(section.snapshot())
+        size = len(_json(value).encode("utf-8"))
+        if size <= self._max_section_bytes:
+            return value
+        return {
+            "_omitted": True,
+            "reason": (
+                f"section '{section.id}' snapshot is {size} bytes, over the "
+                f"{self._max_section_bytes}-byte cap; not injected"
+            ),
+        }
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: Any
@@ -252,7 +283,7 @@ class WorldStateHooks(NoopHooks):
         if ctx.round_index != 0 or not self._sections:
             return PreStepAction(kind="proceed")
         current = {
-            section.id: _strip_nulls(section.snapshot()) for section in self._sections
+            section.id: self._bounded_snapshot(section) for section in self._sections
         }
         previous = last_world_state_snapshot(transcript)
         if previous is None:

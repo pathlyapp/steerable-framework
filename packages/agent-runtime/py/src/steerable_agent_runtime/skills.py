@@ -146,10 +146,24 @@ def select_catalog(
     ]
 
 
+#: Aggregate bound on the injected skill catalog (Wave 4, W4-7). A host
+#: pointing the provider at a huge skill tree must not blow the context
+#: with a single unbounded injection — codex's hook-output hard-cap
+#: counterpart for this surface. Highest-priority skills survive the cut.
+DEFAULT_MAX_CATALOG_SKILLS = 50
+
+
 def render_skill_catalog(
-    skills: Sequence[SkillSummary], *, tool_name: str = "skill"
+    skills: Sequence[SkillSummary],
+    *,
+    tool_name: str = "skill",
+    max_skills: int = DEFAULT_MAX_CATALOG_SKILLS,
 ) -> str:
-    """System-prompt section listing the catalog layer, one line per skill."""
+    """System-prompt section listing the catalog layer, one line per skill.
+
+    Bounded at ``max_skills`` entries (highest priority first); an overflow
+    line names the cut so the model knows the list is partial and can ask.
+    """
     lines = [
         "# Available skills (load on demand)",
         "",
@@ -159,9 +173,17 @@ def render_skill_catalog(
         "none match, ignore this list — do not guess unlisted skill names.",
         "",
     ]
-    for s in skills:
+    ranked = sorted(skills, key=lambda s: s.priority, reverse=True)
+    shown = ranked[:max_skills]
+    for s in shown:
         label = s.name if not s.display_name else f"{s.name}({s.display_name})"
         lines.append(f"- {label}: {s.description}" if s.description else f"- {label}")
+    omitted = len(ranked) - len(shown)
+    if omitted > 0:
+        lines.append(
+            f"- …and {omitted} more skills not listed (catalog capped at "
+            f"{max_skills}); ask if none of these fit."
+        )
     return "\n".join(lines)
 
 
@@ -512,12 +534,14 @@ class SkillHooks(NoopHooks):
         exclude: Sequence[str] = (),
         config: SkillConfig | None = None,
         ignore_conditions: bool = False,
+        max_catalog_skills: int = DEFAULT_MAX_CATALOG_SKILLS,
     ) -> None:
         self._provider = provider
         self._conditions = conditions
         self._exclude = tuple(exclude)
         self._config = config or SkillConfig()
         self._ignore_conditions = ignore_conditions
+        self._max_catalog_skills = max_catalog_skills
         self._injected = False
 
     async def pre_step(
@@ -531,7 +555,11 @@ class SkillHooks(NoopHooks):
         )
         if not catalog:
             return PreStepAction(kind="proceed")
-        section = render_skill_catalog(catalog, tool_name=self._config.tool_name)
+        section = render_skill_catalog(
+            catalog,
+            tool_name=self._config.tool_name,
+            max_skills=self._max_catalog_skills,
+        )
         return PreStepAction(
             kind="proceed",
             appends=[

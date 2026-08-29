@@ -125,6 +125,25 @@ class HistorySeed:
 #: The record is a linear log of items, declared-rewrite markers, and seeds.
 RecordEntry = HistoryItem | CompactionBoundary | HistorySeed
 
+#: Durable record format version. v1 is the pre-versioning shape (no ``v``
+#: key); writers always stamp ``v: 2``. Bump only on a structural change to
+#: the envelope shapes below — never for additive content kinds.
+RECORD_FORMAT_VERSION = 2
+
+
+class RecordFormatError(ValueError):
+    """A durable record entry this build cannot read (fail-closed).
+
+    Raised by ``entry_from_dict`` for a missing/unsupported ``v`` or an
+    unknown envelope discriminant. Deliberately a ``ValueError`` subclass so
+    existing ``except ValueError`` callers keep working; the class name is
+    the machine-greppable signal that the record — not the input — is at
+    fault. There is no skip-and-continue read path: a record this build
+    cannot fully read is refused whole rather than silently truncated
+    (dsh's required-on-read stance; the ``ignorable`` field it deleted is
+    not adopted).
+    """
+
 
 class ContextFragment:
     """Injected content with a stable, self-recognisable rendering.
@@ -458,6 +477,7 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
     if isinstance(entry, HistoryItem):
         return {
             "entry": "item",
+            "v": RECORD_FORMAT_VERSION,
             "seq": entry.seq,
             "kind": entry.kind,
             "turn_id": entry.turn_id,
@@ -467,6 +487,7 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
     if isinstance(entry, CompactionBoundary):
         return {
             "entry": "boundary",
+            "v": RECORD_FORMAT_VERSION,
             "seq": entry.seq,
             "kind": entry.kind,
             "turn_id": entry.turn_id,
@@ -476,6 +497,7 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
     if isinstance(entry, HistorySeed):
         return {
             "entry": "seed",
+            "v": RECORD_FORMAT_VERSION,
             "seq": entry.seq,
             "kind": entry.kind,
             "turn_id": entry.turn_id,
@@ -489,7 +511,20 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
 
 
 def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
-    """Inverse of ``entry_to_dict``; raises ``ValueError`` on unknown shapes."""
+    """Inverse of ``entry_to_dict``; fail-closed on unreadable shapes.
+
+    Version gate first: a missing ``v`` is the pre-versioning v1 shape
+    (accepted); a ``v`` newer than this build's ``RECORD_FORMAT_VERSION``
+    means the record was written by a newer build — refuse it whole rather
+    than guess (the desktop-downgrade case). An unknown ``entry``
+    discriminant is refused the same way. Both raise ``RecordFormatError``.
+    """
+    version = data.get("v", 1)
+    if not isinstance(version, int) or version < 1 or version > RECORD_FORMAT_VERSION:
+        raise RecordFormatError(
+            f"unsupported record format version: {version!r} "
+            f"(this build reads v1..v{RECORD_FORMAT_VERSION})"
+        )
     envelope = data.get("entry")
     if envelope == "item":
         return HistoryItem(
@@ -516,7 +551,7 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             turn_id=data.get("turn_id"),
             message_kinds=tuple(str(k) for k in data.get("message_kinds") or ()),
         )
-    raise ValueError(f"unknown record entry envelope: {envelope!r}")
+    raise RecordFormatError(f"unknown record entry envelope: {envelope!r}")
 
 
 @runtime_checkable

@@ -262,10 +262,16 @@ class LoopConfig:
     #: backstop against *hung* tools, not a budget — products with fast
     #: tools should set a tighter value. ``None`` disables.
     tool_timeout_ms: int | None = 300_000
+    #: Bound on one mid-turn ``steer()`` injection (W4-7). Oversized
+    #: injections are truncated with a visible marker. ``None`` disables
+    #: (trusted hosts only).
+    max_steer_chars: int | None = 32_000
 
     def __post_init__(self) -> None:
         if self.tool_timeout_ms is not None and self.tool_timeout_ms <= 0:
             raise ValueError("tool_timeout_ms must be positive (or None to disable)")
+        if self.max_steer_chars is not None and self.max_steer_chars <= 0:
+            raise ValueError("max_steer_chars must be positive (or None to disable)")
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +334,18 @@ class CoreLoop:
         ``run()`` is active; the message is appended to the transcript at the
         next round boundary and surfaced as a ``steer`` event. Messages sent
         after the run ends are ignored by the (already closed) consumer.
+
+        Bounded (W4-7): an oversized injection is truncated to
+        ``max_steer_chars`` with a visible marker rather than appended
+        whole — a host bug must not be able to stuff an unbounded blob
+        mid-turn.
         """
         if content:
+            cap = self._config.max_steer_chars
+            if cap is not None and len(content) > cap:
+                content = (
+                    f"{content[:cap]}\n…[steer message truncated at {cap} chars]"
+                )
             self._inbox.put_nowait(content)
 
     async def _flush_history(
@@ -1119,6 +1135,16 @@ class CoreLoop:
                             "success": result.success,
                             "durationMs": duration_ms,
                             "resultPreview": preview,
+                            # W4-2: lift the per-exec sandbox marker out of
+                            # result.data so stream consumers (tool cards)
+                            # can show the enforcement actually applied
+                            # without parsing the result body.
+                            **(
+                                {"sandbox": result.data["_sandbox"]}
+                                if isinstance(result.data, dict)
+                                and isinstance(result.data.get("_sandbox"), dict)
+                                else {}
+                            ),
                             **(
                                 {"result": _result_content(result)}
                                 if self._config.persist_tool_results

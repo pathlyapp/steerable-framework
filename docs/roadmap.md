@@ -320,9 +320,8 @@ Ordered by dependency, not by appeal. Each wave assumes the one before it.
    breaker handles it. Also a hard MCP prerequisite — a remote server
    *will* hang.
 3. **The egress allow-list** from [the safety section](#safety-the-sandbox-confines-the-wrong-process).
-   Landed as a mechanism; **the product default is still open egress**,
-   because the sidecar sandbox that carries the allow-list only engages
-   under `STEERABLE_SIDECAR_SANDBOX=1`. Wave 4 closes that.
+   Landed as a mechanism in Wave 0; the product default (sidecar sandbox
+   on, allow-list derived from the provider `baseUrl`) landed in Wave 4.
 
 ### Wave 1 — the foundation (L, one project, not three) ✅ landed 2026-08-29
 
@@ -504,30 +503,36 @@ cache-friendly from day one.
    Harbor `claude-code` / `codex` / `pi`) live in `evals/` and are a
    scheduled job, not a required merge check.
 
-### Wave 4 — plug in what is already built
+### Wave 4 — plug in what is already built ✅ landed 2026-08-29
 
 Round 6 found that the binding constraint is no longer missing mechanism
 but missing wiring, so Wave 4 adds **no new mechanisms**.
 
-1. **Turn on the safety layer in the desktop product.** Send `approval` and
-   `execSandbox` from `deeppath-agent`'s `coreloop-stream.ts`, and make the
-   sidecar's own sandbox and egress allow-list the default rather than an
-   environment opt-in. The approval half needs a real Electron approval UI,
-   so it is product work, not plumbing. The argument for doing this first is
-   uncomfortable: we claim codex's and dsh's safety posture while the
-   product runs in pi's posture (everything allowed, nothing confined)
-   *without* pi's honest "so containerize it" instruction to users.
-2. **Finish Wave 2's other half: emit `cache_control`.** Adopt pi's
-   three-anchor strategy — system prompt, last tool definition, and the tail
-   of the transcript — and send compaction's one-off summarization request
-   with retention disabled, as pi does. The read-side instrumentation
-   already shipped is exactly the acceptance signal: the cached-to-prompt
-   token ratio is the payoff reading.
-3. **Three long-recorded small holes.** Narrow the subagent's tool domain
-   (dsh's `toolFilter` → `restrict` is the template); give the durable
-   record a format version and a read policy (adopt dsh's fail-closed
-   stance, not the `ignorable` field it deleted); put `SpillHooks` in the
-   sidecar's default chain and cap the skill catalog in aggregate.
+1. **Turn on the safety layer in the desktop product** ✅. `approval` and
+   `execSandbox` now go out on every chat turn from `router.ts`; the
+   sidecar's own Seatbelt sandbox is default-on (`STEERABLE_SIDECAR_SANDBOX=0`
+   opts out) with the egress allow-list derived per boot from the provider
+   `baseUrl`. The approval half got its real Electron UI: a reverse-channel
+   bridge (`reverse-approval.ts`, fail-closed on no-window/timeout/bad
+   decision) plus a seven-variant modal (`ApprovalModal.tsx`), durable
+   decisions in `~/.steerable/approvals.json`. `execSandbox` ships with
+   `requireFull: false` — honest degradation, with the enforcement marker
+   rendered on the tool card. Wiring this surfaced and fixed a real hole:
+   reverse-channel `tool.invoke` used to drop `projectRoot`, so the
+   project-mode fence never applied to CoreLoop-driven turns.
+2. **Finish Wave 2's other half: emit `cache_control`** ✅. Three anchors
+   (system prompt, last tool definition, transcript tail) via a
+   `CacheControlProvider` decorator; compaction's one-off summarization
+   request goes out with retention disabled.
+3. **Three long-recorded small holes** ✅. Subagent tool domain narrowed
+   by construction (`tool_filter` on `SubagentConfig`, threaded through
+   the sidecar's `toolFilter` param); the durable record carries
+   `RECORD_FORMAT_VERSION` and reads fail closed; `SpillHooks` is in the
+   default chain and the skill catalog / world-state / steer injections
+   are all capped.
+
+Regression after wiring: deeppath-agent 292 tests pass,
+steerable-framework 629 tests pass, desktop build green.
 
 Deliberately **not** doing: pi-style in-process extension loading (an
 unsandboxed loader plus an unbounded `context` hook is more risk than

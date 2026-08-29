@@ -262,7 +262,13 @@ class CompactionHooks(NoopHooks):
                     "\n".join(f"[{m.role}] {m.content_text[:2000]}" for m in middle),
                 ),
             ]
-            message, _usage = await self._summarizer.complete(prompt)
+            # One-off summarization of a transcript that is about to be
+            # discarded: never write it into the prompt cache (pi's
+            # retention=none rule). The kwarg is consumed by
+            # CacheControlProvider; providers without it ignore the key.
+            message, _usage = await self._summarizer.complete(
+                prompt, cache_retention="none"
+            )
             return message.content_text
         # No summarizer configured: deterministic fallback keeps role + a short
         # excerpt per message so the thread of actions survives.

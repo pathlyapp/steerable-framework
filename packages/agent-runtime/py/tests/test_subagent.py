@@ -98,6 +98,95 @@ async def test_allow_tools_false_fails_child_tool_calls_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_filter_narrows_the_childs_tool_domain() -> None:
+    # A read-only research sub-agent: the child may call ``search`` but a
+    # write tool fails closed with tool_not_delegated — the filter is a
+    # privilege boundary, not a prompt hint.
+    router = ToolRouter()
+
+    async def search(query: str) -> str:
+        return f"results for {query}"
+
+    async def delete_everything() -> str:
+        return "deleted"  # must never run inside the child
+
+    router.register(search)
+    router.register(delete_everything)
+
+    events = await _run_parent(
+        [
+            {"tool_calls": [tc("delegate_subagent", {"task": "research"})]},
+            {"tool_calls": [tc("delete_everything")]},
+            {"tool_calls": [tc("search", {"query": "q"})]},
+            {"content": "searched instead"},
+            {"content": "parent done"},
+        ],
+        router,
+        config=SubagentConfig(tool_filter=frozenset({"search"})),
+    )
+
+    results = _tool_results(events)
+    assert results[0]["success"] is True
+    assert "searched instead" in results[0].get("resultPreview", "")
+
+
+@pytest.mark.asyncio
+async def test_tool_filter_denied_call_names_the_delegated_set() -> None:
+    # The denial text tells the child what it CAN call, so it re-issues
+    # instead of concluding the tool is broken. The child's denial is a
+    # child-internal step (the parent span only carries the final answer),
+    # so assert on the child's own completion text: a child that saw the
+    # delegated set in the denial can answer "cannot delete" truthfully.
+    router = ToolRouter()
+
+    async def search(query: str) -> str:
+        return "ok"
+
+    router.register(search)
+
+    events = await _run_parent(
+        [
+            {"tool_calls": [tc("delegate_subagent", {"task": "clean up"})]},
+            {"tool_calls": [tc("rm_rf")]},
+            {"content": "cannot delete: tool_not_delegated, have search"},
+            {"content": "parent done"},
+        ],
+        router,
+        config=SubagentConfig(tool_filter=frozenset({"search"})),
+    )
+
+    results = _tool_results(events)
+    assert results[0]["success"] is True
+    assert "tool_not_delegated" in results[0].get("resultPreview", "")
+
+
+@pytest.mark.asyncio
+async def test_tool_filter_none_keeps_whole_domain() -> None:
+    # Legacy behavior: no filter → the child reaches every parent tool.
+    router = ToolRouter()
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    router.register(add)
+
+    events = await _run_parent(
+        [
+            {"tool_calls": [tc("delegate_subagent", {"task": "add"})]},
+            {"tool_calls": [tc("add", {"a": 2, "b": 3})]},
+            {"content": "5"},
+            {"content": "parent done"},
+        ],
+        router,
+        config=SubagentConfig(tool_filter=None),
+    )
+
+    results = _tool_results(events)
+    assert results[0]["success"] is True
+    assert "5" in results[0].get("resultPreview", "")
+
+
+@pytest.mark.asyncio
 async def test_empty_task_fails_fast_without_running_a_child() -> None:
     provider_script = [
         {"tool_calls": [tc("delegate_subagent", {"task": "  "})]},

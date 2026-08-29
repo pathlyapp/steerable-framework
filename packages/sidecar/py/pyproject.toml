@@ -26,6 +26,7 @@ dependencies = [
 [project.scripts]
 steerable-sidecar = "steerable_sidecar.__main__:main"
 steerable-sidecar-acp = "steerable_sidecar.acp_adapter:main"
+steerable-sidecar-headless = "steerable_sidecar.headless:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

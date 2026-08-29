@@ -1052,6 +1052,65 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       发出的轨迹。审查记录：终局 stop 轮的 toolErrorCount 沿用
       consecutive 计数（不归零）与 budget 退出轮复用 round 序号均为
       现状语义，门禁如实钉住。
+  - [x] **Wave 4（接线，零新机制）**：第六轮复审（见下）发现 Wave 0-3 造的
+    九项机制里桌面只开了四项。这一波**不加任何机制**，只做两件事——把已建
+    的插上电（W4-1/2/3），补 Wave 2 只做了读侧的写侧（W4-4）；外加三个第五
+    轮就记录、至今未动的小口子（W4-5/6/7）。**全部完成**：回测
+    deeppath-agent 292 过 / steerable-framework 629 过 / build 绿。
+    - [x] **W4-1 桌面接线审批代数**（P0，是真产品活不是纯管道）：
+      `coreloop-stream.ts` 下发 `approval: {mode: "host", timeoutMs,
+      storePath}`，反向通道 `approval.request` 在 sidecar 侧已就绪，宿主
+      只需应答——**难的是 UI**：8 变体 × 3 持久化域要在 Electron 里可表达，
+      否则 host 模式实际退化成 `allow_once`/`deny_once` 两个按钮，代数白造。
+      验收：拒绝一次 shell 调用，模型收到 `Denied{reason}` 后继续跑；abort
+      一次，transcript 里无悬空 `tool_call`。
+      **落地**：`reverse-approval.ts` 桥（fail-closed：无窗口/超时/非法
+      决策一律 `deny_once`）+ `ApprovalModal.tsx` 七按钮模态 +
+      `~/.steerable/approvals.json` 持久化；`STEERABLE_APPROVAL=0` 退回旧
+      行为。8 变体中 `deny_for_session` 由宿主桥表达（store 三域在框架侧）。
+    - [x] **W4-2 桌面接线 `execSandbox`**（P0）：`coreloop-stream.ts` 下发
+      `execSandbox: {enabled: true, writableRoots: [工作区], network,
+      allowedHosts, requireFull}`。**`requireFull` 的缺省值需要产品决策**：
+      true 会在无 Seatbelt 的平台上直接拒掉工具调用（诚实但可能砸用户流程），
+      false 则退回「标记了 partial 但照跑」。验收：桌面跑一次
+      `local_exec_shell`，结果 `_sandbox` 标记 `enforcement=full`，且写
+      `$HOME` 被内核拒绝。
+      **落地**：`requireFull: false`（诚实降级，`_sandbox.enforcement` 上
+      工具卡）；`writableRoots` 取会话项目绑定；顺手补了一个真缺口——
+      CoreLoop 反向通道的 `tool.invoke` 原来丢 `projectRoot`，项目模式围栏
+      对 sidecar 驱动的回合不生效，现按 `context.chatId` 逐调用解析。
+    - [x] **W4-3 sidecar 沙箱与出网白名单转缺省开**（P0）：去掉
+      `STEERABLE_SIDECAR_SANDBOX=1` 的 opt-in，改为缺省开 + 显式关，
+      `allowed_hosts` 由 provider `baseUrl` 推导。**W0-3 记录的 sbpl 限制
+      在这里变成决策点**：按主机名的 enforcement 在 Seatbelt 里不可表达，
+      缺省态要么接受按端口降级（弱），要么起本地 egress 代理并只声明
+      `localhost:<代理端口>`（强，但多一个进程）。验收：
+      `docs/spec/safety.md` 的「当前产品姿态」一节可以整节删掉。
+      **落地**：缺省开 + `STEERABLE_SIDECAR_SANDBOX=0` 显式关；白名单按
+      `baseUrl` 逐次启动推导（远端主机名按 sbpl 限制降级为端口级，safety.md
+      姿态节已重写为「三层全开 + 各层逃生门」而非删掉——限制本身仍需记录）。
+    - [x] **W4-4 `cache_control` 发射**（P1，Wave 2 的另一半）：四家里我们
+      是唯一只读不写的。抄 pi 的三锚点——系统提示词 / 最后一条工具定义 /
+      transcript 尾部，压缩摘要那一次请求走 `retention: none` 且**只作用于
+      该次请求**。类型侧无需再动：W1 落的 `ContentPart` 已支持逐 block 注解
+      （这正是当初把 `content: str` 拆开的理由之一）。验收信号就是已有的读侧
+      仪表——`cachedPromptTokens / promptTokens` 命中率。
+    - [x] **W4-5 子代理工具域收窄**（P2，第五轮记录至今未动）：
+      `subagent.py:107` 现在是 `self._inner if allow_tools else _NoTools()`
+      的二元选择，子代理因此不是权限边界。抄 dsh 的 `toolFilter` →
+      `tools.restrict()`，让只读研究型子代理**按构造**打断 lethal trifecta；
+      子代理审批钉死为拒绝（dsh 的 `never`）一并做。
+    - [x] **W4-6 持久记录格式版本 + 读策略**（P2）：`history.py:519` 现在
+      对未知信封直接 `ValueError` 硬失败，触发场景是桌面用户降级。加版本
+      字段 + 采纳 dsh 的 fail-closed 读策略——注意**不要**抄它 08-25 删掉的
+      `ignorable`：dsh 是想清楚后选择更严，我们现在是「没做」而不是「选择
+      了更严」。
+    - [x] **W4-7 注入内容设界**（P2）：`SpillHooks` 进 sidecar 缺省钩子链
+      （现在造了但不在链上）；skill catalog 加聚合上限；world-state 与 steer
+      的上限一并补。参照 codex 的 hook 输出 2500 token 硬顶 + 落盘。
+    - 记录但不排期：**供应链/发布完整性**（pi 的依赖钉死、
+      `min-release-age=2`、shrinkwrap、`--ignore-scripts`、OIDC 可信发布、
+      发布前隔离冒烟）——我们从未把它当作一轴考虑过，值得借鉴但不阻塞产品。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；
@@ -1530,20 +1589,16 @@ records + 纯 reducer + SQLite）看着比我们和 dsh 都激进，但
   `spill-policy`。我们有 `spill.py` 但**不在 sidecar 缺省钩子链里**，
   skill catalog 无聚合上限、world-state 无上限、steer 无上限。
 
-**第六轮排序（P0 唯一，且不含任何新机制）**：
-- [ ] **P0 · 把已经造好的插上电**（三件，零新机制）：桌面接线审批代数
-      （需要新建 Electron 审批 UI，这是真产品活不是纯管道）、桌面接线
-      `execSandbox`、sidecar 沙箱与出网白名单转为缺省开。判据很直白：
-      我们在安全轴上宣称站 codex/dsh 那侧，但产品跑在 pi 的姿势上
-      （全放行 + 无收容），却又没有 pi 那套「所以请容器化」的诚实说明。
-- [ ] **P1 · 补完 Wave 2 的另一半：`cache_control` 发射**。抄 pi 的
-      三锚点策略（系统提示词 / 最后工具定义 / 最后一条 user 消息），
-      压缩摘要请求走 `retention: none`。我们已有的读侧仪表正好是它的
-      验收信号——命中率 cached/prompt 就是这件事的收益读数。
-- [ ] **P2 · 三个记录已久未动的小口子**：子代理工具域收窄（抄 dsh 的
-      `toolFilter` → restrict）、持久记录格式版本 + 读策略（抄 dsh 的
-      fail-closed，不抄它删掉的 `ignorable`）、`SpillHooks` 进 sidecar
-      缺省链 + skill catalog 聚合上限。
+**第六轮排序**——可执行条目在上方 **Wave 4** 波次里（W4-1 … W4-7），
+这里只留判断：
+- **P0 = W4-1/2/3（把已经造好的插上电）**。判据很直白：我们在安全轴上
+  宣称站 codex/dsh 那侧，但产品跑在 pi 的姿势上（全放行 + 无收容 + 出网
+  全开），却又没有 pi 那套「所以请容器化」的诚实说明。三件里 W4-1 是真
+  产品活（要新建 Electron 审批 UI），另两件是管道。
+- **P1 = W4-4（`cache_control` 发射）**。仪表装了、方向盘没接；四家里
+  我们是唯一只读不写的。
+- **P2 = W4-5/6/7（三个第五轮就记录、至今未动的小口子）**：子代理不是
+  权限边界、持久记录无格式版本、注入内容无界。
 - 明确**不做**：pi 式扩展运行时（进程内不沙箱加载 + 无上限 context
   钩子，风险面比收益大）；会话分支树（等真实产品需求）；`AgentHarness`
   式 lane/reducer 重写（我们的 `HistoryItem` 追加式记录已覆盖同一问

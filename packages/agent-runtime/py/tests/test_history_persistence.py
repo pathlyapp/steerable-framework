@@ -16,12 +16,14 @@ import pytest
 from steerable_agent_protocol.generated import ToolCall
 
 from steerable_agent_runtime import (
+    RECORD_FORMAT_VERSION,
     CompactionBoundary,
     ContextManager,
     CoreLoop,
     HistoryItem,
     HistorySeed,
     LLMMessage,
+    RecordFormatError,
     RewriteRequest,
     RouterToolExecutor,
     ToolRouter,
@@ -87,8 +89,52 @@ def test_entry_codec_roundtrip_all_kinds() -> None:
 
 
 def test_entry_from_dict_rejects_unknown_envelope() -> None:
-    with pytest.raises(ValueError, match="unknown record entry envelope"):
-        entry_from_dict({"entry": "mystery", "seq": 0})
+    with pytest.raises(RecordFormatError, match="unknown record entry envelope"):
+        entry_from_dict({"entry": "mystery", "seq": 0, "v": RECORD_FORMAT_VERSION})
+
+
+def test_entry_codec_stamps_and_reads_format_version() -> None:
+    # Writers stamp v=RECORD_FORMAT_VERSION; the reader round-trips it.
+    entry = HistoryItem(
+        seq=0, kind="user", message=_msg("user", "hi"), token_estimate=1
+    )
+    data = entry_to_dict(entry)
+    assert data["v"] == RECORD_FORMAT_VERSION
+    assert entry_from_dict(data) == entry
+
+
+def test_entry_from_dict_accepts_pre_versioning_v1() -> None:
+    # Records written before versioning have no ``v`` key — read as v1.
+    legacy = {
+        "entry": "item",
+        "seq": 3,
+        "kind": "user",
+        "turn_id": "t1",
+        "token_estimate": 2,
+        "message": {"role": "user", "content": [{"type": "text", "text": "old"}]},
+    }
+    entry = entry_from_dict(legacy)
+    assert isinstance(entry, HistoryItem)
+    assert entry.seq == 3 and entry.message.content_text == "old"
+
+
+def test_entry_from_dict_refuses_newer_version_fail_closed() -> None:
+    # The desktop-downgrade case: a record written by a newer build must be
+    # refused whole, never silently truncated or partially read.
+    future = {
+        "entry": "item",
+        "v": RECORD_FORMAT_VERSION + 1,
+        "seq": 0,
+        "kind": "user",
+        "message": {"role": "user", "content": [{"type": "text", "text": "x"}]},
+    }
+    with pytest.raises(RecordFormatError, match="unsupported record format version"):
+        entry_from_dict(future)
+
+
+def test_entry_from_dict_refuses_non_integer_version() -> None:
+    with pytest.raises(RecordFormatError, match="unsupported record format version"):
+        entry_from_dict({"entry": "item", "v": "2", "seq": 0})
 
 
 # ---------------------------------------------------------------------------

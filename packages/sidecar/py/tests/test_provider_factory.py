@@ -100,6 +100,34 @@ def test_recording_wrapper_default_off() -> None:
     assert not isinstance(provider, RecordingProvider)
 
 
+def test_cache_control_wrapper_default_on_for_anthropic() -> None:
+    from steerable_agent_runtime import CacheControlProvider
+
+    provider = default_llm_provider_factory(
+        {"provider": "anthropic", "model": "claude-sonnet-4-5", "apiKey": "k"}
+    )
+    assert isinstance(provider, CacheControlProvider)
+    assert provider.inner.name == "anthropic"  # type: ignore[attr-defined]
+
+
+def test_cache_control_wrapper_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    from steerable_agent_runtime import CacheControlProvider
+
+    monkeypatch.setenv("STEERABLE_CACHE_CONTROL", "0")
+    provider = default_llm_provider_factory(
+        {"provider": "anthropic", "model": "claude-sonnet-4-5", "apiKey": "k"}
+    )
+    assert not isinstance(provider, CacheControlProvider)
+
+
+def test_cache_control_wrapper_not_applied_to_openai_compat() -> None:
+    # Implicit prefix caches have no breakpoint surface — no wrapper.
+    from steerable_agent_runtime import CacheControlProvider
+
+    provider = default_llm_provider_factory({"provider": "ollama", "model": "m"})
+    assert not isinstance(provider, CacheControlProvider)
+
+
 def test_recording_wrapper_opt_in(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

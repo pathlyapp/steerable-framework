@@ -36,6 +36,7 @@ from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
 from .history import (
+    RECORD_FORMAT_VERSION,
     CompactionBoundary,
     ContextFragment,
     ContextManager,
@@ -43,6 +44,7 @@ from .history import (
     HistorySeed,
     HistoryStore,
     RecordEntry,
+    RecordFormatError,
     entry_from_dict,
     entry_to_dict,
     message_from_dict,
@@ -77,6 +79,12 @@ from .loop import (
     LoopEvent,
     RouterToolExecutor,
     ToolExecutor,
+)
+from .cache_control import (
+    CacheControlProvider,
+    CacheRetention,
+    place_cache_breakpoints,
+    system_blocks_with_cache,
 )
 from .pseudo import extract_inline_tool_calls
 from .sandboxed import (
@@ -169,6 +177,8 @@ __all__ = [
     "Approver",
     "AutoApprover",
     "BudgetExhaustedError",
+    "CacheControlProvider",
+    "CacheRetention",
     "CalibratingProvider",
     "ChainHooks",
     "CompactionBoundary",
@@ -214,7 +224,9 @@ __all__ = [
     "NoopHooks",
     "PolicyDeniedError",
     "PreStepAction",
+    "RECORD_FORMAT_VERSION",
     "RecordEntry",
+    "RecordFormatError",
     "RecordedRequest",
     "RecordingProvider",
     "RegisteredTool",
@@ -276,6 +288,8 @@ __all__ = [
     "extract_inline_tool_calls",
     "parse_grounding_verdict",
     "parse_turn_route",
+    "place_cache_breakpoints",
+    "system_blocks_with_cache",
     "entry_from_dict",
     "entry_to_dict",
     "last_world_state_snapshot",

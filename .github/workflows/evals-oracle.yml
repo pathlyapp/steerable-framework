@@ -1,15 +1,26 @@
 name: Evals oracle
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "evals/**"
       - ".github/workflows/evals-oracle.yml"
+      - ".github/actions/setup-harbor/**"
+      - "packages/sidecar/py/**"
+      - "packages/agent-runtime/py/**"
+      - "packages/agent-harness/py/**"
+      - "packages/agent-protocol/py/**"
   push:
     branches: [main]
     paths:
       - "evals/**"
       - ".github/workflows/evals-oracle.yml"
+      - ".github/actions/setup-harbor/**"
+      - "packages/sidecar/py/**"
+      - "packages/agent-runtime/py/**"
+      - "packages/agent-harness/py/**"
+      - "packages/agent-protocol/py/**"
 
 permissions:
   contents: read
@@ -27,7 +38,43 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
-      - run: uv tool install harbor
+      - uses: ./.github/actions/setup-harbor
       - run: docker info
       - name: Harbor oracle canary
-        run: uv run python -m evals.run --agent oracle --split oracle-canary
+        run: uv run python -m evals.run --agent oracle --split oracle-canary --require-mean 1.0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oracle-fix-git
+          path: evals/jobs/oracle/**/result.json
+          if-no-files-found: ignore
+
+  steerable:
+    name: Harbor steerable × fix-git
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor product canary
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set +e
+          uv run python -m evals.run --agent steerable --split oracle-canary --skip-missing-env
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::warning::steerable canary skipped (set OPENAI_API_KEY or ANTHROPIC_API_KEY)"
+            exit 0
+          fi
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: steerable-fix-git
+          path: evals/jobs/steerable/**/result.json
+          if-no-files-found: ignore

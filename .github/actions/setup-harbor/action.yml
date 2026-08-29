@@ -1,0 +1,17 @@
+name: Setup Harbor
+description: Install the pinned Harbor CLI and put it on PATH.
+
+inputs:
+  version:
+    description: Harbor version (keep in sync with evals/suite.yaml run.harbor_version)
+    required: false
+    default: "0.22.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Harbor
+      shell: bash
+      run: |
+        uv tool install "harbor==${{ inputs.version }}"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"

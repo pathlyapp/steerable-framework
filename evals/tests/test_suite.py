@@ -6,10 +6,15 @@ import pytest
 
 from evals.suite import (
     LIVE_AGENTS,
+    PINNED_HARBOR_VERSION,
+    PRODUCT_AGENT,
+    STEERABLE_IMPORT_PATH,
     SUITE_PATH,
     SuiteError,
     agent_ready,
+    dataset_org,
     harbor_argv,
+    harbor_task_name,
     load_suite,
     missing_env,
     resolve_tasks,
@@ -71,14 +76,34 @@ def test_pi_is_first_party_harbor_agent() -> None:
     assert pi.env_any == ("ANTHROPIC_API_KEY",)
 
 
-def test_live_agents_are_claude_codex_pi() -> None:
+def test_live_agents_include_product() -> None:
     suite = load_suite()
-    assert LIVE_AGENTS == ("claude-code", "codex", "pi")
-    for name in LIVE_AGENTS:
+    assert LIVE_AGENTS == ("claude-code", "codex", "pi", PRODUCT_AGENT)
+    for name in ("claude-code", "codex", "pi"):
         spec = suite.agents[name]
         assert spec.skipped is False
         assert spec.harbor == name
         assert spec.model
+    product = suite.agents[PRODUCT_AGENT]
+    assert product.skipped is False
+    assert product.harbor == STEERABLE_IMPORT_PATH
+    assert product.model == "openai/gpt-5.5"
+
+
+def test_setup_harbor_action_matches_pin() -> None:
+    action = Path(__file__).resolve().parents[2] / ".github" / "actions" / "setup-harbor" / "action.yml"
+    assert f'default: "{PINNED_HARBOR_VERSION}"' in action.read_text()
+
+
+def test_harbor_task_name_prefixes_org() -> None:
+    assert harbor_task_name("terminal-bench/terminal-bench-2-1", "fix-git") == (
+        "terminal-bench/fix-git"
+    )
+    assert harbor_task_name(
+        "terminal-bench/terminal-bench-2-1", "terminal-bench/fix-git"
+    ) == "terminal-bench/fix-git"
+    with pytest.raises(SuiteError, match="org/name"):
+        dataset_org("not-an-org")
 
 
 def test_oracle_needs_no_key() -> None:
@@ -97,6 +122,15 @@ def test_claude_code_and_pi_need_anthropic_key() -> None:
         assert agent_ready(spec, empty) is False
         assert missing_env(spec, empty) == ("ANTHROPIC_API_KEY",)
         assert agent_ready(spec, keyed) is True
+
+
+def test_steerable_accepts_any_listed_key() -> None:
+    suite = load_suite()
+    spec = suite.agents["steerable"]
+    assert agent_ready(spec, {}) is False
+    assert agent_ready(spec, {"OPENAI_API_KEY": "sk"}) is True
+    assert agent_ready(spec, {"ANTHROPIC_API_KEY": "sk"}) is True
+    assert agent_ready(spec, {"STEERABLE_API_KEY": "sk"}) is True
 
 
 def test_codex_accepts_either_openai_or_codex_key() -> None:
@@ -130,7 +164,7 @@ def test_harbor_argv_oracle_omits_model() -> None:
     assert "--agent" in argv
     assert argv[argv.index("--agent") + 1] == "oracle"
     assert "--model" not in argv
-    assert argv[argv.index("--include-task-name") + 1] == "fix-git"
+    assert argv[argv.index("--include-task-name") + 1] == "terminal-bench/fix-git"
     assert "--yes" in argv
 
 
@@ -149,7 +183,22 @@ def test_harbor_argv_pi_uses_include_task_name() -> None:
         for i, flag in enumerate(argv)
         if flag == "--include-task-name"
     ]
-    assert includes == list(CHEAP_12)
+    assert includes == [f"terminal-bench/{task}" for task in CHEAP_12]
+
+
+def test_harbor_argv_steerable_uses_import_path() -> None:
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="steerable",
+        tasks=["fix-git"],
+        jobs_dir=Path("evals/jobs/steerable"),
+        agent_setup_timeout_multiplier=3,
+    )
+    assert argv[argv.index("--agent") + 1] == STEERABLE_IMPORT_PATH
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.5"
+    assert argv[argv.index("--include-task-name") + 1] == "terminal-bench/fix-git"
+    assert argv[argv.index("--agent-setup-timeout-multiplier") + 1] == "3"
 
 
 def test_harbor_argv_rejects_dsh() -> None:

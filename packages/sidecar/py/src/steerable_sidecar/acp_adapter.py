@@ -7,8 +7,9 @@ bespoke 15-method surface. It implements the stable core of ``acp.Agent``:
 ``initialize`` / ``new_session`` / ``prompt`` / ``cancel`` /
 ``close_session``. Session loading, forking, and mode/config RPCs are
 deliberately unimplemented (the SDK's default ``None`` answers advertise
-that); the terminal/fs client bridges (agent tools backed by the editor's
-terminal) are the recorded follow-up.
+that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
+``write_file`` scoped to the session cwd (see ``workspace_tools``). Editor
+fs/terminal client bridges remain a follow-up for IDE embeddings.
 
 Multi-turn is the loop's own record-aware seeding: each session is a
 ``chat_id`` whose durable record lives in the storage adapter, so a
@@ -59,12 +60,15 @@ from acp.schema import (
 )
 from steerable_agent_runtime import (
     CoreLoop,
+    LoopConfig,
     LoopEvent,
     RouterToolExecutor,
     ToolRouter,
 )
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
+
+from .workspace_tools import workspace_tools_for_cwd
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +88,17 @@ def _env_provider_params() -> dict[str, Any]:
     return {
         "provider": os.environ.get("STEERABLE_PROVIDER", "openai_compat"),
         "model": os.environ.get("STEERABLE_MODEL", ""),
-        "baseUrl": os.environ.get("STEERABLE_BASE_URL"),
-        "apiKey": os.environ.get("STEERABLE_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+        "baseUrl": (
+            os.environ.get("STEERABLE_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("ANTHROPIC_BASE_URL")
+        ),
+        "apiKey": (
+            os.environ.get("STEERABLE_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+            or ""
+        ),
     }
 
 
@@ -106,7 +119,9 @@ class SteerableAcpAgent(acp.Agent):
 
             llm_provider_factory = default_llm_provider_factory
         self._provider_factory = llm_provider_factory
-        self._tools = tools or ToolRouter()
+        # None → per-session workspace tools (Harbor / headless). An explicit
+        # empty ToolRouter is preserved for tests that inject their own set.
+        self._tools = tools
         self._storage = storage or InMemoryStorage()
         self._conn: acp.Client | None = None
         self._sessions: dict[str, _Session] = {}
@@ -183,9 +198,15 @@ class SteerableAcpAgent(acp.Agent):
         session.stop_reason = "end_turn"
 
         provider = self._provider_factory(self._provider_params)
+        router = (
+            self._tools
+            if self._tools is not None
+            else workspace_tools_for_cwd(session.cwd)
+        )
         loop = CoreLoop(
             provider,
-            RouterToolExecutor(self._tools),
+            RouterToolExecutor(router, consent_granted=True),
+            config=LoopConfig(max_rounds=80),
             history_store=self._storage,
             record_id=session_id,
         )
@@ -193,7 +214,11 @@ class SteerableAcpAgent(acp.Agent):
         # record-aware seeding reconciles it against the durable record so
         # the model sees the full history (tool rounds included) while the
         # record stays delta-only.
-        events = loop.run(list(session.history), chat_id=session_id)
+        events = loop.run(
+            list(session.history),
+            tools=router.describe_model(),
+            chat_id=session_id,
+        )
         assistant_text: list[str] = []
         session.task = asyncio.current_task()
         try:

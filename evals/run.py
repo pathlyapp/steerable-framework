@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             n_concurrent=args.n_concurrent,
             n_attempts=args.n_attempts,
+            agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
             harbor_bin=args.harbor,
         )
     except SuiteError as exc:
@@ -78,12 +79,15 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(argv_harbor, cwd=REPO_ROOT)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT), *(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)]
+    )
+    completed = subprocess.run(argv_harbor, cwd=REPO_ROOT, env=env)
     if completed.returncode != 0:
         print(f"harbor exited {completed.returncode}", file=sys.stderr)
         return EXIT_HARBOR
-    _print_summary(jobs_dir)
-    return EXIT_OK
+    return _print_summary(jobs_dir, require_mean=args.require_mean)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -93,7 +97,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
             f"Live agents: {', '.join(LIVE_AGENTS)}. DSH is skipped."
         )
     )
-    parser.add_argument("--agent", required=True, help="oracle, claude-code, codex, or pi")
+    parser.add_argument(
+        "--agent",
+        required=True,
+        help="oracle, steerable, claude-code, codex, or pi",
+    )
     parser.add_argument("--split", default="cheap-12", help="split name from suite.yaml")
     parser.add_argument(
         "--tasks",
@@ -110,25 +118,64 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--model", help="override suite.yaml model (provider/model)")
     parser.add_argument("--n-concurrent", type=int)
     parser.add_argument("--n-attempts", type=int)
+    parser.add_argument(
+        "--agent-setup-timeout-multiplier",
+        type=float,
+        help="Harbor --agent-setup-timeout-multiplier",
+    )
+    parser.add_argument(
+        "--require-mean",
+        type=float,
+        help="fail if the latest job Mean is below this value (oracle canary)",
+    )
     parser.add_argument("--harbor", default="harbor", help="Harbor executable")
     return parser.parse_args(argv)
 
 
-def _print_summary(jobs_dir: Path) -> None:
-    results = sorted(jobs_dir.rglob("result.json"))
+def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:
+    results = sorted(jobs_dir.glob("*/result.json"))
     if not results:
-        print(f"harbor finished; no result.json under {jobs_dir}", file=sys.stderr)
-        return
+        print(f"harbor finished; no job result.json under {jobs_dir}", file=sys.stderr)
+        return EXIT_HARBOR
     latest = results[-1]
     try:
         payload = json.loads(latest.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         print(f"could not read {latest}: {exc}", file=sys.stderr)
-        return
+        return EXIT_HARBOR
     stats = payload.get("stats") if isinstance(payload, dict) else None
     print(f"harbor result: {latest}")
-    if isinstance(stats, dict):
-        print(json.dumps(stats, indent=2, sort_keys=True))
+    if not isinstance(stats, dict):
+        print(f"harbor result missing stats: {latest}", file=sys.stderr)
+        return EXIT_HARBOR
+    print(json.dumps(stats, indent=2, sort_keys=True))
+    errored = stats.get("n_errored_trials") or 0
+    if errored:
+        print(f"harbor reported {errored} errored trial(s)", file=sys.stderr)
+        return EXIT_HARBOR
+    mean = _job_mean(stats)
+    if require_mean is not None:
+        if mean is None or mean + 1e-9 < require_mean:
+            print(
+                f"harbor mean {mean!r} below required {require_mean}",
+                file=sys.stderr,
+            )
+            return EXIT_HARBOR
+    return EXIT_OK
+
+
+def _job_mean(stats: dict) -> float | None:
+    evals = stats.get("evals") or {}
+    if not isinstance(evals, dict):
+        return None
+    means: list[float] = []
+    for body in evals.values():
+        if not isinstance(body, dict):
+            continue
+        for metric in body.get("metrics") or []:
+            if isinstance(metric, dict) and isinstance(metric.get("mean"), (int, float)):
+                means.append(float(metric["mean"]))
+    return means[0] if means else None
 
 
 if __name__ == "__main__":

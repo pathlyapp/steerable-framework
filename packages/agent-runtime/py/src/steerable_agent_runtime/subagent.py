@@ -17,6 +17,12 @@ Design:
 - Opt-in: the host advertises ``subagent_tool_descriptor`` in the tools
   list and wraps its executor; products that don't want delegation simply
   do neither.
+- Privilege boundary: ``SubagentConfig.tool_filter`` narrows the child's
+  tool domain (dsh ``toolFilter`` → restrict counterpart); filtered-out
+  calls fail closed with ``tool_not_delegated``. Approval narrowing is not
+  done here — an ``ApprovalExecutor`` outside this decorator already gates
+  child calls (it is wrapped innermost, see the sidecar wiring note on
+  ``SubagentExecutor``), and the child cannot spawn further agents.
 """
 
 from __future__ import annotations
@@ -32,11 +38,22 @@ from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
 
 @dataclass(frozen=True, slots=True)
 class SubagentConfig:
-    """Tunables for the delegation tool exposed by ``SubagentExecutor``."""
+    """Tunables for the delegation tool exposed by ``SubagentExecutor``.
+
+    ``tool_filter`` narrows the child's tool domain (dsh's
+    ``toolFilter`` → ``tools.restrict()`` counterpart): a frozenset of tool
+    names the child may call, everything else fails closed with
+    ``tool_not_delegated``. ``None`` keeps the legacy whole-domain hand-off
+    (and ``allow_tools=False`` still means no tools at all). A read-only
+    research sub-agent is ``tool_filter=frozenset({...read tools...})`` —
+    it cannot reach the parent's write/shell tools *by construction*, which
+    is what breaks the private-data + untrusted-content + egress trifecta.
+    """
 
     tool_name: str = "delegate_subagent"
     max_rounds: int = 8
     allow_tools: bool = True
+    tool_filter: frozenset[str] | None = None
     description: str = (
         "Delegate a self-contained subtask to a sub-agent with its own "
         "reasoning loop. Good for parallelizable or context-heavy subtasks; "
@@ -80,6 +97,37 @@ class _NoTools:
         )
 
 
+class _FilteredTools:
+    """Child executor for ``tool_filter``: only the named tools delegate.
+
+    Filtered-out calls fail closed with ``tool_not_delegated`` and the
+    delegated set named, so the child can re-issue with a tool it actually
+    has instead of concluding the tool is broken.
+    """
+
+    def __init__(self, inner: ToolExecutor, allowed: frozenset[str]) -> None:
+        self._inner = inner
+        self._allowed = allowed
+
+    async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        if call.name not in self._allowed:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"tool_not_delegated: '{call.name}' is outside this "
+                    f"sub-agent's tool domain; delegated tools: "
+                    f"{', '.join(sorted(self._allowed)) or '(none)'}"
+                ),
+                needsFollowup=True,
+                data={"toolNotDelegated": call.name},
+            )
+        return await self._inner.execute(call, ctx)
+
+    def concurrency_safe(self, call: ToolCall) -> bool:
+        inner_safe = getattr(self._inner, "concurrency_safe", None)
+        return bool(inner_safe and inner_safe(call))
+
+
 class SubagentExecutor:
     """ToolExecutor decorator: ``config.tool_name`` calls run a child loop."""
 
@@ -104,7 +152,7 @@ class SubagentExecutor:
             return ToolResult(success=False, error="empty task")
         child = CoreLoop(
             self._provider,
-            self._inner if self._config.allow_tools else _NoTools(),
+            self._child_executor(),
             LoopConfig(max_rounds=self._config.max_rounds),
             hooks=self._hooks,
         )
@@ -126,6 +174,13 @@ class SubagentExecutor:
             success=True,
             message=answer or "(sub-agent returned no text)",
         )
+
+    def _child_executor(self) -> ToolExecutor:
+        if not self._config.allow_tools:
+            return _NoTools()
+        if self._config.tool_filter is not None:
+            return _FilteredTools(self._inner, self._config.tool_filter)
+        return self._inner
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         # Delegation spawns a full child loop — never batch it with siblings;

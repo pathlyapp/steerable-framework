@@ -10,8 +10,12 @@ from typing import Mapping, Sequence
 import yaml
 
 SUITE_PATH = Path(__file__).resolve().parent / "suite.yaml"
-LIVE_AGENTS = ("claude-code", "codex", "pi")
-REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh")
+BASELINE_AGENTS = ("claude-code", "codex", "pi")
+PRODUCT_AGENT = "steerable"
+LIVE_AGENTS = (*BASELINE_AGENTS, PRODUCT_AGENT)
+REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
+STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
+PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
 
 
@@ -36,6 +40,7 @@ class Suite:
     n_attempts: int
     n_concurrent: int
     jobs_dir: str
+    harbor_version: str
     agents: dict[str, AgentSpec]
 
     @property
@@ -91,6 +96,26 @@ def resolve_tasks(
     return selected
 
 
+def dataset_org(dataset_name: str) -> str:
+    """Return the Harbor org prefix from a `org/dataset` package name."""
+    if "/" not in dataset_name:
+        raise SuiteError(f"dataset name {dataset_name!r} must be org/name")
+    return dataset_name.split("/", 1)[0]
+
+
+def harbor_task_name(dataset_name: str, task: str) -> str:
+    """Harbor `--include-task-name` id (`org/short-id`).
+
+    Suite YAML stores short ids (`fix-git`). Package datasets publish
+    `terminal-bench/fix-git`; a bare short id matches nothing.
+    """
+    org = dataset_org(dataset_name)
+    prefix = f"{org}/"
+    if task.startswith(prefix):
+        return task
+    return f"{prefix}{task}"
+
+
 def harbor_argv(
     suite: Suite,
     *,
@@ -100,6 +125,7 @@ def harbor_argv(
     model: str | None = None,
     n_concurrent: int | None = None,
     n_attempts: int | None = None,
+    agent_setup_timeout_multiplier: float | None = None,
     harbor_bin: str = "harbor",
 ) -> list[str]:
     spec = suite.agents.get(agent)
@@ -134,10 +160,17 @@ def harbor_argv(
             str(jobs_dir),
         ]
     )
+    if agent_setup_timeout_multiplier is not None:
+        argv.extend(
+            [
+                "--agent-setup-timeout-multiplier",
+                str(agent_setup_timeout_multiplier),
+            ]
+        )
     for key, value in spec.kwargs:
         argv.extend(["--agent-kwarg", f"{key}={value}"])
     for task in tasks:
-        argv.extend(["--include-task-name", task])
+        argv.extend(["--include-task-name", harbor_task_name(suite.dataset_name, task)])
     return argv
 
 
@@ -200,6 +233,20 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         raise SuiteError(f"{source}: agents.dsh must be skipped until a Harbor adapter exists")
     if agents["pi"].harbor != "pi":
         raise SuiteError(f"{source}: agents.pi.harbor must be 'pi' (Harbor first-party agent)")
+    steerable = agents[PRODUCT_AGENT]
+    if steerable.skipped:
+        raise SuiteError(f"{source}: agents.{PRODUCT_AGENT} must not be skipped")
+    if steerable.harbor != STEERABLE_IMPORT_PATH:
+        raise SuiteError(
+            f"{source}: agents.{PRODUCT_AGENT}.harbor must be {STEERABLE_IMPORT_PATH!r}"
+        )
+    harbor_version = _require_str(
+        run.get("harbor_version"), "run.harbor_version", source
+    )
+    if harbor_version != PINNED_HARBOR_VERSION:
+        raise SuiteError(
+            f"{source}: run.harbor_version must be {PINNED_HARBOR_VERSION!r}"
+        )
 
     return Suite(
         dataset_name=dataset_name,
@@ -210,6 +257,7 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         n_attempts=_require_int(run.get("n_attempts"), "run.n_attempts", source),
         n_concurrent=_require_int(run.get("n_concurrent"), "run.n_concurrent", source),
         jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
+        harbor_version=harbor_version,
         agents=agents,
     )
 
