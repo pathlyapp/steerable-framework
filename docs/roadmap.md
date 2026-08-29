@@ -187,36 +187,71 @@ something a host can branch on or show in a settings panel.
 
 ## Gap scorecard
 
+Refreshed 2026-08-29 after Waves 0–3, against three references:
+**codex** (HEAD `0b45b171`), **DeepSeek Harness** ("dsh", HEAD `cd5ef814`),
+and **pi** (`earendil-works/pi` v0.84.4, HEAD `853a80d`, MIT, ~121k LOC
+TypeScript) — pi joins as a first-class reference this round. A separate
+source-only audit checked the framework against its own claims; where the
+two disagreed, the source won.
+
+**The headline finding is that the gap changed nature.** Rounds 1–5 read
+"we lack the mechanism". This round reads "**we have the mechanism and the
+product does not use it**". On the desktop path, world state, tool tiers,
+and the skill catalog layer are live; the approval algebra, the per-exec
+sandbox, the sidecar process sandbox with its egress allow-list, and the
+recording provider are all **implemented but never switched on** — the
+host never sends the corresponding `chat.stream` parameters, and the
+desktop has no approval UI at all (`deeppath-agent/src/harness/README.md`
+states everything is allowed locally). Read the "Wave 0 egress allow-list"
+line below with that in mind: the code landed, the product default did not.
+
 | Capability | Reference implementation | Steerable today | Severity |
 | --- | --- | --- | --- |
-| History representation | Append-only envelopes with per-item metadata; "no history rewrite" is a written rule (codex) | Mutable `list[LLMMessage]`, hooks replace wholesale (`loop.py:320`, `:464-465`) | **Blocking** |
-| Injected context typed + self-identifying | `ContextualUserFragment` with markers and `matches_text` (`codex-rs/context-fragments/src/fragment.rs:64-119`) | None; skill catalog is a plain transcript rewrite | **Blocking** |
-| Cache-stable incremental state | `WorldStateSection` + RFC 7386 merge patch; unchanged sections emit nothing | None; state changes rewrite the transcript | **Blocking** |
-| Durable model-visible record | Rollout JSONL with model and display items as distinct variants, governed by an explicit policy (`codex-rs/rollout/src/policy.rs`) | One display stream; the model transcript is re-derived from it (`resume.py:71-167`) | **Blocking** |
-| Model-visible ⟺ logged, enforced | `deriveMessages()` folds the log; a runtime invariant compares provider bytes to the fold (dsh `agent-loop/src/invariant.ts`) | `self.trajectory` runs parallel to a mutable transcript; notices never reach the projection | **Blocking** |
-| Test harness asserting what the model saw | `ResponseMock` / `ResponsesRequest` body assertions | No recording provider; tests assert emitted `LoopEvent`s | **Blocking** (gates the rest) |
-| Prompt-cache instrumentation | `cached_tokens` / `cache_read_input_tokens` parsed and surfaced | Zero matches across `packages/`; `LLMUsage` has three fields | **Significant** |
-| Multimodal / content parts | Content-part unions with per-part `cache_control` | `LLMMessage.content: str` (`llm/__init__.py:28`) | **Significant** (Tier 1, pre-1.0) |
-| Compaction checkpointing | `CompactedItem.replacement_history` + chained windows (`codex-rs/history/src/lib.rs:146-155`); dsh `replace` surface op shadowing cited seqs | In-memory rewrite in a hook; nothing durable records what it did | **Significant** |
-| Per-item bounding as an invariant | `TruncationPolicy`, middle-out, shared budget, self-describing header | `spill.py` as an opt-in `post_tool_result` hook; nothing bounds other injections | **Significant** |
-| Hook output bounding | 2500-token cap with spill-to-disk (`codex-rs/hooks/src/output_spill.rs:12`) | None — hooks return transcripts with no cap | **Significant** |
-| Per-tool timeouts | Server and caller timeouts composed with `min()` | None; `soft_timeout_ms` is only checked at round boundaries (`loop.py:425-429`) | **Significant** |
-| Tool exposure tiers | `Direct / Deferred / Hidden` — registration ≠ exposure (`codex-rs/tools/src/tool_executor.rs:51-70`) | All registered tools are exposed; `tools` is a flat list | **Significant** (blocks MCP at scale) |
-| MCP | Full client with identity-keyed reuse, per-server catalog caps, name qualification, immutable per-step binding | None | **Significant** |
-| Tool-execution sandbox | Per-exec Seatbelt / seccomp / restricted token driven by per-turn policy | `SandboxedToolExecutor` + `SeatbeltExecBackend` (Wave 3, shell/subprocess; enforcement reported as a value, `require_full` fails closed) | Closed for shell/subprocess; Linux Landlock pending |
-| Egress control | Allow-listed | Open `network-outbound` (`docs/spec/safety.md:99`) | **Significant** |
-| Approval algebra | 8-variant decision, 3 persistence scopes, `Denied{reason}` distinct from `Abort` | `require_consent` / `consent_granted` booleans | **Significant** |
+| History representation | Append-only envelopes with per-item metadata (codex); lane records + pure reducer (pi's `AgentHarness`, **not shipping**) | Closed — `HistoryItem` envelopes, `ContextManager.projection` is the only provider input, no mutable transcript remains (`history.py:65-74`, `loop.py:479`) | Closed |
+| Injected context typed + self-identifying | `ContextualUserFragment` with markers and `matches_text` (`codex-rs/context-fragments/src/fragment.rs:64-119`) | Closed — `ContextFragment.type_markers()` / `matches_text()` (`history.py:129-188`) | Closed |
+| Cache-stable incremental state | `WorldStateSection` + RFC 7386 merge patch, unchanged sections emit nothing (codex); dsh and pi both re-render or skip-if-unchanged instead | Closed and **live on desktop** (`world_state.py:82-273`) | Closed |
+| Durable model-visible record | Rollout JSONL split across persistence policy, history filter, and thread-preview policy (codex `policy.rs` + `context_manager/history.rs:79-91` + `rollout/src/list.rs:1177-1184`) | Closed for the loop; the trace-side `resume.project_transcript` remains a parallel lossy projection (`resume.py:72-168`) | Minor residue |
+| Model-visible ⟺ logged, enforced | `deriveMessages()` folds the log; a runtime invariant compares provider bytes to the fold (dsh `agent-loop/src/invariant.ts:39-52`) | Single write path by convention; `self.trajectory` still parallel with **no enforced invariant** (`loop.py:516-525`) | **Significant** |
+| Test harness asserting what the model saw | `ResponseMock` / `ResponsesRequest` body assertions (codex); keyless session-log snapshots (dsh) | `RecordingProvider` + `assert_stable_prefix` exist but are **env-gated and off in production** (`recording.py:261-301`, `sidecar.py:1286-1300`) | **Significant** (wiring, not mechanism) |
+| Prompt-cache shaping (write) | pi: `cacheRetention: none/short/long` as a first-class stream option, breakpoints at three fixed anchors — system prompt, last tool definition, tail of the transcript (`packages/ai/src/api/anthropic-messages.ts:1015-1033,1295-1316`); codex instead keeps the prefix stable via stable input-item IDs (`context_manager/normalize.rs:18-19`); dsh delegates to pi-ai | **None — zero `cache_control` emitters repo-wide** | **Significant** — the unfinished half of Wave 2 |
+| Prompt-cache instrumentation (read) | `cached_tokens` / `cache_read_input_tokens` parsed and surfaced (all three) | Closed — parsed for OpenAI, DeepSeek, and Anthropic; surfaced on `stage_complete` (`llm/__init__.py:71-79`, `loop.py:1245-1250`) | Closed |
+| Multimodal / content parts | Content-part unions with per-part annotations (codex, pi) | Type closed (`LLMMessage.content: list[ContentPart]`), providers plumbed, but **the loop never constructs an image** — turns are text-only today | Closed as a type; unused in product |
+| Compaction checkpointing | `CompactedItem.replacement_history` + window lineage (`codex-rs/history/src/lib.rs:152-159`); dsh `replace` op shadowing cited seqs; pi's durable `CompactionEntry` with a materialized `retainedTail` | Closed — declared `replace_all` writes a durable `CompactionBoundary` (`history.py:259-285`) | Closed |
+| Per-item bounding as an invariant | `TruncationPolicy` with middle-out, shared budget, self-describing header (codex); 2000 lines / 50KB with spill-to-disk (pi `truncate.ts:4-13`) | `spill.py` exists with a 16KB inline cap but is **not in the sidecar's default hook chain**; skill catalog, world state, and steer have no caps at all | **Significant** |
+| Hook output bounding | 2500-token cap with spill-to-disk (`codex-rs/hooks/src/output_spill.rs:12`) | None — hooks return transcripts with no cap. pi shares this weakness: its `context` hook is unbounded too | **Significant** |
+| Per-tool timeouts | Server and caller timeouts composed with `min()` (codex `codex-mcp/src/binding.rs:321-325`) | Closed and default-on — `LoopConfig.tool_timeout_ms` = 300s, `asyncio.wait_for` per call (`loop.py:401-432`). pi has no per-tool timeout at all | Closed |
+| Tool exposure tiers | codex now has **six** tiers (`Direct`, `Deferred`, `DirectModelOnly`, `DeferredModelOnly`, `CodeModeOnly`, `Hidden`) plus a BM25 `tool_search` capped at 8 results (`tools/src/tool_executor.rs:51-79`, `tool_discovery.rs:6-7`); dsh has it for skills only; pi has an active-tool subset but no deferred tier | Closed — `direct/deferred/hidden` + `tool_search`, live on the desktop via the host's TypeScript router | Closed |
+| MCP | codex: identity-keyed reuse, 2048-item catalog caps, `mcp__server__tool`, immutable per-step binding with a revision guard; dsh: client with auto-reconnect, declines to be an MCP *server* in favor of ACP; pi: **no MCP in core at all**, extension-only | Seam closed (`mcp.py`, 64 tools/server cap, deferred by default); the desktop runs its MCP client host-side instead | Closed as a seam |
+| Tool-execution sandbox | codex: per-OS, fail-closed on Windows, `SandboxErr::Denied` returned to the caller, and a second approval to escalate to unsandboxed; dsh: bwrap/Landlock, Seatbelt, Windows restricted token, enforcement as a return value; pi: **none by design** — containerize the whole process instead | `SandboxedToolExecutor` + `SeatbeltExecBackend` implemented with `require_full` fail-closed — but **the desktop never sends `execSandbox`, so commands run unconfined** | **Significant** — wiring, not mechanism |
+| Egress control | Allow-listed (codex, dsh); pi delegates to the container | Allow-list implemented in the profile generator, but the sidecar sandbox is off unless `STEERABLE_SIDECAR_SANDBOX=1`, so **the product default is open egress** | **Significant** — wiring, not mechanism |
+| Approval algebra | codex: 8 variants across three persistence scopes, composed with sandbox escalation; dsh: four outcomes with `rejected` distinct from `cancelled`, child agents pinned to `never`; pi: no core algebra, extensions may block a call | 8 variants and 3 scopes implemented (`approval.py:63-72`), Denied distinct from Abort — but **the desktop sends no `approval` parameter and has no approval UI** | **Significant** — wiring, not mechanism |
+| Subagent as a privilege boundary | dsh: `toolFilter` → `tools.restrict()` and child approval pinned to `never` (`subagent/src/child-agent.ts:210,218-221`); codex: permission profiles; pi: spawns a separate `pi` process | Still binary — the child gets the parent's whole executor or nothing (`subagent.py:107`) | **Significant** (unmoved since round 5) |
+| Durable record format version | dsh went *stricter* this round: `ignorable` removed, every event required-on-read, unknown type raises `SessionFormatUnsupportedError`; pi migrates v1→v2→v3 on load | None — an unknown envelope raises `ValueError` (`history.py:519`) | **Significant** (desktop users downgrade) |
 | Declared RPC concurrency | `ClientRequestSerializationScope` per method (`codex-rs/app-server-protocol/src/protocol/common.rs:128-139`) | "ordered by their JSON-RPC `id`" (`docs/spec/sidecar.md:162-163`) — not an ordering guarantee | **Significant** |
-| Subagent as privilege boundary | Child gets its own context window *and* its own tool set | Child inherits the parent executor (`subagent.py:107`) | **Significant** |
-| Tool render intent in the protocol | Declared `presentCall` / `presentResult` as pure functions, persisted for replay | Inferred from regex on the tool name (`docs/spec/tools.md:50-58`) | **Significant** |
-| Cursor pagination on list methods | `cursor`/`limit` → `data`/`next_cursor` everywhere | `trace.fetch` returns every event; no back-pressure (`docs/spec/sidecar.md:164-166`) | **Minor** now, **Significant** at scale |
-| Log format versioning | `SESSION_FORMAT_VERSION` + per-event `ignorable`, required-on-read default | None | **Significant** (desktop users downgrade) |
-| Cancelled-stream integrity | `interrupted: true` anchor + synthetic `ABORTED_BEFORE_DISPATCH` results | `_close_dangling_tool_calls` runs at projection time (`resume.py:170`), not record time | **Significant** |
+| Tool render intent in the protocol | Declared as pure functions of args — dsh's closed `ToolCallView` union (`core/tools/src/presentation.ts:46-118`), pi's `renderCall` / `renderResult` on the tool definition | Inferred from regex on the tool name (`docs/spec/tools.md:50-58`) | **Significant** |
+| Cursor pagination on list methods | `cursor`/`limit` → `data`/`next_cursor` (codex) | `trace.fetch` returns every event with no back-pressure; the record channel *does* paginate internally but is not exposed as RPC | **Minor** now, **Significant** at scale |
+| Cancelled-stream integrity | Synthetic aborted outputs written for missing tool results (codex `context_manager/normalize.rs:21-80`); dsh `appendSkippedToolCall`. pi is *weaker* than us here — an abort mid-batch can leave dangling tool calls and a resume that providers reject | Closed at record time for abort and breaker paths (`loop.py:1145-1216`); a plain user cancel still relies on projection-time repair | Minor residue |
+| Session branching as a product primitive | pi's history is a **tree** (`/tree`, fork, branch summaries in one file); dsh has `Session.fork`; codex preserves context baselines across forks | Resume only, no branching | **Minor** — no product demand yet |
+| Extension architecture as a delivery vehicle | pi loads TypeScript extensions in-process via jiti (unsandboxed, may register tools, replace the system prompt, rewrite the request, persist their own entries) and routes **every turn** through them; dsh has the Cordis plugin runtime | Hooks plus executor decorators — a deliberately narrower surface | **None** — deliberate |
+| Loop resilience budgets | codex and dsh both have them; **pi has none** — no max rounds and no tool-error breaker, so its loop can iterate indefinitely | Max rounds, consecutive-error breaker, per-tool timeout, soft-timeout wrap-up | **Ahead** |
+| Supply-chain / release integrity | pi is notably strong: exact-pinned direct deps, `min-release-age=2`, generated shrinkwrap, `--ignore-scripts` installs, OIDC trusted publishing, isolated pre-tag smoke installs | Not considered as an axis | **Minor** — worth borrowing later |
 | Workflow orchestration | `ctx.workflowEngine` (dsh) | None | **None** — correctly out of scope |
 
 ## Where Steerable is ahead
 
-Beyond the model-quality layer, four things hold up against both
+Round 6 was the first time these claims were checked against three
+independent references rather than our own tests. The model-quality layer
+survived that check intact: **none of codex, dsh, or pi has a
+`before_completion` veto** (codex's Guardian V2 is a safety reviewer, not
+a completion-draft veto; dsh's `llm-retry` retries failed *requests*),
+**none recovers pseudo tool calls** (codex validates schemas, dsh passes
+malformed JSON through to the tool as a raw string, pi ignores tool-shaped
+prose), and **all three estimate tokens heuristically** — codex's
+`approx_token_count`, dsh's four-characters-per-token, and pi's
+`ceil(chars/4)` with no CJK handling. Loop resilience is a fourth: pi has
+no round cap and no tool-error breaker at all.
+
+Beyond the model-quality layer, four things hold up against all three
 references:
 
 1. **`hook_action` events** (`loop.py:89-91`). Emitting *why* the loop
@@ -285,6 +320,9 @@ Ordered by dependency, not by appeal. Each wave assumes the one before it.
    breaker handles it. Also a hard MCP prerequisite — a remote server
    *will* hang.
 3. **The egress allow-list** from [the safety section](#safety-the-sandbox-confines-the-wrong-process).
+   Landed as a mechanism; **the product default is still open egress**,
+   because the sidecar sandbox that carries the allow-list only engages
+   under `STEERABLE_SIDECAR_SANDBOX=1`. Wave 4 closes that.
 
 ### Wave 1 — the foundation (L, one project, not three) ✅ landed 2026-08-29
 
@@ -465,6 +503,37 @@ cache-friendly from day one.
    itself* emits. Public capability evals (Terminal-Bench 2.1 cheap-12 via
    Harbor `claude-code` / `codex` / `pi`) live in `evals/` and are a
    scheduled job, not a required merge check.
+
+### Wave 4 — plug in what is already built
+
+Round 6 found that the binding constraint is no longer missing mechanism
+but missing wiring, so Wave 4 adds **no new mechanisms**.
+
+1. **Turn on the safety layer in the desktop product.** Send `approval` and
+   `execSandbox` from `deeppath-agent`'s `coreloop-stream.ts`, and make the
+   sidecar's own sandbox and egress allow-list the default rather than an
+   environment opt-in. The approval half needs a real Electron approval UI,
+   so it is product work, not plumbing. The argument for doing this first is
+   uncomfortable: we claim codex's and dsh's safety posture while the
+   product runs in pi's posture (everything allowed, nothing confined)
+   *without* pi's honest "so containerize it" instruction to users.
+2. **Finish Wave 2's other half: emit `cache_control`.** Adopt pi's
+   three-anchor strategy — system prompt, last tool definition, and the tail
+   of the transcript — and send compaction's one-off summarization request
+   with retention disabled, as pi does. The read-side instrumentation
+   already shipped is exactly the acceptance signal: the cached-to-prompt
+   token ratio is the payoff reading.
+3. **Three long-recorded small holes.** Narrow the subagent's tool domain
+   (dsh's `toolFilter` → `restrict` is the template); give the durable
+   record a format version and a read policy (adopt dsh's fail-closed
+   stance, not the `ignorable` field it deleted); put `SpillHooks` in the
+   sidecar's default chain and cap the skill catalog in aggregate.
+
+Deliberately **not** doing: pi-style in-process extension loading (an
+unsandboxed loader plus an unbounded `context` hook is more risk than
+payoff), session branching trees (no product demand yet), and an
+`AgentHarness`-style lane/reducer rewrite (our append-only `HistoryItem`
+record already answers the same question, and ours actually runs).
 
 ## Protocol positioning (decided)
 

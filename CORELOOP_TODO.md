@@ -1412,6 +1412,143 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
 （grounding judge 已是轻量版，沙箱之前升级它是本末倒置）；多智能体
 产品化（codex 两年后才上 v2，seam 已备等真实需求）。
 
+#### 第六轮复审（2026-08-29，四方对照：codex / dsh / **pi**（新增）/ 自勘）
+
+Wave 0-3 全部落地后重新拉的对照。**pi 首次进入对照**
+（`earendil-works/pi`，MIT，TS 单仓约 12 万行，HEAD `853a80d`），与
+codex / dsh 同级别深潜；另加一路**独立自勘**（不读路线图、只读源码），
+专门查「文档是否跑在代码前面」。
+
+**头号结论：差距的性质变了。** 前五轮都是「我们缺这个机制」；这一轮
+自勘的结论是「**机制大多已经有了，但产品不用**」。桌面端真实接线：
+world-state ✅ / 工具分层 ✅（宿主 TS 侧，sidecar 的 Python 分层机制
+在聊天路径闲置）/ skills catalog ✅ / **审批代数 ❌**（
+`coreloop-stream.ts` 根本不发 `approval` 参数，桌面无审批 UI，
+`harness/README.md` 写明「本地默认全部允许」）/ **逐 exec 沙箱 ❌**（
+不发 `execSandbox`，命令无收容运行）/ **sidecar 进程沙箱 + 出网白名单
+❌**（要 `STEERABLE_SIDECAR_SANDBOX=1`，缺省出网全开）/
+**RecordingProvider ❌**（env 开关，生产从不录制）/ **AG-UI、ACP ❌**（
+只有测试与 examples 证明）。「零生产验证」这个连续五轮的头号风险，
+现在变形为「**机制—产品接线断层**」：不是没造，是造了不插电。
+
+**路线图措辞需就地修正的一处**：「Wave 0 出网白名单已落地」——代码
+确实落了，但**产品缺省出网全开**。这条在安全叙述里承重，不能按「已
+落地」宣读。
+
+**pi 是安全轴上的第三极，且是刻意的。** 不是「还没做」而是写进文档的
+拒绝：核心不含权限系统、不含沙箱、不含出网控制，`security.md` 直接
+承认仓库内容的提示注入是预期内的，隔离必须落在 OS/容器边界（Gondolin
+微 VM / Docker / OpenShell 三种模式）。核心也刻意不含 MCP、子代理、
+plan 模式、todo——一律推给扩展。三方现在是三种答案：codex 逐 exec 沙箱
++ 8 变体审批 + 审批↔沙箱升级协议；dsh 三平台后端（bwrap/Landlock、
+Seatbelt、Windows 受限令牌）+ enforcement 返回值 + fail-closed；pi 整
+进程容器化。我们站 codex/dsh 那侧，但**没插电**（见上）。
+
+**pi 的新架构不能算数（重要，防止误记分）**：`AgentHarness`（v4 lane
+records + 纯 reducer + SQLite）看着比我们和 dsh 都激进，但
+`prompt` / `steer` / `abort` / `resume` / `compact` / `watch` / `lane`
+等运行期操作**全部抛 `HarnessNotImplemented`**，`hooks.on` / `events.on`
+也是 `UnavailableRegistry` 桩。CLI / RPC / SDK / evals 跑的都是旧的
+`SessionManager`（JSONL v3 树）+ `AgentSession`。changelog 自述是
+「compile-complete scaffold，durable execution 实现期间拒绝」。记分只
+认在跑的那套。
+
+**四方确认的领先项（第一次有非自证的外部对照）**：
+- **`before_completion` 三态否决**：codex、dsh、pi 三家**均无对应物**。
+  codex 的 Guardian V2 是安全审查（异步分类 + 同步 reviewer），不是
+  完成稿否决；dsh 的 `llm-retry` 重试的是**失败请求**不是草稿。
+- **伪工具调用恢复**：三家均无。codex 只在 JSON schema 层容错，dsh 把
+  非法 JSON 参数原样透传给工具，pi 纯 schema 校验、纯文本里的伪调用
+  直接忽略。
+- **经验 token 校准**：三家均为启发式——codex `approx_token_count`、
+  dsh 4 字符/token、pi `ceil(chars/4)` 且**无 CJK 处理**。
+- **循环韧性预算**：pi **完全没有**——无最大轮次、无工具错误断路器，
+  循环可无限迭代。我们 + codex + dsh 有。这是 pi 最弱的一轴。
+- **软超时收尾 / 去重软反馈**：codex 只有 token 预算提醒（不是执行软
+  超时），dsh 的 `repeat-tool-reminder` 是 3/5/8 阈值的劝告而非抑制。
+- **跨语言契约**（仍是独有）。
+
+**新暴露的三个真实缺口（代码问题，非措辞）**：
+1. **`cache_control` 一行都没有** —— Wave 2 的「cache 仪表」只做了读
+   （`cached_prompt_tokens` / `cache_creation_tokens` 进 trace），零处
+   **写**断点。pi 在这一轴明确领先：`cacheRetention: none|short|long`
+   是流式选项一等公民（默认 `short`，`PI_CACHE_RETENTION` 可覆盖），
+   断点是**三个固定语义锚点**——系统提示词 / 最后一个工具定义 / 最后
+   一条 user 消息的最后一个 block；OpenAI-completions 兼容路径同构，
+   从尾部反向扫描找第一条有文本的 user|assistant|tool。压缩请求显式
+   `cacheRetention: "none"`（一次性摘要不值得写缓存，且**只作用于那
+   一次 HTTP 请求**，不标记产出的摘要）。dsh 是把断点委托给 pi-ai
+   （`llm-pi-ai` 只有 `cacheControlFormat` / `cacheRetention` 配置，
+   无第一方放置逻辑）；codex 走另一条路——稳定的 Responses input item
+   id + 合成输出命名空间 + world-state 哈希来保前缀稳定
+   （`context_manager/normalize.rs:18-19` 明写是为 prompt cache）。
+   **我们是四家里唯一只读不写的。**
+2. **子代理不是权限边界**：`subagent.py:107` 是
+   `self._inner if allow_tools else _NoTools()`——全父工具或零工具的
+   二元选择。dsh 有 `toolFilter` → `tools.restrict()` 做真正的工具域
+   收窄且子代理审批钉死 `'never'`；codex 有 permission profile；pi 的
+   子代理扩展直接 spawn 独立 `pi` 子进程（自带独立上下文）。第五轮
+   记录的这条至今未动。
+3. **持久记录无格式版本**：未知条目直接 `ValueError` 硬失败
+   （`history.py:519`）。dsh 这一轮反而**加强**了——2026-08-25 把
+   `ignorable` 整个删掉，改成全事件 required-on-read +
+   `SessionFormatUnsupportedError`，是想清楚后选择更严（
+   `SESSION_FORMAT_VERSION` 仍为 0，无迁移承诺）；pi 有 v1→v2→v3 +
+   载入时自动迁移。我们是「没做」。
+
+**对照结论的三处修订（旧记分卡引用已漂移）**：
+- codex 工具分层从 3 档扩到 **6 档**（新增 `DirectModelOnly` /
+  `DeferredModelOnly` / `CodeModeOnly`，`tool_executor.rs:51-79`）；
+  `tool_search` 默认返回上限 **8**、BM25 检索；MCP 目录上限 2048
+  （Codex Apps 8192）。
+- dsh 的 `SandboxEnforcement` 类型里**没有 `none`**（只有
+  `full | partial`）——我们照抄时加的 `none` 是自己的扩展。
+- 「rollout policy 区分模型可见/展示」不能只引 `policy.rs`，现在分三
+  层：`policy.rs` 决定持久与否、`context_manager/history.rs:79-91`
+  过滤 world-state 片段、`rollout/src/list.rs:1177-1184` 决定线程预览。
+- codex 的 MCP `tools/list_changed` **不是自动刷新**（handler 只记
+  日志），目录刷新是显式的；dsh 是监听后排队重同步。
+
+**第六轮新开轴（按 2026 现状，非 r3 的 13 轴）**：
+- **cache 塑形（写）** 与 **cache 仪表（读）** 拆成两轴——我们只有后者。
+- **机制—产品接线率**：新轴，且是我们独有的问题。codex / dsh 的审批与
+  沙箱都是产品缺省开，pi 的「不做」也是产品事实；只有我们存在「框架
+  有、产品不接」的断层。
+- **扩展/插件架构作为交付载体**：pi 的扩展经 jiti 在进程内加载、**不
+  沙箱**、可注册工具/替换系统提示词/改写模型请求/写自己的持久条目，
+  且**每一轮 LLM 都过 `transformContext`**——是承重的；但 `context`
+  钩子**无任何 token 上限**，写坏的扩展能撑爆上下文。dsh 是 Cordis
+  插件运行时。我们是 hooks，面窄一档（这是刻意的，见「明确不做」）。
+- **会话分支作为产品原语**：pi 的历史是**可分支的树**（`/tree`、fork、
+  分支摘要都在一个文件里）、dsh 有 `Session.fork`、codex 有跨 fork
+  的 context baseline 保持。我们只有 resume，无分支。
+- **供应链/发布完整性**：pi 显著强（依赖钉死、`min-release-age=2`、
+  shrinkwrap、`--ignore-scripts`、OIDC 可信发布、发布前隔离冒烟）。
+  我们没考虑过这一轴。
+- **注入内容设界**：codex hook 输出 2500 token 硬顶 + 落盘；pi 工具
+  输出 2000 行/50KB + bash 溢出落盘 + 子代理 50KB；dsh 有
+  `spill-policy`。我们有 `spill.py` 但**不在 sidecar 缺省钩子链里**，
+  skill catalog 无聚合上限、world-state 无上限、steer 无上限。
+
+**第六轮排序（P0 唯一，且不含任何新机制）**：
+- [ ] **P0 · 把已经造好的插上电**（三件，零新机制）：桌面接线审批代数
+      （需要新建 Electron 审批 UI，这是真产品活不是纯管道）、桌面接线
+      `execSandbox`、sidecar 沙箱与出网白名单转为缺省开。判据很直白：
+      我们在安全轴上宣称站 codex/dsh 那侧，但产品跑在 pi 的姿势上
+      （全放行 + 无收容），却又没有 pi 那套「所以请容器化」的诚实说明。
+- [ ] **P1 · 补完 Wave 2 的另一半：`cache_control` 发射**。抄 pi 的
+      三锚点策略（系统提示词 / 最后工具定义 / 最后一条 user 消息），
+      压缩摘要请求走 `retention: none`。我们已有的读侧仪表正好是它的
+      验收信号——命中率 cached/prompt 就是这件事的收益读数。
+- [ ] **P2 · 三个记录已久未动的小口子**：子代理工具域收窄（抄 dsh 的
+      `toolFilter` → restrict）、持久记录格式版本 + 读策略（抄 dsh 的
+      fail-closed，不抄它删掉的 `ignorable`）、`SpillHooks` 进 sidecar
+      缺省链 + skill catalog 聚合上限。
+- 明确**不做**：pi 式扩展运行时（进程内不沙箱加载 + 无上限 context
+  钩子，风险面比收益大）；会话分支树（等真实产品需求）；`AgentHarness`
+  式 lane/reducer 重写（我们的 `HistoryItem` 追加式记录已覆盖同一问
+  题，且我们的在跑）。
+
 **原 A5 备忘**（并入第一步勘察范围，2026-08-27 勘察结论）：
 - [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件 —— 实测 114
       点，但勘察重估为「O(20) 形状映射 + transport + 编排旁路」，

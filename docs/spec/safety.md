@@ -175,3 +175,18 @@ execution instead of passing through unconfined. The sidecar wires it as
 `execSandbox: {enabled, writableRoots, network, allowedHosts, shell,
 tools, commandArg, requireFull}` on `chat.stream`; absent means unconfined
 (legacy behavior). Linux Landlock is the deliberate follow-up backend.
+
+## Current product posture (2026-08-29)
+
+All three layers exist as mechanisms; **none of them is on by default in
+the DeepPath desktop build.** Layer 1 requires `STEERABLE_SIDECAR_SANDBOX=1`,
+so the sidecar spawns unconfined with open egress. Layer 3 requires the
+host to send `execSandbox`, which `deeppath-agent` does not, so tool
+commands run unconfined. The approval algebra is likewise implemented and
+unwired — the desktop sends no `approval` parameter and has no approval UI,
+which is what "本地默认全部允许" in the agent's README means in practice.
+
+State this plainly rather than describing the mechanisms as the posture.
+An integrator reading only the sections above would conclude the desktop
+product is confined; it is not. Closing this is Wave 4 item 1 in
+[the roadmap](../roadmap.md).
