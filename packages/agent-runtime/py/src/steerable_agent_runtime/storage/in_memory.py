@@ -183,3 +183,13 @@ class InMemoryStorage:
         if limit is not None:
             bucket = bucket[:limit]
         return bucket
+
+    async def list_history_records(self, *, prefix: str | None = None) -> list[str]:
+        """Enumerate known record ids. Optional extension beyond the
+        StorageAdapter protocol — branch discovery (``agent.session.branches``)
+        uses it when present and degrades to lineage-only without it."""
+        async with self._lock:
+            ids = list(self._history.keys())
+        if prefix is not None:
+            ids = [record_id for record_id in ids if record_id.startswith(prefix)]
+        return sorted(ids)

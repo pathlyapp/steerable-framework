@@ -58,6 +58,13 @@ system.shutdown_now          → null            (force kill)
 agent.session.create         → AgentSession
 agent.session.resume         → AgentSession
 agent.session.list           → AgentSession[]
+agent.session.fork           → BranchPoint    (fork a durable record — untilSeq |
+                                               beforeLastUser | beforeUserIndex
+                                               addressing — without running a turn;
+                                               the non-destructive regenerate primitive)
+agent.session.branches       → { lineage, children }  (branch-family view; children
+                                               need the store's optional
+                                               list_history_records extension)
 agent.turn.start             → { traceId }     followed by stream.chunk notifications
 agent.turn.cancel            → null
 tool.list                    → ToolCall[]      (descriptors only)

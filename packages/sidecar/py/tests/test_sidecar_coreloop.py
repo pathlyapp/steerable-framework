@@ -855,3 +855,110 @@ async def test_chat_fork_from_record_seeds_a_fresh_log() -> None:
 
     # The source chat's log is untouched by the variant.
     assert await sidecar.storage.list_history("chat_1") == source_before
+
+
+@pytest.mark.asyncio
+async def test_session_fork_creates_branch_without_running_a_turn() -> None:
+    """agent.session.fork (Wave 5): the non-destructive regen primitive —
+    forks the record, returns the BranchPoint, runs nothing."""
+    provider = _ScriptedProvider([_text_round("answer 0"), _text_round("answer 1")])
+    sidecar = _make_sidecar(provider)
+    # Host-shaped turns: each passes the FULL intended transcript prefix (as
+    # the desktop does), so the record accumulates one continuous span.
+    history: list[dict] = []
+    for question, answer in (("question 0", "answer 0"), ("question 1", "answer 1")):
+        history.append({"role": "user", "content": question})
+        await _run_stream(
+            sidecar,
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": list(history),
+                "useCoreLoop": True,
+                "chatId": "chat_1",
+            },
+        )
+        history.append({"role": "assistant", "content": answer})
+    source_before = await sidecar.storage.list_history("chat_1")
+    attempts_before = provider.attempts
+
+    resp = await sidecar.server.handle_frame(
+        _frame(
+            "agent.session.fork",
+            {"recordId": "chat_1", "beforeLastUser": True, "newRecordId": "chat_1:r2"},
+        )
+    )
+
+    assert "error" not in resp, resp
+    result = resp["result"]
+    assert result["recordId"] == "chat_1:r2"
+    assert result["sourceRecordId"] == "chat_1"
+    # beforeLastUser: the fork keeps the prompting user turn, drops the
+    # assistant reply after it.
+    assert result["label"] == "question 1"
+    assert result["seedMessages"] == 3  # q0, a0, q1
+    # No turn ran on the branch.
+    assert provider.attempts == attempts_before
+    # Source record untouched; the branch is one provenance seed.
+    assert await sidecar.storage.list_history("chat_1") == source_before
+    branch = await sidecar.storage.list_history("chat_1:r2")
+    assert len(branch) == 1
+    assert branch[0]["entry"] == "seed"
+    assert branch[0]["source_record_id"] == "chat_1"
+
+
+@pytest.mark.asyncio
+async def test_session_fork_unknown_record_errors() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.session.fork", {"recordId": "nope"})
+    )
+    assert "error" in resp
+
+
+@pytest.mark.asyncio
+async def test_session_branches_reports_lineage_and_children() -> None:
+    provider = _ScriptedProvider([_text_round("answer 0")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "question 0"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    for branch_id in ("chat_1:r2", "chat_1:r3"):
+        resp = await sidecar.server.handle_frame(
+            _frame(
+                "agent.session.fork",
+                {"recordId": "chat_1", "newRecordId": branch_id},
+            )
+        )
+        assert "error" not in resp, resp
+
+    # From the root: children discovered via the record enumeration.
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.session.branches", {"recordId": "chat_1"})
+    )
+    assert "error" not in resp, resp
+    result = resp["result"]
+    assert [p["recordId"] for p in result["lineage"]] == ["chat_1"]
+    assert result["lineage"][0]["depth"] == 0
+    assert sorted(c["recordId"] for c in result["children"]) == [
+        "chat_1:r2",
+        "chat_1:r3",
+    ]
+    assert all(c["label"] == "question 0" for c in result["children"])
+
+    # From a branch: lineage walks up to the root.
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.session.branches", {"recordId": "chat_1:r2"})
+    )
+    assert "error" not in resp, resp
+    chain = resp["result"]["lineage"]
+    assert [p["recordId"] for p in chain] == ["chat_1", "chat_1:r2"]
+    assert [p["depth"] for p in chain] == [0, 1]
+    assert resp["result"]["children"] == []

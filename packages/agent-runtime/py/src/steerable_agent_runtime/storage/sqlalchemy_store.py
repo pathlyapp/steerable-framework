@@ -330,6 +330,18 @@ class SqlAlchemyStorage:
         )
         return [dict(row["payload"]) for row in rows]
 
+    async def list_history_records(self, *, prefix: str | None = None) -> list[str]:
+        """Enumerate known record ids. Optional extension beyond the
+        StorageAdapter protocol — branch discovery uses it when present."""
+        clauses = []
+        if prefix is not None:
+            clauses.append(history_table.c.recordId.startswith(prefix))
+        async with self._sessionmaker() as session:
+            result = await session.execute(
+                select(history_table.c.recordId).where(*clauses).distinct()
+            )
+            return sorted(row[0] for row in result.all())
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

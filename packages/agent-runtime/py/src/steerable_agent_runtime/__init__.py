@@ -35,6 +35,14 @@ from .errors import (
 from .errors import (
     RuntimeError as SteerableRuntimeError,
 )
+from .branch import (
+    BranchPoint,
+    ForkResult,
+    branch_label,
+    fork_record,
+    lineage,
+    resolve_fork_seq,
+)
 from .history import (
     RECORD_FORMAT_VERSION,
     CompactionBoundary,
@@ -292,6 +300,12 @@ __all__ = [
     "system_blocks_with_cache",
     "entry_from_dict",
     "entry_to_dict",
+    "BranchPoint",
+    "ForkResult",
+    "branch_label",
+    "fork_record",
+    "lineage",
+    "resolve_fork_seq",
     "last_world_state_snapshot",
     "load_history_transcript",
     "load_recorded_requests",

@@ -8,6 +8,8 @@ Methods (see spec/sidecar/README.md for the full catalog):
   agent.session.create     -> AgentSession
   agent.session.resume     -> AgentSession
   agent.session.list       -> AgentSession[]
+  agent.session.fork       -> BranchPoint  (fork a record, no turn run)
+  agent.session.branches   -> { lineage, children } (branch-family view)
   agent.chat.stream        -> { streamId } (chunks pushed via `stream.chunk`,
                                             terminator via `stream.done`)
   agent.chat.cancel        -> null         (best-effort cancel of an in-flight stream)
@@ -67,8 +69,11 @@ from steerable_agent_runtime import (
     ToolRouter,
     TraceRecorder,
     WorldStateHooks,
-    entry_to_dict,
-    estimate_tokens,
+    branch_label,
+    entry_from_dict,
+    fork_record,
+    lineage,
+    resolve_fork_seq,
     select_catalog,
     skill_tool_descriptor,
     subagent_tool_descriptor,
@@ -80,7 +85,7 @@ from steerable_agent_runtime.llm import (
     LLMProvider,
     TextPart,
 )
-from steerable_agent_runtime.resume import load_history_items, project_transcript
+from steerable_agent_runtime.resume import project_transcript
 from steerable_agent_runtime.storage import InMemoryStorage, StorageAdapter
 from steerable_agent_runtime.transport.stdio_jsonrpc import (
     JsonRpcError,
@@ -201,6 +206,8 @@ class Sidecar:
         register("agent.chat.cancel", self._handle_chat_cancel)
         register("agent.chat.steer", self._handle_chat_steer)
         register("agent.chat.fork", self._handle_chat_fork)
+        register("agent.session.fork", self._handle_session_fork)
+        register("agent.session.branches", self._handle_session_branches)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -520,39 +527,30 @@ class Sidecar:
         stream_id = params.get("streamId") or _new_stream_id()
         source_record = params.get("recordId")
         if source_record is not None:
-            # Wave 1 record fork: seed from the durable record (optionally
-            # truncated at a record seq) into a FRESH record id, so the
-            # variant never pollutes the source chat's log. The seed entry
-            # is persisted up front with provenance and per-message kinds
-            # (the loop's host-view reconciliation needs them to keep
-            # forked records continuous); the run's own continuous-log
-            # seeding then recognises the prefix and only appends genuinely
-            # new items.
+            # Wave 1 record fork (Wave 5: via branch.fork_record): seed from
+            # the durable record (optionally truncated at a record seq) into
+            # a FRESH record id, so the variant never pollutes the source
+            # chat's log. The seed entry is persisted up front with
+            # provenance and per-message kinds (the loop's host-view
+            # reconciliation needs them to keep forked records continuous);
+            # the run's own continuous-log seeding then recognises the
+            # prefix and only appends genuinely new items.
             until_seq = params.get("untilSeq")
-            seed_items = await load_history_items(
-                self.storage,
-                str(source_record),
-                until_seq=int(until_seq) if until_seq is not None else None,
-            )
-            if seed_items is None:
+            try:
+                fork = await fork_record(
+                    self.storage,
+                    str(source_record),
+                    until_seq=int(until_seq) if until_seq is not None else None,
+                    new_record_id=f"{source_record}:fork:{stream_id}",
+                )
+            except KeyError:
                 raise JsonRpcError(
                     f"record not found: {source_record}",
                     code=-32004,
                     kind="invalid_request",
-                )
-            record_id = f"{source_record}:fork:{stream_id}"
-            seed_msgs = [item.message for item in seed_items]
-            seed_entry = HistorySeed(
-                seq=0,
-                messages=tuple(seed_msgs),
-                token_estimate=estimate_tokens(seed_msgs),
-                source_record_id=str(source_record),
-                source_until_seq=int(until_seq) if until_seq is not None else None,
-                message_kinds=tuple(item.kind for item in seed_items),
-            )
-            await self.storage.append_history(record_id, [entry_to_dict(seed_entry)])
-            seed = list(seed_msgs)
-            params = {**params, "recordId": record_id}
+                ) from None
+            seed = list(fork.messages)
+            params = {**params, "recordId": fork.point.record_id}
         else:
             trace_id = params.get("traceId")
             if not trace_id:
@@ -586,6 +584,130 @@ class Sidecar:
         )
         self._streams[stream_id] = task
         return {"streamId": stream_id, "seedMessages": len(seed)}
+
+    async def _handle_session_fork(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Fork a durable record WITHOUT running a turn (Wave 5).
+
+        Params::
+
+            {
+              "recordId": "chat_...",        # the source record (required)
+              "untilSeq": 41,                # exact inclusive fork point, or
+              "beforeLastUser": true,        # regen addressing: fork at the
+                                             # newest user item (the prompting
+                                             # turn stays, the reply is dropped)
+              "beforeUserIndex": 2,          # regen addressing by user-message
+                                             # ordinal (mid-history regen)
+              "newRecordId": "chat_...:r2",  # optional explicit branch id
+              "label": "...",                # optional host-supplied summary
+            }
+
+        Returns the BranchPoint (``recordId``, ``sourceRecordId``,
+        ``sourceUntilSeq``, ``label``) plus ``seedMessages`` (count). The
+        host then runs turns on the branch by passing the returned
+        ``recordId`` to ``agent.chat.stream``. The source record is never
+        mutated — this is the non-destructive regenerate primitive: the old
+        tail stays intact and discoverable via ``agent.session.branches``.
+        """
+        params = _require_params(params)
+        source_record = params.get("recordId")
+        if not source_record:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+        until_seq = params.get("untilSeq")
+        user_index = params.get("beforeUserIndex")
+        if until_seq is None and user_index is not None:
+            until_seq = await resolve_fork_seq(
+                self.storage, str(source_record), user_index=int(user_index)
+            )
+            if until_seq is None:
+                raise JsonRpcError(
+                    f"user message index {user_index} not addressable in "
+                    f"record: {source_record}",
+                    code=-32004,
+                    kind="invalid_request",
+                )
+        if until_seq is None and params.get("beforeLastUser"):
+            until_seq = await resolve_fork_seq(
+                self.storage, str(source_record), before_last_user=True
+            )
+            if until_seq is None:
+                raise JsonRpcError(
+                    f"no user message to fork before: {source_record}",
+                    code=-32004,
+                    kind="invalid_request",
+                )
+        try:
+            fork = await fork_record(
+                self.storage,
+                str(source_record),
+                until_seq=int(until_seq) if until_seq is not None else None,
+                new_record_id=(
+                    str(params["newRecordId"]) if params.get("newRecordId") else None
+                ),
+                label=str(params["label"]) if params.get("label") else None,
+            )
+        except KeyError:
+            raise JsonRpcError(
+                f"record not found: {source_record}",
+                code=-32004,
+                kind="invalid_request",
+            ) from None
+        point = fork.point
+        return {
+            "recordId": point.record_id,
+            "sourceRecordId": point.source_record_id,
+            "sourceUntilSeq": point.source_until_seq,
+            "label": point.label,
+            "seedMessages": len(fork.messages),
+        }
+
+    async def _handle_session_branches(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Branch-family view of a record (Wave 5).
+
+        Returns ``{"lineage": [...root-first BranchPoints...], "children":
+        [...]}``. Lineage walks seed provenance upwards and always works;
+        children discovery needs record enumeration — stores implementing
+        the optional ``list_history_records`` extension get direct children
+        (records whose seed names this one as source), others report an
+        empty list (documented degradation, not an error).
+        """
+        params = _require_params(params)
+        record_id = params.get("recordId")
+        if not record_id:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+        chain = await lineage(self.storage, str(record_id))
+        children: list[dict[str, Any]] = []
+        list_records = getattr(self.storage, "list_history_records", None)
+        if callable(list_records):
+            for candidate in await list_records():
+                if candidate == record_id:
+                    continue
+                first = await self.storage.list_history(candidate, limit=1)
+                if not first:
+                    continue
+                entry = entry_from_dict(first[0])
+                if isinstance(entry, HistorySeed) and entry.source_record_id == record_id:
+                    children.append(
+                        {
+                            "recordId": candidate,
+                            "sourceRecordId": record_id,
+                            "sourceUntilSeq": entry.source_until_seq,
+                            "label": branch_label(list(entry.messages)),
+                        }
+                    )
+        return {
+            "lineage": [
+                {
+                    "recordId": point.record_id,
+                    "sourceRecordId": point.source_record_id,
+                    "sourceUntilSeq": point.source_until_seq,
+                    "label": point.label,
+                    "depth": point.depth,
+                }
+                for point in chain
+            ],
+            "children": children,
+        }
 
     async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Inject a user message into a running CoreLoop turn.

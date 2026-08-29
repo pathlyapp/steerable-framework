@@ -1133,6 +1133,29 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       默认 Docker（probe 拒→全 none，fail-closed 正确）、SYS_ADMIN
       （仍拒）、--privileged（4 个真禁锢测试全绿：声明根可写/越界拒/
       断网//proc/1/root 不逃逸/宿主进程表不可见）。本机 728 全绿。
+    - [x] **W5-2 会话分支（record 级 fork 树 + 非破坏 regen）**（2026-08-29）：
+      模型取 codex/dsh 的 fork 形（分支 = 新 record + seed 溯源），不抄 pi 的
+      日志内 entry 树——steerable 的 record 是 append-only 线性日志，分支在
+      record 粒度发生，源 record 永不变异。框架新增 `branch.py`：
+      `fork_record`（一次性原语：load 前缀→写带溯源/ kinds 的 HistorySeed→
+      返回 ForkResult{point, messages}）、`branch_label`（确定性免 LLM 摘要：
+      fork 点最后一条 user 消息预览）、`resolve_fork_seq`（语义寻址：
+      before_last_user=regen 地址；user_index=K 按 user 消息序数寻址——
+      桌面 regen 的截断点是消息序数不是 record seq；seed 内 user 消息计入
+      序数但不可寻址，序数落进 seed → None → 宿主降级）、`lineage`
+      （向上走 seed 溯源链，环/超深 fail-loud）。sidecar 新增
+      `agent.session.fork`（不跑回合的纯分叉 RPC）与 `agent.session.branches`
+      （lineage 恒可用；children 靠存储的可选 `list_history_records` 扩展——
+      InMemory/SQLAlchemy 已实现，无此能力的存储降级为仅 lineage）。
+      **桌面采纳（修真实 bug）**：此前 CoreLoop 聊天的 regen 截断桌面库后
+      继续往同一 record 追加——durable log 里新旧两条尾巴交织无标记。
+      现在 regen 先 `session.fork`（beforeUserIndex 寻址）再截断：旧尾
+      完整留在源 record、可经 branches RPC 发现；chat→活跃 recordId 映射
+      存 settings_kv（重启不丢），后续回合显式传 recordId。fork 失败
+      （无 record/序数落进 seed）降级为旧截断路径。验证：框架 756 全绿
+      （branch.py 19 测 + sidecar 两 RPC 4 测），desktop vitest 308 全绿
+      （fork 序数纯函数 4 测）+ tsc 干净。仍开：pi 式会话内树 UI（需
+      entry 级 parent 链 + 渲染层设计，等真实需求）。
     - 记录但不排期：**供应链/发布完整性**（pi 的依赖钉死、
       `min-release-age=2`、shrinkwrap、`--ignore-scripts`、OIDC 可信发布、
       发布前隔离冒烟）——我们从未把它当作一轴考虑过，值得借鉴但不阻塞产品。
