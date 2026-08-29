@@ -114,6 +114,18 @@ from .tokens import (
     register_model_factor,
 )
 from .tool_search import TOOL_SEARCH_NAME, register_tool_search, tool_search_descriptor
+from .mcp import (
+    DEFAULT_MAX_SERVER_TOOLS,
+    McpCallResult,
+    McpCatalogError,
+    McpError,
+    McpStdioClient,
+    McpToolInfo,
+    mcp_invoker,
+    parse_mcp_name,
+    qualify_mcp_name,
+    register_mcp_catalog,
+)
 from .tools import RegisteredTool, ToolExposure, ToolRouter, tool
 from .tracing import TraceRecorder
 from .transport import TransportAdapter
@@ -144,6 +156,7 @@ __all__ = [
     "ContextManager",
     "CoreLoop",
     "DEFAULT_MAX_ITEM_TOKENS",
+    "DEFAULT_MAX_SERVER_TOOLS",
     "EAGER_PRIORITY_THRESHOLD",
     "ExecutionBudget",
     "FilesystemSkillProvider",
@@ -165,6 +178,11 @@ __all__ = [
     "LoopContext",
     "LoopEvent",
     "LoopHooks",
+    "McpCallResult",
+    "McpCatalogError",
+    "McpError",
+    "McpStdioClient",
+    "McpToolInfo",
     "NoopHooks",
     "PolicyDeniedError",
     "PreStepAction",
@@ -233,11 +251,15 @@ __all__ = [
     "load_recorded_requests",
     "load_transcript",
     "matches_conditions",
+    "mcp_invoker",
     "merge_patch",
     "message_from_dict",
     "message_to_dict",
+    "parse_mcp_name",
     "project_transcript",
+    "qualify_mcp_name",
     "reduce_execution_state",
+    "register_mcp_catalog",
     "register_tool_search",
     "render_skill_catalog",
     "select_catalog",

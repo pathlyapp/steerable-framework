@@ -321,7 +321,7 @@ automatically (no manual boundary indices). `LLMMessage.content` is
 text-only common case; the wire schema gained an additive optional
 `parts` field with `content` retained as its plain-text projection.
 
-### Wave 2 — the payoff (in flight)
+### Wave 2 — the payoff ✅ landed 2026-08-29
 
 Cache instrumentation → world-state diffing → tool exposure tiers → MCP.
 The order is the argument:
@@ -358,28 +358,31 @@ The order is the argument:
    search tool over the deferred inventory, returning full schemas so a
    match is callable the next round. Hidden tools leak nowhere — not into
    search results, not into unknown-tool suggestions.
-4. **MCP.** Landing into a system that can hold it.
+4. **MCP** ✅ landed 2026-08-29 (`mcp.py`), on the full foundation:
+   per-tool timeouts (Wave 0), exposure tiers (item 3), plus the two rules
+   the module owns — deterministic `mcp__<server>__<tool>` qualification
+   (collisions impossible by construction; origin visible to model, trace,
+   and policy) and per-server catalog caps that fail loud and atomically
+   (never a half-registered or silently truncated catalog). Catalogs
+   register deferred by default, so the model discovers MCP tools through
+   `tool_search` instead of paying for every schema in every request.
+   `McpStdioClient` (NDJSON JSON-RPC: initialize handshake, cursor-paginated
+   `tools/list`, `tools/call`, per-request timeouts, method-not-found
+   answers to server-initiated requests) serves hosts embedding the
+   runtime directly; the desktop keeps the recorded architecture — servers
+   launch host-side (Electron main) and arrive through
+   `ToolRouter.register_remote`, whose invoker contract is identical to
+   `register_mcp_catalog`'s.
 
-#### The MCP ordering decision
+#### The MCP ordering decision (resolved)
 
 The 2026-07-28 MCP spec made the core stateless HTTP — no handshake, no
 session id, self-describing requests — which retires the "sidecar becomes
-a process supervisor" objection recorded in `CORELOOP_TODO.md`, and
-architecturally the client is an `McpToolExecutor` in the existing
-decorator chain. Both are true. **The foundation still comes first.**
-
-Landing MCP on a mutable list with no per-item bounding, no exposure
-tiers, and no state diffing reproduces exactly the cache-thrash pathology
-already recorded in dogfood — but harder to diagnose, because the cause
-lives in another process.
-
-Prerequisites when it is built: per-tool timeouts, per-server catalog
-caps, deterministic name qualification (`mcp__<server>__<tool>` — Codex
-and DeepSeek Harness converged on the same shape independently), immutable
-per-step tool binding, and tool exposure tiers. MCP servers should be
-launched host-side (the Electron main process) and reached through the
-existing `ToolRouter.register_remote` (`tools.py:110-149`), not spawned
-by a Seatbelt-confined sidecar.
+a process supervisor" objection recorded in `CORELOOP_TODO.md`. The
+ordering argument above held: MCP landed only after timeouts, exposure
+tiers, catalog caps, and name qualification existed, so the largest
+unbounded third-party context source arrived bounded, discoverable, and
+cache-friendly from day one.
 
 ### Wave 3
 

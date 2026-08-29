@@ -931,9 +931,23 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       权重高于 description），返回完整 schema，命中即调，结果有界
       （默认 5，封顶 20）。hidden 层不进搜索、不进 unknown-tool 建议
       （不再泄漏进模型可见错误文本）。
-    - [ ] **MCP**：落到能承载它的系统里（前置：逐工具超时 ✅、每 server
-      目录上限、确定性命名 `mcp__<server>__<tool>`、逐轮不可变工具绑定、
-      曝光分层 ✅）。
+    - [x] **MCP** ✅ 2026-08-29（前置全齐后落地）：`mcp.py`——
+      ① 确定性命名 `qualify_mcp_name` / `parse_mcp_name`
+      （`mcp__<server>__<tool>`，server 名禁含分隔符，qualified 名超 64
+      字符即 loud fail）；② `register_mcp_catalog` 每 server 目录上限
+      （默认 64，超帽 loud fail 且原子——先全量校验再注册，不留半注册
+      状态），目录默认 deferred 层（模型经 tool_search 发现，不为每个
+      schema 每轮付 token），invoker 契约 `(未限定名, arguments)` 与
+      `register_remote` 同形——host 侧 MCP client 经反向通道接入与
+      进程内 client 插法一致；③ `McpStdioClient`：NDJSON JSON-RPC
+      2.0 子进程客户端（initialize 握手 / cursor 分页 tools/list /
+      tools/call），server 通知忽略、server 主动请求（sampling 等）
+      回 -32601 防 wedge，每请求超时（3.10/3.11 的 TimeoutError 分裂
+      已处理），非文本 content 以占位符呈现。架构决定不变：桌面产品里
+      server 由 host（Electron 主进程）启动，sidecar 不 spawn；
+      `McpStdioClient` 服务直接嵌入 runtime 的宿主（CLI / 测试）。
+      测试含真实假 server 子进程 + 全链路 e2e（server → 目录 →
+      deferred → tool_search 发现 → loop 调用）。
   - [ ] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
     回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
     → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →
