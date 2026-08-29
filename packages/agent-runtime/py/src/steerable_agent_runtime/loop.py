@@ -55,6 +55,7 @@ from steerable_agent_harness import (
 )
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
+from .errors import ApprovalAborted
 from .history import (
     KIND_ASSISTANT,
     KIND_SYSTEM,
@@ -165,7 +166,10 @@ class RouterToolExecutor:
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         return await self._router.dispatch(
             call,
-            consent_granted=self._consent_granted,
+            # An upstream ApprovalExecutor bridges its allow verdict through
+            # the context so the router's require_consent gate recognizes it
+            # instead of double-gating.
+            consent_granted=self._consent_granted or ctx.consent_granted,
             context={"chat_id": ctx.chat_id, "round": ctx.round_index},
         )
 
@@ -204,6 +208,10 @@ class LoopContext:
     #: describe one request, not a projection, so rewrites don't stale them.
     last_cached_prompt_tokens: int = 0
     last_cache_creation_tokens: int = 0
+    #: Set by an upstream ApprovalExecutor on its allow path; read by
+    #: RouterToolExecutor to bridge the verdict into the router's
+    #: require_consent gate. Plain False when no approval layer is wired.
+    consent_granted: bool = False
 
 
 @dataclass(slots=True)
@@ -1036,6 +1044,11 @@ class CoreLoop:
                 # order during phase 3.
                 started_by_idx = {i: started for i, _, started in pending}
                 errors: dict[int, str] = {}
+                # An ApprovalAborted surfacing from any call ends the turn
+                # after this batch's bookkeeping (see phase 3) — distinct
+                # from a denial, which is an ordinary failed ToolResult.
+                abort_exc: ApprovalAborted | None = None
+                abort_idx: int | None = None
                 if pending:
                     if batch_safe and len(pending) > 1:
                         outcomes = await asyncio.gather(
@@ -1043,7 +1056,12 @@ class CoreLoop:
                             return_exceptions=True,
                         )
                         for (call_idx, _, _), outcome in zip(pending, outcomes):
-                            if isinstance(outcome, BaseException):
+                            if isinstance(outcome, ApprovalAborted):
+                                errors[call_idx] = str(outcome)
+                                if abort_exc is None:
+                                    abort_exc = outcome
+                                    abort_idx = call_idx
+                            elif isinstance(outcome, BaseException):
                                 errors[call_idx] = str(outcome)
                             else:
                                 results[call_idx] = outcome
@@ -1051,6 +1069,13 @@ class CoreLoop:
                         for call_idx, call, _ in pending:
                             try:
                                 results[call_idx] = await self._execute_tool(call, ctx)
+                            except ApprovalAborted as exc:
+                                errors[call_idx] = str(exc)
+                                abort_exc = exc
+                                abort_idx = call_idx
+                                # Abort is a stop signal: nothing further in
+                                # this batch (or turn) executes.
+                                break
                             except Exception as exc:  # noqa: BLE001 — tool_error event
                                 errors[call_idx] = str(exc)
 
@@ -1111,6 +1136,40 @@ class CoreLoop:
                         )
                     )
 
+                    # Approval abort ends the turn: record the batch like the
+                    # breaker does (real results for executed calls, synthetic
+                    # skips for the rest — no dangling tool_calls) and finish
+                    # as failed. No narration offer: stopping is the
+                    # approver's explicit intent.
+                    if call_idx == abort_idx:
+                        _append_unexecuted_tool_results(
+                            manager,
+                            batch=batch,
+                            batch_idx=batch_idx,
+                            batches=batches,
+                            call_idx=call_idx,
+                            errors=errors,
+                            results=results,
+                            skip_message=_APPROVAL_ABORT_SKIP_MESSAGE,
+                            skip_kind="loop.abort_skip",
+                        )
+                        record_terminal_content(content, tool_calls)
+                        await self._flush_history(manager, chat_id)
+                        yield emit_completion(
+                            step_summary(
+                                round_index=round_index,
+                                finish_reason="tool_calls",
+                                content=content,
+                                tool_calls=tool_calls,
+                            ),
+                            CompletionDecision(
+                                status="failed",
+                                reason=f"approval aborted: {abort_exc}",
+                                confidence=1.0,
+                            ),
+                        )
+                        return
+
                     # consecutive-error breaker (runaway guard). In a parallel
                     # batch the remaining calls already ran — their results
                     # are recorded above; the breaker gates the NEXT batch.
@@ -1144,35 +1203,17 @@ class CoreLoop:
                             # reject the request. Append real results for calls
                             # that already ran in this batch, synthetic skips
                             # for everything never executed.
-                            remaining: list[tuple[ToolCall, int | None]] = [
-                                (c, i)
-                                for i, c in enumerate(batch)
-                                if i > call_idx
-                            ] + [
-                                (c, None)
-                                for _, later in batches[batch_idx + 1:]
-                                for c in later
-                            ]
-                            for skipped, skip_idx in remaining:
-                                if skip_idx is not None and skip_idx in errors:
-                                    skip_content = f"Error: {errors[skip_idx]}"
-                                elif skip_idx is not None and skip_idx in results:
-                                    skip_content = _result_content(results[skip_idx])
-                                else:
-                                    skip_content = _BREAKER_SKIP_MESSAGE
-                                manager.append(
-                                    LLMMessage.text_of(
-                                        "tool",
-                                        skip_content,
-                                        name=skipped.name,
-                                        tool_call_id=skipped.id,
-                                    ),
-                                    kind=(
-                                        "loop.breaker_skip"
-                                        if skip_content is _BREAKER_SKIP_MESSAGE
-                                        else "tool"
-                                    ),
-                                )
+                            _append_unexecuted_tool_results(
+                                manager,
+                                batch=batch,
+                                batch_idx=batch_idx,
+                                batches=batches,
+                                call_idx=call_idx,
+                                errors=errors,
+                                results=results,
+                                skip_message=_BREAKER_SKIP_MESSAGE,
+                                skip_kind="loop.breaker_skip",
+                            )
                             break  # leave the tool loop; wrap-up round runs next
                         record_terminal_content(content, tool_calls)
                         await self._flush_history(manager, chat_id)
@@ -1318,6 +1359,51 @@ _BREAKER_SKIP_MESSAGE = (
     "[not executed: the turn stopped after too many consecutive tool errors. "
     "Do not claim this call produced a result.]"
 )
+
+_APPROVAL_ABORT_SKIP_MESSAGE = (
+    "[not executed: the turn was stopped by an approval abort. "
+    "Do not claim this call produced a result.]"
+)
+
+
+def _append_unexecuted_tool_results(
+    manager: ContextManager,
+    *,
+    batch: list[ToolCall],
+    batch_idx: int,
+    batches: list[tuple[bool, list[ToolCall]]],
+    call_idx: int,
+    errors: dict[int, str],
+    results: dict[int, ToolResult],
+    skip_message: str,
+    skip_kind: str,
+) -> None:
+    """Append tool messages for calls that never executed.
+
+    The assistant message carrying these tool_calls is already in the
+    transcript; providers reject requests with dangling tool_calls, so every
+    call gains a response — real content for calls that ran, a synthetic skip
+    notice for the rest.
+    """
+    remaining: list[tuple[ToolCall, int | None]] = [
+        (c, i) for i, c in enumerate(batch) if i > call_idx
+    ] + [(c, None) for _, later in batches[batch_idx + 1 :] for c in later]
+    for skipped, skip_idx in remaining:
+        if skip_idx is not None and skip_idx in errors:
+            skip_content = f"Error: {errors[skip_idx]}"
+        elif skip_idx is not None and skip_idx in results:
+            skip_content = _result_content(results[skip_idx])
+        else:
+            skip_content = skip_message
+        manager.append(
+            LLMMessage.text_of(
+                "tool",
+                skip_content,
+                name=skipped.name,
+                tool_call_id=skipped.id,
+            ),
+            kind=(skip_kind if skip_content is skip_message else "tool"),
+        )
 
 
 def _stable_json_hash(value: Any) -> str:

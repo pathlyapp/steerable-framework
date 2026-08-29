@@ -27,6 +27,7 @@ import platform
 import sys
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,17 +40,21 @@ from steerable_agent_protocol.generated import (
 from steerable_agent_runtime import (
     AntiHallucinationConfig,
     AntiHallucinationHooks,
+    ApprovalExecutor,
+    AutoApprover,
     BudgetExhaustedError,
     ChainHooks,
     CompactionHooks,
     CoreLoop,
     FilesystemSkillProvider,
     HistorySeed,
+    JsonApprovalStore,
     LoopConfig,
     LoopHooks,
     PolicyDeniedError,
     RetryHooks,
     RouterToolExecutor,
+    SessionApprovalCache,
     SkillExecutor,
     SkillHooks,
     StaticWorldStateSection,
@@ -81,7 +86,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
     encode_frame,
 )
 
-from .host_tools import HostToolExecutor
+from .host_tools import HostApprover, HostToolExecutor
 
 logger = logging.getLogger("steerable_sidecar")
 
@@ -96,6 +101,10 @@ SIDECAR_VERSION = "0.1.0"
 # realistic frames.
 STDIO_STREAM_LIMIT = 16 * 1024 * 1024
 READY_PREFIX = "__SIDECAR_READY__:"
+
+#: Bound on per-chat session approval caches held by one sidecar. Eviction
+#: only re-asks a cached *_for_session decision once; decisions are cheap.
+_APPROVAL_SESSION_CACHE_CAP = 64
 
 
 @dataclass
@@ -139,6 +148,11 @@ class Sidecar:
         #: Active CoreLoop instances by stream id — the steer RPC targets
         #: these to inject user messages into a running turn.
         self._coreloops: dict[str, CoreLoop] = {}
+        #: Session-scope approval caches per chat (Wave 3 approval algebra).
+        #: LRU-bounded so a long-lived sidecar hosting many chats doesn't
+        #: grow without limit; eviction only means a cached *_for_session
+        #: decision is re-asked once.
+        self._approval_sessions: OrderedDict[str, SessionApprovalCache] = OrderedDict()
         self._transport: StdioJsonRpcTransport | None = None
         self._started_ms = int(time.monotonic() * 1000)
         self._wall_started_ms = int(time.time() * 1000)
@@ -148,6 +162,19 @@ class Sidecar:
         self._register_default_methods()
         for tool in self.config.initial_tools:
             self.tools.register(tool)
+
+    def _approval_session(self, chat_id: Any) -> SessionApprovalCache:
+        """Session-scope approval cache for one chat (LRU-bounded)."""
+        key = str(chat_id) if chat_id else ""
+        cache = self._approval_sessions.get(key)
+        if cache is None:
+            cache = SessionApprovalCache()
+            self._approval_sessions[key] = cache
+            while len(self._approval_sessions) > _APPROVAL_SESSION_CACHE_CAP:
+                self._approval_sessions.popitem(last=False)
+        else:
+            self._approval_sessions.move_to_end(key)
+        return cache
 
     # ------------------------------------------------------------------
     # Method registration
@@ -680,6 +707,27 @@ class Sidecar:
             if params.get("toolsViaHost")
             else RouterToolExecutor(self.tools)
         )
+        # approval: opt-in approval algebra (Wave 3). ``{"mode": "auto"}`` is
+        # the headless policy (safe modes auto-approve, the rest auto-deny —
+        # a run never hangs on a prompt nobody answers); ``{"mode": "host"}``
+        # asks the host UI over the reverse channel. Absent → no approval
+        # layer, the router's require_consent gate alone (legacy behavior).
+        # Wrapped innermost so a subagent's child-loop calls are gated too.
+        approval = params.get("approval")
+        if isinstance(approval, dict) and approval.get("mode") in ("auto", "host"):
+            timeout_ms = approval.get("timeoutMs")
+            store_path = approval.get("storePath")
+            executor = ApprovalExecutor(
+                executor,
+                (
+                    AutoApprover()
+                    if approval["mode"] == "auto"
+                    else HostApprover(self.server)
+                ),
+                session=self._approval_session(params.get("chatId")),
+                store=JsonApprovalStore(store_path) if store_path else None,
+                timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
+            )
         # subagent: opt-in delegation seam — advertise the tool and answer it
         # with a bounded child CoreLoop (depth-1 by construction). Products
         # that don't want delegation (the desktop today) simply don't pass it.

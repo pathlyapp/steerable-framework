@@ -386,12 +386,30 @@ cache-friendly from day one.
 
 ### Wave 3
 
-Approval algebra (an 8-variant decision with three persistence scopes,
-`Denied{reason}` fed back to the model as distinct from `Abort`, plus
-per-category auto-reject so headless runs reject rather than hang) →
-tool-execution sandbox, starting with shell and subprocess only → AG-UI
-and ACP transports → a golden-trajectory eval gate reusing the existing
-`replay.py` fixtures.
+1. **Approval algebra** ✅ landed 2026-08-29 (`approval.py`). The 8-variant
+   `ApprovalKind` mirrors codex's `ReviewDecision` — allow/deny across
+   request / session / durable scopes, with codex's policy-amendment variants
+   generalized into the durable one. Enforcement is `ApprovalExecutor`, a
+   `ToolExecutor` decorator, so the algebra stands in front of any dispatch
+   path (router, host reverse channel, MCP) instead of living inside one
+   registry; an allow verdict bridges into the router's `require_consent`
+   gate via `ctx.consent_granted`. Deny variants return a failed
+   `ToolResult` — the model sees `Denied{reason}` and the run continues —
+   while `abort` raises `ApprovalAborted` and the loop ends the turn as
+   failed after giving every tool_call in the batch a response (real results
+   plus `loop.abort_skip` placeholders, no dangling calls). `timed_out`
+   fails closed but keeps its variant name for observability. Session scope
+   is a per-category `SessionApprovalCache`; durable scope is an
+   `ApprovalStore` (`JsonApprovalStore` writes atomically) and wins over
+   session. `AutoApprover` is the headless policy: per-category automatic
+   allow/deny by tool mode, so a run with no human rejects instead of
+   hanging. The sidecar wires it as `approval: {mode: "auto" | "host",
+   timeoutMs, storePath}` on `chat.stream` — absent means no approval layer
+   (legacy behavior); `host` mode asks the host UI over the reverse channel
+   (`approval.request`) and fails closed when the host can't answer.
+2. Tool-execution sandbox, starting with shell and subprocess only.
+3. AG-UI and ACP transports.
+4. A golden-trajectory eval gate reusing the existing `replay.py` fixtures.
 
 ## Protocol positioning (decided)
 

@@ -948,10 +948,36 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       `McpStdioClient` 服务直接嵌入 runtime 的宿主（CLI / 测试）。
       测试含真实假 server 子进程 + 全链路 e2e（server → 目录 →
       deferred → tool_search 发现 → loop 调用）。
-  - [ ] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
+  - [~] **Wave 3**：审批代数（8 变体决策 + 三种持久化域，`Denied{reason}`
     回喂模型且与 `Abort` 语义不同；逐类别自动拒绝，headless 才不会挂起）
     → 工具执行沙箱（先只做 shell/subprocess）→ AG-UI / ACP transport →
     金轨迹评测门禁（复用既有 `replay.py` fixtures）。
+    - [x] **审批代数** ✅ 2026-08-29：`approval.py`——8 变体
+      `ApprovalKind`（`allow_once` / `allow_for_session` / `allow_always` /
+      `deny_once` / `deny_for_session` / `deny_always` / `abort` /
+      `timed_out`，codex `ReviewDecision` 同构，其 policy-amendment 变体
+      泛化为 durable 域）；三种持久化域 = request（不缓存）/ session
+      （`SessionApprovalCache` 按 category）/ durable（`ApprovalStore`
+      协议 + `InMemoryApprovalStore` / `JsonApprovalStore` 原子写实现，
+      跨 session）；durable 优先于 session（更强的承诺先查）。
+      `ApprovalExecutor` 是 ToolExecutor 装饰器——审批立在任意分发路径
+      之前（router / host 反向通道 / MCP 一视同仁），不是埋在某个注册表
+      里；allow 时经 `ctx.consent_granted` 桥接 router 的
+      `require_consent` 门（每个调用仍先过审批装饰器，桥接无法绕过）。
+      deny 变体返回失败 ToolResult（`error="approval_denied"` + reason
+      进 data）——模型看到 `Denied{reason}` 继续跑；`abort` 抛
+      `ApprovalAborted`，loop 像 breaker 一样补齐本批 tool 响应（真实
+      结果 + `loop.abort_skip` 合成跳过，不留悬空 tool_call）后以
+      failed 收尾——与 Denied 语义截然不同；`timed_out` fail-closed 当
+      deny 但保留变体名供观测。`AutoApprover` 是 headless 审批器：按
+      mode 逐类别自动允许/拒绝，永不阻塞。sidecar 接线：
+      `chat.stream` 新增 `approval: {mode: "auto"|"host", timeoutMs,
+      storePath}` 参数（缺省 = 无审批层，行为不变）；host 模式走反向
+      通道 `approval.request`（`HostApprover`，宿主不可达/回复非法一律
+      fail-closed deny）；session 域按 chatId LRU（64）挂 Sidecar 实例；
+      包装在 executor 最内层，子 agent 的工具调用同样过审批。测试 20
+      （框架：代数/域/超时/桥接/loop 回喂与 abort 收尾）+ 7（sidecar：
+      auto/host/不可达/跨轮 session 携带/缺省不变）。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；

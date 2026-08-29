@@ -11,9 +11,21 @@ from .antihallucination import (
     parse_turn_route,
     should_run_grounding_judge,
 )
+from .approval import (
+    ApprovalDecision,
+    ApprovalExecutor,
+    ApprovalRequest,
+    ApprovalStore,
+    Approver,
+    AutoApprover,
+    InMemoryApprovalStore,
+    JsonApprovalStore,
+    SessionApprovalCache,
+)
 from .calibration import CalibratingProvider, ModelCalibration, UsageCalibration
 from .compaction import CompactionHooks
 from .errors import (
+    ApprovalAborted,
     BudgetExhaustedError,
     PolicyDeniedError,
     StorageError,
@@ -143,6 +155,13 @@ from .world_state import (
 __all__ = [
     "AntiHallucinationConfig",
     "AntiHallucinationHooks",
+    "ApprovalAborted",
+    "ApprovalDecision",
+    "ApprovalExecutor",
+    "ApprovalRequest",
+    "ApprovalStore",
+    "Approver",
+    "AutoApprover",
     "BudgetExhaustedError",
     "CalibratingProvider",
     "ChainHooks",
@@ -167,8 +186,10 @@ __all__ = [
     "HistorySeed",
     "HistoryStore",
     "ImagePart",
+    "InMemoryApprovalStore",
     "InMemoryRequestSink",
     "InMemorySpillStore",
+    "JsonApprovalStore",
     "JsonlRequestSink",
     "LLMMessage",
     "LLMProvider",
@@ -195,6 +216,7 @@ __all__ = [
     "RetryHooks",
     "RewriteRequest",
     "RouterToolExecutor",
+    "SessionApprovalCache",
     "SkillConfig",
     "SkillDefinition",
     "SkillExecutor",

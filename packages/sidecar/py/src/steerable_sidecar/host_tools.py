@@ -16,10 +16,16 @@ enforce them (deeppath-agent's ToolRouter carries the same 61-rule set).
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime import LoopContext
+from steerable_agent_runtime.approval import (
+    APPROVAL_KINDS,
+    ApprovalDecision,
+    ApprovalKind,
+    ApprovalRequest,
+)
 from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
 
 logger = logging.getLogger(__name__)
@@ -73,6 +79,55 @@ class HostToolExecutor:
         if isinstance(payload, dict) and "success" in payload:
             return _coerce_host_result(payload)
         return ToolResult(success=True, data={"value": payload})
+
+
+class HostApprover:
+    """Approver over the reverse channel: the host UI answers
+    ``approval.request`` with ``{"kind": <variant>, "reason": "..."}``.
+
+    Fails closed: an unreachable host or an invalid reply becomes a
+    ``deny_once`` — never a hang, never an auto-allow.
+    """
+
+    def __init__(
+        self,
+        server: JsonRpcServer,
+        *,
+        method: str = "approval.request",
+        timeout: float | None = None,
+    ) -> None:
+        self._server = server
+        self._method = method
+        self._timeout = timeout
+
+    async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        try:
+            payload: Any = await self._server.call(
+                self._method,
+                {
+                    "toolName": request.tool_name,
+                    "arguments": request.arguments,
+                    "mode": request.mode,
+                    "category": request.category,
+                    "round": request.round_index,
+                },
+                timeout=self._timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail closed
+            logger.warning("host approval request failed: %s", exc)
+            return ApprovalDecision(
+                "deny_once", f"host approval unavailable: {exc}"
+            )
+        kind = payload.get("kind") if isinstance(payload, dict) else None
+        if kind not in APPROVAL_KINDS:
+            logger.warning("host returned invalid approval decision: %r", payload)
+            return ApprovalDecision(
+                "deny_once", f"host returned an invalid approval decision: {kind!r}"
+            )
+        return ApprovalDecision(
+            cast(ApprovalKind, kind),  # validated against APPROVAL_KINDS above
+            str(payload.get("reason") or ""),
+        )
 
 
 _KNOWN_RESULT_KEYS = frozenset(ToolResult.model_fields)

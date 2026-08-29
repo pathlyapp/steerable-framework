@@ -26,6 +26,15 @@ class PolicyDeniedError(ToolDispatchError):
     """A tool call was denied by policy (e.g. destructive without consent)."""
 
 
+class ApprovalAborted(PolicyDeniedError):
+    """The approval decision for a call was ``abort``.
+
+    Distinct from denial: denial becomes a tool result the model can react to
+    while the run continues; abort ends the turn. The loop records the current
+    batch (every tool_call keeps a response) and finishes the run as failed.
+    """
+
+
 class BudgetExhaustedError(RuntimeError):
     """The harness budget would be violated by the next operation."""
 
