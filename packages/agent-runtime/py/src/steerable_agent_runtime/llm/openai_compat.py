@@ -127,6 +127,7 @@ class OpenAICompatProvider:
                     except httpx.HTTPStatusError as exc:
                         await response.aread()
                         raise self._http_error(exc, body_text=response.text) from exc
+                    assembler = _OpenAIToolCallAssembler()
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -135,14 +136,35 @@ class OpenAICompatProvider:
                         if line.startswith("data:"):
                             line = line[5:].strip()
                         if line == "[DONE]":
+                            for call in assembler.flush():
+                                yield LLMStreamChunk(tool_call_delta=call)
                             return
                         try:
                             chunk = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+                        assembler.observe(chunk)
                         parsed = _parse_stream_chunk(chunk)
-                        if parsed is not None:
+                        if parsed is None:
+                            continue
+                        # Fragments are assembled below; do not dispatch per chunk.
+                        if parsed.tool_call_delta is not None:
+                            parsed = LLMStreamChunk(
+                                content_delta=parsed.content_delta,
+                                reasoning_delta=parsed.reasoning_delta,
+                                finish_reason=parsed.finish_reason,
+                                usage=parsed.usage,
+                                raw=parsed.raw,
+                            )
+                        if (
+                            parsed.content_delta
+                            or parsed.reasoning_delta
+                            or parsed.finish_reason
+                            or parsed.usage is not None
+                        ):
                             yield parsed
+                    for call in assembler.flush():
+                        yield LLMStreamChunk(tool_call_delta=call)
         except httpx.TransportError as exc:
             raise LLMError(
                 f"{self.name}: transport error: {exc}",
@@ -210,6 +232,62 @@ class OpenAICompatProvider:
 # ---------------------------------------------------------------------------
 # Wire-format helpers (kept pure functions for unit-testability)
 # ---------------------------------------------------------------------------
+
+
+class _OpenAIToolCallAssembler:
+    """Concatenate streamed ``function.arguments`` strings, then json.loads.
+
+    OpenAI-compatible SSE sends one tool-call object per index; ``arguments``
+    is a JSON *string* split across chunks. Parsing each fragment drops the
+    command.
+    """
+
+    def __init__(self) -> None:
+        self._buf: dict[int, dict[str, str]] = {}
+
+    def observe(self, chunk: dict[str, Any]) -> None:
+        choices = chunk.get("choices") or []
+        if not choices:
+            return
+        delta = (choices[0].get("delta") or {}) if isinstance(choices[0], dict) else {}
+        for item in delta.get("tool_calls") or []:
+            if not isinstance(item, dict):
+                continue
+            idx = int(item.get("index") or 0)
+            slot = self._buf.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+            if item.get("id"):
+                slot["id"] = str(item["id"])
+            function = item.get("function") or {}
+            if not isinstance(function, dict):
+                continue
+            if function.get("name"):
+                slot["name"] += str(function["name"])
+            raw_args = function.get("arguments")
+            if isinstance(raw_args, str) and raw_args:
+                slot["arguments"] += raw_args
+            elif isinstance(raw_args, dict):
+                slot["arguments"] = json.dumps(raw_args)
+
+    def flush(self) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        for idx in sorted(self._buf):
+            slot = self._buf[idx]
+            name = _sanitize_tool_name(slot["name"])
+            if not name:
+                continue
+            raw = slot["arguments"] or "{}"
+            try:
+                arguments = json.loads(raw)
+            except json.JSONDecodeError:
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append(ToolCall(id=slot["id"], name=name, arguments=arguments))
+        self._buf.clear()
+        return calls
+
+
+
 
 # Harmony-format special tokens (gpt-oss family) leak into the tool name
 # field when a vendor's chat-completions shim only half-parses the format —
@@ -342,9 +420,16 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     if raw_tool_calls:
         first = raw_tool_calls[0]
         function = first.get("function") or {}
-        try:
-            arguments = json.loads(function.get("arguments") or "{}")
-        except (TypeError, json.JSONDecodeError):
+        raw_args = function.get("arguments")
+        arguments: Any = {}
+        if isinstance(raw_args, dict):
+            arguments = raw_args
+        elif isinstance(raw_args, str) and raw_args:
+            try:
+                arguments = json.loads(raw_args)
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict):
             arguments = {}
         tool_call_delta = ToolCall(
             id=first.get("id") or "",

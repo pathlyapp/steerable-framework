@@ -206,7 +206,11 @@ class SteerableAcpAgent(acp.Agent):
         loop = CoreLoop(
             provider,
             RouterToolExecutor(router, consent_granted=True),
-            config=LoopConfig(max_rounds=80),
+            config=LoopConfig(
+                max_rounds=80,
+                max_tool_errors=16,
+                tool_dedup=False,
+            ),
             history_store=self._storage,
             record_id=session_id,
         )

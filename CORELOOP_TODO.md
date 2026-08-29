@@ -1108,6 +1108,15 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     - [x] **W4-7 注入内容设界**（P2）：`SpillHooks` 进 sidecar 缺省钩子链
       （现在造了但不在链上）；skill catalog 加聚合上限；world-state 与 steer
       的上限一并补。参照 codex 的 hook 输出 2500 token 硬顶 + 落盘。
+    - [x] **W4-8 实测修出的两个产品 bug**（2026-08-29 桌面实盘 CDP 驱动验证
+      发现，单测不可见）：① sidecar 的 httpx 走环境/系统代理
+      （`getproxies()`），出网白名单只写了 provider 端点 → 代理用户全量
+      LLM 调用被 EPERM；修复为白名单 = provider 端点 ∪ 环境代理 ∪
+      macOS 系统代理（`scutil --proxy`）。② 审批模态原挂在 chat 视图层，
+      用户切走页面即永不渲染、只能等超时 fail-closed；改挂 AgentLayout。
+      实盘全绿：审批请求 → 模态渲染 → 真实点击「允许一次」→ 工具执行
+      （工具卡 `sandbox: {enforcement: full, backend: seatbelt}`）→ 答案
+      基于真实工具输出 → trace 落库。
     - 记录但不排期：**供应链/发布完整性**（pi 的依赖钉死、
       `min-release-age=2`、shrinkwrap、`--ignore-scripts`、OIDC 可信发布、
       发布前隔离冒烟）——我们从未把它当作一轴考虑过，值得借鉴但不阻塞产品。

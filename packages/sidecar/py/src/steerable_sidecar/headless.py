@@ -27,9 +27,11 @@ from .workspace_tools import workspace_tools_for_cwd
 __version__ = "0.2.5"
 
 _SYSTEM = (
-    "You are a coding agent in a Linux workspace. Solve the task using the "
-    "bash, read_file, and write_file tools. Paths are relative to the current "
-    "workspace. Do not wait for confirmation."
+    "You are a coding agent in a Linux workspace. Complete the user's task "
+    "by using the bash, read_file, and write_file tools. Inspect the files, "
+    "make the required changes, and verify with shell commands. Do not only "
+    "describe a plan. Do not wait for confirmation. Keep going until the "
+    "workspace satisfies the instruction."
 )
 
 
@@ -71,7 +73,11 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     loop = CoreLoop(
         default_llm_provider_factory(params),
         RouterToolExecutor(tools, consent_granted=True),
-        config=LoopConfig(max_rounds=max_rounds),
+        config=LoopConfig(
+            max_rounds=max_rounds,
+            max_tool_errors=16,
+            tool_dedup=False,
+        ),
         history_store=InMemoryStorage(),
         record_id="headless",
     )
@@ -82,6 +88,14 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     async for event in loop.run(seed, tools=tools.describe_model(), chat_id="headless"):
         if event.kind == "content_delta":
             sys.stdout.write(str(event.data.get("delta", "")))
+            sys.stdout.flush()
+        elif event.kind == "tool_call_start":
+            sys.stdout.write(
+                f"\n[tool {event.data.get('name')} {event.data.get('arguments')}]\n"
+            )
+            sys.stdout.flush()
+        elif event.kind in ("tool_error", "error"):
+            sys.stdout.write(f"\n[{event.kind} {event.data}]\n")
             sys.stdout.flush()
         elif event.kind == "completion":
             sys.stdout.write("\n")

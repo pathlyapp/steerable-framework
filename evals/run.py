@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
             n_concurrent=args.n_concurrent,
             n_attempts=args.n_attempts,
             agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
+            environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
             harbor_bin=args.harbor,
         )
     except SuiteError as exc:
@@ -80,10 +81,13 @@ def main(argv: list[str] | None = None) -> int:
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = os.pathsep.join(
         [str(REPO_ROOT), *(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)]
     )
-    completed = subprocess.run(argv_harbor, cwd=REPO_ROOT, env=env)
+    completed = subprocess.run(
+        argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
+    )
     if completed.returncode != 0:
         print(f"harbor exited {completed.returncode}", file=sys.stderr)
         return EXIT_HARBOR
@@ -124,12 +128,44 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Harbor --agent-setup-timeout-multiplier",
     )
     parser.add_argument(
+        "--environment-build-timeout-multiplier",
+        type=float,
+        help="Harbor --environment-build-timeout-multiplier",
+    )
+    parser.add_argument(
         "--require-mean",
         type=float,
         help="fail if the latest job Mean is below this value (oracle canary)",
     )
     parser.add_argument("--harbor", default="harbor", help="Harbor executable")
     return parser.parse_args(argv)
+
+
+_DOCKER_PROXY_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def _harbor_child_env(env: dict[str, str]) -> dict[str, str]:
+    """Keep Clash off Docker Hub pulls; trial containers still get STEERABLE_HOST_PROXY."""
+    out = dict(env)
+    host_proxy = (
+        out.get("STEERABLE_HOST_PROXY")
+        or out.get("HTTPS_PROXY")
+        or out.get("HTTP_PROXY")
+        or out.get("https_proxy")
+        or out.get("http_proxy")
+    )
+    if host_proxy:
+        out["STEERABLE_HOST_PROXY"] = host_proxy
+    for key in _DOCKER_PROXY_KEYS:
+        out.pop(key, None)
+    return out
 
 
 def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:

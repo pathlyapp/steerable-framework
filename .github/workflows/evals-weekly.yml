@@ -35,7 +35,7 @@ jobs:
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
         run: |
           set +e
-          uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env
+          uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-${{ matrix.agent }}.txt"

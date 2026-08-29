@@ -182,9 +182,13 @@ All three layers are **on by default** in the DeepPath desktop build:
 
 - **Layer 1 (sidecar process sandbox)** spawns under Seatbelt unless
   `STEERABLE_SIDECAR_SANDBOX=0`; the egress allow-list is derived per boot
-  from the provider `baseUrl` (explicit override:
-  `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`). The hostname limitation
-  documented above applies: remote entries degrade to port-only
+  from the provider `baseUrl` **plus ambient proxy endpoints** (proxy env
+  vars and, on macOS, the System Configuration proxy via `scutil`) —
+  the sidecar's httpx stack honors ambient proxies, so a configured proxy
+  is an effective egress point and must be allow-listed or every LLM call
+  is denied for proxy users (found by dogfooding, 2026-08-29). Explicit
+  override: `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`. The hostname
+  limitation documented above applies: remote entries degrade to port-only
   enforcement, which still breaks reverse shells / beacons / DNS
   tunnelling but not exfiltration to an attacker HTTPS endpoint on 443.
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as

@@ -41,6 +41,12 @@ async def test_bash_empty_and_nonzero(tmp_path: Path) -> None:
     router = workspace_tools_for_cwd(tmp_path)
     empty = await _call(router, "bash", {"command": "  "})
     assert empty.success is False
+    missing = await _call(router, "bash", {})
+    assert missing.success is False
+    assert "empty" in (missing.error or "")
+    aliased = await _call(router, "bash", {"cmd": "echo aliased"})
+    assert aliased.success is True
+    assert "aliased" in aliased.data["stdout"]
     failed = await _call(router, "bash", {"command": "exit 7"})
     assert failed.success is False
     assert failed.data["exitCode"] == 7

@@ -12,6 +12,7 @@ from steerable_agent_runtime.llm.anthropic_native import (
     _split_system_and_messages,
 )
 from steerable_agent_runtime.llm.openai_compat import (
+    _OpenAIToolCallAssembler,
     _decode_tool_calls,
     _encode_message,
     _parse_stream_chunk,
@@ -147,6 +148,119 @@ def test_openai_stream_requests_usage_chunk() -> None:
         extra={},
     )
     assert "stream_options" not in complete_body
+
+
+def test_openai_tool_call_assembler_concatenates_argument_fragments() -> None:
+    assembler = _OpenAIToolCallAssembler()
+    assembler.observe(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_x",
+                                "function": {"name": "bash", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    assembler.observe(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": '{"com'}}
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    assembler.observe(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {"arguments": 'mand": "git status"}'},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    calls = assembler.flush()
+    assert calls == [
+        ToolCall(id="call_x", name="bash", arguments={"command": "git status"})
+    ]
+    assert assembler.flush() == []
+
+
+def test_openai_tool_call_assembler_keeps_parallel_indices() -> None:
+    assembler = _OpenAIToolCallAssembler()
+    assembler.observe(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "c1",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path": "b"}',
+                                },
+                            },
+                            {
+                                "index": 0,
+                                "id": "c0",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": '{"command": "pwd"}',
+                                },
+                            },
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    calls = assembler.flush()
+    assert [c.name for c in calls] == ["bash", "read_file"]
+    assert calls[0].arguments == {"command": "pwd"}
+    assert calls[1].arguments == {"path": "b"}
+
+
+def test_openai_parse_stream_chunk_ignores_string_json_fragments() -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "id": "call_x",
+                            "function": {"name": "bash", "arguments": '":"'},
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+    parsed = _parse_stream_chunk(chunk)
+    assert parsed is not None
+    assert parsed.tool_call_delta is not None
+    assert parsed.tool_call_delta.name == "bash"
+    assert parsed.tool_call_delta.arguments == {}
 
 
 def test_openai_parse_stream_chunk_tool_call_delta() -> None:

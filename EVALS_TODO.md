@@ -47,7 +47,7 @@
 - [x] **1.1** ACP 工具桥：默认 in-process `bash` / `read_file` / `write_file`（`workspace_tools.py`）。Editor fs/terminal 仍是 follow-up
 - [x] **1.2** 无头启动：`python -m steerable_sidecar.headless`（`--instruction` / `--instruction-file`）
 - [x] **1.3** Harbor adapter：`evals.harbor_steerable:SteerableHarborAgent`；`suite.yaml` `steerable` 未 skipped
-- [ ] **1.4** 同一题对照：oracle Mean = 1.0 **且** 产品 canary 交卷（Harbor Mean 落盘）
+- [x] **1.4** 同一题对照：oracle Mean = 1.0 **且** 产品 canary 交卷（`evals/jobs/steerable/2026-08-29__15-09-24` Mean **1.000**，隐藏 pytest 全过）
 - [x] **1.5** GHA 矩阵加上产品 agent（oracle workflow 的 `steerable` job + weekly 矩阵）
 
 ---

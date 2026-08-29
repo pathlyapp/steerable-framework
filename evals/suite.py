@@ -126,6 +126,7 @@ def harbor_argv(
     n_concurrent: int | None = None,
     n_attempts: int | None = None,
     agent_setup_timeout_multiplier: float | None = None,
+    environment_build_timeout_multiplier: float | None = None,
     harbor_bin: str = "harbor",
 ) -> list[str]:
     spec = suite.agents.get(agent)
@@ -165,6 +166,13 @@ def harbor_argv(
             [
                 "--agent-setup-timeout-multiplier",
                 str(agent_setup_timeout_multiplier),
+            ]
+        )
+    if environment_build_timeout_multiplier is not None:
+        argv.extend(
+            [
+                "--environment-build-timeout-multiplier",
+                str(environment_build_timeout_multiplier),
             ]
         )
     for key, value in spec.kwargs:

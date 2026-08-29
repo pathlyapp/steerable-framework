@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evals.run import EXIT_HARBOR, EXIT_OK, EXIT_SKIPPED, EXIT_USAGE, _print_summary, main
+from evals.run import (
+    EXIT_HARBOR,
+    EXIT_OK,
+    EXIT_SKIPPED,
+    EXIT_USAGE,
+    _harbor_child_env,
+    _print_summary,
+    main,
+)
 from evals.suite import STEERABLE_IMPORT_PATH
 
 
@@ -34,12 +42,15 @@ def test_dry_run_steerable_uses_import_path(capsys) -> None:
             "--split",
             "oracle-canary",
             "--dry-run",
+            "--environment-build-timeout-multiplier",
+            "3",
         ]
     )
     captured = capsys.readouterr()
     assert code == 0
     assert STEERABLE_IMPORT_PATH in captured.out
     assert "--include-task-name terminal-bench/fix-git" in captured.out
+    assert "--environment-build-timeout-multiplier 3" in captured.out
 
 
 def test_skip_missing_env_exits_3_for_pi(capsys, monkeypatch) -> None:
@@ -103,4 +114,13 @@ def test_print_summary_missing_stats(tmp_path: Path) -> None:
 
 def test_print_summary_no_result(tmp_path: Path) -> None:
     assert _print_summary(tmp_path) == EXIT_HARBOR
+
+
+def test_harbor_child_env_moves_proxy_off_docker() -> None:
+    out = _harbor_child_env(
+        {"HTTP_PROXY": "http://127.0.0.1:7890", "OPENAI_API_KEY": "x"}
+    )
+    assert "HTTP_PROXY" not in out
+    assert out["STEERABLE_HOST_PROXY"] == "http://127.0.0.1:7890"
+    assert out["OPENAI_API_KEY"] == "x"
 

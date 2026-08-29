@@ -46,7 +46,8 @@ def workspace_tools_for_cwd(cwd: str | Path) -> ToolRouter:
     root = Path(cwd).expanduser().resolve()
     router = ToolRouter()
 
-    def bash(command: str) -> ToolResult:
+    def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
+        command = command or cmd or script
         if not command or not command.strip():
             return ToolResult(success=False, error="command is empty", needsFollowup=True)
         try:
