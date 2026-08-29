@@ -18,6 +18,30 @@ members = [
 ]
 
 [[package]]
+name = "ag-ui-protocol"
+version = "0.1.21"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/a8/86e3dec527a47a798f4aba5cddc68deedacd78dcf0f638d0cf7c9ac21525/ag_ui_protocol-0.1.21.tar.gz", hash = "sha256:42f6fb809399cd2ced5417ed928f821feda2534f4e55aebeada170823a6b1a5f", size = 15102, upload-time = "2026-08-27T11:48:28.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/e5/4229590a6c0561ef9979e251d12962b85df5c5e88685c6dd2fbdf221ba7d/ag_ui_protocol-0.1.21-py3-none-any.whl", hash = "sha256:628203b9decd66eb98995f86edca5536de330ecdfbcb809809863e4408ddeb57", size = 18527, upload-time = "2026-08-27T11:48:27.343Z" },
+]
+
+[[package]]
+name = "agent-client-protocol"
+version = "0.12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/95/2c28ca34e545ce0282e88272aa3a8abdf8f3f926a0492f567ea11acd071b/agent_client_protocol-0.12.1.tar.gz", hash = "sha256:9963ccb590ed96d7dc542c9c023e90676fc76b1c6562e21a9ee112f4fbcb0095", size = 130605, upload-time = "2026-08-16T14:08:22.545Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/61/0a2186c8ca53cf464767d4c4fb7fd9e23f48ce4547c2fa0d1c83a4d52410/agent_client_protocol-0.12.1-py3-none-any.whl", hash = "sha256:aaf3cc301ed87d9e2c4ccb91adfe1cd58784355f6ce7e513f50e7ca2391862ef", size = 85929, upload-time = "2026-08-16T14:08:21.307Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1119,6 +1143,8 @@ name = "steerable-sidecar"
 version = "0.2.5"
 source = { editable = "packages/sidecar/py" }
 dependencies = [
+    { name = "ag-ui-protocol" },
+    { name = "agent-client-protocol" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "steerable-agent-harness" },
@@ -1128,6 +1154,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ag-ui-protocol", specifier = ">=0.1.21" },
+    { name = "agent-client-protocol", specifier = ">=0.12.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "steerable-agent-harness", editable = "packages/agent-harness/py" },

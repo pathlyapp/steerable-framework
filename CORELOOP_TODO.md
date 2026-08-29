@@ -1005,6 +1005,33 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
       sandbox-exec 冒烟**——声明根可写、$HOME 写被内核拒绝、缺省断网）
       + 5（sidecar 接线：重写生效/缺省不变/非 shell 不动/requireFull
       无后端拒绝/端到端内核收容）。Linux Landlock 后端是刻意的后续项。
+    - [x] **AG-UI / ACP transport** ✅ 2026-08-29：两个生态信封作为
+      peer transport 落地，自研 `stream.chunk` 面保留给 DeepPath 字节
+      兼容。**AG-UI**（`ag_ui.py`）：`AgUiRenderer` 把 LoopEvent 投影为
+      AG-UI 事件流（依赖官方 `ag-ui-protocol` pydantic 模型，不手搓
+      dict）——content/reasoning 增量开闭 TEXT_MESSAGE_/REASONING_
+      MESSAGE_ 段（工具调用先关消息段，段间不交错）；tool_call_start
+      展开为 START+ARGS（loop 带全量参数，单发）+END；result/error 进
+      TOOL_CALL_RESULT（AG-UI 无 tool-error 事件，错误乘 result
+      content）；completion 按 status 收 RUN_FINISHED / RUN_ERROR；
+      stage/hook/steer/budget 等框架观测事件一律 CUSTOM
+      （`steerable.<kind>`，无损且不冒充 AG-UI "step"）。HTTP  serving
+      归嵌入方 web 层，`encode_sse` 渲染字节流。**ACP**
+      （`acp_adapter.py`，依赖官方 `agent-client-protocol` SDK v0.12）：
+      `SteerableAcpAgent` 实现 `acp.Agent` 稳定核心——initialize /
+      new_session / prompt / cancel / close_session；session↔chat_id，
+      多轮靠 loop 自己的 record-aware seeding（适配器只维护
+      user/assistant 文本的宿主视图，record 投影补齐 tool 轮次）；
+      content→AgentMessageChunk、reasoning→AgentThoughtChunk、工具→
+      ToolCallStart/Progress；completion→end_turn，cancel→cancelled，
+      failed 先把 reason 作为最终 agent 消息发出再 end_turn。provider
+      配置走环境变量（编辑器 spawn agent 的方式）；session 加载/fork/
+      mode RPC 与 editor 终端/文件反向桥（agent 工具借编辑器 terminal
+      执行）是记录的后续项。入口 `steerable-sidecar-acp` =
+      `python -m steerable_sidecar.acp_adapter`（stdio）。测试 11
+      （AG-UI：生命周期/推理族/工具序列/消息边界/失败收尾/CUSTOM 映射/
+      SSE 编码/全 loop 投影）+ 7（ACP：capabilities/文本流/工具转发/
+      未知 session/cancel/多轮 record 播种/失败原因可见）。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；

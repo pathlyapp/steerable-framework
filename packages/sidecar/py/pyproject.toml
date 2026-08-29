@@ -19,10 +19,13 @@ dependencies = [
   "steerable-agent-protocol>=0.1.0,<1.0.0",
   "steerable-agent-harness>=0.1.0,<1.0.0",
   "steerable-agent-runtime>=0.1.0,<1.0.0",
+  "ag-ui-protocol>=0.1.21",
+  "agent-client-protocol>=0.12.1",
 ]
 
 [project.scripts]
 steerable-sidecar = "steerable_sidecar.__main__:main"
+steerable-sidecar-acp = "steerable_sidecar.acp_adapter:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

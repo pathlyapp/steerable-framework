@@ -430,7 +430,23 @@ cache-friendly from day one.
    behavior); the wrap order is base → sandbox → approval → subagent so
    the approver reviews the original command. Linux Landlock is the
    deliberate follow-up backend.
-3. AG-UI and ACP transports.
+3. **AG-UI and ACP transports** ✅ landed 2026-08-29 (`ag_ui.py` +
+   `acp_adapter.py` in the sidecar package). Both are peer transports over
+   the unchanged LoopEvent taxonomy — the bespoke `stream.chunk` surface
+   stays for DeepPath byte-compatibility. AG-UI: `AgUiRenderer` projects
+   loop events onto the official `ag-ui-protocol` models (text/reasoning
+   segments open and close around tool calls; results and errors ride
+   TOOL_CALL_RESULT; framework observability events travel as lossless
+   `steerable.*` CUSTOM events; completion maps to RUN_FINISHED/RUN_ERROR
+   by status), with `encode_sse` rendering the canonical SSE bytes for the
+   embedder's web tier. ACP: `SteerableAcpAgent` implements the stable
+   `acp.Agent` core (initialize / new_session / prompt / cancel /
+   close_session) on the official `agent-client-protocol` SDK, so any ACP
+   editor drives a CoreLoop over stdio (`steerable-sidecar-acp`).
+   Multi-turn reuses the loop's record-aware seeding — the adapter keeps
+   only the host-view (user/assistant texts), the record projection
+   restores tool rounds. Session loading/fork and the editor-terminal
+   tool bridge are the recorded follow-ups.
 4. A golden-trajectory eval gate reusing the existing `replay.py` fixtures.
    Public capability evals (Terminal-Bench 2.1 cheap-12 via Harbor
    `claude-code` / `codex` / `pi`) live in `evals/` and are a scheduled
