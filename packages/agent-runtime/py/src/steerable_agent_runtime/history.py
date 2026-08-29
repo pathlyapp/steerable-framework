@@ -82,6 +82,15 @@ class CompactionBoundary:
     ``action`` is the ``hook_action`` label of the rewriter (``"compact"``,
     ``"overflow_recovery"``, …) so traces and assertions can attribute the
     boundary without guessing.
+
+    ``replacement_count`` is the number of messages the rewrite appended
+    right after this boundary. It lets the host-seed reconciliation see
+    through the loop's OWN compactions (``compact`` / ``overflow_recovery``):
+    the rewrite re-states content the host already had, so the host's next
+    raw seed still matches the pre-compaction conversation and the loop
+    keeps its compaction instead of discarding it as a spurious
+    ``host_revision`` (W6-10). ``None`` for records written before this
+    field existed — those fall back to treating the boundary as opaque.
     """
 
     seq: int
@@ -89,6 +98,7 @@ class CompactionBoundary:
     action: str = "compact"
     turn_id: str | None = None
     kind: str = KIND_COMPACTION_BOUNDARY
+    replacement_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,17 +299,19 @@ class ContextManager:
         then appends the replacement messages as new items. The projection
         changes; the record only grows.
         """
+        replacements = list(messages)
         boundary = CompactionBoundary(
             seq=self._next_seq,
             reason=reason,
             action=action,
             turn_id=turn_id or self.turn_id,
+            replacement_count=len(replacements),
         )
         self._record.append(boundary)
         self._pending.append(boundary)
         self._next_seq += 1
         self._boundary_index = len(self._record) - 1
-        for message in messages:
+        for message in replacements:
             self.append(message, turn_id=turn_id)
         return boundary
 
@@ -485,7 +497,7 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
             "message": message_to_dict(entry.message),
         }
     if isinstance(entry, CompactionBoundary):
-        return {
+        out: dict[str, Any] = {
             "entry": "boundary",
             "v": RECORD_FORMAT_VERSION,
             "seq": entry.seq,
@@ -494,6 +506,11 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
             "reason": entry.reason,
             "action": entry.action,
         }
+        # Additive + optional: omitted when None so older readers (which
+        # ignore unknown keys) and older records (which lack it) both work.
+        if entry.replacement_count is not None:
+            out["replacement_count"] = entry.replacement_count
+        return out
     if isinstance(entry, HistorySeed):
         return {
             "entry": "seed",
@@ -535,11 +552,15 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             turn_id=data.get("turn_id"),
         )
     if envelope == "boundary":
+        replacement_count = data.get("replacement_count")
         return CompactionBoundary(
             seq=int(data["seq"]),
             reason=str(data.get("reason") or ""),
             action=str(data.get("action") or "compact"),
             turn_id=data.get("turn_id"),
+            replacement_count=(
+                int(replacement_count) if replacement_count is not None else None
+            ),
         )
     if envelope == "seed":
         return HistorySeed(

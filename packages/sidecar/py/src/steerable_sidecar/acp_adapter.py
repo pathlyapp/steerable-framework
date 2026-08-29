@@ -203,6 +203,8 @@ class SteerableAcpAgent(acp.Agent):
             if self._tools is not None
             else workspace_tools_for_cwd(session.cwd)
         )
+        from .sidecar import _default_loop_hooks
+
         loop = CoreLoop(
             provider,
             RouterToolExecutor(router, consent_granted=True),
@@ -211,6 +213,7 @@ class SteerableAcpAgent(acp.Agent):
                 max_tool_errors=16,
                 tool_dedup=False,
             ),
+            hooks=_default_loop_hooks(self._provider_params),
             history_store=self._storage,
             record_id=session_id,
         )

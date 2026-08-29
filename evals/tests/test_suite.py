@@ -87,7 +87,7 @@ def test_live_agents_include_product() -> None:
     product = suite.agents[PRODUCT_AGENT]
     assert product.skipped is False
     assert product.harbor == STEERABLE_IMPORT_PATH
-    assert product.model == "openai/gpt-5.5"
+    assert product.model == "openai/z-ai/glm-5.3-flash"
 
 
 def test_setup_harbor_action_matches_pin() -> None:
@@ -195,12 +195,14 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
         jobs_dir=Path("evals/jobs/steerable"),
         agent_setup_timeout_multiplier=3,
         environment_build_timeout_multiplier=3,
+        agent_timeout_multiplier=3,
     )
     assert argv[argv.index("--agent") + 1] == STEERABLE_IMPORT_PATH
-    assert argv[argv.index("--model") + 1] == "openai/gpt-5.5"
+    assert argv[argv.index("--model") + 1] == "openai/z-ai/glm-5.3-flash"
     assert argv[argv.index("--include-task-name") + 1] == "terminal-bench/fix-git"
     assert argv[argv.index("--agent-setup-timeout-multiplier") + 1] == "3"
     assert argv[argv.index("--environment-build-timeout-multiplier") + 1] == "3"
+    assert argv[argv.index("--agent-timeout-multiplier") + 1] == "3"
 
 
 def test_harbor_argv_rejects_dsh() -> None:

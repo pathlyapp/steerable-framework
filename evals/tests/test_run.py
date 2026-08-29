@@ -44,13 +44,17 @@ def test_dry_run_steerable_uses_import_path(capsys) -> None:
             "--dry-run",
             "--environment-build-timeout-multiplier",
             "3",
+            "--agent-timeout-multiplier",
+            "3",
         ]
     )
     captured = capsys.readouterr()
     assert code == 0
     assert STEERABLE_IMPORT_PATH in captured.out
+    assert "--model openai/z-ai/glm-5.3-flash" in captured.out
     assert "--include-task-name terminal-bench/fix-git" in captured.out
     assert "--environment-build-timeout-multiplier 3" in captured.out
+    assert "--agent-timeout-multiplier 3" in captured.out
 
 
 def test_skip_missing_env_exits_3_for_pi(capsys, monkeypatch) -> None:

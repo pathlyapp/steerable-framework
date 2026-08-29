@@ -9,7 +9,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | Agent | Harbor `-a` | Default model | Keys |
 | ----- | ------------ | ------------- | ---- |
 | `oracle` | `oracle` | none | none |
-| `steerable` | `evals.harbor_steerable:SteerableHarborAgent` | `openai/gpt-5.5` | `STEERABLE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
+| `steerable` | `evals.harbor_steerable:SteerableHarborAgent` | `openai/z-ai/glm-5.3-flash` | `STEERABLE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | `claude-code` | `claude-code` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
@@ -19,7 +19,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 
 Pi is Harbor's first-party installed agent (`-a pi`), which installs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) inside the trial container. Do not use a third-party Harbor import path.
 
-Claude Code and Pi share a model so the cheap-12 job compares harnesses. Codex and `steerable` default to `openai/gpt-5.5`.
+Claude Code and Pi share a model so the cheap-12 job compares harnesses. Codex defaults to `openai/gpt-5.5`. The product agent defaults to OpenRouter `z-ai/glm-5.3-flash` (`--model openai/z-ai/glm-5.3-flash`); pass `--model openai/gpt-5.5` to match Codex's tier.
 
 ## Commands
 

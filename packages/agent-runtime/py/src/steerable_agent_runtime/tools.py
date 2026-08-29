@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from steerable_agent_harness.policy import ToolMode, decide_tool_mode
-from steerable_agent_harness.safety import classify_shell_command
+from steerable_agent_harness.safety import CommandSafetyConfig, classify_shell_command
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .errors import PolicyDeniedError, ToolDispatchError
@@ -80,8 +80,9 @@ class RegisteredTool:
 class ToolRouter:
     """Async-safe in-process tool dispatch."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, shell_safety: CommandSafetyConfig | None = None) -> None:
         self._tools: dict[str, RegisteredTool] = {}
+        self._shell_safety = shell_safety
 
     # ------------------------------------------------------------------
     # Registration
@@ -257,7 +258,7 @@ class ToolRouter:
         if shell_param:
             command = (call.arguments or {}).get(shell_param)
             if isinstance(command, str):
-                verdict = classify_shell_command(command)
+                verdict = classify_shell_command(command, self._shell_safety)
                 if verdict.severity == "critical":
                     raise PolicyDeniedError(
                         f"Shell command blocked by safety policy: {verdict.matched_rules}",

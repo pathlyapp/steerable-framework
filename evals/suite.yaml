@@ -164,7 +164,10 @@ agents:
       `pnpm dsh --profile headless` is not the L2 capability gate.
   steerable:
     harbor: evals.harbor_steerable:SteerableHarborAgent
-    model: openai/gpt-5.5
+    # Local product loop: OpenRouter `z-ai/glm-5.3-flash` (cheap). Codex
+    # stays `openai/gpt-5.5`. Override with `--model openai/gpt-5.5` for a
+    # same-tier harness comparison.
+    model: openai/z-ai/glm-5.3-flash
     env_any:
       - STEERABLE_API_KEY
       - OPENAI_API_KEY

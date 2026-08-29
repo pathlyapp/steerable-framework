@@ -159,3 +159,127 @@ async def test_export_otlp_http_posts_json() -> None:
     assert received["path"] == "/v1/traces"
     assert received["content_type"] == "application/json"
     assert received["body"]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+
+
+# ---------------------------------------------------------------------------
+# W6-6: privacy modes + export-time redaction waterfall
+# ---------------------------------------------------------------------------
+
+
+def _raw_trace_with_secret():
+    """A trace whose stored payloads still contain a secret — i.e. recorded by
+    a path that did NOT redact at write time. The exporter must redact anyway
+    (the waterfall's second stage)."""
+    from steerable_agent_protocol.generated import HarnessTrace, TraceEvent, TraceSpan
+
+    trace = HarnessTrace(
+        traceId="trace_" + "cd" * 16,
+        chatId="chat_9",
+        status="completed",
+        hadError=False,
+        eventCount=1,
+        spanCount=1,
+        durationMs=5,
+        createdAt="2026-01-01T00:00:00.000000+00:00",
+        updatedAt="2026-01-01T00:00:00.005000+00:00",
+    )
+    events = [
+        TraceEvent(
+            traceId=trace.traceId,
+            kind="tool_call_result",
+            name="add",
+            sequence=0,
+            timestampMs=1_767_225_600_000,
+            status="ok",
+            payload={"result": "ok", "api_key": "sk-live0000000000000000deadbeef"},
+        )
+    ]
+    spans = [
+        TraceSpan(
+            spanId="span_0001",
+            traceId=trace.traceId,
+            name="add",
+            kind="tool",
+            startMs=1_767_225_600_000,
+            endMs=1_767_225_600_005,
+            durationMs=5,
+            status="ok",
+            attrs={"toolCallId": "call_add_1", "error": "Bearer abcdefghijklmnop"},
+        )
+    ]
+    return trace, spans, events
+
+
+def test_full_mode_redacts_secrets_in_payloads_and_attrs() -> None:
+    trace, spans, events = _raw_trace_with_secret()
+    payload = to_otlp_json(trace, spans, events, privacy_mode="full")
+    blob = json.dumps(payload)
+    assert "sk-live0000000000000000deadbeef" not in blob
+    assert "Bearer abcdefghijklmnop" not in blob
+    # non-secret content survives in full mode
+    root = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    event_attrs = {
+        a["key"]: next(iter(a["value"].values())) for a in root["events"][0]["attributes"]
+    }
+    assert event_attrs["result"] == "ok"
+    assert event_attrs["api_key"] == "***"
+    tool = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][1]
+    tool_attrs = {a["key"]: next(iter(a["value"].values())) for a in tool["attributes"]}
+    assert tool_attrs["toolCallId"] == "call_add_1"
+    assert tool_attrs["error"] == "***"
+
+
+def test_metadata_mode_strips_content_but_keeps_structure() -> None:
+    trace, spans, events = _raw_trace_with_secret()
+    payload = to_otlp_json(trace, spans, events, privacy_mode="metadata")
+    blob = json.dumps(payload)
+    # no content-bearing values at all
+    assert "sk-live0000000000000000deadbeef" not in blob
+    assert "Bearer abcdefghijklmnop" not in blob
+    assert '"result"' not in blob  # payload body dropped entirely
+    assert '"error"' not in blob  # free-form span attr dropped
+
+    root = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    event_attrs = {a["key"]: next(iter(a["value"].values())) for a in root["events"][0]["attributes"]}
+    assert event_attrs == {"status": "ok"}  # only status survives
+
+    tool = payload["resourceSpans"][0]["scopeSpans"][0]["spans"][1]
+    tool_attrs = {a["key"]: next(iter(a["value"].values())) for a in tool["attributes"]}
+    assert tool_attrs["toolCallId"] == "call_add_1"  # safe id kept
+    assert "error" not in tool_attrs
+    # timing/identity intact
+    assert tool["startTimeUnixNano"] and tool["endTimeUnixNano"]
+
+
+@pytest.mark.asyncio
+async def test_export_trace_convenience_posts_metadata_by_default() -> None:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    from steerable_agent_runtime import export_trace
+
+    received: dict = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received["body"] = json.loads(body)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        trace, spans, events = _raw_trace_with_secret()
+        status = export_trace(
+            trace, spans, events, f"http://127.0.0.1:{server.server_port}/v1/traces"
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    blob = json.dumps(received["body"])
+    assert "sk-live0000000000000000deadbeef" not in blob  # metadata default

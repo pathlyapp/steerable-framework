@@ -17,20 +17,29 @@ class _ScriptedProvider:
     name = "scripted"
     model = "scripted-model"
 
-    def __init__(self, script):
+    def __init__(self, script, fail_on: set[int] | None = None):
         self._script = script
+        self._fail_on = fail_on or set()
         self._round = 0
         self.calls: list[list] = []
+        self.attempts = 0
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
 
     def stream(self, messages, **kwargs):
+        self.attempts += 1
+        attempt = self.attempts
         self.calls.append(list(messages))
         chunks = self._script[min(self._round, len(self._script) - 1)]
-        self._round += 1
 
         async def _gen():
+            if attempt in self._fail_on:
+                from steerable_agent_runtime.llm.errors import LLMError
+
+                raise LLMError("upstream reset", kind="transport", provider="scripted")
+                yield  # pragma: no cover — make this a generator
+            self._round += 1
             for chunk in chunks:
                 yield chunk
 
@@ -89,6 +98,23 @@ async def test_prompt_streams_text_and_ends_turn() -> None:
     resp = await agent.prompt(session.session_id, _prompt("hello"))
 
     assert resp.stop_reason == "end_turn"
+    chunks = [u for sid, u in client.updates if sid == session.session_id]
+    text = "".join(
+        u.content.text for u in chunks if isinstance(u, AgentMessageChunk)
+    )
+    assert text == "Hello back"
+
+
+@pytest.mark.asyncio
+async def test_prompt_retries_transient_stream_error() -> None:
+    provider = _ScriptedProvider([_text_round("Hello back")], fail_on={1})
+    agent, client = _agent(provider)
+    session = await agent.new_session(cwd="/tmp")
+
+    resp = await agent.prompt(session.session_id, _prompt("hello"))
+
+    assert resp.stop_reason == "end_turn"
+    assert provider.attempts == 2
     chunks = [u for sid, u in client.updates if sid == session.session_id]
     text = "".join(
         u.content.text for u in chunks if isinstance(u, AgentMessageChunk)

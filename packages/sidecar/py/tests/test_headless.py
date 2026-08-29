@@ -14,18 +14,27 @@ class _ScriptedProvider:
     name = "scripted"
     model = "scripted-model"
 
-    def __init__(self, script):
+    def __init__(self, script, fail_on=None):
         self._script = script
+        self._fail_on = fail_on or set()
         self._round = 0
+        self.attempts = 0
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
 
     def stream(self, messages, **kwargs):
+        self.attempts += 1
+        attempt = self.attempts
         chunks = self._script[min(self._round, len(self._script) - 1)]
-        self._round += 1
 
         async def _gen():
+            if attempt in self._fail_on:
+                from steerable_agent_runtime.llm.errors import LLMError
+
+                raise LLMError("upstream reset", kind="transport", provider=self.name)
+                yield  # pragma: no cover — make this a generator
+            self._round += 1
             for chunk in chunks:
                 yield chunk
 
@@ -113,3 +122,30 @@ async def test_run_with_bash_tool(
         headless_mod, "default_llm_provider_factory", lambda _params: provider
     )
     await _run("run echo", cwd=str(tmp_path), max_rounds=8)
+
+
+@pytest.mark.asyncio
+async def test_run_retries_transient_stream_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="recovered"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ],
+        fail_on={1},
+    )
+    monkeypatch.setattr(
+        headless_mod, "_env_provider_params", lambda: {"model": "fake"}
+    )
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    await _run("hello", cwd=str(tmp_path), max_rounds=4)
+    assert provider.attempts == 2
+    assert "recovered" in capsys.readouterr().out

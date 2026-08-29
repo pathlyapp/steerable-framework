@@ -22,12 +22,33 @@ import json
 import re
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from steerable_agent_protocol.generated import HarnessTrace, TraceEvent, TraceSpan
+from steerable_agent_harness.tracing import sanitize_for_trace
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")
+
+#: Privacy modes control how much content leaves the process (W6-6).
+#:
+#: - ``"full"``: event payloads and span attributes are included, but always
+#:   passed through ``sanitize_for_trace`` first (the redaction waterfall —
+#:   the recorder already redacts at write time; the exporter redacts again so
+#:   a trace recorded by an older/non-conforming path still can't leak a key).
+#: - ``"metadata"``: only structural/timing/status fields are exported. Event
+#:   payload bodies and free-form/error attributes — anything that could carry
+#:   user content — are dropped. This is the privacy-conscious default for
+#:   deployments that want observability without content egress.
+#:
+#: ``"off"`` is not a mode here: it is the caller deciding not to export at
+#: all (the desktop gates the whole export on a user-configured collector).
+PrivacyMode = Literal["full", "metadata"]
+
+#: Span attribute keys always safe to export (ids, kinds, timing, status).
+_SAFE_SPAN_ATTR_KEYS = frozenset(
+    {"steerable.span_id", "steerable.kind", "toolCallId", "durationMs", "status"}
+)
 
 
 def _trace_id(raw: str) -> str:
@@ -77,8 +98,13 @@ def to_otlp_json(
     events: Iterable[TraceEvent],
     *,
     service_name: str = "steerable-agent",
+    privacy_mode: PrivacyMode = "full",
 ) -> dict[str, Any]:
-    """Build an OTLP ``ExportTraceServiceRequest`` dict from a stored trace."""
+    """Build an OTLP ``ExportTraceServiceRequest`` dict from a stored trace.
+
+    ``privacy_mode`` controls content egress (see ``PrivacyMode``); payloads
+    and attributes are always secret-redacted via ``sanitize_for_trace``.
+    """
 
     otel_trace_id = _trace_id(trace.traceId)
     root_span_id = _span_id(trace.traceId, salt="root")
@@ -88,9 +114,16 @@ def to_otlp_json(
 
     span_events = []
     for event in sorted(events, key=lambda e: e.sequence):
-        attributes = dict(event.payload or {})
-        if event.status:
-            attributes.setdefault("status", event.status)
+        if privacy_mode == "metadata":
+            # Drop the payload body — keep only the status, which carries no
+            # user content.
+            attributes = {}
+            if event.status:
+                attributes["status"] = event.status
+        else:
+            attributes = dict(sanitize_for_trace(dict(event.payload or {})))
+            if event.status:
+                attributes.setdefault("status", event.status)
         span_events.append(
             {
                 "timeUnixNano": _ns(event.timestampMs),
@@ -126,6 +159,12 @@ def to_otlp_json(
 
     child_spans = []
     for span in spans:
+        if privacy_mode == "metadata":
+            span_attrs = {
+                k: v for k, v in (span.attrs or {}).items() if k in _SAFE_SPAN_ATTR_KEYS
+            }
+        else:
+            span_attrs = dict(sanitize_for_trace(dict(span.attrs or {})))
         child_spans.append(
             {
                 "traceId": otel_trace_id,
@@ -139,7 +178,7 @@ def to_otlp_json(
                     {
                         "steerable.span_id": span.spanId,
                         "steerable.kind": span.kind,
-                        **(span.attrs or {}),
+                        **span_attrs,
                     }
                 ),
                 "status": {"code": 2} if span.status == "error" else {"code": 1},
@@ -182,3 +221,25 @@ def export_otlp_http(
     )
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
         return response.status
+
+
+def export_trace(
+    trace: HarnessTrace,
+    spans: Iterable[TraceSpan],
+    events: Iterable[TraceEvent],
+    endpoint: str,
+    *,
+    privacy_mode: PrivacyMode = "metadata",
+    service_name: str = "steerable-agent",
+    timeout_s: float = 10.0,
+    headers: dict[str, str] | None = None,
+) -> int:
+    """One-call export: build the OTLP payload (privacy-filtered + redacted)
+    and POST it to the collector. ``privacy_mode`` defaults to ``"metadata"``
+    here — the safe choice for a host that just wants observability without
+    content egress; pass ``"full"`` only when the collector is trusted with
+    (redacted) payloads."""
+    payload = to_otlp_json(
+        trace, spans, events, service_name=service_name, privacy_mode=privacy_mode
+    )
+    return export_otlp_http(payload, endpoint, timeout_s=timeout_s, headers=headers)

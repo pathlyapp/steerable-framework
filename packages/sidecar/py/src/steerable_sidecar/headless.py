@@ -21,7 +21,7 @@ from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
 from .acp_adapter import _env_provider_params
-from .sidecar import default_llm_provider_factory
+from .sidecar import _default_loop_hooks, default_llm_provider_factory
 from .workspace_tools import workspace_tools_for_cwd
 
 __version__ = "0.2.5"
@@ -69,7 +69,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     params = _env_provider_params()
     if not params.get("model"):
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
-    tools = workspace_tools_for_cwd(cwd)
+    tools = workspace_tools_for_cwd(cwd, jailed=True)
     loop = CoreLoop(
         default_llm_provider_factory(params),
         RouterToolExecutor(tools, consent_granted=True),
@@ -78,6 +78,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             max_tool_errors=16,
             tool_dedup=False,
         ),
+        hooks=_default_loop_hooks(params),
         history_store=InMemoryStorage(),
         record_id="headless",
     )
@@ -85,11 +86,19 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         LLMMessage.text_of("system", _SYSTEM),
         LLMMessage.text_of("user", instruction),
     ]
+    thinking = False
     async for event in loop.run(seed, tools=tools.describe_model(), chat_id="headless"):
         if event.kind == "content_delta":
+            thinking = False
             sys.stdout.write(str(event.data.get("delta", "")))
             sys.stdout.flush()
+        elif event.kind == "reasoning_delta":
+            if not thinking:
+                sys.stdout.write("[thinking]\n")
+                sys.stdout.flush()
+                thinking = True
         elif event.kind == "tool_call_start":
+            thinking = False
             sys.stdout.write(
                 f"\n[tool {event.data.get('name')} {event.data.get('arguments')}]\n"
             )

@@ -10,25 +10,41 @@ import os
 import shlex
 import tempfile
 from pathlib import Path
-from typing import override
+
+try:
+    from typing import override
+except ImportError:  # Python < 3.12 — evals unit tests still collect.
+    def override(f):  # type: ignore[misc]
+        return f
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
 from harbor.agents.model_connection import ModelConnectionSpec
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+from evals.harbor_helpers import (
+    _APT_PYTHON_INSTALL,
+    _NO_PROXY_ENV,
+    _REMOTE_SRC,
+    _REPO_ROOT,
+    _UV_PIP_INSTALL,
+    _UV_SEED,
+    ensure_github_no_proxy as _ensure_github_no_proxy,
+    pip_install_command as _pip_install_command,
+    rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
+    rewrite_loopback_host as _rewrite_loopback_host,
+    venv_tarball as _venv_tarball,
+)
+
 _PACKAGE_DIRS = (
     _REPO_ROOT / "packages" / "agent-protocol" / "py",
     _REPO_ROOT / "packages" / "agent-harness" / "py",
     _REPO_ROOT / "packages" / "agent-runtime" / "py",
     _REPO_ROOT / "packages" / "sidecar" / "py",
 )
-_REMOTE_SRC = "/installed-agent/steerable"
 _VENV_PYTHON = f"{_REMOTE_SRC}/venv/bin/python"
 _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
-_VENV_CACHE_DIR = _REPO_ROOT / "evals" / ".cache"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
     "STEERABLE_BASE_URL",
@@ -94,10 +110,15 @@ class SteerableHarborAgent(BaseInstalledAgent):
         restored = False
         if cached is not None and cached.is_file():
             restored = await self._restore_venv(environment, cached)
-        if not restored:
+        if restored:
+            # Cached venv is third-party wheels; overlay workspace sources so
+            # later trials pick up headless/runtime fixes without a full pip.
+            await self._overlay_source(environment, proxy_env)
+        else:
             await self._pip_install_packages(environment, proxy_env)
             if py_tag:
                 await self._save_venv(environment, _venv_tarball(py_tag))
+        await self._seed_uv(environment)
         agent_user = str(environment.default_user or "root")
         await self.exec_as_root(
             environment,
@@ -122,38 +143,57 @@ class SteerableHarborAgent(BaseInstalledAgent):
     async def _ensure_python_apt(
         self, environment: BaseEnvironment, apt_env: dict[str, str]
     ) -> None:
-        """Install pip/venv without racing a leftover apt-get that still holds dpkg."""
-        install = (
-            "apt-get update && apt-get install -y python3 python3-pip python3-venv"
-        )
-        wait_lock = (
-            "i=0; while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 "
-            "|| fuser /var/lib/dpkg/lock >/dev/null 2>&1; "
-            "do sleep 2; i=$((i+1)); [ \"$i\" -ge 90 ] && exit 1; done"
-        )
+        """Install pip/venv after Ubuntu's boot apt releases the dpkg lock.
+
+        Slim images have no ``fuser``. A Harbor timeout also leaves apt-get
+        running, so a second install must wait on ``/proc/*/fd`` and only then
+        kill a stuck lock holder.
+        """
         try:
             await self.exec_as_root(
                 environment,
-                command=install,
+                command=_APT_PYTHON_INSTALL,
                 env=apt_env or None,
-                timeout_sec=300,
+                timeout_sec=900,
             )
         except Exception:
             await self.exec_as_root(
                 environment,
-                command=f"{wait_lock}; {install}",
+                command=_APT_PYTHON_INSTALL,
                 env=apt_env or None,
-                timeout_sec=300,
+                timeout_sec=900,
             )
         pip_check = await environment.exec(
             command="python3 -m pip --version", user="root"
         )
         if pip_check.return_code != 0:
-            await self.exec_as_root(
-                environment, command=wait_lock, timeout_sec=200
-            )
             await self.ensure_system_dependencies(
                 environment, ("python3", "python_pip")
+            )
+
+    async def _seed_uv(self, environment: BaseEnvironment) -> None:
+        """Install uv from a PyPI mirror so TB ``test.sh`` need not hit GitHub.
+
+        Clash (and even noproxy GitHub GETs from Docker Desktop) stall the
+        official uv tarball around 2 MB, which becomes VerifierTimeoutError.
+        Tsinghua's manylinux wheel completed in ~7s. Failure here is ignored
+        so GHA can still rely on ``test.sh`` downloading uv itself.
+        """
+        try:
+            await self.exec_as_root(
+                environment,
+                command=_UV_PIP_INSTALL,
+                env=_NO_PROXY_ENV,
+                timeout_sec=180,
+            )
+            await self.exec_as_root(environment, command=_UV_SEED)
+        except Exception:
+            return
+        path = environment._persistent_env.get("PATH", "")
+        prefix = "/root/.local/bin"
+        if prefix not in path.split(":"):
+            environment._persistent_env["PATH"] = (
+                f"{prefix}:{path}" if path else f"{prefix}:/usr/local/bin:/usr/bin:/bin"
             )
 
     async def _restore_venv(
@@ -177,9 +217,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         )
         return False
 
-    async def _pip_install_packages(
-        self, environment: BaseEnvironment, proxy_env: dict[str, str]
-    ) -> None:
+    async def _upload_packages(self, environment: BaseEnvironment) -> list[str]:
         remote_pkgs: list[str] = []
         for src in _PACKAGE_DIRS:
             dest = f"{_REMOTE_SRC}/{src.parent.name}"
@@ -188,6 +226,23 @@ class SteerableHarborAgent(BaseInstalledAgent):
             )
             await environment.upload_dir(src, dest)
             remote_pkgs.append(dest)
+        return remote_pkgs
+
+    async def _overlay_source(
+        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+    ) -> None:
+        remote_pkgs = await self._upload_packages(environment)
+        await self._pip_install(
+            environment,
+            remote_pkgs,
+            proxy_env,
+            extra_args=("--no-deps", "--upgrade", "--force-reinstall"),
+        )
+
+    async def _pip_install_packages(
+        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+    ) -> None:
+        remote_pkgs = await self._upload_packages(environment)
         venv = f"{_REMOTE_SRC}/venv"
         venv_check = await environment.exec(
             command=f"python3 -m venv {shlex.quote(venv)}", user="root"
@@ -197,11 +252,18 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await self.exec_as_root(
                 environment, command=f"python3 -m venv {shlex.quote(venv)}"
             )
-        quoted = " ".join(shlex.quote(p) for p in remote_pkgs)
-        pip = f"{venv}/bin/pip"
+        await self._pip_install(environment, remote_pkgs, proxy_env)
+
+    async def _pip_install(
+        self,
+        environment: BaseEnvironment,
+        remote_pkgs: list[str],
+        proxy_env: dict[str, str],
+        extra_args: tuple[str, ...] = (),
+    ) -> None:
         await self.exec_as_root(
             environment,
-            command=f"{shlex.quote(pip)} install --quiet {quoted}",
+            command=_pip_install_command(remote_pkgs, extra_args=extra_args),
             env=proxy_env or None,
             timeout_sec=600,
         )
@@ -239,6 +301,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = self._parsed_model_name or ""
         env["PYTHONUNBUFFERED"] = "1"
+        # GLM-5.3-Flash thinking defaults to max and can sit silent for many
+        # minutes before the first tool call. Harbor wants cheap/fast rounds.
+        env.setdefault("STEERABLE_REASONING_EFFORT", "low")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,
@@ -258,7 +323,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             if not value:
                 continue
             if key in proxy_keys:
-                value = _rewrite_loopback_host(value)
+                value = _rewrite_forwarded_env_value(key, value)
             env[key] = value
         host_proxy = os.environ.get("STEERABLE_HOST_PROXY")
         if host_proxy and not (
@@ -287,41 +352,3 @@ class SteerableHarborAgent(BaseInstalledAgent):
         }:
             _ensure_github_no_proxy(env)
         return env
-
-
-def _venv_tarball(py_tag: str) -> Path:
-    return _VENV_CACHE_DIR / f"steerable-venv-cp{py_tag}-linux-amd64.tgz"
-
-
-def _rewrite_loopback_host(value: str) -> str:
-    """Docker Desktop: host Clash on 127.0.0.1 is not the container loopback."""
-    return value.replace("127.0.0.1", "host.docker.internal").replace(
-        "localhost", "host.docker.internal"
-    )
-
-
-def _ensure_github_no_proxy(env: dict[str, str]) -> None:
-    """Clash GET of the GitHub uv tarball often stalls; apt still uses the proxy."""
-    extra = (
-        "github.com",
-        "astral.sh",
-        "objects.githubusercontent.com",
-        "raw.githubusercontent.com",
-        "release-assets.githubusercontent.com",
-        "codeload.github.com",
-    )
-    parts: list[str] = []
-    seen: set[str] = set()
-    for raw in (env.get("NO_PROXY"), env.get("no_proxy"), *extra):
-        if not raw:
-            continue
-        for item in str(raw).split(","):
-            host = item.strip()
-            key = host.lower()
-            if not host or key in seen:
-                continue
-            seen.add(key)
-            parts.append(host)
-    merged = ",".join(parts)
-    env["NO_PROXY"] = merged
-    env["no_proxy"] = merged

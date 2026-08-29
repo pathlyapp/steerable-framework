@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             n_attempts=args.n_attempts,
             agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
             environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
+            agent_timeout_multiplier=args.agent_timeout_multiplier,
             harbor_bin=args.harbor,
         )
     except SuiteError as exc:
@@ -131,6 +132,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--environment-build-timeout-multiplier",
         type=float,
         help="Harbor --environment-build-timeout-multiplier",
+    )
+    parser.add_argument(
+        "--agent-timeout-multiplier",
+        type=float,
+        help="Harbor --agent-timeout-multiplier (agent.run wall clock)",
     )
     parser.add_argument(
         "--require-mean",

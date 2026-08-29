@@ -284,6 +284,131 @@ async def test_coreloop_stream_persists_trace_fetchable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trace_export_pushes_redacted_payload_to_collector() -> None:
+    """trace.export (W6-6): the sidecar pushes a stored trace to an OTLP/HTTP
+    collector, secret-redacted, defaulting to metadata privacy mode."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: dict = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            received["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+    try:
+        _stream_id, events = await _run_stream(
+            sidecar,
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "add"}],
+                "useCoreLoop": True,
+            },
+        )
+        done = [p for m, p in events if m == "stream.done"]
+        trace_id = done[0].get("traceId")
+        assert trace_id
+
+        response = await sidecar.server.handle_frame(
+            _frame(
+                "trace.export",
+                {
+                    "traceId": trace_id,
+                    "endpoint": f"http://127.0.0.1:{server.server_port}/v1/traces",
+                },
+            )
+        )
+        assert "error" not in response, response
+        assert response["result"]["status"] == 200
+        assert response["result"]["privacyMode"] == "metadata"
+        spans = received["body"]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        assert spans[0]["name"] == "coreloop.run"
+
+        # invalid privacy mode is rejected
+        bad = await sidecar.server.handle_frame(
+            _frame(
+                "trace.export",
+                {
+                    "traceId": trace_id,
+                    "endpoint": f"http://127.0.0.1:{server.server_port}/v1/traces",
+                    "privacyMode": "everything",
+                },
+            )
+        )
+        assert "error" in bad
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stream_done_carries_accumulated_usage_and_cost() -> None:
+    """W6-9: stream.done carries the run's accumulated billable usage, plus a
+    cost estimate when the model is priced (omitted for unpriced models)."""
+    # Priced model → costUsd present. Two rounds × (5 in / 1 out) = 10/2/12.
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+        },
+    )
+    done = [p for m, p in events if m == "stream.done"]
+    usage = done[0]["usage"]
+    assert usage["promptTokens"] == 10
+    assert usage["completionTokens"] == 2
+    assert usage["totalTokens"] == 12
+    # deepseek-chat: $0.27/1M in, $1.10/1M out → (10*0.27 + 2*1.10)/1e6
+    assert usage["costUsd"] == pytest.approx((10 * 0.27 + 2 * 1.10) / 1_000_000)
+
+    # Unpriced (local/unknown) model → usage present, costUsd omitted.
+    provider2 = _ScriptedProvider([_text_round("hi")])
+    sidecar2 = _make_sidecar(provider2)
+    _s2, events2 = await _run_stream(
+        sidecar2,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+        },
+    )
+    done2 = [p for m, p in events2 if m == "stream.done"]
+    assert done2[0]["usage"]["totalTokens"] == 6
+    assert "costUsd" not in done2[0]["usage"]
+
+
+@pytest.mark.asyncio
 async def test_coreloop_antihallucination_deferred_retry() -> None:
     """antiHallucination: true wires the desktop's deferred-execution guard
     into the sidecar CoreLoop: an all-talk-no-tool_call round is sent back

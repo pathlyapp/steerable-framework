@@ -16,6 +16,7 @@ Methods (see spec/sidecar/README.md for the full catalog):
   tool.list                -> ToolDescriptor[]
   tool.invoke              -> ToolResult
   trace.fetch              -> { trace, spans, events }
+  trace.export             -> { status, traceId, privacyMode }  (OTLP/HTTP push, W6-6)
   config.get / config.set
 """
 
@@ -69,6 +70,8 @@ from steerable_agent_runtime import (
     ToolRouter,
     TraceRecorder,
     WorldStateHooks,
+    estimate_cost_usd,
+    export_trace,
     branch_label,
     entry_from_dict,
     fork_record,
@@ -200,6 +203,7 @@ class Sidecar:
         register("tool.list", self._handle_tool_list)
         register("tool.invoke", self._handle_tool_invoke)
         register("trace.fetch", self._handle_trace_fetch)
+        register("trace.export", self._handle_trace_export)
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("agent.chat.stream", self._handle_chat_stream)
@@ -408,6 +412,49 @@ class Sidecar:
             "spans": [s.model_dump(exclude_none=True) for s in spans],
             "events": [e.model_dump(exclude_none=True) for e in events],
         }
+
+    async def _handle_trace_export(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Export a stored trace to an OTLP/HTTP collector (W6-6).
+
+        Params: ``traceId`` (required), ``endpoint`` (required, the collector's
+        ``/v1/traces`` URL), ``privacyMode`` (``"full"`` | ``"metadata"``,
+        default ``"metadata"``), ``serviceName`` (optional). The payload is
+        secret-redacted regardless of mode; ``metadata`` additionally strips
+        event payload bodies and free-form span attributes.
+        """
+        params = _require_params(params)
+        trace_id = params.get("traceId")
+        endpoint = params.get("endpoint")
+        if not trace_id:
+            raise JsonRpcError("traceId required", code=-32602, kind="invalid_params")
+        if not endpoint:
+            raise JsonRpcError("endpoint required", code=-32602, kind="invalid_params")
+        privacy_mode = params.get("privacyMode", "metadata")
+        if privacy_mode not in ("full", "metadata"):
+            raise JsonRpcError(
+                f"invalid privacyMode: {privacy_mode}", code=-32602, kind="invalid_params"
+            )
+        trace = await self.storage.get_trace(trace_id)
+        if trace is None:
+            raise JsonRpcError(
+                f"trace not found: {trace_id}", code=-32004, kind="invalid_request"
+            )
+        spans = await self.storage.list_spans(trace_id)
+        events = await self.storage.list_events(trace_id)
+        try:
+            status = export_trace(
+                trace,
+                spans,
+                events,
+                str(endpoint),
+                privacy_mode=privacy_mode,
+                service_name=str(params.get("serviceName") or "steerable-agent"),
+            )
+        except Exception as exc:  # collector unreachable / non-2xx
+            raise JsonRpcError(
+                f"trace export failed: {exc}", code=-32603, kind="internal"
+            ) from exc
+        return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
 
     async def _handle_config_get(self, _params: dict[str, Any] | None) -> dict[str, Any]:
         return {
@@ -981,7 +1028,13 @@ class Sidecar:
                     chat_id=params.get("chatId"),
                 )
             ):
-                await self._emit_loop_event(transport, stream_id, event, recorder.trace_id)
+                await self._emit_loop_event(
+                    transport,
+                    stream_id,
+                    event,
+                    recorder.trace_id,
+                    model=params.get("model"),
+                )
         except asyncio.CancelledError:
             await transport.emit_notification(
                 "stream.done",
@@ -1016,6 +1069,7 @@ class Sidecar:
         stream_id: str,
         event: Any,
         trace_id: str | None = None,
+        model: str | None = None,
     ) -> None:
         kind = event.kind
         data = event.data
@@ -1090,16 +1144,27 @@ class Sidecar:
                 },
             )
         elif kind == "completion" and data.get("status") != "executing":
-            await transport.emit_notification(
-                "stream.done",
-                {
-                    "streamId": stream_id,
-                    "ok": data["status"] == "completed",
-                    "status": data["status"],
-                    "reason": data["reason"],
-                    **({"traceId": trace_id} if trace_id else {}),
-                },
-            )
+            # W6-9: forward the run's accumulated billable usage, plus a cost
+            # estimate when the model is priced (None → key omitted, never a
+            # fabricated $0.00 for unpriced/local models).
+            done: dict[str, Any] = {
+                "streamId": stream_id,
+                "ok": data["status"] == "completed",
+                "status": data["status"],
+                "reason": data["reason"],
+                **({"traceId": trace_id} if trace_id else {}),
+            }
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                done["usage"] = usage
+                cost = estimate_cost_usd(
+                    model,
+                    int(usage.get("promptTokens") or 0),
+                    int(usage.get("completionTokens") or 0),
+                )
+                if cost is not None:
+                    done["usage"] = {**usage, "costUsd": cost}
+            await transport.emit_notification("stream.done", done)
 
     # ------------------------------------------------------------------
     # Plumbing

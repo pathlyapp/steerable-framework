@@ -1159,6 +1159,84 @@ skills、多智能体全是挂在稳定协议面上的增量——顺序不能�
     - 记录但不排期：**供应链/发布完整性**（pi 的依赖钉死、
       `min-release-age=2`、shrinkwrap、`--ignore-scripts`、OIDC 可信发布、
       发布前隔离冒烟）——我们从未把它当作一轴考虑过，值得借鉴但不阻塞产品。
+
+- **Wave 6 · 第七轮四方复审后的产品面补课**（立项 2026-08-30）。
+  背景：前六轮的 13 轴全部落在 CoreLoop 内核（cache、循环韧性、沙箱、审批、
+  伪调用恢复），恰是我们投入最深处，「13 轴全 par/lead」有选题效应。本轮改用
+  客观立轴规则——**三个对照框架里 ≥2 家有可指认的实质实现才成轴**，只有一家的
+  归「单方特有」不计缺口——扩到产品面与工程面重测 16 轴：**9 项落后、
+  2 项有机制未接线、5 项追平**。缺口集中在工具原语与产品交互，不在推理内核。
+  基线 codex@0b45b17 / dsh@cd5ef81 / pi@853a80d。详见
+  canvas `steerable-r7-product-axes`。
+  - **P0 真实产品痛点（用户当下就在踩）**
+    - [ ] **W6-1 结构化文件编辑**：现状是 `path + 全文件 content` 覆盖
+      （`local-executor.ts` 的 `writeLocalFile`、`workspace_tools.py` 的
+      `write_file`），改长文件必须让模型重述全文——烧 token 且一次生成失误
+      整段丢内容，也无从发现文件被外部改过。三家都做了结构化编辑：codex
+      `apply-patch` 的 `seek_sequence` 三级降级定位（精确→去空白→Unicode
+      标点归一）、pi `edit-diff` 的批量 `edits[]` 逆序替换禁重叠、dsh 用
+      `FsVersion` 不透明版本标识强制 read-before-write。做：`edits[]` 批量 +
+      三级模糊定位 + mtime/摘要冲突检测 + tmp&rename 原子写；工具卡渲染
+      unified diff。
+    - [ ] **W6-2 follow-up 输入队列**：agent 在跑时用户再发一条只能走 steer
+      （轮内注入、有字符上限），turn 一结束未消费内容直接丢弃——没有「本轮结束
+      后自动作为下一轮发出」的通道。这是可复现的产品缺陷而非能力差距。三家都把
+      steer 与 follow-up 拆成两条队列（codex `Steer|Mailbox` 双模并禁止 steer
+      审查/压缩轮；dsh 按 `target=next-turn|next-step` 分流；pi 直接给用户
+      `steeringMode`/`followUpMode` 两个 `all | one-at-a-time` 开关）。
+    - [ ] **W6-3 多模态接线**：`ImagePart` 的类型 / wire / 双厂商序列化 /
+      token 估算全链路早已打通，桌面拖拽却只把**文件路径**写进文本——典型的
+      W4 式接线断层，成本最低收益最直接。做：附件读成 base64 `ImagePart` +
+      尺寸/字节上限 + 超限缩放并把说明注入上下文（codex 的做法）。
+  - **P1 安全与合规（有明确风险）**
+    - [ ] **W6-4 凭据脱敏对齐 spec**：spec 明写记录器要过 `sanitize_for_trace()`，
+      而**该函数根本不存在**，`TraceRecorder` 只按长度截断；默认 preset 里还有
+      硬编码 key。规格与实现不符本身即缺陷。做：实现并接入脱敏 + 清掉硬编码 key +
+      补一条「密钥不得进 trace」的机械门禁测试。
+    - [ ] **W6-5 项目信任门控**：现在打开任意项目目录就会加载其技能与规则文件，
+      没有信任门。pi 把这条设成安全边界（`project-trust.ts`：未信任前只加载
+      user/CLI 扩展，项目扩展与 settings 一律延后，`trust.json` 持久化）。
+      做：首次绑定项目时询问、未信任仅加载用户级技能、可在设置里撤销。
+    - [x] **W6-6 遥测合规化** ✅：`otel.py` 加 `PrivacyMode`（`full`/`metadata`）
+      + `export_trace` 一键导出；脱敏 waterfall 双段——record 时（W6-4
+      `sanitize_for_trace`）+ export 时再脱敏（防旧/非 conforming 路径漏 key）；
+      `metadata` 档只出结构/时延/状态、丢 payload 正文与自由属性。sidecar 新增
+      `trace.export` RPC；桌面 `telemetry-settings.ts`（默认关=无 endpoint）+
+      `settings_kv` 持久化 + `/api/v2/local-settings/telemetry` IPC + 设置页
+      TelemetrySettingsPanel + 每轮结束按档位导出（失败不阻断主流程）。测试：
+      otel 7 项 + sidecar export 1 项 + telemetry-settings 11 项全绿。
+  - **P2 能力扩展（排在痛点之后）**
+    - [x] **W6-7 `world_state` 扩面 + 规则文件加载** ✅：
+      - **W6-7a 规则文件加载**（见 W6-5，与信任门控同落地）：`project-rules.ts`
+        向上遍历 `AGENTS.md`/`CLAUDE.md`（有界、root-first、覆盖优先级、截断），
+        信任门控后注入系统提示词【项目规则】节。
+      - **W6-7b world_state 扩面**：桌面 `buildWorldState` 从只有 time 扩到
+        `time`/`mode`/`permissions`/`skills` 四节（permissions=approval 模式+
+        沙箱可写根/网络；skills=活跃条件+模式级排除的紧凑过滤面，正文仍走分层
+        披露）。sidecar 逐节 merge-patch diff，没变零 token。coreloop-stream
+        12 项测试全绿。
+    - [x] **W6-8 结构化模型能力** ✅：新增 `model_info.py`——`ModelInfo`
+      （`context_window`/`modalities`/`tool_format`/`reasoning_levels`，派生
+      `supports_tools`/`supports_vision`）+ 内置表 `MODEL_INFOS`（最长前缀匹配，
+      窗口值与 deeppath-api 对齐）+ 运行时 `register_model_info` 覆盖（模型迭代
+      不再等框架发版）。`resolve_context_window` 改为委托 `resolve_model_info`
+      （行为不变，test_tokens 全绿）；`STEERABLE_REASONING_EFFORT` 由裸 env 直通
+      改为 `clamp_reasoning_effort` 按模型能力夹取（无 reasoning 档位的模型一律
+      不发该参数，避免 strict API 报错）。model_info 12 项 + wire-helpers 25 项全绿。
+    - [ ] **W6-9 用量与成本归因**：已有 token/步数/工具预算，缺金额估算与用量
+      面板。codex 逐轮美元成本 + rate limit 阈值警告 + `/status`；pi 按
+      model/provider 与工具/摘要分桶并常驻 footer。
+    - [ ] **W6-10 压缩双层去重核查**：sidecar 回合内 `CompactionHooks` 与桌面
+      跨回合滚动摘要职责不同，但可能对同一段对话重复压缩——需要构造长会话实证，
+      必要时让桌面摘要跳过已被 `CompactionBoundary` 覆盖的区间。
+  - **记录不排期**：多 agent 编排（codex MultiAgentV2 / dsh workflow+Agent Teams
+    投入大，pi 核心也没有，等真实需求）、通用第三方插件 runtime（投入大且安全面宽，
+    我们的技能 + MCP 已覆盖主要场景）、LSP（只有 dsh 一家，不成轴）、桌面
+    autoUpdater（先定发布策略）。
+  - **本轮追平项（不需动作，仅备查）**：上下文压缩策略、长驻 PTY（我们有完整
+    node-pty 实现，pi 甚至没有 PTY 抽象）、MCP 客户端、崩溃恢复语义（与 dsh
+    同源）、供应链完整性（框架侧 lockstep + provenance + 代码签名已不弱，
+    桌面缺自更新通道）。
 - **明确不做**：Cordis 式插件运行时（装饰器链 ~40 行已给到 provider 替换，
   抄**缝的纪律**不抄运行时）；workflow 编排（dsh 自己 README 写明无
   journaling / 无 resume / 仅前台）；durable execution（等消费者提需求）；

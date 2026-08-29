@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,7 @@ from steerable_agent_protocol.generated import ToolCall
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .errors import LLMError, classify_http_status
 from .parts import ImagePart, TextPart
+from ..model_info import clamp_reasoning_effort
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +228,16 @@ class OpenAICompatProvider:
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
+        # W6-8: clamp the env-requested reasoning effort to a level the model
+        # actually supports (structured ModelInfo replaces the raw env
+        # passthrough). A model with no reasoning knob gets no parameter at
+        # all — sending one would be an unsupported-field error on strict APIs.
+        effort = clamp_reasoning_effort(
+            self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
+        )
+        if effort and "reasoning_effort" not in body and "reasoning" not in body:
+            # GLM-5.3-Flash defaults to max thinking; Harbor sets `low`.
+            body["reasoning_effort"] = effort
         return body
 
 
@@ -414,7 +426,7 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     delta = choice.get("delta") or {}
     finish_reason = choice.get("finish_reason")
     content = delta.get("content")
-    reasoning = delta.get("reasoning_content")
+    reasoning = _reasoning_text(delta)
     tool_call_delta: ToolCall | None = None
     raw_tool_calls = delta.get("tool_calls")
     if raw_tool_calls:
@@ -443,3 +455,23 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
         finish_reason=finish_reason,
         raw=chunk,
     )
+
+
+def _reasoning_text(delta: dict[str, Any]) -> str | None:
+    """DeepSeek uses ``reasoning_content``; OpenRouter GLM uses ``reasoning``."""
+    raw = delta.get("reasoning_content")
+    if raw is None:
+        raw = delta.get("reasoning")
+    if isinstance(raw, str) and raw:
+        return raw
+    if isinstance(raw, list):
+        parts: list[str] = []
+        for item in raw:
+            if isinstance(item, str) and item:
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+        return "".join(parts) or None
+    return None

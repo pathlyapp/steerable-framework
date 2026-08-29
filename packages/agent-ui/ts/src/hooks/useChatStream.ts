@@ -70,6 +70,11 @@ export interface UseChatStreamOptions {
 export interface UseChatStreamReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
+  /**
+   * Send a user message. Queue-safe (W6-2): if a turn is currently streaming
+   * the message is NOT dropped — it is appended to the follow-up queue and
+   * sent automatically as the next turn when the current one ends.
+   */
   sendUserMessage: (input: ChatStreamSendInput) => Promise<void>;
   /**
    * Steer the running turn with an extra user message. No-op resolving
@@ -78,6 +83,17 @@ export interface UseChatStreamReturn {
    * consumes it at the next round boundary).
    */
   steerUserMessage: (content: string) => Promise<boolean>;
+  /**
+   * Explicitly queue a message as a follow-up (W6-2): sent automatically as
+   * the next turn once the current turn finishes. When not streaming this is
+   * equivalent to `sendUserMessage`. Distinct from `steerUserMessage`, which
+   * redirects the *current* turn mid-flight.
+   */
+  followUpUserMessage: (input: ChatStreamSendInput) => void;
+  /** Follow-up messages queued while streaming, in order (not yet sent). */
+  pendingFollowUps: ChatStreamSendInput[];
+  /** Remove a queued follow-up by index (e.g. the user withdraws it). */
+  removeFollowUp: (index: number) => void;
   cancel: () => void;
   /** Replace the message buffer (e.g. when switching chat). */
   setMessages: (messages: ChatMessage[]) => void;
@@ -226,6 +242,14 @@ export function useChatStream(
   const isStreamingRef = useRef(false);
   const cancelRef = useRef<(() => void) | null>(null);
   const [, forceRerender] = useReducer((x: number) => x + 1, 0);
+  // W6-2 follow-up queue: messages submitted while a turn is streaming. Kept
+  // in a ref (drained imperatively at turn end) with a version counter to
+  // re-render consumers that show the pending queue.
+  const followUpsRef = useRef<ChatStreamSendInput[]>([]);
+  const [followUpVersion, bumpFollowUpVersion] = useReducer((x: number) => x + 1, 0);
+  // Self-handle so a finishing turn can start the next queued turn without a
+  // circular useCallback dependency.
+  const sendRef = useRef<(input: ChatStreamSendInput) => Promise<void>>();
 
   const setStreaming = useCallback((next: boolean) => {
     isStreamingRef.current = next;
@@ -292,6 +316,10 @@ export function useChatStream(
   const sendUserMessage = useCallback(
     async (input: ChatStreamSendInput) => {
       if (isStreamingRef.current) {
+        // W6-2: queue instead of dropping. The finishing turn's `finally`
+        // drains the queue and starts the next turn automatically.
+        followUpsRef.current = [...followUpsRef.current, input];
+        bumpFollowUpVersion();
         return;
       }
       dispatch({ type: 'append', message: newUserMessage(input.content) });
@@ -312,12 +340,42 @@ export function useChatStream(
       } finally {
         cancelRef.current = null;
         setStreaming(false);
+        // W6-2: drain the follow-up queue — send the next queued message as
+        // a fresh turn. isStreamingRef is already false here, so the nested
+        // call starts a new turn rather than re-queueing.
+        const next = followUpsRef.current.shift();
+        if (next !== undefined) {
+          bumpFollowUpVersion();
+          void sendRef.current?.(next);
+        }
       }
     },
     [handleEvent, options.transport, setStreaming],
   );
 
+  useEffect(() => {
+    sendRef.current = sendUserMessage;
+  }, [sendUserMessage]);
+
+  const followUpUserMessage = useCallback((input: ChatStreamSendInput) => {
+    if (!isStreamingRef.current) {
+      void sendRef.current?.(input);
+      return;
+    }
+    followUpsRef.current = [...followUpsRef.current, input];
+    bumpFollowUpVersion();
+  }, []);
+
+  const removeFollowUp = useCallback((index: number) => {
+    followUpsRef.current = followUpsRef.current.filter((_, i) => i !== index);
+    bumpFollowUpVersion();
+  }, []);
+
   const cancel = useCallback(() => {
+    // Cancelling the current turn also drops queued follow-ups — an explicit
+    // stop means "don't keep going", so we don't auto-send what was queued.
+    followUpsRef.current = [];
+    bumpFollowUpVersion();
     if (cancelRef.current) {
       cancelRef.current();
       cancelRef.current = null;
@@ -363,10 +421,25 @@ export function useChatStream(
       isStreaming: isStreamingRef.current,
       sendUserMessage,
       steerUserMessage,
+      followUpUserMessage,
+      // followUpVersion re-keys this memo so queue changes surface to the UI.
+      pendingFollowUps: followUpsRef.current,
+      removeFollowUp,
       cancel,
       setMessages,
       appendMessage,
     }),
-    [state.messages, sendUserMessage, steerUserMessage, cancel, setMessages, appendMessage],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      state.messages,
+      sendUserMessage,
+      steerUserMessage,
+      followUpUserMessage,
+      removeFollowUp,
+      cancel,
+      setMessages,
+      appendMessage,
+      followUpVersion,
+    ],
   );
 }

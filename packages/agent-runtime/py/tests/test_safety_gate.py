@@ -98,6 +98,30 @@ async def test_router_annotates_warning_command() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_allows_sudo_when_pattern_disabled() -> None:
+    router = ToolRouter(
+        shell_safety=CommandSafetyConfig(disabled_pattern_ids=["sudo"])
+    )
+
+    async def run_shell(command: str) -> str:
+        return f"ran: {command}"
+
+    router.register(
+        run_shell,
+        name="local_exec_shell",
+        metadata={"shell_command_param": "command"},
+    )
+    result = await router.dispatch(
+        ToolCall(
+            id="c5",
+            name="local_exec_shell",
+            arguments={"command": "sudo nginx -t"},
+        )
+    )
+    assert result.success is True
+
+
+@pytest.mark.asyncio
 async def test_router_without_shell_param_metadata_skips_gate() -> None:
     router = ToolRouter()
 

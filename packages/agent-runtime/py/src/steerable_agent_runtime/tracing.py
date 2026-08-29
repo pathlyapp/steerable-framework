@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from steerable_agent_protocol.generated import HarnessTrace, TraceEvent, TraceSpan
+from steerable_agent_harness.tracing import sanitize_for_trace
 
 from .loop import LoopEvent
 from .storage import StorageAdapter
@@ -102,7 +103,12 @@ class TraceRecorder:
                     sequence=self._sequence,
                     timestampMs=_now_ms(),
                     status=event.data.get("status"),
-                    payload=_truncate(dict(event.data), self._max_payload),
+                    # Secret-redact before truncating/persisting (spec
+                    # "Secret redaction") — a tool result echoing a key must
+                    # never land in the trace.
+                    payload=_truncate(
+                        sanitize_for_trace(dict(event.data)), self._max_payload
+                    ),
                 )
             ],
         )
@@ -129,14 +135,16 @@ class TraceRecorder:
                             endMs=_now_ms(),
                             durationMs=event.data.get("durationMs"),
                             status="ok" if success else "error",
-                            attrs={
-                                "toolCallId": event.data["id"],
-                                **(
-                                    {"error": str(event.data["error"])[: self._max_payload]}
-                                    if "error" in event.data
-                                    else {}
-                                ),
-                            },
+                            attrs=sanitize_for_trace(
+                                {
+                                    "toolCallId": event.data["id"],
+                                    **(
+                                        {"error": str(event.data["error"])[: self._max_payload]}
+                                        if "error" in event.data
+                                        else {}
+                                    ),
+                                }
+                            ),
                         )
                     ],
                 )

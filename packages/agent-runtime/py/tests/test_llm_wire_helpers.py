@@ -113,6 +113,20 @@ def test_openai_parse_stream_chunk_reasoning_and_finish() -> None:
     assert parsed.finish_reason == "stop"
 
 
+def test_openai_parse_stream_chunk_openrouter_reasoning_field() -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {"reasoning": "plan the edit"},
+                "finish_reason": None,
+            }
+        ]
+    }
+    parsed = _parse_stream_chunk(chunk)
+    assert parsed is not None
+    assert parsed.reasoning_delta == "plan the edit"
+
+
 def test_openai_parse_stream_chunk_usage_only() -> None:
     chunk = {
         "choices": [],
@@ -148,6 +162,34 @@ def test_openai_stream_requests_usage_chunk() -> None:
         extra={},
     )
     assert "stream_options" not in complete_body
+
+
+def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
+    """W6-8: the env-requested effort is clamped to the model's structured
+    reasoning levels — applied when the model has a reasoning knob, omitted
+    for models that don't (never an unsupported parameter)."""
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "low")
+
+    def build(model: str, extra: dict | None = None) -> dict:
+        provider = OpenAICompatProvider(name="t", model=model, base_url="http://x/v1")
+        return provider._build_body(
+            messages=[LLMMessage.text_of("user", "hi")],
+            tools=None,
+            temperature=None,
+            max_tokens=None,
+            stream=True,
+            extra=extra or {},
+        )
+
+    # A reasoning-capable model gets the (supported) env effort.
+    assert build("deepseek-reasoner")["reasoning_effort"] == "low"
+    # A model with no reasoning knob gets no reasoning parameter at all.
+    assert "reasoning_effort" not in build("deepseek-chat")
+    assert "reasoning_effort" not in build("m")  # unknown model → no knob
+    # An explicit per-request effort always wins over the env default.
+    assert build("deepseek-reasoner", {"reasoning_effort": "max"})["reasoning_effort"] == "max"
 
 
 def test_openai_tool_call_assembler_concatenates_argument_fragments() -> None:

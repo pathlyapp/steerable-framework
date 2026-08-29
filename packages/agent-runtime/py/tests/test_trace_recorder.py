@@ -147,6 +147,49 @@ async def test_recorder_truncates_huge_payloads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_secrets_never_enter_the_trace() -> None:
+    """Mechanical gate (spec "Secret redaction"): a tool that returns a live
+    credential — and a tool argument that *is* one — must not appear anywhere
+    in the persisted trace events or spans."""
+    secret_key = "sk-live0000000000000000deadbeef"
+    secret_token = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig"
+
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("fetch", {"api_key": secret_key, "url": "https://x"})]},
+            {"content": "done"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def fetch(api_key: str, url: str) -> dict[str, Any]:
+        # Echo the credential back in the result, as a leaky tool would.
+        return {"authorization": secret_token, "echo": api_key, "body": "ok"}
+
+    router.register(fetch)
+    storage = InMemoryStorage()
+    recorder = TraceRecorder(storage)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "go")])):
+        pass
+
+    events = await storage.list_events(recorder.trace_id)
+    spans = await storage.list_spans(recorder.trace_id)
+    import json
+
+    blob = json.dumps(
+        {
+            "events": [e.payload for e in events],
+            "spans": [s.attrs for s in spans],
+        }
+    )
+    assert secret_key not in blob
+    assert secret_token not in blob
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in blob
+
+
+@pytest.mark.asyncio
 async def test_trace_row_is_live_mid_turn() -> None:
     """The trace row is upserted status=running on the first event, so
     trace.fetch works while the turn is still in flight; finalize overwrites

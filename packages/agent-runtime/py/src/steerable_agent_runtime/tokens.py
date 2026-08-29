@@ -24,6 +24,7 @@ import math
 from collections.abc import Sequence
 
 from .llm import LLMMessage, TextPart
+from .model_info import DEFAULT_CONTEXT_WINDOW, MODEL_INFOS, resolve_model_info
 
 #: CJK char → token, everything else → token (TS parity: 0.6 / 0.25).
 _CJK_FACTOR = 0.6
@@ -118,28 +119,16 @@ def estimate_tokens(messages: Sequence[LLMMessage], model: str | None = None) ->
 
 
 #: model-name prefix → provider context window in tokens (longest match wins).
-#: Values mirror the authoritative table in deeppath-api
-#: ``app/core/models_config.py`` (ProviderModelEntry.context_window).
-#: Unknown models fall back to ``DEFAULT_CONTEXT_WINDOW``.
+#: Derived from the structured capability table (``model_info.MODEL_INFOS``,
+#: W6-8) so window/modality/reasoning/tool-format stay a single source of
+#: truth. Unknown models fall back to ``DEFAULT_CONTEXT_WINDOW``.
 #:
 #: Caveat: for a LOCAL Ollama daemon the effective window is the daemon's
 #: ``num_ctx`` (default 4096), not the model's native window — pass an
 #: explicit ``maxContextTokens`` for local-model deployments.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    "deepseek": 131_072,
-    "gpt-oss": 131_072,
-    "llama3": 131_072,
-    "qwen3": 129_024,
-    "qwen2.5": 131_072,
-    "kimi-k2": 262_144,
-    "minimax": 197_000,
-    "claude": 200_000,
-    "gpt-5": 200_000,
-    "gpt-4": 128_000,
+    info.pattern: info.context_window for info in MODEL_INFOS
 }
-
-#: Fallback window for unknown models — the pre-calibration desktop default.
-DEFAULT_CONTEXT_WINDOW = 60_000
 
 
 def resolve_context_window(model: str | None, explicit: int | None = None) -> int:
@@ -151,15 +140,4 @@ def resolve_context_window(model: str | None, explicit: int | None = None) -> in
     old fixed 60k against 131k models — compact far earlier than the provider
     requires.
     """
-    if explicit and explicit > 0:
-        return explicit
-    if model:
-        name = model.lower()
-        best = ""
-        window = 0
-        for prefix, w in MODEL_CONTEXT_WINDOWS.items():
-            if name.startswith(prefix) and len(prefix) > len(best):
-                best, window = prefix, w
-        if window:
-            return window
-    return DEFAULT_CONTEXT_WINDOW
+    return resolve_model_info(model, context_window_override=explicit).context_window

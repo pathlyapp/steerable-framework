@@ -12,8 +12,35 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import {
   useChatStream,
+  type ChatStreamSendInput,
   type ChatStreamTransport,
 } from './useChatStream';
+
+/**
+ * A transport whose streams stay open until the test explicitly finishes them,
+ * so we can submit follow-ups mid-stream and watch the queue drain.
+ */
+function makeControllableTransport() {
+  const streams: Array<{
+    input: ChatStreamSendInput;
+    onEvent: (e: SSEEvent) => void;
+    finish: () => void;
+  }> = [];
+  const transport: ChatStreamTransport = {
+    stream: (input, onEvent) =>
+      new Promise<void>((resolve) => {
+        streams.push({
+          input,
+          onEvent,
+          finish: () => {
+            onEvent({ type: 'done' });
+            resolve();
+          },
+        });
+      }),
+  };
+  return { transport, streams };
+}
 
 function makeTransport(
   script: SSEEvent[][],
@@ -307,5 +334,131 @@ describe('steerUserMessage', () => {
     await act(async () => {
       await done;
     });
+  });
+});
+
+describe('follow-up queue (W6-2)', () => {
+  it('sendUserMessage while streaming queues instead of dropping, then auto-sends next turn', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    // Turn 1 starts and stays open.
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    expect(result.current.isStreaming).toBe(true);
+
+    // Submit a second message mid-stream — must be queued, not dropped.
+    await act(async () => {
+      await result.current.sendUserMessage({ content: 'second' });
+    });
+    expect(streams).toHaveLength(1); // no new turn yet
+    expect(result.current.pendingFollowUps).toEqual([{ content: 'second' }]);
+
+    // Finish turn 1 → the queued message auto-sends as turn 2.
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('second');
+    expect(result.current.pendingFollowUps).toEqual([]);
+
+    await act(async () => {
+      streams[1]!.finish();
+    });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+    // Both user messages landed in the transcript.
+    const userTexts = result.current.messages
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content);
+    expect(userTexts).toEqual(['first', 'second']);
+  });
+
+  it('followUpUserMessage queues while streaming and sends immediately when idle', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    // Idle: followUpUserMessage behaves like a normal send.
+    await act(async () => {
+      result.current.followUpUserMessage({ content: 'idle' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    expect(streams[0]!.input.content).toBe('idle');
+
+    // Streaming: queues.
+    await act(async () => {
+      result.current.followUpUserMessage({ content: 'queued' });
+    });
+    expect(streams).toHaveLength(1);
+    expect(result.current.pendingFollowUps).toEqual([{ content: 'queued' }]);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('queued');
+    await act(async () => {
+      streams[1]!.finish();
+    });
+  });
+
+  it('removeFollowUp withdraws a queued message before it sends', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    await act(async () => {
+      result.current.followUpUserMessage({ content: 'keep' });
+      result.current.followUpUserMessage({ content: 'drop' });
+    });
+    expect(result.current.pendingFollowUps.map((m) => m.content)).toEqual(['keep', 'drop']);
+
+    await act(async () => {
+      result.current.removeFollowUp(1); // remove 'drop'
+    });
+    expect(result.current.pendingFollowUps.map((m) => m.content)).toEqual(['keep']);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('keep');
+    await act(async () => {
+      streams[1]!.finish();
+    });
+    // 'drop' never sent.
+    expect(streams).toHaveLength(2);
+  });
+
+  it('cancel() clears the queue so nothing auto-sends afterwards', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    await act(async () => {
+      result.current.followUpUserMessage({ content: 'queued' });
+    });
+    expect(result.current.pendingFollowUps).toHaveLength(1);
+
+    await act(async () => {
+      result.current.cancel();
+    });
+    expect(result.current.pendingFollowUps).toEqual([]);
+
+    // Even if the stream later finishes, no follow-up turn starts.
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+    expect(streams).toHaveLength(1);
   });
 });

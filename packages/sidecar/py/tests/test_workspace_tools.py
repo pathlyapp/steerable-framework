@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 
+from steerable_sidecar import workspace_tools as workspace_tools_mod
 from steerable_sidecar.workspace_tools import (
-    _BASH_TIMEOUT_SEC,
     _MAX_OUTPUT,
     workspace_tools_for_cwd,
 )
@@ -70,20 +70,34 @@ async def test_missing_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_clip_and_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     router = workspace_tools_for_cwd(tmp_path)
     huge = "a" * (_MAX_OUTPUT + 10)
     (tmp_path / "big.txt").write_text(huge)
     read = await _call(router, "read_file", {"path": "big.txt"})
     assert read.success is True
     assert read.data["content"].endswith("...[truncated]...")
+    binary = await _call(router, "bash", {"command": r"printf '\x99\xff'"})
+    assert binary.success is True
 
-    def _timeout(*_args, **_kwargs):
-        raise subprocess.TimeoutExpired(cmd="sleep", timeout=_BASH_TIMEOUT_SEC)
 
-    monkeypatch.setattr(subprocess, "run", _timeout)
-    timed = await _call(router, "bash", {"command": "sleep 999"})
+@pytest.mark.asyncio
+async def test_bash_timeout_kills_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(workspace_tools_mod, "_BASH_TIMEOUT_SEC", 1)
+    router = workspace_tools_for_cwd(tmp_path)
+    started = time.monotonic()
+    timed = await _call(router, "bash", {"command": "sleep 30 | cat"})
+    elapsed = time.monotonic() - started
     assert timed.success is False
     assert "timed out" in (timed.error or "")
+    assert elapsed < 10
+
+
+def test_jailed_workspace_disables_sudo_gate(tmp_path: Path) -> None:
+    open_router = workspace_tools_for_cwd(tmp_path)
+    jailed = workspace_tools_for_cwd(tmp_path, jailed=True)
+    assert open_router._shell_safety is None
+    assert jailed._shell_safety is not None
+    assert "sudo" in jailed._shell_safety.disabled_pattern_ids

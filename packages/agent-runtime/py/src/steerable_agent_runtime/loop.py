@@ -60,14 +60,17 @@ from .history import (
     KIND_ASSISTANT,
     KIND_SYSTEM,
     KIND_USER,
+    CompactionBoundary,
     ContextFragment,
     ContextManager,
     HistoryItem,
+    HistorySeed,
     HistoryStore,
+    entry_from_dict,
     entry_to_dict,
 )
 from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
-from .llm import LLMMessage, LLMProvider
+from .llm import LLMMessage, LLMProvider, LLMUsage
 from .pseudo import (
     PseudoStreamStripper,
     extract_inline_tool_calls,
@@ -208,6 +211,12 @@ class LoopContext:
     #: describe one request, not a projection, so rewrites don't stale them.
     last_cached_prompt_tokens: int = 0
     last_cache_creation_tokens: int = 0
+    #: Accumulated billable usage across every provider request this run
+    #: (W6-9). Unlike the ``last_*`` pressure indices these SUM over requests —
+    #: each request bills its own prompt+completion, so per-turn cost
+    #: attribution needs the running totals, not the latest single request.
+    accumulated_prompt_tokens: int = 0
+    accumulated_completion_tokens: int = 0
     #: Set by an upstream ApprovalExecutor on its allow path; read by
     #: RouterToolExecutor to bridge the verdict into the router's
     #: require_consent gate. Plain False when no approval layer is wired.
@@ -326,6 +335,9 @@ class CoreLoop:
         # transcript is its projection). Rebuilt per run() from the seed
         # messages; exposed for tests, persistence, and resume.
         self.history = ContextManager()
+        # W6-9: the live LoopContext of the current/last run, so the host can
+        # read accumulated billable usage after the run via `last_run_usage`.
+        self._run_context: LoopContext | None = None
 
     def steer(self, content: str) -> None:
         """Inject a user message into a running turn.
@@ -347,6 +359,25 @@ class CoreLoop:
                     f"{content[:cap]}\n…[steer message truncated at {cap} chars]"
                 )
             self._inbox.put_nowait(content)
+
+    @property
+    def last_run_usage(self) -> LLMUsage | None:
+        """Accumulated billable usage of the current/last run (W6-9).
+
+        Summed over every provider request in the run — each request bills its
+        own prompt+completion, so per-turn cost attribution needs these totals,
+        not the latest single request. ``None`` before the first run.
+        """
+        ctx = self._run_context
+        if ctx is None:
+            return None
+        return LLMUsage(
+            prompt_tokens=ctx.accumulated_prompt_tokens,
+            completion_tokens=ctx.accumulated_completion_tokens,
+            total_tokens=ctx.accumulated_prompt_tokens + ctx.accumulated_completion_tokens,
+            cached_prompt_tokens=ctx.last_cached_prompt_tokens,
+            cache_creation_tokens=ctx.last_cache_creation_tokens,
+        )
 
     async def _flush_history(
         self, manager: ContextManager, chat_id: str | None
@@ -390,7 +421,6 @@ class CoreLoop:
           ``host_revision`` boundary persists first, then the whole host
           seed flushes after it, keeping the durable projection coherent.
         """
-        from .history import CompactionBoundary
         from .resume import load_history_items
 
         store = self._history_store
@@ -407,12 +437,48 @@ class CoreLoop:
             new_tail = _reconcile_host_seed(items, messages)
             if new_tail is not None:
                 return ([*prior, *new_tail], next_seq, len(prior), None)
+            # W6-10: the direct reconcile failed. Before declaring a host
+            # revision, see through the loop's OWN compactions — the host never
+            # revised, it just reseeded the raw conversation while the record
+            # holds a compacted projection. If the seed matches the
+            # compaction-transparent host view, keep the compaction and append
+            # only the genuinely-new tail (no double compression).
+            see_through = await self._host_view_seeing_through_compactions(
+                store, record_id
+            )
+            if see_through is not None:
+                new_tail = _match_host_view(see_through, messages)
+                if new_tail is not None:
+                    return ([*prior, *new_tail], next_seq, len(prior), None)
         boundary = CompactionBoundary(
             seq=next_seq,
             reason="host revised history upstream of this run",
             action="host_revision",
         )
         return (messages, next_seq + 1, 0, entry_to_dict(boundary))
+
+    async def _host_view_seeing_through_compactions(
+        self, store: HistoryStore, record_id: str
+    ) -> list[LLMMessage] | None:
+        """The host-visible view with the loop's own compactions made transparent.
+
+        Returns None when the record holds no loop compaction to see through —
+        the caller then falls straight through to a ``host_revision`` exactly as
+        before. Otherwise returns the reconstructed host view for the
+        reconciliation fallback.
+        """
+        raw = await store.list_history(record_id)
+        if not raw:
+            return None
+        entries = [entry_from_dict(r) for r in raw]
+        if not any(
+            isinstance(e, CompactionBoundary)
+            and e.action in ("compact", "overflow_recovery")
+            and e.replacement_count is not None
+            for e in entries
+        ):
+            return None
+        return _host_view_through_loop_compactions(entries)
 
     async def _execute_tool(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         """Run one tool call under the per-tool timeout.
@@ -492,6 +558,7 @@ class CoreLoop:
         chat_id: str | None = None,
     ) -> AsyncIterator[LoopEvent]:
         ctx = LoopContext(chat_id=chat_id)
+        self._run_context = ctx
         # The transcript is a projection of the append-only record; nothing
         # mutates a list in place anymore (see history.py).
         record_id = self._record_id or chat_id
@@ -537,6 +604,17 @@ class CoreLoop:
             trajectory is never recorded through a separate channel, so the
             event stream alone can rebuild it)."""
             data = {**step, **_decision_data(dec)}
+            # W6-9: running billable usage rides the event (NOT the trajectory
+            # step — the trajectory keeps the stable api/agent-aligned shape).
+            # The terminal completion carries the run's final totals.
+            data["usage"] = {
+                "promptTokens": ctx.accumulated_prompt_tokens,
+                "completionTokens": ctx.accumulated_completion_tokens,
+                "totalTokens": (
+                    ctx.accumulated_prompt_tokens + ctx.accumulated_completion_tokens
+                ),
+                "cachedPromptTokens": ctx.last_cached_prompt_tokens,
+            }
             self.trajectory.append(build_step_decision_event(step, _decision_data(dec)))
             return LoopEvent("completion", data)
 
@@ -769,6 +847,12 @@ class CoreLoop:
                             ctx.last_cached_prompt_tokens = chunk.usage.cached_prompt_tokens
                             ctx.last_cache_creation_tokens = (
                                 chunk.usage.cache_creation_tokens
+                            )
+                            # W6-9: running billable totals for per-turn cost
+                            # attribution (summed over every request).
+                            ctx.accumulated_prompt_tokens += chunk.usage.prompt_tokens
+                            ctx.accumulated_completion_tokens += (
+                                chunk.usage.completion_tokens
                             )
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
@@ -1454,6 +1538,63 @@ def _decision_data(decision: CompletionDecision) -> dict[str, Any]:
     }
 
 
+def _is_host_visible(item: HistoryItem) -> bool:
+    """The host-visible kinds: bare system/user plus terminal assistant
+    messages (tool-call rounds are loop-internal)."""
+    return (
+        item.kind in (KIND_SYSTEM, KIND_USER)
+        or (item.kind == KIND_ASSISTANT and not item.message.tool_calls)
+    )
+
+
+def _host_view_through_loop_compactions(
+    entries: list[HistoryItem | CompactionBoundary | HistorySeed],
+) -> list[LLMMessage]:
+    """The host-visible conversation, seeing through the loop's OWN compactions.
+
+    A ``compact`` / ``overflow_recovery`` boundary is the loop compressing its
+    own record — the host never revised anything and still holds the raw
+    pre-compaction conversation. The rewrite that follows such a boundary
+    (head + summary marker + tail, ``replacement_count`` messages) re-states
+    content the host already has, so it is skipped: the view stays the host's
+    full conversation and the next raw seed reconciles instead of declaring a
+    spurious ``host_revision`` that would discard the compaction (W6-10).
+
+    A ``host_revision`` boundary is a genuine host edit — the pre-boundary
+    span is dropped (the view resets), matching the post-boundary projection.
+    Boundaries without a ``replacement_count`` (older records) are opaque and
+    reset the view the same way, preserving the pre-W6-10 behavior.
+    """
+    view: list[LLMMessage] = []
+    i = 0
+    n = len(entries)
+    while i < n:
+        entry = entries[i]
+        if isinstance(entry, CompactionBoundary):
+            if (
+                entry.action in ("compact", "overflow_recovery")
+                and entry.replacement_count is not None
+            ):
+                # See through the loop's own compaction: skip the rewrite.
+                i += 1 + entry.replacement_count
+                continue
+            # host_revision or an opaque (legacy) boundary: the visible span
+            # restarts here.
+            view = []
+            i += 1
+            continue
+        if isinstance(entry, HistorySeed):
+            for message in entry.messages:
+                if message.role in ("system", "user") or (
+                    message.role == "assistant" and not message.tool_calls
+                ):
+                    view.append(message)
+        elif _is_host_visible(entry):
+            view.append(entry.message)
+        i += 1
+    return view
+
+
 def _reconcile_host_seed(
     items: list[HistoryItem], seed: list[LLMMessage]
 ) -> list[LLMMessage] | None:
@@ -1470,12 +1611,19 @@ def _reconcile_host_seed(
     the history genuinely changed (edit/truncate/regenerate) and the
     caller declares a ``host_revision`` boundary.
     """
-    host_view = [
-        item.message
-        for item in items
-        if item.kind in (KIND_SYSTEM, KIND_USER)
-        or (item.kind == KIND_ASSISTANT and not item.message.tool_calls)
-    ]
+    host_view = [item.message for item in items if _is_host_visible(item)]
+    return _match_host_view(host_view, seed)
+
+
+def _match_host_view(
+    host_view: list[LLMMessage], seed: list[LLMMessage]
+) -> list[LLMMessage] | None:
+    """Match a host seed's history part against a host-visible view.
+
+    The seed reconciles when its leading ``len(host_view)`` messages match the
+    view — user/system text exactly, assistant text up to a host-appended
+    suffix. Returns the seed's new tail on match; None on a genuine divergence.
+    """
     if len(seed) <= len(host_view):
         return None
     history_part, new_tail = seed[: len(host_view)], seed[len(host_view) :]

@@ -65,7 +65,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split oracle-canary --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3
+          uv run python -m evals.run --agent steerable --split oracle-canary --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
           code=$?
           if [ "$code" -eq 3 ]; then
             echo "::warning::steerable canary skipped (set OPENAI_API_KEY or ANTHROPIC_API_KEY)"

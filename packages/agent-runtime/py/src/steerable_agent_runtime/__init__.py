@@ -120,7 +120,22 @@ from .replay import (
     build_step_decision_event,
     reduce_execution_state,
 )
-from .otel import export_otlp_http, to_otlp_json
+from .model_info import (
+    MODEL_INFOS,
+    REASONING_EFFORT_ORDER,
+    ModelInfo,
+    clamp_reasoning_effort,
+    register_model_info,
+    resolve_model_info,
+)
+from .otel import PrivacyMode, export_otlp_http, export_trace, to_otlp_json
+from .pricing import (
+    MODEL_PRICES,
+    ModelPrice,
+    estimate_cost_usd,
+    price_for_model,
+    register_model_price,
+)
 from .resume import load_history_transcript, load_transcript, project_transcript
 from .retry import RetryHooks
 from .skills import (
@@ -273,8 +288,21 @@ __all__ = [
     "estimate_text_tokens",
     "estimate_tokens",
     "export_otlp_http",
+    "export_trace",
     "factor_for_model",
+    "MODEL_INFOS",
+    "MODEL_PRICES",
+    "ModelInfo",
+    "ModelPrice",
+    "PrivacyMode",
+    "REASONING_EFFORT_ORDER",
+    "clamp_reasoning_effort",
+    "estimate_cost_usd",
+    "price_for_model",
     "register_model_factor",
+    "register_model_info",
+    "register_model_price",
+    "resolve_model_info",
     "to_otlp_json",
     "TransportAdapter",
     "TransportError",

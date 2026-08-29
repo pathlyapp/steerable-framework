@@ -93,6 +93,35 @@ def test_entry_from_dict_rejects_unknown_envelope() -> None:
         entry_from_dict({"entry": "mystery", "seq": 0, "v": RECORD_FORMAT_VERSION})
 
 
+def test_boundary_codec_roundtrips_replacement_count() -> None:
+    # W6-10: the see-through reconcile needs the rewrite size persisted.
+    boundary = CompactionBoundary(
+        seq=5, reason="compact", action="compact", turn_id="t1", replacement_count=4
+    )
+    data = entry_to_dict(boundary)
+    assert data["replacement_count"] == 4
+    assert entry_from_dict(data) == boundary
+
+
+def test_boundary_codec_reads_legacy_without_replacement_count() -> None:
+    # Records written before W6-10 lack the key — read as None (opaque
+    # boundary: the see-through reconcile treats it as a real revision).
+    legacy = {
+        "entry": "boundary",
+        "v": RECORD_FORMAT_VERSION,
+        "seq": 5,
+        "kind": "compaction.boundary",
+        "turn_id": "t1",
+        "reason": "compact",
+        "action": "compact",
+    }
+    boundary = entry_from_dict(legacy)
+    assert isinstance(boundary, CompactionBoundary)
+    assert boundary.replacement_count is None
+    # And a None replacement_count is omitted on write (stays optional/additive).
+    assert "replacement_count" not in entry_to_dict(boundary)
+
+
 def test_entry_codec_stamps_and_reads_format_version() -> None:
     # Writers stamp v=RECORD_FORMAT_VERSION; the reader round-trips it.
     entry = HistoryItem(
@@ -585,6 +614,192 @@ async def test_forked_record_reconciles_host_shaped_seeds() -> None:
     assert not [e for e in entries if e["entry"] == "boundary"]
     resumed = await load_history_transcript(storage, "chat_1:fork")
     assert [m.content_text for m in resumed][-2:] == ["try again", "answer two"]
+
+
+@pytest.mark.asyncio
+async def test_w6_10_framework_compaction_survives_host_reseed() -> None:
+    """W6-10 修复实证:框架回合内压缩在桌面跨回合重种子下被保留。
+
+    生产接线里(sidecar CoreLoop 是唯一聊天路径)两层压缩操作同一对话:
+
+    - 框架 `CompactionHooks` 在回合内压缩自己的 durable record(写
+      `CompactionBoundary`,把中段 user/assistant 摘要成一个 marker);
+    - 桌面只把每轮的最终 user/assistant 文本落到自己的 `chat_messages`,
+      看不到框架的压缩边界,下一轮仍按原始(未压缩)历史重种子。
+
+    修复前:桌面的原始重种子与框架已压缩的投影对不上 → reconcile 失败 →
+    `host_revision` 边界 → 框架丢弃自己的压缩 → 同一段中段被再次压缩
+    (双层重复压缩)。
+
+    修复后:reconcile 增加「看穿框架自身压缩」的回退——`compact` 边界
+    携带 `replacement_count`,据此还原出桌面视角的原始对话,与桌面的
+    原始重种子比对成功 → 不写 `host_revision`,框架压缩被保留,只追加
+    真正的新消息。本测试实证修复后的行为。
+    """
+    from steerable_agent_runtime import CompactionHooks
+
+    storage = InMemoryStorage()
+
+    # 长会话第 1 轮:桌面发来一段已有历史的种子(纯文本,无 tool 消息——
+    # 折叠无从下手,直接走中段摘要)。窗口调到很小,首轮 pre_step 即触发压缩。
+    def turn1_seed() -> list[LLMMessage]:
+        return [
+            _msg("user", "目标:重构存储层 " + "细节" * 40),
+            _msg("assistant", "好的,我先看一下现状 " + "分析" * 40),
+            _msg("user", "先处理迁移 " + "要求" * 40),
+            _msg("assistant", "迁移方案如下 " + "方案" * 40),
+            _msg("user", "继续 " + "补充" * 40),
+        ]
+
+    hooks1 = CompactionHooks(
+        max_context_tokens=120,  # 阈值 96 token,种子估算远超 → 立即压缩
+        keep_last_messages=2,
+        keep_last_tool_results=2,
+        summarizer=None,  # 确定性 fallback:role + 摘录
+        model="fake-model",
+    )
+    loop1 = CoreLoop(
+        _provider([{"content": "第一轮答复 " + "内容" * 40}]),
+        RouterToolExecutor(ToolRouter()),
+        hooks=hooks1,
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run(turn1_seed(), chat_id="chat_1"))
+
+    entries1 = await storage.list_history("chat_1")
+    compact1 = [e for e in entries1 if e["entry"] == "boundary" and e["action"] == "compact"]
+    assert len(compact1) == 1, f"turn 1 应发生一次压缩,实际边界: {entries1}"
+    # 压缩边界必须记录 replacement_count(看穿压缩回退的依据)。
+    assert compact1[0].get("replacement_count") is not None, (
+        f"compact 边界应记录 replacement_count,实际: {compact1[0]}"
+    )
+    # 压缩后的投影里,中段被替换成摘要 marker(head 首条 user 与尾部保留)。
+    projection1 = await load_history_transcript(storage, "chat_1")
+    assert any("[context compacted" in m.content_text for m in projection1), (
+        f"turn 1 投影应含摘要 marker,实际: {[m.content_text[:30] for m in projection1]}"
+    )
+
+    # 桌面侧:只落库最终 user/assistant 文本(看不到框架的压缩 marker)。
+    # 下一轮重种子 = 原始 5 条 + 新 user(对应 buildConversationMessages 的
+    # 40 条窗口 + latestUserMessage,且此时桌面自己还没生成滚动摘要)。
+    desktop_seed_turn2 = [
+        *turn1_seed(),
+        _msg("assistant", "第一轮答复 " + "内容" * 40),  # turn 1 落库的最终答复
+        _msg("user", "第二轮提问 " + "新内容" * 40),
+    ]
+
+    # 第 2 轮用大窗口,自身不再触发压缩——聚焦验证 reconcile 是否保留第 1 轮的压缩。
+    hooks2 = CompactionHooks(
+        max_context_tokens=100_000,
+        keep_last_messages=2,
+        keep_last_tool_results=2,
+        summarizer=None,
+        model="fake-model",
+    )
+    loop2 = CoreLoop(
+        _provider([{"content": "第二轮答复"}]),
+        RouterToolExecutor(ToolRouter()),
+        hooks=hooks2,
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop2.run(desktop_seed_turn2, chat_id="chat_1"))
+
+    entries2 = await storage.list_history("chat_1")
+    host_revisions = [e for e in entries2 if e["entry"] == "boundary" and e["action"] == "host_revision"]
+    compacts = [e for e in entries2 if e["entry"] == "boundary" and e["action"] == "compact"]
+
+    # 修复结论 1:看穿压缩的 reconcile 匹配成功 → 不再写 host_revision。
+    assert len(host_revisions) == 0, (
+        f"修复后桌面重种子不应触发 host_revision(框架压缩被保留),实际: {entries2}"
+    )
+    # 修复结论 2:只有第 1 轮那一次压缩,同一段中段不会被重复压缩。
+    assert len(compacts) == 1, (
+        f"修复后应只有 turn 1 的一次压缩(无重复压缩),实际 compact 边界数: {len(compacts)}"
+    )
+    # 修复结论 3:第 2 轮投影仍保留第 1 轮的摘要 marker(压缩成果存续)。
+    projection2 = await load_history_transcript(storage, "chat_1")
+    assert any("[context compacted" in m.content_text for m in projection2), (
+        f"turn 2 投影应保留 turn 1 的摘要 marker,实际: "
+        f"{[m.content_text[:30] for m in projection2]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_w6_10_see_through_reconcile_still_detects_genuine_host_edit() -> None:
+    """W6-10 边界:看穿压缩的回退不能吞掉真正的 host 编辑。
+
+    框架第 1 轮压缩后,若桌面下一轮种子在某条**历史**消息上真的改了内容
+    (不是单纯追加),看穿压缩的视图也对不上 → 仍应声明 host_revision,
+    从桌面编辑后的视图重种子。这保证回退只在「桌面只是重发了原始对话」
+    时生效,不会把真实编辑误判成「框架自己压缩过」。
+    """
+    from steerable_agent_runtime import CompactionHooks
+
+    storage = InMemoryStorage()
+
+    def turn1_seed() -> list[LLMMessage]:
+        return [
+            _msg("user", "目标:重构存储层 " + "细节" * 40),
+            _msg("assistant", "好的,我先看一下现状 " + "分析" * 40),
+            _msg("user", "先处理迁移 " + "要求" * 40),
+            _msg("assistant", "迁移方案如下 " + "方案" * 40),
+            _msg("user", "继续 " + "补充" * 40),
+        ]
+
+    hooks1 = CompactionHooks(
+        max_context_tokens=120,
+        keep_last_messages=2,
+        keep_last_tool_results=2,
+        summarizer=None,
+        model="fake-model",
+    )
+    loop1 = CoreLoop(
+        _provider([{"content": "第一轮答复 " + "内容" * 40}]),
+        RouterToolExecutor(ToolRouter()),
+        hooks=hooks1,
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop1.run(turn1_seed(), chat_id="chat_1"))
+    assert any(
+        e["entry"] == "boundary" and e["action"] == "compact"
+        for e in await storage.list_history("chat_1")
+    ), "turn 1 应发生一次压缩"
+
+    # 第 2 轮:桌面**编辑**了第 2 条历史消息(把 assistant 答复改掉),再追加新消息。
+    edited_seed = [
+        _msg("user", "目标:重构存储层 " + "细节" * 40),
+        _msg("assistant", "【已编辑】推翻重来 " + "新方向" * 40),  #  genuinely edited
+        _msg("user", "先处理迁移 " + "要求" * 40),
+        _msg("assistant", "迁移方案如下 " + "方案" * 40),
+        _msg("user", "继续 " + "补充" * 40),
+        _msg("assistant", "第一轮答复 " + "内容" * 40),
+        _msg("user", "第二轮提问 " + "新内容" * 40),
+    ]
+    loop2 = CoreLoop(
+        _provider([{"content": "第二轮答复"}]),
+        RouterToolExecutor(ToolRouter()),
+        hooks=CompactionHooks(
+            max_context_tokens=100_000,
+            keep_last_messages=2,
+            keep_last_tool_results=2,
+            summarizer=None,
+            model="fake-model",
+        ),
+        history_store=storage,
+        record_id="chat_1",
+    )
+    await _collect(loop2.run(edited_seed, chat_id="chat_1"))
+
+    entries2 = await storage.list_history("chat_1")
+    host_revisions = [
+        e for e in entries2 if e["entry"] == "boundary" and e["action"] == "host_revision"
+    ]
+    assert len(host_revisions) == 1, (
+        f"真实的 host 编辑仍应触发 host_revision(看穿回退不能吞掉编辑),实际: {entries2}"
+    )
 
 
 @pytest.mark.asyncio
