@@ -95,6 +95,8 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "BPE garbage" in headless_mod._SYSTEM
     assert "player moves" in headless_mod._SYSTEM
     assert "help iterations" in headless_mod._SYSTEM
+    assert "policy enum" in headless_mod._SYSTEM
+    assert "position embeddings" in headless_mod._SYSTEM
     assert "adapt-control" in headless_mod._SYSTEM
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
