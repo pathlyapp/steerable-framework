@@ -7,6 +7,8 @@ pytest `FileNotFoundError` on the named output (`eval.scm`, `program.py`,
 
 from __future__ import annotations
 
+import re
+
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import (
     CompletionAction,
@@ -20,6 +22,17 @@ from steerable_agent_runtime.loop import LoopContext
 
 _MUTATING = frozenset({"write_file", "edit_file"})
 _EXPLORE = frozenset({"bash", "read_file"})
+# TB agents usually create scored files with bash (`python … open(…,'w')`,
+# `cat > /app/out`). Counting only write_file caused a false no_artifact
+# retry after the file already existed (count-dataset-tokens).
+_BASH_WRITES = re.compile(
+    r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
+    r"|\btee\b"
+    r"|\b(?:cp|mv|touch)\s+\S+"
+    r"|open\([^)]*['\"][wa]"
+    r"|Path\([^)]*\)\.write"
+    r"|\.write_text\("
+)
 
 _EXPLORE_NUDGE = (
     "You have inspected the workspace but not written the required output "
@@ -85,7 +98,7 @@ class DeliveryHooks:
         self, result: ToolResult, call: ToolCall, ctx: LoopContext
     ) -> ToolResult:
         name = call.name
-        if name in _MUTATING:
+        if name in _MUTATING or (name == "bash" and _bash_writes(call)):
             self.writes += 1
             self.consecutive_explore = 0
         elif name in _EXPLORE:
@@ -120,3 +133,9 @@ class DeliveryHooks:
                 reason="no_artifact",
             )
         return CompletionAction(kind="accept")
+
+
+def _bash_writes(call: ToolCall) -> bool:
+    args = call.arguments or {}
+    command = str(args.get("command") or args.get("cmd") or args.get("script") or "")
+    return bool(_BASH_WRITES.search(command))

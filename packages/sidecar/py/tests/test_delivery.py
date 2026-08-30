@@ -80,6 +80,41 @@ async def test_completion_accepts_after_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_completion_accepts_after_bash_write() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": 'python -c "open(\'/app/answer.txt\',\'w\').write(\'1\')"'},
+        ),
+        ctx,
+    )
+    action = await hooks.before_completion(_draft(tools=1), ctx)
+    assert action.kind == "accept"
+    assert hooks.writes == 1
+
+
+@pytest.mark.asyncio
+async def test_explore_bash_does_not_count_as_write() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(
+        ok, ToolCall(id="t", name="bash", arguments={"command": "ls /app && cat README"}), ctx
+    )
+    await hooks.post_tool_result(
+        ok, ToolCall(id="t", name="bash", arguments={"command": "python -c 'print(2 > 1)'"}), ctx
+    )
+    first = await hooks.before_completion(_draft(tools=2), ctx)
+    assert first.kind == "retry"
+    assert first.reason == "no_artifact"
+
+
+@pytest.mark.asyncio
 async def test_single_tool_turn_does_not_retry() -> None:
     hooks = DeliveryHooks()
     action = await hooks.before_completion(_draft(tools=1), LoopContext())
