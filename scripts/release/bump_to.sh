@@ -44,6 +44,7 @@ version = os.environ["VERSION"]
 ts_pkgs = [
     "packages/agent-protocol/ts",
     "packages/agent-harness/ts",
+    "packages/agent-runtime/ts",
     "packages/agent-ui/ts",
 ]
 py_pkgs = [
@@ -51,9 +52,10 @@ py_pkgs = [
     "packages/agent-harness/py",
     "packages/agent-runtime/py",
     "packages/sidecar/py",
+    "packages/egress-proxy/py",
 ]
 
-print(f"\nBumping all 7 publishable packages to {version}:\n")
+print(f"\nBumping all 9 publishable packages to {version}:\n")
 
 for d in ts_pkgs:
     p = Path(d) / "package.json"
