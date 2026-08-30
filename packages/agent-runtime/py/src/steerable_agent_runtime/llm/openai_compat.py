@@ -56,6 +56,14 @@ def _openrouter_host(base_url: str | None) -> bool:
     return "openrouter.ai" in (base_url or "").lower()
 
 
+def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
+    """Z.AI rejects ``tool_choice=required`` with HTTP 400 (must be auto)."""
+    if _glm_z_ai_host(base_url):
+        return True
+    lowered = (model or "").lower()
+    return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
+
+
 def _env_flag(name: str) -> bool | None:
     raw = os.environ.get(name, "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
@@ -316,6 +324,13 @@ class OpenAICompatProvider:
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
+        # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
+        # Harbor still logs the hook; the wire must send auto or the trial
+        # dies on round 0 (failed-prev 33335200327).
+        if body.get("tool_choice") == "required" and _z_ai_tool_choice_auto_only(
+            self.model, self.base_url
+        ):
+            body["tool_choice"] = "auto"
         # W6-8: clamp the env-requested reasoning effort to a level the model
         # actually supports (structured ModelInfo replaces the raw env
         # passthrough). A model with no reasoning knob gets no parameter at

@@ -291,6 +291,42 @@ def test_openai_build_body_openrouter_pins_z_ai(monkeypatch) -> None:
     assert headers["X-Title"] == "TB"
 
 
+def test_openai_build_body_z_ai_coerces_required_tool_choice_to_auto() -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    openrouter = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = openrouter._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+
+    openai = OpenAICompatProvider(
+        name="t",
+        model="gpt-4.1",
+        base_url="https://api.openai.com/v1",
+        api_key="k",
+    )
+    kept = openai._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert kept["tool_choice"] == "required"
+
+
 def test_http_error_copies_retry_after_header() -> None:
     from types import SimpleNamespace
 
