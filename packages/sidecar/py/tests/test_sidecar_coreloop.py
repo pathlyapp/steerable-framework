@@ -1220,3 +1220,28 @@ async def test_system_prompt_over_cap_is_degraded() -> None:
     assert first[0].role == "system"
     assert len(first[0].content_text) < len(huge)
     assert "fragment truncated" in first[0].content_text
+
+
+@pytest.mark.asyncio
+async def test_storage_path_config_selects_sqlite(tmp_path) -> None:
+    """W2.6.1: SidecarConfig.storage_path wires the durable SqliteStorage;
+    sessions survive a Sidecar restart on the same path."""
+    from steerable_agent_runtime.storage import SqliteStorage
+    from steerable_sidecar.sidecar import Sidecar, SidecarConfig
+
+    db = str(tmp_path / "sessions.db")
+    sidecar = Sidecar(config=SidecarConfig(storage_path=db))
+    assert isinstance(sidecar.storage, SqliteStorage)
+
+    response = await sidecar.server.handle_frame(
+        _frame("agent.session.create", {"sessionId": "s_durable", "chatId": "c1"})
+    )
+    assert "error" not in response, response
+
+    # simulate restart: a new Sidecar on the same path sees the session
+    restarted = Sidecar(config=SidecarConfig(storage_path=db))
+    fetched = await restarted.server.handle_frame(
+        _frame("agent.session.resume", {"sessionId": "s_durable"})
+    )
+    assert "error" not in fetched, fetched
+    assert fetched["result"]["sessionId"] == "s_durable"

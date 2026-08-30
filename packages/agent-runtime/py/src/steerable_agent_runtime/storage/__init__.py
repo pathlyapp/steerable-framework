@@ -89,15 +89,18 @@ class StorageAdapter(Protocol):
     ) -> list[dict[str, Any]]:
         """Read record entries in seq order.
 
-        ``after_seq`` / ``until_seq`` bound the (inclusive) seq range;
-        ``reverse`` returns newest-first (bounded by ``until_seq``), which
-        with ``limit`` is the O(tail) resume scan: page backwards until the
-        newest ``compaction.boundary`` entry, then project forward.
+        ``after_seq`` is an EXCLUSIVE lower bound (entries strictly after
+        it — the resume scan projects forward from just past the newest
+        boundary); ``until_seq`` is inclusive. ``reverse`` returns
+        newest-first (bounded by ``until_seq``), which with ``limit`` is
+        the O(tail) resume scan: page backwards until the newest
+        ``compaction.boundary`` entry, then project forward.
         """
         ...
 
 
 from .in_memory import InMemoryStorage  # noqa: E402
+from .sqlite_store import SqliteStorage  # noqa: E402
 
 try:
     from .sqlalchemy_store import SqlAlchemyStorage  # noqa: F401
@@ -108,5 +111,6 @@ except Exception:  # pragma: no cover - optional dep
 __all__ = [
     "StorageAdapter",
     "InMemoryStorage",
+    "SqliteStorage",
     "SqlAlchemyStorage",
 ]

@@ -161,10 +161,28 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.6 会话工程设施（R9：语义领先，设施薄）
 
-- [ ] **2.6.1** sqlite 后端 + 会话索引（codex rollout 15k 行、DSH session 16 子包的
+- [x] **2.6.1**（2026-08-30 完成：`SqliteStorage`——stdlib sqlite3 零依赖
+      （沿用 W2.7.1 决策逻辑：嵌入包体积预算内不引 SQLAlchemy）；实体全量
+      JSON 存 data 列，过滤/排序字段（id/chat_id/seq/created_at）冗余为索引列，
+      会话枚举与 resume 尾扫皆为索引查询；`search_sessions` 按消息内容 SQL
+      检索；WAL 模式读不阻塞写。sidecar `--storage-path` 接线（重启会话仍在），
+      桌面传 `~/.steerable/sessions.db`——Seatbelt 唯一可写根，userData 在沙箱
+      下会被拒。语义对齐 InMemoryStorage：消息 limit 取尾、after_seq 排他
+      （修正协议 docstring 原误书 inclusive）、trace 计数器随 append 更新、
+      list_history_records 分支发现扩展。测试 7 例 + sidecar 接线 1 例）
+      sqlite 后端 + 会话索引（codex rollout 15k 行、DSH session 16 子包的
       对应物）：会话枚举/搜索不再扫 jsonl。
-- [ ] **2.6.2** 维护作业：压缩、归档、损坏修复的离线工具。
-- [ ] **2.6.3** 保持 `CompactionBoundary` 可审计语义不变——这是领先点，设施加厚不能丢。
+- [x] **2.6.2**（2026-08-30 完成：`maintenance.py` 四作业 + CLI
+      （`python -m steerable_agent_runtime.maintenance`）——`check`
+      （integrity_check 预检，他作业遇损拒跑）、`compact`（清旧
+      traces/spans/events + VACUUM，会话/消息/历史不动）、`archive`（旧会话
+      连消息搬入独立归档库，归档库本身可读）、`salvage`（损坏库逐行导出
+      JSONL，跳过必计数）。测试 5 例） 维护作业：压缩、归档、损坏修复的离线工具。
+- [x] **2.6.3**（2026-08-30 完成：构造保证——history 表形态无关（seq 序 JSON
+      行），CompactionBoundary 条目字节级往返一致；测试走真实 resume 路径
+      （load_history_items 反向扫到边界、只投影边界后条目）；维护作业不改写
+      历史记录） 保持 `CompactionBoundary` 可审计语义不变——这是领先点，
+      设施加厚不能丢。
 
 ### 2.7 可观测性加厚（R9：落后）
 
