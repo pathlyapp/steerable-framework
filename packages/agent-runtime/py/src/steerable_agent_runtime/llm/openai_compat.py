@@ -47,6 +47,11 @@ def _timeout_sec(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+def _glm_z_ai_host(base_url: str | None) -> bool:
+    host = (base_url or "").lower()
+    return "z.ai" in host or "bigmodel.cn" in host
+
+
 def _stream_timeout():
     """Idle gap between SSE lines; ``Timeout(None)`` left hung thinks uncapped."""
     import httpx
@@ -280,8 +285,13 @@ class OpenAICompatProvider:
             and "reasoning_effort" not in body
             and "reasoning" not in body
         ):
-            # GLM-5.3-Flash defaults to max thinking; Harbor TB sets `high`.
+            # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
             body["reasoning_effort"] = effort
+        if _glm_z_ai_host(self.base_url) and "thinking" not in body:
+            # Forced-on for GLM-5.3; omitting is fine, disabling 400s.
+            body["thinking"] = {"type": "enabled"}
+            if stream:
+                body["tool_stream"] = True
         return body
 
 

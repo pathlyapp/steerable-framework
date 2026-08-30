@@ -114,9 +114,16 @@ def test_clamp_reasoning_effort_unrecognized_value_falls_back() -> None:
     assert clamp_reasoning_effort("deepseek-reasoner", "ultra") == "medium"
 
 
+def test_clamp_reasoning_effort_glm_supports_max() -> None:
+    assert clamp_reasoning_effort("z-ai/glm-5.3-flash", "max") == "max"
+    assert clamp_reasoning_effort("z-ai/glm-5.3-flash", "high") == "high"
+
+
 def test_builtin_table_is_consistent() -> None:
     for info in MODEL_INFOS:
         assert info.pattern and info.pattern == info.pattern.lower()
         assert info.context_window > 0
         assert "text" in info.modalities
-        assert info.reasoning_levels <= frozenset({"minimal", "low", "medium", "high"})
+        assert info.reasoning_levels <= frozenset(
+            {"minimal", "low", "medium", "high", "max"}
+        )

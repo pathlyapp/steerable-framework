@@ -194,6 +194,42 @@ def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
     assert build("deepseek-reasoner", {"reasoning_effort": "max"})["reasoning_effort"] == "max"
 
 
+def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "max")
+    zai = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://api.z.ai/api/coding/paas/v4",
+    )
+    body = zai._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert body["reasoning_effort"] == "max"
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["tool_stream"] is True
+    other = OpenAICompatProvider(
+        name="t", model="z-ai/glm-5.3-flash", base_url="https://openrouter.ai/api/v1"
+    )
+    openrouter = other._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert openrouter["reasoning_effort"] == "max"
+    assert "thinking" not in openrouter
+    assert "tool_stream" not in openrouter
+
+
 def test_stream_timeout_is_idle_read_not_infinite(monkeypatch) -> None:
     monkeypatch.delenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("STEERABLE_LLM_CONNECT_TIMEOUT_SEC", raising=False)

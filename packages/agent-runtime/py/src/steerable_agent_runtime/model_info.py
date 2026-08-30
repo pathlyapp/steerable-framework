@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 #: Canonical reasoning-effort ordering, lowest to highest. Used to clamp a
 #: requested effort to the nearest level a model actually supports (pi's
 #: ``clampThinkingLevel`` counterpart).
-REASONING_EFFORT_ORDER: tuple[str, ...] = ("minimal", "low", "medium", "high")
+REASONING_EFFORT_ORDER: tuple[str, ...] = ("minimal", "low", "medium", "high", "max")
 
 #: Fallback context window for unknown models — the pre-calibration desktop
 #: default. (Defined here so ``model_info`` has no import cycle with
@@ -71,7 +71,7 @@ class ModelInfo:
 MODEL_INFOS: tuple[ModelInfo, ...] = (
     ModelInfo("deepseek-reasoner", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("deepseek", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
-    ModelInfo("z-ai/glm", 202_752, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
+    ModelInfo("z-ai/glm", 202_752, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
     ModelInfo("gpt-oss", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("llama3", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     ModelInfo("qwen3", 129_024, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),

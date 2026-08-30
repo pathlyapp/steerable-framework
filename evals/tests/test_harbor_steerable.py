@@ -132,7 +132,7 @@ def test_merge_trial_path_adds_sbin_and_uv() -> None:
 def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
     text = src.read_text()
-    assert 'STEERABLE_REASONING_EFFORT", "high"' in text
+    assert 'STEERABLE_REASONING_EFFORT", "max"' in text
     assert 'STEERABLE_TEMPERATURE", "1.0"' in text
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
     assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text

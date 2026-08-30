@@ -332,10 +332,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = self._parsed_model_name or ""
         env["PYTHONUNBUFFERED"] = "1"
-        # Z.AI's TB 2.1 84.3 used Claude Code 2.1.207, temperature=1.0,
-        # max_new_tokens=65536, 6h. `low` thinking was a speed knob that
-        # also produced empty rounds and weaker solutions.
-        env.setdefault("STEERABLE_REASONING_EFFORT", "high")
+        # Z.AI GLM-5.3 coding default is reasoning_effort=max (high is weaker).
+        # Claude Code TB 84.3 used temperature=1.0, max_new_tokens=65536, 6h.
+        env.setdefault("STEERABLE_REASONING_EFFORT", "max")
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
         # Harbor ×3 on 3600s tasks is 180 min; wrap up 10 min before the kill.
