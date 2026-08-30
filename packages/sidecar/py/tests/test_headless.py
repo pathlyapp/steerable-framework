@@ -62,6 +62,8 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "scoring CLI" in headless_mod._SYSTEM
     assert "quantize" in headless_mod._SYSTEM
     assert "rewritten sidecar" in headless_mod._SYSTEM
+    assert "exact output that must" in headless_mod._SYSTEM
+    assert "source-size cap" in headless_mod._SYSTEM
     assert "wget" in headless_mod._SYSTEM
     assert "dd" in headless_mod._SYSTEM
     assert "carving" in headless_mod._SYSTEM
