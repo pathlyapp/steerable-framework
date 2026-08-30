@@ -41,6 +41,7 @@ class Suite:
     n_concurrent: int
     jobs_dir: str
     harbor_version: str
+    catalog_minutes: dict[str, int]
     agents: dict[str, AgentSpec]
 
     @property
@@ -97,14 +98,42 @@ def resolve_tasks(
 
 
 def shard_tasks(
-    tasks: Sequence[str], *, shard: int, shards: int
+    tasks: Sequence[str],
+    *,
+    shard: int,
+    shards: int,
+    minutes: Mapping[str, int] | None = None,
 ) -> tuple[str, ...]:
-    """Split ``tasks`` into ``shards`` round-robin slices (GHA catalog jobs)."""
+    """Split ``tasks`` into ``shards`` slices for GHA catalog jobs.
+
+    With ``minutes``, pack longest-first onto the current lightest shard so
+    wall-clock stays even. Without it, round-robin by catalog order.
+    """
     if shards < 1:
         raise SuiteError("shards must be >= 1")
     if shard < 0 or shard >= shards:
         raise SuiteError(f"shard {shard} out of range 0..{shards - 1}")
+    if minutes:
+        return _pack_by_minutes(tasks, shards, minutes)[shard]
     return tuple(task for index, task in enumerate(tasks) if index % shards == shard)
+
+
+def _pack_by_minutes(
+    tasks: Sequence[str], shards: int, minutes: Mapping[str, int]
+) -> tuple[tuple[str, ...], ...]:
+    known = [int(minutes[task]) for task in tasks if task in minutes]
+    default = sorted(known)[len(known) // 2] if known else 15
+    loads = [0] * shards
+    bins: list[list[str]] = [[] for _ in range(shards)]
+    ordered = sorted(tasks, key=lambda task: (-int(minutes.get(task, default)), task))
+    for task in ordered:
+        index = min(range(shards), key=lambda item: (loads[item], len(bins[item]), item))
+        bins[index].append(task)
+        loads[index] += int(minutes.get(task, default))
+    catalog_order = {task: position for position, task in enumerate(tasks)}
+    for bucket in bins:
+        bucket.sort(key=lambda task: catalog_order[task])
+    return tuple(tuple(bucket) for bucket in bins)
 
 
 def dataset_org(dataset_name: str) -> str:
@@ -274,6 +303,7 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         raise SuiteError(
             f"{source}: run.harbor_version must be {PINNED_HARBOR_VERSION!r}"
         )
+    catalog_minutes = _catalog_minutes(run.get("catalog_minutes"), catalog, source)
 
     return Suite(
         dataset_name=dataset_name,
@@ -285,8 +315,28 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         n_concurrent=_require_int(run.get("n_concurrent"), "run.n_concurrent", source),
         jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
         harbor_version=harbor_version,
+        catalog_minutes=catalog_minutes,
         agents=agents,
     )
+
+
+def _catalog_minutes(value: object, catalog: tuple[str, ...], source: Path) -> dict[str, int]:
+    if not isinstance(value, dict) or not value:
+        raise SuiteError(f"{source}: run.catalog_minutes must be a mapping of catalog ids")
+    catalog_set = frozenset(catalog)
+    minutes: dict[str, int] = {}
+    for key, raw in value.items():
+        if key not in catalog_set:
+            raise SuiteError(f"{source}: run.catalog_minutes unknown id {key}")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            raise SuiteError(f"{source}: run.catalog_minutes.{key} must be a positive integer")
+        minutes[str(key)] = raw
+    missing = [task for task in catalog if task not in minutes]
+    if missing:
+        raise SuiteError(
+            f"{source}: run.catalog_minutes missing {', '.join(missing)}"
+        )
+    return minutes
 
 
 def _require_str(value: object, field: str, source: Path) -> str:

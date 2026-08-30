@@ -20,6 +20,98 @@ run:
   # Pinned Harbor CLI. Workflows install this exact version; bump here and
   # in `.github/actions/setup-harbor/action.yml` together.
   harbor_version: "0.22.0"
+  # Wall-clock minutes from GHA catalog run 33309282690 (n-concurrent=2).
+  # Used only to pack 8 shards; not a score.
+  catalog_minutes:
+    adaptive-rejection-sampler: 8
+    bn-fit-modify: 4
+    break-filter-js-from-html: 20
+    build-cython-ext: 5
+    build-pmars: 2
+    build-pov-ray: 4
+    caffe-cifar-10: 26
+    cancel-async-tasks: 5
+    chess-best-move: 3
+    circuit-fibsqrt: 62
+    cobol-modernization: 5
+    code-from-image: 2
+    compile-compcert: 2
+    configure-git-webserver: 5
+    constraints-scheduling: 9
+    count-dataset-tokens: 33
+    crack-7z-hash: 15
+    custom-memory-heap-crash: 15
+    db-wal-recovery: 23
+    distribution-search: 15
+    dna-assembly: 42
+    dna-insert: 2
+    extract-elf: 3
+    extract-moves-from-video: 28
+    feal-differential-cryptanalysis: 5
+    feal-linear-cryptanalysis: 64
+    filter-js-from-html: 16
+    financial-document-processor: 7
+    fix-code-vulnerability: 7
+    fix-git: 26
+    fix-ocaml-gc: 11
+    gcode-to-text: 4
+    git-leak-recovery: 3
+    git-multibranch: 10
+    gpt2-codegolf: 11
+    headless-terminal: 15
+    hf-model-inference: 2
+    install-windows-3.11: 15
+    kv-store-grpc: 1
+    large-scale-text-editing: 32
+    largest-eigenval: 5
+    llm-inference-batching-scheduler: 47
+    log-summary-date-ranges: 1
+    mailman: 14
+    make-doom-for-mips: 12
+    make-mips-interpreter: 26
+    mcmc-sampling-stan: 18
+    merge-diff-arc-agi-task: 2
+    model-extraction-relu-logits: 8
+    modernize-scientific-stack: 3
+    mteb-leaderboard: 13
+    mteb-retrieve: 4
+    multi-source-data-merger: 2
+    nginx-request-logging: 6
+    openssl-selfsigned-cert: 1
+    overfull-hbox: 7
+    password-recovery: 12
+    path-tracing: 39
+    path-tracing-reverse: 9
+    polyglot-c-py: 2
+    polyglot-rust-c: 15
+    portfolio-optimization: 4
+    protein-assembly: 1
+    prove-plus-comm: 27
+    pypi-server: 1
+    pytorch-model-cli: 16
+    pytorch-model-recovery: 8
+    qemu-alpine-ssh: 1
+    qemu-startup: 3
+    query-optimize: 2
+    raman-fitting: 29
+    regex-chess: 33
+    regex-log: 11
+    reshard-c4-data: 36
+    rstan-to-pystan: 15
+    sam-cell-seg: 4
+    sanitize-git-repo: 32
+    schemelike-metacircular-eval: 4
+    sparql-university: 8
+    sqlite-db-truncate: 9
+    sqlite-with-gcov: 2
+    torch-pipeline-parallelism: 59
+    torch-tensor-parallelism: 6
+    train-fasttext: 3
+    tune-mjcf: 7
+    video-processing: 3
+    vulnerable-secret: 19
+    winning-avg-corewars: 34
+    write-compressor: 14
 
 splits:
   catalog:

@@ -47,7 +47,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.shard is not None or args.shards is not None:
             if args.shard is None or args.shards is None:
                 raise SuiteError("--shard and --shards must be set together")
-            tasks = shard_tasks(tasks, shard=args.shard, shards=args.shards)
+            tasks = shard_tasks(
+                tasks,
+                shard=args.shard,
+                shards=args.shards,
+                minutes=suite.catalog_minutes,
+            )
             if not tasks:
                 raise SuiteError(
                     f"shard {args.shard}/{args.shards} selected no tasks"

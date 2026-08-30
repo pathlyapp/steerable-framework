@@ -76,7 +76,11 @@ jobs:
         if: always()
         with:
           name: steerable-fix-git
-          path: evals/jobs/steerable/*/result.json
+          path: |
+            evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/agent/headless.log
+            evals/jobs/steerable/*/*/verifier/test-stdout.txt
+            evals/jobs/steerable/*/*/exception.txt
           if-no-files-found: ignore
 
   notify:

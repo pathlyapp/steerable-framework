@@ -13,7 +13,7 @@ from evals.run import (
     harbor_progress_line,
     main,
 )
-from evals.suite import STEERABLE_IMPORT_PATH
+from evals.suite import STEERABLE_IMPORT_PATH, load_suite, shard_tasks
 
 
 def test_dry_run_oracle_prints_harbor_command(capsys) -> None:
@@ -52,9 +52,13 @@ def test_dry_run_catalog_shard_selects_a_slice(capsys) -> None:
     captured = capsys.readouterr()
     assert code == 0
     includes = captured.out.count("--include-task-name")
-    assert includes == 12
-    assert "--include-task-name terminal-bench/adaptive-rejection-sampler" in captured.out
-    assert "--include-task-name terminal-bench/bn-fit-modify" not in captured.out
+    assert 10 <= includes <= 12
+    suite = load_suite()
+    expected = shard_tasks(
+        suite.catalog, shard=0, shards=8, minutes=suite.catalog_minutes
+    )
+    for task in expected:
+        assert f"--include-task-name terminal-bench/{task}" in captured.out
 
 
 def test_dry_run_steerable_uses_import_path(capsys) -> None:

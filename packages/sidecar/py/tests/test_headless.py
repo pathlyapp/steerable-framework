@@ -7,7 +7,7 @@ from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
 from steerable_sidecar import headless as headless_mod
-from steerable_sidecar.headless import _load_instruction, _run, main
+from steerable_sidecar.headless import _load_instruction, _run, _soft_timeout_ms, main
 
 
 class _ScriptedProvider:
@@ -94,6 +94,15 @@ async def test_run_streams_completion(
 def test_run_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": ""})
     assert main(["--instruction", "hi"]) == 2
+
+
+def test_soft_timeout_ms_default_and_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEERABLE_SOFT_TIMEOUT_MS", raising=False)
+    assert _soft_timeout_ms() == 1_800_000
+    monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "0")
+    assert _soft_timeout_ms() is None
+    monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "60000")
+    assert _soft_timeout_ms() == 60_000
 
 
 @pytest.mark.asyncio

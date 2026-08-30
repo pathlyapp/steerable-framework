@@ -30,6 +30,11 @@ _NO_ARTIFACT_RETRY = (
     "The turn is ending without write_file or edit_file. Hidden tests look "
     "for named output files. Write them now; do not only describe the plan."
 )
+_EMPTY_ROUND_RETRY = (
+    "You produced no tool call and no final answer (reasoning only). "
+    "Continue the task now with bash, read_file, write_file, or edit_file. "
+    "Do not stop until the required output files exist."
+)
 
 
 class DeliveryHooks:
@@ -41,14 +46,17 @@ class DeliveryHooks:
         explore_before_nudge: int = 8,
         max_nudges: int = 2,
         min_tools_for_completion_retry: int = 2,
+        max_empty_round_retries: int = 3,
     ) -> None:
         self._explore_before_nudge = explore_before_nudge
         self._max_nudges = max_nudges
         self._min_tools_for_completion_retry = min_tools_for_completion_retry
+        self._max_empty_round_retries = max_empty_round_retries
         self.writes = 0
         self.consecutive_explore = 0
         self.nudges = 0
         self.completion_retries = 0
+        self.empty_round_retries = 0
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: LoopContext
@@ -92,6 +100,14 @@ class DeliveryHooks:
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
+        empty = not (draft.content or "").strip() and not draft.had_tool_calls
+        if empty and self.empty_round_retries < self._max_empty_round_retries:
+            self.empty_round_retries += 1
+            return CompletionAction(
+                kind="retry",
+                message=_EMPTY_ROUND_RETRY,
+                reason="empty_round",
+            )
         if (
             self.writes == 0
             and draft.tool_calls_used >= self._min_tools_for_completion_retry

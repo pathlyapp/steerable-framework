@@ -12,13 +12,13 @@ def _call(name: str) -> ToolCall:
     return ToolCall(id="t", name=name, arguments={})
 
 
-def _draft(*, tools: int) -> CompletionDraft:
+def _draft(*, tools: int, content: str = "done", had_tool_calls: bool | None = None) -> CompletionDraft:
     return CompletionDraft(
         status="completed",
         reason="stop",
-        content="done",
+        content=content,
         round_index=1,
-        had_tool_calls=tools > 0,
+        had_tool_calls=tools > 0 if had_tool_calls is None else had_tool_calls,
         tool_calls_used=tools,
         tool_successes=tools,
     )
@@ -84,3 +84,29 @@ async def test_single_tool_turn_does_not_retry() -> None:
     hooks = DeliveryHooks()
     action = await hooks.before_completion(_draft(tools=1), LoopContext())
     assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_empty_round_retries_before_accept() -> None:
+    hooks = DeliveryHooks(max_empty_round_retries=2)
+    ctx = LoopContext()
+    draft = _draft(tools=2, content="", had_tool_calls=False)
+    first = await hooks.before_completion(draft, ctx)
+    assert first.kind == "retry"
+    assert first.reason == "empty_round"
+    second = await hooks.before_completion(draft, ctx)
+    assert second.kind == "retry"
+    assert second.reason == "empty_round"
+    third = await hooks.before_completion(draft, ctx)
+    assert third.kind == "retry"
+    assert third.reason == "no_artifact"
+
+
+@pytest.mark.asyncio
+async def test_empty_round_retries_even_with_zero_tools() -> None:
+    hooks = DeliveryHooks()
+    action = await hooks.before_completion(
+        _draft(tools=0, content="  ", had_tool_calls=False), LoopContext()
+    )
+    assert action.kind == "retry"
+    assert action.reason == "empty_round"

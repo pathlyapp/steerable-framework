@@ -72,6 +72,18 @@ def _load_instruction(text: str | None, path: Path | None) -> str:
     return ""
 
 
+def _soft_timeout_ms() -> int | None:
+    """Harbor agent timeout × 3 is typically 45 min; wrap up before the kill.
+
+    ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables. Unset defaults to 30 minutes.
+    """
+    raw = os.environ.get("STEERABLE_SOFT_TIMEOUT_MS")
+    if raw is None or not str(raw).strip():
+        return 1_800_000
+    value = int(raw)
+    return None if value <= 0 else value
+
+
 async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     params = _env_provider_params()
     if not params.get("model"):
@@ -84,6 +96,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             max_rounds=max_rounds,
             max_tool_errors=16,
             tool_dedup=False,
+            soft_timeout_ms=_soft_timeout_ms(),
         ),
         hooks=ChainHooks(DeliveryHooks(), _default_loop_hooks(params)),
         history_store=InMemoryStorage(),
@@ -113,7 +126,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
                 f"\n[tool {event.data.get('name')} {event.data.get('arguments')}]\n"
             )
             sys.stdout.flush()
-        elif event.kind in ("tool_error", "error"):
+        elif event.kind in ("tool_error", "error", "hook_action", "soft_timeout"):
             sys.stdout.write(f"\n[{event.kind} {event.data}]\n")
             sys.stdout.flush()
         elif event.kind == "completion":

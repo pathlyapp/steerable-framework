@@ -305,6 +305,8 @@ class SteerableHarborAgent(BaseInstalledAgent):
         # GLM-5.3-Flash thinking defaults to max and can sit silent for many
         # minutes before the first tool call. Harbor wants cheap/fast rounds.
         env.setdefault("STEERABLE_REASONING_EFFORT", "low")
+        # Wrap up before Harbor's agent-timeout kill (typically 45 min × 3).
+        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "1800000")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,

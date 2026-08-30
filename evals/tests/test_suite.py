@@ -47,6 +47,12 @@ def test_catalog_is_89_unique_ids() -> None:
     assert len(suite.catalog_set) == 89
 
 
+def test_catalog_minutes_cover_every_catalog_id() -> None:
+    suite = load_suite()
+    assert set(suite.catalog_minutes) == suite.catalog_set
+    assert all(value >= 1 for value in suite.catalog_minutes.values())
+
+
 def test_cheap_12_is_pinned_subset() -> None:
     suite = load_suite()
     assert suite.splits["cheap-12"] == CHEAP_12
@@ -124,6 +130,9 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
     assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
     assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog_job
+    assert "agent/headless.log" in weekly
+    assert "verifier/test-stdout.txt" in weekly
+    assert "agent/headless.log" in oracle
 
 
 def test_harbor_task_name_prefixes_org() -> None:
@@ -184,13 +193,29 @@ def test_resolve_tasks_override_must_be_in_catalog() -> None:
 
 def test_shard_tasks_covers_catalog_without_overlap() -> None:
     suite = load_suite()
-    shards = [shard_tasks(suite.catalog, shard=i, shards=8) for i in range(8)]
+    shards = [
+        shard_tasks(suite.catalog, shard=i, shards=8, minutes=suite.catalog_minutes)
+        for i in range(8)
+    ]
     flat = [task for shard in shards for task in shard]
     assert len(flat) == 89
     assert sorted(flat) == sorted(suite.catalog)
     assert all(10 <= len(shard) <= 12 for shard in shards)
+    loads = [sum(suite.catalog_minutes[task] for task in shard) for shard in shards]
+    assert max(loads) - min(loads) <= 2
+    round_robin = [
+        shard_tasks(suite.catalog, shard=i, shards=8) for i in range(8)
+    ]
+    rr_loads = [sum(suite.catalog_minutes[task] for task in shard) for shard in round_robin]
+    assert max(loads) < max(rr_loads)
     with pytest.raises(SuiteError, match="out of range"):
         shard_tasks(suite.catalog, shard=8, shards=8)
+
+
+def test_shard_tasks_round_robin_without_minutes() -> None:
+    tasks = ("a", "b", "c", "d")
+    assert shard_tasks(tasks, shard=0, shards=2) == ("a", "c")
+    assert shard_tasks(tasks, shard=1, shards=2) == ("b", "d")
 
 
 def test_harbor_argv_oracle_omits_model() -> None:
