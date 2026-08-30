@@ -183,6 +183,7 @@ async def test_empty_round_forces_tool_choice_on_next_step() -> None:
     assert action.reason == "empty_round_force_tool"
     ok = ToolResult(success=True, data={})
     await hooks.post_tool_result(ok, _call("bash"), ctx)
+    ctx.round_index = 1
     again = await hooks.pre_step([], ctx)
     assert again.tool_choice is None
 
@@ -227,3 +228,16 @@ async def test_existing_named_path_is_input_not_required(tmp_path) -> None:
     assert first.reason == "missing_named_output"
     assert str(missing) in (first.message or "")
     assert str(existing) not in (first.message or "")
+
+
+@pytest.mark.asyncio
+async def test_first_round_forces_tool_choice() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ctx.round_index = 0
+    action = await hooks.pre_step([], ctx)
+    assert action.tool_choice == "required"
+    assert action.reason == "first_round_force_tool"
+    ctx.round_index = 1
+    later = await hooks.pre_step([], ctx)
+    assert later.tool_choice is None

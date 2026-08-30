@@ -123,9 +123,17 @@ class DeliveryHooks(NoopHooks):
             ]
             reason = "explore_without_write"
             append_action = "delivery_nudge"
-        tool_choice = "required" if self._force_tool else None
+        tool_choice = (
+            "required"
+            if self._force_tool or ctx.round_index == 0
+            else None
+        )
         if tool_choice and reason is None:
-            reason = "empty_round_force_tool"
+            reason = (
+                "empty_round_force_tool"
+                if self._force_tool
+                else "first_round_force_tool"
+            )
         if appends or tool_choice:
             return PreStepAction(
                 kind="proceed",
