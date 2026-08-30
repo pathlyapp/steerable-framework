@@ -87,6 +87,13 @@ class HostApprover:
 
     Fails closed: an unreachable host or an invalid reply becomes a
     ``deny_once`` — never a hang, never an auto-allow.
+
+    Amendments (W2.4.2): a reply may also carry
+    ``{"amendment": {"decision": "allow"|"deny", "commandPrefix": [...]}}``
+    — "and keep applying this to matching calls". With an ``amendment_sink``
+    wired, the amendment becomes an ``ApprovalRule`` handed to the sink
+    (which updates the live policy and persists it); without one the
+    amendment is dropped with a warning (the decision itself still stands).
     """
 
     def __init__(
@@ -95,10 +102,12 @@ class HostApprover:
         *,
         method: str = "approval.request",
         timeout: float | None = None,
+        amendment_sink: Any | None = None,
     ) -> None:
         self._server = server
         self._method = method
         self._timeout = timeout
+        self._amendment_sink = amendment_sink
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         try:
@@ -124,10 +133,32 @@ class HostApprover:
             return ApprovalDecision(
                 "deny_once", f"host returned an invalid approval decision: {kind!r}"
             )
+        if isinstance(payload, dict) and "amendment" in payload:
+            self._apply_amendment(request, payload.get("amendment"))
         return ApprovalDecision(
             cast(ApprovalKind, kind),  # validated against APPROVAL_KINDS above
             str(payload.get("reason") or ""),
         )
+
+    def _apply_amendment(self, request: ApprovalRequest, amendment: Any) -> None:
+        from steerable_agent_runtime import rule_from_amendment
+
+        rule = rule_from_amendment(request, amendment)
+        if rule is None:
+            return
+        if self._amendment_sink is None:
+            logger.warning(
+                "host sent an approval amendment but no amendment sink is "
+                "wired; dropping it (decision stands): %r",
+                amendment,
+            )
+            return
+        try:
+            self._amendment_sink(rule)
+        except OSError as exc:
+            # The decision stands; only the persistence failed. Surface it —
+            # a silently dropped amendment re-asks the user next time.
+            logger.warning("failed to persist approval amendment: %s", exc)
 
 
 _KNOWN_RESULT_KEYS = frozenset(ToolResult.model_fields)

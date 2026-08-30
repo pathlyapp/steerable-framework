@@ -22,6 +22,13 @@ from .approval import (
     JsonApprovalStore,
     SessionApprovalCache,
 )
+from .approval_policy import (
+    ApprovalPolicy,
+    ApprovalRule,
+    JsonApprovalPolicyStore,
+    PolicyApprover,
+    rule_from_amendment,
+)
 from .branch import (
     BranchPoint,
     ForkResult,
@@ -223,7 +230,9 @@ __all__ = [
     "ApprovalAborted",
     "ApprovalDecision",
     "ApprovalExecutor",
+    "ApprovalPolicy",
     "ApprovalRequest",
+    "ApprovalRule",
     "ApprovalStore",
     "Approver",
     "AutoApprover",
@@ -257,6 +266,7 @@ __all__ = [
     "InMemoryApprovalStore",
     "InMemoryRequestSink",
     "InMemorySpillStore",
+    "JsonApprovalPolicyStore",
     "JsonApprovalStore",
     "JsonlRequestSink",
     "LLMMessage",
@@ -279,6 +289,7 @@ __all__ = [
     "OrchestrationBudgetExceeded",
     "OrchestrationConfig",
     "OrchestrationExecutor",
+    "PolicyApprover",
     "PolicyDeniedError",
     "PreStepAction",
     "PrivacyMode",
@@ -374,6 +385,7 @@ __all__ = [
     "render_skill_catalog",
     "resolve_fork_seq",
     "resolve_model_info",
+    "rule_from_amendment",
     "select_catalog",
     "select_skills",
     "should_run_grounding_judge",

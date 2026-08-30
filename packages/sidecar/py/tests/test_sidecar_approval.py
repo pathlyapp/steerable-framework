@@ -307,3 +307,130 @@ async def test_no_approval_param_keeps_legacy_behavior() -> None:
     # No approval layer: the call goes straight to the host, no ask.
     assert [c["name"] for c in host.reverse_calls] == ["delete_file"]
     assert host.approval_requests == []
+
+
+# ─── W2.4: policy rules + amendments ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_policy_rule_allows_without_host_roundtrip(tmp_path) -> None:
+    """A matching allow rule decides; the host is never asked."""
+    import json as _json
+
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "rules": [
+                    {
+                        "tool": "shell",
+                        "decision": "allow",
+                        "commandPrefix": ["echo"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="shell", arguments={"command": "echo hi"})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"shell": {"success": True, "data": {"value": "hi"}}},
+        approvals={"kind": "deny_once", "reason": "host would deny — must not be asked"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host", "policyPath": str(policy_file)}),
+    )
+
+    assert host.approval_requests == []  # rule short-circuited the prompt
+    assert [c["name"] for c in host.reverse_calls] == ["shell"]  # executed
+
+
+@pytest.mark.asyncio
+async def test_policy_rule_denies_without_host_roundtrip(tmp_path) -> None:
+    import json as _json
+
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "rules": [{"tool": "shell", "decision": "deny", "commandPrefix": ["rm"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="shell", arguments={"command": "rm -rf /x"})),
+            _text_round("ok, not deleting"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"shell": {"success": True, "data": {"value": "deleted"}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host", "policyPath": str(policy_file)}),
+    )
+
+    assert host.approval_requests == []
+    assert host.reverse_calls == []  # never executed
+
+
+@pytest.mark.asyncio
+async def test_host_amendment_persists_and_applies_within_the_run(tmp_path) -> None:
+    """The host approves with an amendment; the next matching call in the
+    SAME run is not re-asked, and the rule lands on disk for future runs."""
+    import json as _json
+
+    policy_file = tmp_path / "policy.json"
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="shell", arguments={"command": "echo one"})),
+            _tool_round(ToolCall(id="c2", name="shell", arguments={"command": "echo two"})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"shell": {"success": True, "data": {"value": "ok"}}},
+        approvals={
+            "kind": "allow_once",
+            "amendment": {"decision": "allow", "commandPrefix": ["echo"]},
+        },
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host", "policyPath": str(policy_file)}),
+    )
+
+    # Asked once (first echo); the amendment covered the second.
+    assert len(host.approval_requests) == 1
+    assert [c["name"] for c in host.reverse_calls] == ["shell", "shell"]
+
+    persisted = _json.loads(policy_file.read_text(encoding="utf-8"))
+    assert persisted["rules"] == [
+        {"tool": "shell", "decision": "allow", "commandPrefix": ["echo"]}
+    ]
