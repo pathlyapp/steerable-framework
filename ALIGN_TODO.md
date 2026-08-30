@@ -133,10 +133,21 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.4 审批策略机（R9：决策格追平，策略机落后）
 
-- [ ] **2.4.1** 规则引擎：持久化的 execpolicy 类规则（命令模式 → 自动 allow/deny），
+- [x] **2.4.1**（2026-08-30 完成：`approval_policy.py`——`ApprovalRule`
+      （tool 精确名 + argv 前缀 token，shlex 解析失败 fail-closed 不匹配）、
+      `ApprovalPolicy`（有序首中即决）、`JsonApprovalPolicyStore`（原子写、
+      损坏文件 fail-closed 为空策略）、`PolicyApprover`（规则命中免询问，
+      未中委派内层）；sidecar `approval.policyPath` 接线，决议顺序=
+      持久类别→会话类别→规则→宿主。框架测试 14 例 + sidecar 端到端 3 例）
+      规则引擎：持久化的 execpolicy 类规则（命令模式 → 自动 allow/deny），
       与现有八变体决策格正交。
-- [ ] **2.4.2** 修正案载荷：用户批准的同时可顺带改策略（"以后都允许这类"），
-      而不是每次重问。
+- [x] **2.4.2**（2026-08-30 完成：宿主 approval.request 应答可携
+      `amendment: {decision, commandPrefix?}`——sidecar 解码为规则
+      （工具名锁定为被批准调用的工具，不可重定向），同时写入内存策略
+      （同轮即生效）与持久文件（跨轮生效）；无效修正案丢弃不阻决策；
+      未接线 sink 时告警丢弃。端到端验证：同轮第二次 echo 免询问 +
+      规则落盘） 修正案载荷：用户批准的同时可顺带改策略（"以后都允许
+      这类"），而不是每次重问。
 
 ### 2.5 编排工具面与跨厂商委派（R9：核心追平，广度落后）
 

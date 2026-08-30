@@ -349,6 +349,16 @@ All three layers are **on by default** in the DeepPath desktop build:
   persist to `~/.steerable/approvals.json`. Unanswered prompts fail
   closed as `timed_out` after 120s. `STEERABLE_APPROVAL=0` restores the
   legacy ungated behavior.
+- **Approval policy rules** (W2.4, codex execpolicy's counterpart):
+  `approval.policyPath` loads an ordered rule list — `{tool, decision,
+  commandPrefix}` — consulted after the lattice's own caches and before
+  the interactive prompt; first match decides with no host round-trip.
+  The host reply may carry an **amendment**
+  (`{"kind": ..., "amendment": {"decision": "allow"|"deny",
+  "commandPrefix": [...]}}`) — "allow, and keep allowing commands like
+  this": the sidecar persists it as a rule and applies it within the
+  same run. A corrupt policy file fails closed (no rules → every call
+  falls through to the prompt).
 
 One wiring gap found and closed during Wave 4: the CoreLoop path used to
 drop `projectRoot` on reverse-channel tool calls, so the project-mode

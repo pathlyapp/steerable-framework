@@ -1139,13 +1139,40 @@ class Sidecar:
         if isinstance(approval, dict) and approval.get("mode") in ("auto", "host"):
             timeout_ms = approval.get("timeoutMs")
             store_path = approval.get("storePath")
-            executor = ApprovalExecutor(
-                executor,
-                (
+            # W2.4: pattern rules (codex execpolicy's counterpart). Loaded
+            # from ``policyPath`` and consulted after the lattice's own
+            # caches, before the interactive/headless approver; host replies
+            # may amend it (``amendment`` payload → durable rule). The sink
+            # updates the live in-memory policy too, so an amendment takes
+            # effect within the same run, not just on the next one.
+            approver: Any
+            policy_path = approval.get("policyPath")
+            if policy_path:
+                from steerable_agent_runtime import (
+                    JsonApprovalPolicyStore,
+                    PolicyApprover,
+                )
+
+                policy_store = JsonApprovalPolicyStore(str(policy_path))
+                live_policy = policy_store.load()
+
+                def _amendment_sink(rule: Any) -> None:
+                    live_policy.add(rule)
+                    policy_store.add_rule(rule)
+
+                base = (
                     AutoApprover()
                     if approval["mode"] == "auto"
-                    else HostApprover(self.server)
-                ),
+                    else HostApprover(self.server, amendment_sink=_amendment_sink)
+                )
+                approver = PolicyApprover(base, live_policy)
+            elif approval["mode"] == "auto":
+                approver = AutoApprover()
+            else:
+                approver = HostApprover(self.server)
+            executor = ApprovalExecutor(
+                executor,
+                approver,
                 session=self._approval_session(params.get("chatId")),
                 store=JsonApprovalStore(store_path) if store_path else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
