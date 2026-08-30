@@ -42,7 +42,7 @@ _EXPLORE_NUDGE = (
     "required output files. If you already know contents that satisfy every "
     "constraint the instruction states (path, length, format, metric), write "
     "those files now with write_file, edit_file, or bash. Do not write "
-    "placeholders, decoys, or guesses that violate those constraints."
+    "placeholders, decoys, guesses, or a prose description of a rendering."
 )
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "

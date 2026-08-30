@@ -73,6 +73,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "wget -c" in headless_mod._SYSTEM
     assert "sleep 290" in headless_mod._SYSTEM
     assert "BOS/EOS" in headless_mod._SYSTEM
+    assert "paragraph describing" in headless_mod._SYSTEM
+    assert "every solution" in headless_mod._SYSTEM
+    assert "stdout phrase" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
