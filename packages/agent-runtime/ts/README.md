@@ -57,6 +57,7 @@ await runtime.close();
 | `ping()` | `system.ping` |
 | `createSession` / `resumeSession` / `listSessions` | `agent.session.*` |
 | `forkSession` / `sessionBranches` | `agent.session.fork` / `agent.session.branches` |
+| `sessionMessages` | `agent.session.messages` |
 | `chatStream` / `cancelChat` / `steerChat` / `forkChat` | `agent.chat.*` |
 | `listTools` / `invokeTool` | `tool.list` / `tool.invoke` |
 | `listSkills` | `skills.list` |
