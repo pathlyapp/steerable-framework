@@ -132,9 +132,14 @@ Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
   breaks the common exfiltration channels — reverse shells, beacons, and
   DNS tunnelling live on non-443 ports — but it does **not** stop
   exfiltration to an attacker HTTPS endpoint on 443. For true per-host
-  enforcement, run a local allow-listing egress proxy and declare only
+  enforcement, run the shipped allow-listing egress proxy
+  (`steerable-egress-proxy`, `packages/egress-proxy/py`) and declare only
   `localhost:<proxy port>`; Seatbelt then pins the sidecar to the proxy
-  and the proxy owns the host list.
+  and the proxy owns the host list. The proxy serves `CONNECT` only (no
+  TLS interception, no plain-HTTP forwarding in v1), fails closed on an
+  empty allow-list, and its bare-host entries allow 443/80 to mirror the
+  profile semantics above. Point the sidecar's HTTP stack at it with
+  `HTTPS_PROXY=http://127.0.0.1:<port>` (httpx honors proxy env vars).
 
 The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 
@@ -176,13 +181,33 @@ execution instead of passing through unconfined. The sidecar wires it as
 tools, commandArg, requireFull}` on `chat.stream`; absent means unconfined
 (legacy behavior).
 
-**Backend ladder** (`select_exec_backend`, fail-closed): macOS → Seatbelt,
-Linux → bubblewrap (`BwrapExecBackend`), anything else → no backend
+**Backend ladder** (`select_exec_backend`, fail-closed): macOS → Seatbelt;
+Linux → bubblewrap (`BwrapExecBackend`), then Landlock
+(`LandlockExecBackend`); anything else → no backend
 (`enforcement: "none"`). The bwrap profile is the dsh-proven minimal set:
 read-only host-root bind, private PID namespace with its own `/proc`
 (without it, procfs magic links such as `/proc/<pid>/root` cross the
 read-only bind into host processes' mount views), private `/tmp` tmpfs,
 `--die-with-parent`, and `--unshare-net` unless the call declares egress.
+
+Landlock (`landlock.py`) is the kernel-LSM rung for hosts where bwrap
+cannot run — it needs no external binary and no user namespaces, so it
+works inside containers whose runtimes refuse namespace creation. Because
+Landlock is not a command wrapper, the backend rewrites the command
+through our own launcher (`python -m steerable_sidecar.landlock_run`),
+which installs the ruleset on itself and `execvp`s the target; children
+inherit the restriction. Coverage differences from bwrap, all surfaced
+through the enforcement value:
+
+| Dimension | bwrap | Landlock |
+| --------- | ----- | -------- |
+| Filesystem writes | read-only root bind + declared roots | read-only rule on `/` + declared roots |
+| `/tmp` | private tmpfs | host's shared `/tmp` (no mount namespaces) |
+| Process view | private PID namespace, own `/proc` | host's process table visible (reads stay open) |
+| Egress `network: false` | network namespace removed → `full` | TCP bind/connect denied on ABI v4+ (kernel 6.7) → `full`; below v4 egress is inexpressible → `partial` and `requireFull` refuses |
+| Per-host egress | not enforceable (`partial`) | not enforceable (`partial`) |
+| Dependencies | bwrap binary + namespace privileges | kernel 5.13+ only |
+
 Two deliberate semantics differences from Seatbelt, both surfaced through
 the enforcement value rather than hidden:
 
@@ -190,25 +215,39 @@ the enforcement value rather than hidden:
   false` → `full`, `network: true` → `partial`. A declared `allowedHosts`
   is accepted for interface parity but **not enforced** under bwrap (no
   per-host pinning exists to degrade to) — hosts needing per-host egress
-  run a local allow-listing proxy, the same remedy as Seatbelt's
-  port-only note.
+  run `steerable-egress-proxy`, the same remedy as Seatbelt's port-only
+  note above.
 - Writable roots must exist when the backend is constructed (bwrap fails
   the whole wrapped command on a missing bind source), so a nonexistent
   root raises at construction instead of failing every tool call.
 
 Availability is a **functional probe**, not a version or platform check:
 `bwrap_path()` runs a real maximal wrap (network namespace included) and
-caches the verdict. This matters in practice — Docker Desktop's VM denies
-`pivot_root` even with `CAP_SYS_ADMIN` and only passes under
-`--privileged`; a version check would misjudge all three. A host that
-cannot confine gets `enforcement: "none"` (and `requireFull` refusals),
-never a weaker wrap.
+caches the verdict; `landlock_available()` runs the launcher wrapping a
+no-op and caches the verdict. This matters in practice — Docker Desktop's
+VM denies `pivot_root` even with `CAP_SYS_ADMIN` and only passes under
+`--privileged`, and Docker's default seccomp profile errno-rejects the
+landlock syscalls; version checks would misjudge all of these. A host
+that cannot confine gets `enforcement: "none"` (and `requireFull`
+refusals), never a weaker wrap.
 
-Windows constructs no backend: its confinement primitive (restricted
-token + job object, cf. dsh's `sandbox-windows-acl`) is host-side spawn
-support, not a command wrapper, so it does not fit the rewriter
-architecture. That port is a documented follow-up; until then Windows
-reports `none` and `requireFull` refuses.
+### Windows: no backend (recorded decision, 2026-08-30)
+
+Windows constructs no backend, and this is a deliberate scope decision,
+not an oversight. The platform's confinement primitive — restricted
+token + job object, cf. dsh's `sandbox-windows-acl` — is host-side spawn
+support: the token must be created and applied *by the process that
+spawns the child* (`CreateProcessWithTokenW` & friends). It cannot be
+expressed as a command-line rewrite, so it does not fit this layer's
+rewriter architecture, and no wrapper-string backend can fake it.
+
+What real support requires (a future workstream, in order): a native
+spawn helper shipped per Windows arch; a reverse-channel protocol
+extension so the host (which legitimately holds that capability) performs
+the confined spawn on the loop's behalf; Windows CI coverage for the
+confinement matrix. Until that lands, Windows reports
+`enforcement: "none"` on every call and `requireFull` refuses — the
+honest-degradation contract holds there exactly as elsewhere.
 
 ## Current product posture (2026-08-29, Wave 4 wired)
 
@@ -228,14 +267,14 @@ All three layers are **on by default** in the DeepPath desktop build:
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as
   `execSandbox: {enabled, writableRoots: [project root], network: true,
   allowedHosts: [provider endpoint], requireFull: false}`. The backend is
-  picked per platform: Seatbelt on macOS, bwrap on Linux (probe-gated),
-  none on Windows — the call still runs where no backend exists, marked
-  `_sandbox.enforcement: "none"` in the result and on the tool card —
-  honest degradation over silently breaking the product. Note the
-  desktop's `network: true` + remote provider endpoint means `partial`
-  enforcement on both backends (open egress on bwrap, port-only on
-  Seatbelt); `requireFull` stays false until per-host egress exists.
-  `STEERABLE_EXEC_SANDBOX=0` restores unconfined execution.
+  picked per platform: Seatbelt on macOS, bwrap → Landlock on Linux (both
+  probe-gated), none on Windows — the call still runs where no backend
+  exists, marked `_sandbox.enforcement: "none"` in the result and on the
+  tool card — honest degradation over silently breaking the product. Note
+  the desktop's `network: true` + remote provider endpoint means `partial`
+  enforcement on every current backend (open egress on bwrap/Landlock,
+  port-only on Seatbelt); `requireFull` stays false until per-host egress
+  exists. `STEERABLE_EXEC_SANDBOX=0` restores unconfined execution.
 - **Approval algebra** runs in host mode on every turn: the sidecar's
   `ApprovalExecutor` asks the Electron approval modal over the reverse
   channel (`approval.request`), the user picks among the seven variants

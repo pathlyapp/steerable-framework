@@ -1,10 +1,11 @@
-# CoreLoop Spec (draft)
+# CoreLoop Spec
 
-Status: **draft — ports only, no implementation yet.** This page pins down the
-seams for the `CoreLoop` we intend to sink into `steerable-agent-runtime`
-(Python). It is written **against deeppath-api's requirements** (the larger
-surface) so the interface is right before we validate the implementation
-against deeppath-agent. See `CORELOOP_TODO.md` for the migration plan.
+Status: **implemented.** `CoreLoop` lives in `steerable-agent-runtime`
+(`loop.py`) and is the production loop for the sidecar, the desktop agent,
+and the eval harness. This page records the seam design it implements. The
+design was written **against deeppath-api's requirements** (the larger
+surface) so the interface is right before the server adopts the loop. See
+`CORELOOP_TODO.md` for the migration plan.
 
 The two traps this spec exists to avoid:
 

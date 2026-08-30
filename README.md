@@ -211,7 +211,7 @@ flowchart TB
 <summary><b>Tier 3 — Runtime & Sidecar</b> · <code>steerable-agent-runtime</code> + <code>steerable-sidecar</code></summary>
 
 - **LLMProvider** interface + adapters: **Ollama**, **OpenAI-compat** (works with vLLM, llama.cpp server, Together, Groq, …), **Anthropic**
-- **ToolRouter** + `@tool` decorator with auto-derived JSON Schema from Python type hints
+- **ToolRouter** + `@tool` decorator with JSON Schema auto-derived from Python type hints (explicit `schema=` always overrides)
 - **StorageAdapter** interface + InMemory + SQLAlchemy reference implementations
 - **TransportAdapter**: FastAPI SSE (server-sent events) + stdio JSON-RPC (sidecar)
 - **Sidecar binary** built from `python-build-standalone` — boots in <1s, ~300 MB stripped, macOS notarised, Windows signed

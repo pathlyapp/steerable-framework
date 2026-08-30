@@ -148,3 +148,21 @@ version:
 
 The TS facade for Tier 2 stays only as a parity test surface — your
 production TS code should not import from it.
+
+### Official TS production entry: the embedded-sidecar runtime
+
+Python is the only production implementation of Tiers 2 / 3. There is no
+TS CoreLoop and there will not be one — a second loop implementation is
+the drift trap this architecture exists to avoid. The supported way for a
+pure-TypeScript product to run the framework in production is
+`@steerable/agent-runtime` (`packages/agent-runtime/ts`): an official
+runtime package that owns the sidecar process lifecycle (spawn,
+`lifecycle.ready` handshake, health ping, bounded auto-restart, graceful
+drain) and exposes CoreLoop-level API — chat stream/cancel/steer,
+session create/resume/list/fork/branches, tool list/invoke, skills,
+workspace edits, trace, config — over the same JSON-RPC method surface
+documented in [sidecar.md](./sidecar.md). Callers get the framework;
+they never write subprocess management. Because the TS runtime drives
+the same Python CoreLoop, cross-language conformance holds by
+construction; a test gates that the TS API surface covers every method
+the sidecar registers.

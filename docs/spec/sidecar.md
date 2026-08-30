@@ -72,11 +72,18 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `agent.session.create`  | request   | `AgentSession`                         |
 | `agent.session.resume`  | request   | `AgentSession`                         |
 | `agent.session.list`    | request   | `AgentSession[]`                       |
+| `agent.session.fork`    | request   | `BranchPoint` (fork a record, no turn run) |
+| `agent.session.branches`| request   | `{lineage, children}` (branch-family view) |
 | `agent.chat.stream`     | request   | `{"streamId": "s_…"}`                  |
-| `agent.chat.cancel`     | request   | `null` (best-effort cancel)            |
+| `agent.chat.cancel`     | request   | `null` (cooperative cancel)            |
+| `agent.chat.steer`      | request   | `{"accepted": bool}` (mid-turn steer)  |
+| `agent.chat.fork`       | request   | fork the running turn's record         |
 | `tool.list`             | request   | `ToolDescriptor[]`                     |
 | `tool.invoke`           | request   | `ToolResult`                           |
+| `workspace.apply_edits` | request   | `{content, diff, applied, matches}` (pure edit algorithm; host owns file I/O) |
+| `skills.list`           | request   | `{skills}` (parse + select SKILL.md from host roots) |
 | `trace.fetch`           | request   | `{"trace": HarnessTrace, "spans": TraceSpan[], "events": TraceEvent[]}` |
+| `trace.export`          | request   | `{status, traceId, privacyMode}` (OTLP/HTTP push) |
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
 
@@ -89,6 +96,7 @@ Notifications emitted by the sidecar:
 | `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?}`  |
 | `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?}`                            |
 | `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message}`                             |
+| `agent.child`        | Orchestration child lifecycle (spawned/completed/failed/cancelled) | `{streamId, kind, childId, depth?, status?}` |
 
 ## `agent.chat.stream` payload
 
@@ -119,6 +127,38 @@ consecutive-error breaker treats it like any other tool failure. It
 applies to every executor, in-process or remote (reverse channel, future
 MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
 budget — set a tighter value for fast tools.
+
+OpenAI-compatible vendor divergences are data, not provider branches
+(`steerable_agent_runtime.llm.compat`). An optional `compat` object in
+`params` overrides request/response handling for the OpenAI-compatible
+path; keys are camelCase (`supportsUsageInStreaming`, `maxTokensField`,
+`supportsReasoningEffort`, `supportsTemperature`, `reasoningDeltaFields`,
+`cachedTokensFields`) and unknown keys are rejected. Without `compat`,
+the sidecar auto-detects known vendors from the `baseUrl` host
+(`PROVIDER_COMPAT_HOSTS`); anything unmatched runs on reference OpenAI
+behavior.
+
+`agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
+down at the next safe point (round boundary, stream chunk, or tool-call
+slot), records the partial turn so the chat can continue, and the
+terminal `stream.done` carries `status: "cancelled"` with
+`cancelled: true`. A 5s watchdog hard-cancels the task only if the
+wind-down wedges.
+
+Multi-agent orchestration is opt-in via `orchestration: {maxDepth?,
+maxParallel?, childMaxRounds?}` in `params`: the parent model drives
+parallel child CoreLoops through four tools — `agent_spawn` (returns a
+lineage id like `0.2`, optional `toolFilter` narrows the child's tool
+domain), `agent_send` (steers a running child), `agent_wait`
+(`timeoutMs`; a live child at timeout returns `status: "running"`),
+`agent_close` (cooperative cancel with a hard-cancel backstop). Budgets
+fail closed: spawning at the parallel cap returns
+`orchestration_budget_exceeded`, and depth is structural — a child only
+has orchestration tools when `maxDepth` allows its own pool. Child
+lifecycle lands as `agent.child` notifications; every spawn/wait result
+carries the child id as structured JSON, so the delegation is
+reconstructable from the session record alone. Children still running
+when the parent ends are wound down cooperatively.
 
 ## Health snapshot
 

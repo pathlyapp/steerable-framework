@@ -86,3 +86,6 @@ evals/jobs/
 *.log
 .tmp/
 .cache/
+
+# MkDocs default local build output (mkdocs build without -d)
+site/
