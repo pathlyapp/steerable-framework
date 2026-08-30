@@ -94,7 +94,8 @@ def _soft_timeout_ms() -> int | None:
 
     Long TB tasks set ``[agent] timeout_sec = 3600``; with Harbor ×3 that is
     180 minutes. Unset defaults to 170 minutes so wrap-up beats the kill.
-    Short tasks (900s ×3 = 45 min) are still cut by Harbor first.
+    Short tasks are 900s; catalog/failed-prev GHA uses Harbor ×12 (180 min)
+    so wrap-up still beats the kill. cheap-12 stays at ×3 (45 min).
     ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables.
     """
     raw = os.environ.get("STEERABLE_SOFT_TIMEOUT_MS")

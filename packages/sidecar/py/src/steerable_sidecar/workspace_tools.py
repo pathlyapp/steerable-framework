@@ -170,7 +170,7 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             )
         return None
 
-    def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
+    async def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
         command = command or cmd or script
         if not command or not command.strip():
             return ToolResult(success=False, error="command is empty", needsFollowup=True)
@@ -178,6 +178,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             return ToolResult(
                 success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
             )
+        # Off the event loop so CoreLoop parallel_tools can overlap bash.
+        return await asyncio.to_thread(_run_bash, command)
+
+    def _run_bash(command: str) -> ToolResult:
         proc = subprocess.Popen(
             command,
             shell=True,

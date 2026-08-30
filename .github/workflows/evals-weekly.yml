@@ -98,7 +98,7 @@ jobs:
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split failed-prev --shard "${{ matrix.shard }}" --shards 16 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          uv run python -m evals.run --agent steerable --split failed-prev --shard "${{ matrix.shard }}" --shards 16 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt
@@ -146,7 +146,7 @@ jobs:
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 16 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 16 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt

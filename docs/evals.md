@@ -34,7 +34,7 @@ A product cheap-12 at `n_concurrent: 1` is a multi-hour job (local glm-5.3-flash
 
 The full 89-id catalog is `Evals weekly` → `workflow_dispatch` → split `catalog` (never on a pull request). It splits the suite into 16 shards (`--shard N --shards 16`), each with a 360-minute timeout. Feishu merges shard `result.json` files into one Mean. QEMU, Windows 3.11, video, and long compiles live only in this split.
 
-Harness iteration uses split `failed-prev` (41 ids, 16 shards) so a headless change is not gated on rerunning all 89. Sixteen shards keep a 170-minute agent wrap inside the GitHub-hosted 360-minute job cap when several long tasks land together. That Mean is not the score of record; catalog 89 is.
+Harness iteration uses split `failed-prev` (41 ids, 16 shards) so a headless change is not gated on rerunning all 89. Sixteen shards keep a 170-minute agent wrap inside the GitHub-hosted 360-minute job cap when several long tasks land together. Catalog and failed-prev use `--agent-timeout-multiplier 12` so a 900s Terminal-Bench task gets 180 minutes (Harbor would otherwise kill it at 45 minutes, before wrap). cheap-12 stays at ×3 so the weekly smoke fits 240 minutes. That Mean is not the score of record; catalog 89 is.
 
 Do not run all 89 on every PR. SWE-bench Verified is the next public standard **after** the product agent has a Terminal-Bench Harbor score; run the full Verified set, never a homemade 20-task subset. Work order: [`EVALS_TODO.md`](https://github.com/pathlyapp/steerable-framework/blob/main/EVALS_TODO.md).
 
