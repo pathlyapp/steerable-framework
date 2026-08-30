@@ -35,7 +35,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, Sequence, runtime_checkable
+from typing import Any, Literal, Protocol, Sequence, TypeVar, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
@@ -88,6 +88,9 @@ class SkillDefinition(SkillSummary):
 
     content: str
     root: str
+    #: Informational frontmatter tags (currently unused for selection; surfaced
+    #: so hosts rendering a skill list stay faithful to the source file).
+    tags: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -115,6 +118,15 @@ def matches_conditions(skill: SkillSummary, active: set[str]) -> bool:
     return any(c in active for c in skill.conditions)
 
 
+def _is_excluded(skill: SkillSummary, excluded: set[str]) -> bool:
+    """Host exclusion by name / dir name / display name (case-insensitive)."""
+    return (
+        skill.name.lower() in excluded
+        or skill.dir_name.lower() in excluded
+        or (skill.display_name != "" and skill.display_name.lower() in excluded)
+    )
+
+
 def select_catalog(
     skills: Sequence[SkillSummary],
     conditions: set[str] | frozenset[str] = frozenset(),
@@ -129,21 +141,59 @@ def select_catalog(
     active = set(conditions)
     excluded = {e.lower().strip() for e in exclude}
 
-    def is_excluded(s: SkillSummary) -> bool:
-        return (
-            s.name.lower() in excluded
-            or s.dir_name.lower() in excluded
-            or (s.display_name != "" and s.display_name.lower() in excluded)
-        )
-
     return [
         s
         for s in skills
         if s.layer == "catalog"
         and s.model_invocable
-        and not is_excluded(s)
+        and not _is_excluded(s, excluded)
         and (ignore_conditions or matches_conditions(s, active))
     ]
+
+
+S = TypeVar("S", bound="SkillSummary")
+
+
+def select_skills(
+    skills: Sequence[S],
+    conditions: set[str] | frozenset[str] = frozenset(),
+    exclude: Sequence[str] = (),
+    ignore_conditions: bool = False,
+) -> list[S]:
+    """Both-layer selection for hosts that render/inject skills themselves
+    (the desktop's eager prompt layer and its skill-management UI). Keeps
+    eager + catalog and non-model-invocable skills (the UI lists user-only
+    ``/`` skills too); applies condition matching (unless
+    ``ignore_conditions``) and the host's exclusions. Single-sources the
+    parse/condition/exclusion semantics so the desktop no longer re-parses
+    SKILL.md."""
+    active = set(conditions)
+    excluded = {e.lower().strip() for e in exclude}
+    return [
+        s
+        for s in skills
+        if not _is_excluded(s, excluded)
+        and (ignore_conditions or matches_conditions(s, active))
+    ]
+
+
+def skill_to_dict(skill: SkillDefinition) -> dict[str, Any]:
+    """Serialize a SkillDefinition for the ``skills.list`` RPC wire shape
+    (camelCase, mirroring the desktop's ``SkillModule``)."""
+    return {
+        "name": skill.name,
+        "displayName": skill.display_name,
+        "description": skill.description,
+        "priority": skill.priority,
+        "tags": list(skill.tags),
+        "conditions": list(skill.conditions),
+        "match": skill.match,
+        "layer": skill.layer,
+        "modelInvocable": skill.model_invocable,
+        "content": skill.content,
+        "dirName": skill.dir_name,
+        "skillsDir": skill.root,
+    }
 
 
 #: Aggregate bound on the injected skill catalog (Wave 4, W4-7). A host
@@ -283,6 +333,8 @@ def _parse_skill_dir(skill_dir: Path) -> SkillDefinition | None:
 
     conditions_raw = fm.get("conditions")
     conditions = tuple(conditions_raw) if isinstance(conditions_raw, list) else ()
+    tags_raw = fm.get("tags")
+    tags = tuple(str(t) for t in tags_raw) if isinstance(tags_raw, list) else ()
     match: Literal["any", "all"] = (
         "all" if str(fm.get("match") or "").lower() == "all" else "any"
     )
@@ -319,6 +371,7 @@ def _parse_skill_dir(skill_dir: Path) -> SkillDefinition | None:
         content=content,
         dir_name=skill_dir.name,
         root=str(skill_dir.parent),
+        tags=tags,
     )
 
 

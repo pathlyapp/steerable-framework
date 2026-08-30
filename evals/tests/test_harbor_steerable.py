@@ -6,6 +6,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy,
+    merge_trial_path,
     pip_install_command,
     rewrite_forwarded_env_value,
     rewrite_loopback_host,
@@ -99,3 +100,15 @@ def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:
     truncated.write_bytes(b"\0" * 2_000_000)
     assert truncated.stat().st_size < _UV_MIN_BYTES
     assert uv_tarball() is None
+
+
+def test_merge_trial_path_adds_sbin_and_uv() -> None:
+    merged = merge_trial_path("/usr/bin:/bin")
+    assert merged.startswith("/root/.local/bin")
+    assert "/usr/sbin" in merged.split(":")
+    assert merged.endswith("/usr/bin:/bin")
+    empty = merge_trial_path("")
+    assert "/usr/sbin" in empty.split(":")
+    assert "/usr/bin" in empty.split(":")
+    already = merge_trial_path("/usr/sbin:/usr/bin")
+    assert already.split(":").count("/usr/sbin") == 1

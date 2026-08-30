@@ -223,3 +223,27 @@ def ensure_github_no_proxy(env: dict[str, str]) -> None:
     merged = ",".join(parts)
     env["NO_PROXY"] = merged
     env["no_proxy"] = merged
+
+
+_DEFAULT_TRIAL_PATH = (
+    "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
+)
+_TRIAL_PATH_EXTRAS = (
+    "/root/.local/bin",
+    "/usr/local/sbin",
+    "/usr/sbin",
+)
+
+
+def merge_trial_path(existing: str) -> str:
+    """Keep uv and sbin on PATH so hidden tests that call ``which`` succeed.
+
+    ``nginx-request-logging`` installs nginx to ``/usr/sbin``; verifier
+    ``which nginx`` fails when PATH is only ``/usr/bin``.
+    """
+    parts = [p for p in (existing or "").split(":") if p]
+    if not parts:
+        return _DEFAULT_TRIAL_PATH
+    have = set(parts)
+    prefix = [p for p in _TRIAL_PATH_EXTRAS if p not in have]
+    return ":".join([*prefix, *parts])

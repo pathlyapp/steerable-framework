@@ -1,0 +1,101 @@
+{
+  "edit": {
+    "atomic": true,
+    "errorCodes": [
+      "empty_old",
+      "no_edits",
+      "ambiguous",
+      "not_found",
+      "overlap"
+    ],
+    "matchLevels": [
+      "exact",
+      "trim",
+      "unicode"
+    ],
+    "newField": "newText",
+    "oldField": "oldText",
+    "overlap": "reject"
+  },
+  "tools": {
+    "bash": {
+      "desktopName": "local_exec_shell",
+      "requiredInput": [
+        "command"
+      ],
+      "requiredResult": [
+        "exitCode",
+        "stdout",
+        "stderr"
+      ]
+    },
+    "edit_file": {
+      "desktopName": "local_edit_file",
+      "optionalInput": [
+        "expectedVersion"
+      ],
+      "requiredInput": [
+        "path",
+        "edits"
+      ],
+      "requiredResult": [
+        "version",
+        "diff",
+        "applied",
+        "matches"
+      ]
+    },
+    "read_file": {
+      "desktopName": "local_read_file",
+      "requiredInput": [
+        "path"
+      ],
+      "requiredResult": [
+        "content",
+        "version"
+      ]
+    },
+    "write_file": {
+      "desktopName": "local_write_file",
+      "optionalInput": [
+        "expectedVersion"
+      ],
+      "requiredInput": [
+        "path",
+        "content"
+      ],
+      "requiredResult": [
+        "version"
+      ]
+    }
+  },
+  "version": 1,
+  "versionAlgorithm": "sha256-utf8-hex",
+  "versionToken": {
+    "inputField": "expectedVersion",
+    "onConflict": "reject",
+    "resultField": "version"
+  },
+  "versionVectors": [
+    {
+      "input": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "input": "hello world",
+      "sha256": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+    },
+    {
+      "input": "中文测试",
+      "sha256": "e350545d18735c5dd2dec50dcb971f3eb4cdda24b95a79bdb6b553f6a01ceb87"
+    },
+    {
+      "input": "line1\nline2\n",
+      "sha256": "2751a3a2f303ad21752038085e2b8c5f98ecff61a2e4ebbd43506a941725be80"
+    },
+    {
+      "input": "The quick brown fox jumps over the lazy dog 中文 123",
+      "sha256": "58117d7814c853d4309001a610af6de66b4b2e73dadff71ab5514ea674218644"
+    }
+  ]
+}

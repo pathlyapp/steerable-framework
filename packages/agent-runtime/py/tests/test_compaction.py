@@ -160,6 +160,60 @@ async def test_over_threshold_summarizes_middle_when_still_over() -> None:
     assert events[-1].data["status"] == "completed"
 
 
+async def test_over_threshold_uses_configured_summarizer() -> None:
+    # With a summarizer wired (the sidecar default now that the framework owns
+    # cross-turn compaction), the middle-summary content comes from the model,
+    # not the deterministic excerpt fallback.
+    big = "z" * 4_000
+    provider = make_provider(
+        [
+            {"content": big, "tool_calls": [tc("emit")]},
+            {"content": big, "tool_calls": [tc("emit")]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit() -> str:
+        return "ok"
+
+    router.register(emit)
+
+    class _Summarizer:
+        name = "summarizer"
+        model = "summarizer-model"
+
+        def __init__(self) -> None:
+            self.calls: list[list[LLMMessage]] = []
+
+        async def complete(self, messages, *, cache_retention=None, **kw):
+            self.calls.append(list(messages))
+            return LLMMessage.text_of("assistant", "MODEL_SUMMARY"), None
+
+    summarizer = _Summarizer()
+    hooks = CompactionHooks(
+        max_context_tokens=1_200,
+        threshold_ratio=0.5,
+        keep_last_messages=2,
+        keep_last_tool_results=0,
+        summarizer=summarizer,
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+
+    assert hooks.compactions >= 1
+    # The summarizer was actually consulted for the discarded middle.
+    assert summarizer.calls
+    # The compacted transcript carries the model's summary, not the excerpt.
+    summarized_seen = any(
+        "MODEL_SUMMARY" in m.content_text
+        for call in provider.calls[1:]
+        for m in call
+    )
+    assert summarized_seen
+    assert events[-1].data["status"] == "completed"
+
+
 def test_pressure_blends_observed_usage_with_delta_estimate() -> None:
     hooks = CompactionHooks(max_context_tokens=60_000)
     transcript = [

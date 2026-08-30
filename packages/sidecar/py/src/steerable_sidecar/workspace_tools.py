@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import os
+import re
 import signal
 import subprocess
 from pathlib import Path
@@ -28,10 +29,27 @@ _tmp_counter = itertools.count()
 _BASH_SCHEMA = {
     "type": "object",
     "properties": {
-        "command": {"type": "string", "description": "Shell command to run in the workspace"},
+        "command": {
+            "type": "string",
+            "description": (
+                "Shell command to run in the workspace. Do not wait with "
+                "`while pgrep -f ...` (pgrep matches the wait loop). "
+                "Background long jobs and `wait $!`, or poll a pidfile."
+            ),
+        },
     },
     "required": ["command"],
 }
+# `while pgrep -f <script>` matches the wait loop itself and never exits.
+_PGREP_SELF_WAIT = re.compile(
+    r"while\b[\s\S]{0,80}?\bpgrep\s+-[a-zA-Z]*f\b",
+    re.IGNORECASE,
+)
+_PGREP_WAIT_ERROR = (
+    "Refusing `while pgrep -f ...`: pgrep matches this wait loop and never "
+    "exits. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`, or poll "
+    "a pidfile."
+)
 _READ_SCHEMA = {
     "type": "object",
     "properties": {
@@ -144,6 +162,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         command = command or cmd or script
         if not command or not command.strip():
             return ToolResult(success=False, error="command is empty", needsFollowup=True)
+        if pgrep_self_wait(command):
+            return ToolResult(
+                success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
+            )
         proc = subprocess.Popen(
             command,
             shell=True,
@@ -312,6 +334,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         require_consent=False,
     )
     return router
+
+
+def pgrep_self_wait(command: str) -> bool:
+    """True when ``command`` is a ``while pgrep -f`` wait that matches itself."""
+    return bool(_PGREP_SELF_WAIT.search(command or ""))
 
 
 def _resolve_under(root: Path, path: str) -> Path:

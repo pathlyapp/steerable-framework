@@ -17,6 +17,8 @@ from steerable_agent_runtime.llm.openai_compat import (
     _encode_message,
     _parse_stream_chunk,
     _sanitize_tool_name,
+    _stream_timeout,
+    _timeout_sec,
 )
 
 
@@ -190,6 +192,21 @@ def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
     assert "reasoning_effort" not in build("m")  # unknown model → no knob
     # An explicit per-request effort always wins over the env default.
     assert build("deepseek-reasoner", {"reasoning_effort": "max"})["reasoning_effort"] == "max"
+
+
+def test_stream_timeout_is_idle_read_not_infinite(monkeypatch) -> None:
+    monkeypatch.delenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("STEERABLE_LLM_CONNECT_TIMEOUT_SEC", raising=False)
+    timeout = _stream_timeout()
+    assert timeout.read == 300.0
+    assert timeout.connect == 30.0
+    monkeypatch.setenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "120")
+    assert _stream_timeout().read == 120.0
+    assert _timeout_sec("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", 300.0) == 120.0
+    monkeypatch.setenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "0")
+    assert _timeout_sec("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", 300.0) == 300.0
+    monkeypatch.setenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "nope")
+    assert _timeout_sec("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", 300.0) == 300.0
 
 
 def test_openai_tool_call_assembler_concatenates_argument_fragments() -> None:

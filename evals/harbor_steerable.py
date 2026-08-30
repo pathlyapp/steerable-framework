@@ -30,6 +30,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
+    merge_trial_path as _merge_trial_path,
     pip_install_command as _pip_install_command,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
@@ -119,6 +120,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
             if py_tag:
                 await self._save_venv(environment, _venv_tarball(py_tag))
         await self._seed_uv(environment)
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
         agent_user = str(environment.default_user or "root")
         await self.exec_as_root(
             environment,
@@ -189,12 +193,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await self.exec_as_root(environment, command=_UV_SEED)
         except Exception:
             return
-        path = environment._persistent_env.get("PATH", "")
-        prefix = "/root/.local/bin"
-        if prefix not in path.split(":"):
-            environment._persistent_env["PATH"] = (
-                f"{prefix}:{path}" if path else f"{prefix}:/usr/local/bin:/usr/bin:/bin"
-            )
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
 
     async def _restore_venv(
         self, environment: BaseEnvironment, tarball: Path

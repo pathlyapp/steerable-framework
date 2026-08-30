@@ -38,6 +38,11 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# tool_contract.json is loaded via __file__ by tool_contract.py; ship it so the
+# canonical tool contract resolves from an installed wheel, not only from source.
+[tool.setuptools.package-data]
+steerable_sidecar = ["*.json"]
+
 [tool.uv.sources]
 steerable-agent-protocol = { workspace = true }
 steerable-agent-harness = { workspace = true }

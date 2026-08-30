@@ -681,8 +681,8 @@ async def test_w6_10_framework_compaction_survives_host_reseed() -> None:
     )
 
     # 桌面侧:只落库最终 user/assistant 文本(看不到框架的压缩 marker)。
-    # 下一轮重种子 = 原始 5 条 + 新 user(对应 buildConversationMessages 的
-    # 40 条窗口 + latestUserMessage,且此时桌面自己还没生成滚动摘要)。
+    # 下一轮重种子 = 原始 5 条 + 新 user(对应 buildConversationMessages 发
+    # 全量原始历史——桌面滚动摘要已删除,跨轮压缩完全交给框架)。
     desktop_seed_turn2 = [
         *turn1_seed(),
         _msg("assistant", "第一轮答复 " + "内容" * 40),  # turn 1 落库的最终答复

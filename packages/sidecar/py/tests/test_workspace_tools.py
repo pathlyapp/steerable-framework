@@ -9,6 +9,7 @@ from steerable_agent_protocol.generated import ToolCall
 from steerable_sidecar import workspace_tools as workspace_tools_mod
 from steerable_sidecar.workspace_tools import (
     _MAX_OUTPUT,
+    pgrep_self_wait,
     workspace_tools_for_cwd,
 )
 
@@ -101,3 +102,24 @@ def test_jailed_workspace_disables_sudo_gate(tmp_path: Path) -> None:
     assert open_router._shell_safety is None
     assert jailed._shell_safety is not None
     assert "sudo" in jailed._shell_safety.disabled_pattern_ids
+
+
+def test_pgrep_self_wait_detects_while_loop() -> None:
+    assert pgrep_self_wait("while pgrep -f install3.R; do sleep 2; done")
+    assert pgrep_self_wait("while pgrep -af run_marginal.R\ndo\n  sleep 1\ndone")
+    assert not pgrep_self_wait("pgrep -f install3.R")
+    assert not pgrep_self_wait("wait $pid")
+    assert not pgrep_self_wait("")
+
+
+@pytest.mark.asyncio
+async def test_bash_refuses_pgrep_self_wait(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    refused = await _call(
+        router,
+        "bash",
+        {"command": "while pgrep -f hung.sh; do sleep 1; done"},
+    )
+    assert refused.success is False
+    assert "pgrep" in (refused.error or "")
+    assert "wait" in (refused.error or "")

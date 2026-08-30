@@ -15,6 +15,12 @@ Methods (see spec/sidecar/README.md for the full catalog):
   agent.chat.cancel        -> null         (best-effort cancel of an in-flight stream)
   tool.list                -> ToolDescriptor[]
   tool.invoke              -> ToolResult
+  workspace.apply_edits    -> { content, diff, applied, matches }  (pure edit
+                                algorithm on supplied content; the host owns
+                                all file I/O — W6-1 single source of truth)
+  skills.list              -> { skills }  (parse + select SKILL.md from host
+                                roots; single parse source so the desktop no
+                                longer re-parses — eager/catalog both returned)
   trace.fetch              -> { trace, spans, events }
   trace.export             -> { status, traceId, privacyMode }  (OTLP/HTTP push, W6-6)
   config.get / config.set
@@ -60,6 +66,7 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     SandboxedToolExecutor,
     SessionApprovalCache,
+    SkillDefinition,
     SkillExecutor,
     SkillHooks,
     StaticWorldStateSection,
@@ -78,6 +85,8 @@ from steerable_agent_runtime import (
     lineage,
     resolve_fork_seq,
     select_catalog,
+    select_skills,
+    skill_to_dict,
     skill_tool_descriptor,
     subagent_tool_descriptor,
 )
@@ -97,6 +106,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
     encode_frame,
 )
 
+from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostToolExecutor
 from .sandbox import select_exec_backend
 
@@ -202,6 +212,8 @@ class Sidecar:
         register("agent.session.list", self._handle_session_list)
         register("tool.list", self._handle_tool_list)
         register("tool.invoke", self._handle_tool_invoke)
+        register("workspace.apply_edits", self._handle_workspace_apply_edits)
+        register("skills.list", self._handle_skills_list)
         register("trace.fetch", self._handle_trace_fetch)
         register("trace.export", self._handle_trace_export)
         register("config.get", self._handle_config_get)
@@ -394,6 +406,80 @@ class Sidecar:
                 exc.message, code=-32030, kind="tool_failed", data=exc.data
             ) from exc
         return result.model_dump(exclude_none=True)
+
+    async def _handle_workspace_apply_edits(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Pure structured-edit algorithm on caller-supplied content.
+
+        The host (desktop) owns file read / version check / atomic write; this
+        is only the locate-and-replace surgery so the algorithm has a single
+        Python source of truth shared with the headless / ACP workspace tools.
+        """
+        params = _require_params(params)
+        content = params.get("content")
+        if not isinstance(content, str):
+            raise JsonRpcError(
+                "workspace.apply_edits: `content` (string) is required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        raw_edits = params.get("edits")
+        if not isinstance(raw_edits, list):
+            raise JsonRpcError(
+                "workspace.apply_edits: `edits` (array) is required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        ops = [
+            EditOp(old_text=str(e.get("oldText", "")), new_text=str(e.get("newText", "")))
+            for e in raw_edits
+            if isinstance(e, dict)
+        ]
+        file_path = str(params.get("filePath") or "file")
+        try:
+            result = apply_edits(content, ops, file_path=file_path)
+        except EditError as exc:
+            raise JsonRpcError(
+                str(exc), code=-32030, kind="edit_failed", data={"code": exc.code}
+            ) from exc
+        return {
+            "content": result.content,
+            "diff": result.diff,
+            "applied": len(result.matches),
+            "matches": [
+                {
+                    "level": m.level,
+                    "startLine": m.start_line,
+                    "oldLineCount": m.old_line_count,
+                }
+                for m in result.matches
+            ],
+        }
+
+    async def _handle_skills_list(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Parse + select skills from host-supplied roots (single source of
+        truth for SKILL.md parsing, so the desktop no longer re-parses).
+
+        Roots are host-local paths — the sidecar shares the filesystem with
+        the desktop host. Returns both layers (eager + catalog) with bodies;
+        the host applies its own layer filter / budget / name lookup."""
+        params = _require_params(params)
+        roots_raw = params.get("roots")
+        if not isinstance(roots_raw, list):
+            raise JsonRpcError(
+                "skills.list: `roots` (array of paths) is required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        roots = [str(r) for r in roots_raw]
+        conditions = set(params.get("conditions") or [])
+        exclude = list(params.get("exclude") or [])
+        ignore_conditions = bool(params.get("ignoreConditions"))
+        provider = FilesystemSkillProvider(roots)
+        definitions = [d for d in provider.list() if isinstance(d, SkillDefinition)]
+        selected = select_skills(definitions, conditions, exclude, ignore_conditions)
+        return {"skills": [skill_to_dict(d) for d in selected]}
 
     async def _handle_trace_fetch(self, params: dict[str, Any] | None) -> dict[str, Any]:
         params = _require_params(params)
@@ -846,7 +932,7 @@ class Sidecar:
         hooks: LoopHooks = (
             self._loop_hooks_factory(params)
             if self._loop_hooks_factory is not None
-            else _default_loop_hooks(params)
+            else _default_loop_hooks(params, summarizer=_summarizer_for(provider))
         )
         # antiHallucination: sink the desktop loop's four guards (data-need
         # routing, deferred/claimed retry, grounding judge, narration) into
@@ -1354,7 +1440,23 @@ def _last_message_content(
     return ""
 
 
-def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
+def _summarizer_for(provider: Any) -> Any | None:
+    """Wire the turn's provider as the compaction summarizer.
+
+    The desktop rolling summary made a genuine model call; the deterministic
+    excerpt fallback would be a quality regression now that the framework is
+    the sole owner of cross-turn compaction. Reusing the turn provider for the
+    one-off ``complete`` mirrors how AntiHallucinationHooks already reuses it
+    for the grounding judge. Opt out with ``STEERABLE_SIDECAR_SUMMARIZER=0``
+    (cost-sensitive deployments keep the deterministic excerpts).
+    """
+    flag = os.environ.get("STEERABLE_SIDECAR_SUMMARIZER", "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return None
+    return provider
+
+
+def _default_loop_hooks(params: dict[str, Any], summarizer: Any | None = None) -> LoopHooks:
     """Default hook chain for the CoreLoop chat path.
 
     CompactionHooks comes first: its ``on_request_error`` intercepts
@@ -1373,7 +1475,11 @@ def _default_loop_hooks(params: dict[str, Any]) -> LoopHooks:
         explicit=int(params.get("maxContextTokens") or 0) or None,
     )
     return ChainHooks(
-        CompactionHooks(max_context_tokens=max_ctx, model=params.get("model")),
+        CompactionHooks(
+            max_context_tokens=max_ctx,
+            model=params.get("model"),
+            summarizer=summarizer,
+        ),
         # Spill oversized tool results to disk instead of inlining them into
         # the transcript (W4-7: this hook existed since Wave 0 but was never
         # on the default chain — a single megabyte-sized shell output could

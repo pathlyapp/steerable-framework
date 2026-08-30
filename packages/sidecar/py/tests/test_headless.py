@@ -46,6 +46,13 @@ def test_version(capsys) -> None:
     assert capsys.readouterr().out.strip() == headless_mod.__version__
 
 
+def test_system_prompt_names_edit_file_and_delivery() -> None:
+    assert "edit_file" in headless_mod._SYSTEM
+    assert "write_file" in headless_mod._SYSTEM
+    assert "pgrep" in headless_mod._SYSTEM
+    assert "YYYY-MM-DD" in headless_mod._SYSTEM
+
+
 def test_missing_instruction_errors() -> None:
     with pytest.raises(SystemExit):
         main([])

@@ -150,6 +150,8 @@ from .skills import (
     matches_conditions,
     render_skill_catalog,
     select_catalog,
+    select_skills,
+    skill_to_dict,
     skill_tool_descriptor,
 )
 from .spill import FilesystemSpillStore, InMemorySpillStore, SpillHooks, SpillStore
@@ -351,7 +353,9 @@ __all__ = [
     "register_tool_search",
     "render_skill_catalog",
     "select_catalog",
+    "select_skills",
     "should_run_grounding_judge",
+    "skill_to_dict",
     "skill_tool_descriptor",
     "subagent_tool_descriptor",
     "text_parts",

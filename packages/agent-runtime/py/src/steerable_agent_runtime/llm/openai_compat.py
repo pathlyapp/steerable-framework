@@ -31,6 +31,34 @@ from ..model_info import clamp_reasoning_effort
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_STREAM_READ_SEC = 300.0
+_DEFAULT_CONNECT_SEC = 30.0
+
+
+def _timeout_sec(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _stream_timeout():
+    """Idle gap between SSE lines; ``Timeout(None)`` left hung thinks uncapped."""
+    import httpx
+
+    return httpx.Timeout(
+        connect=_timeout_sec("STEERABLE_LLM_CONNECT_TIMEOUT_SEC", _DEFAULT_CONNECT_SEC),
+        read=_timeout_sec(
+            "STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", _DEFAULT_STREAM_READ_SEC
+        ),
+        write=30.0,
+        pool=30.0,
+    )
+
 
 @dataclass(slots=True)
 class OpenAICompatProvider:
@@ -117,7 +145,7 @@ class OpenAICompatProvider:
             extra=kwargs,
         )
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
+            async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
                 async with client.stream(
                     "POST",
                     f"{self.base_url.rstrip('/')}/chat/completions",

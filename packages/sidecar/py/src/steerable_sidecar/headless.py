@@ -17,10 +17,12 @@ import sys
 from pathlib import Path
 
 from steerable_agent_runtime import CoreLoop, LoopConfig, RouterToolExecutor
+from steerable_agent_runtime.hooks import ChainHooks
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
 from .acp_adapter import _env_provider_params
+from .delivery import DeliveryHooks
 from .sidecar import _default_loop_hooks, default_llm_provider_factory
 from .workspace_tools import workspace_tools_for_cwd
 
@@ -28,10 +30,15 @@ __version__ = "0.2.5"
 
 _SYSTEM = (
     "You are a coding agent in a Linux workspace. Complete the user's task "
-    "by using the bash, read_file, and write_file tools. Inspect the files, "
-    "make the required changes, and verify with shell commands. Do not only "
-    "describe a plan. Do not wait for confirmation. Keep going until the "
-    "workspace satisfies the instruction."
+    "by using bash, read_file, write_file, and edit_file. Inspect, then write "
+    "the required output files; do not only explore or describe a plan. "
+    "Prefer edit_file for in-place edits. Do not wait for confirmation. "
+    "Hidden tests check exact files, formatting, and PATH: write every path "
+    "the instruction names; do not pretty-print files compared byte-for-byte; "
+    "print dates as YYYY-MM-DD when a check must show expiry; after "
+    "apt-installing a binary, make `which <name>` work (symlink into /usr/bin "
+    "if it landed in /usr/sbin). Do not wait with `while pgrep -f ...` — "
+    "pgrep matches the wait loop; background the job and `wait $!`."
 )
 
 
@@ -78,7 +85,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             max_tool_errors=16,
             tool_dedup=False,
         ),
-        hooks=_default_loop_hooks(params),
+        hooks=ChainHooks(DeliveryHooks(), _default_loop_hooks(params)),
         history_store=InMemoryStorage(),
         record_id="headless",
     )

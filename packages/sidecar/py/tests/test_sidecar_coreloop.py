@@ -582,6 +582,26 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
     assert compaction._max_tokens == 60_000
 
 
+def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
+    """The framework is now the sole owner of cross-turn compaction, so the
+    turn provider is wired as the summarizer: compaction makes a genuine model
+    call (the desktop rolling summary's quality bar), not the deterministic
+    excerpt fallback. STEERABLE_SIDECAR_SUMMARIZER=0 opts out."""
+    from steerable_agent_runtime import ChainHooks, CompactionHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks, _summarizer_for
+
+    provider = _ScriptedProvider([_text_round("summary")])
+    hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"}, summarizer=provider)
+    compaction = next(h for h in hooks._hooks if isinstance(h, CompactionHooks))
+    assert compaction._summarizer is provider
+
+    # Default: the turn provider is reused as the summarizer.
+    assert _summarizer_for(provider) is provider
+    # Opt-out keeps the deterministic excerpt fallback.
+    monkeypatch.setenv("STEERABLE_SIDECAR_SUMMARIZER", "0")
+    assert _summarizer_for(provider) is None
+
+
 @pytest.mark.asyncio
 async def test_chat_fork_seeds_from_trace_projection() -> None:
     """fork = project the source trace, append the re-asked user turn, run a

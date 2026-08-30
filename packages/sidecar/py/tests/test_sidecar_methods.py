@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -109,6 +110,138 @@ async def test_config_get_set_round_trip(sidecar: Sidecar) -> None:
     await _call(sidecar, "config.set", {"logLevel": "DEBUG"})
     after = await _call(sidecar, "config.get")
     assert after["result"]["logLevel"] == "DEBUG"
+
+
+async def test_workspace_apply_edits_returns_content_diff_and_matches(
+    sidecar: Sidecar,
+) -> None:
+    content = "alpha\nbeta\ngamma\n"
+    response = await _call(
+        sidecar,
+        "workspace.apply_edits",
+        {
+            "content": content,
+            "filePath": "note.txt",
+            "edits": [{"oldText": "beta", "newText": "BETA"}],
+        },
+    )
+    result = response["result"]
+    assert result["content"] == "alpha\nBETA\ngamma\n"
+    assert result["applied"] == 1
+    assert result["matches"] == [{"level": "exact", "startLine": 1, "oldLineCount": 1}]
+    assert "--- a/note.txt" in result["diff"]
+    assert "-beta" in result["diff"]
+    assert "+BETA" in result["diff"]
+
+
+async def test_workspace_apply_edits_batches_in_reverse_order(sidecar: Sidecar) -> None:
+    content = "one\ntwo\nthree\n"
+    response = await _call(
+        sidecar,
+        "workspace.apply_edits",
+        {
+            "content": content,
+            "edits": [
+                {"oldText": "one", "newText": "1"},
+                {"oldText": "three", "newText": "3"},
+            ],
+        },
+    )
+    assert response["result"]["content"] == "1\ntwo\n3\n"
+    assert response["result"]["applied"] == 2
+
+
+async def test_workspace_apply_edits_edit_failure_carries_code(sidecar: Sidecar) -> None:
+    response = await _call(
+        sidecar,
+        "workspace.apply_edits",
+        {"content": "alpha\n", "edits": [{"oldText": "missing", "newText": "x"}]},
+    )
+    assert response["error"]["kind"] == "edit_failed"
+    assert response["error"]["data"]["code"] == "not_found"
+
+
+async def test_workspace_apply_edits_requires_content_and_edits(
+    sidecar: Sidecar,
+) -> None:
+    missing_content = await _call(
+        sidecar, "workspace.apply_edits", {"edits": [{"oldText": "a", "newText": "b"}]}
+    )
+    assert missing_content["error"]["kind"] == "invalid_params"
+    missing_edits = await _call(sidecar, "workspace.apply_edits", {"content": "a\n"})
+    assert missing_edits["error"]["kind"] == "invalid_params"
+
+
+def _write_skill(root: Path, dir_name: str, frontmatter: str, body: str) -> None:
+    skill_dir = root / dir_name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(f"---\n{frontmatter}---\n\n{body}\n", encoding="utf-8")
+
+
+async def test_skills_list_parses_both_layers_with_body_and_tags(
+    sidecar: Sidecar, tmp_path: Path
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "00-identity",
+        "name: identity\ndescription: Who am I\npriority: 1000\ntags: [base, core]\n",
+        "# Identity\nAlways eager.",
+    )
+    _write_skill(
+        root,
+        "85-local-exec",
+        "name: local-exec\ndescription: Run shell\npriority: 700\n",
+        "# Local exec\nCatalog body.",
+    )
+    response = await _call(sidecar, "skills.list", {"roots": [str(root)]})
+    skills = {s["name"]: s for s in response["result"]["skills"]}
+    assert skills["identity"]["layer"] == "eager"  # priority >= 850
+    assert skills["identity"]["tags"] == ["base", "core"]
+    assert "Always eager." in skills["identity"]["content"]
+    assert skills["identity"]["dirName"] == "00-identity"
+    assert skills["identity"]["skillsDir"] == str(root)
+    assert skills["local-exec"]["layer"] == "catalog"
+
+
+async def test_skills_list_applies_conditions_and_exclude(
+    sidecar: Sidecar, tmp_path: Path
+) -> None:
+    root = tmp_path / "skills"
+    _write_skill(
+        root,
+        "85-local-exec",
+        "name: local-exec\ndescription: x\npriority: 700\nconditions: [tool:local_exec_shell]\n",
+        "body",
+    )
+    _write_skill(root, "90-cflog", "name: cflog\ndescription: y\npriority: 600\n", "body")
+    # No conditions → only the unconditional skill matches.
+    gated = await _call(sidecar, "skills.list", {"roots": [str(root)]})
+    assert {s["name"] for s in gated["result"]["skills"]} == {"cflog"}
+    # Matching condition → both.
+    matched = await _call(
+        sidecar,
+        "skills.list",
+        {"roots": [str(root)], "conditions": ["tool:local_exec_shell"]},
+    )
+    assert {s["name"] for s in matched["result"]["skills"]} == {"local-exec", "cflog"}
+    # Exclusion drops cflog even though it matches.
+    excluded = await _call(
+        sidecar,
+        "skills.list",
+        {"roots": [str(root)], "conditions": ["tool:local_exec_shell"], "exclude": ["cflog"]},
+    )
+    assert {s["name"] for s in excluded["result"]["skills"]} == {"local-exec"}
+    # ignoreConditions lists everything.
+    all_skills = await _call(
+        sidecar, "skills.list", {"roots": [str(root)], "ignoreConditions": True}
+    )
+    assert {s["name"] for s in all_skills["result"]["skills"]} == {"local-exec", "cflog"}
+
+
+async def test_skills_list_requires_roots(sidecar: Sidecar) -> None:
+    response = await _call(sidecar, "skills.list", {})
+    assert response["error"]["kind"] == "invalid_params"
 
 
 async def test_health_snapshot_includes_pid_and_python(sidecar: Sidecar) -> None:
