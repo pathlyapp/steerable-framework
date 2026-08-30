@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from evals.suite import (
@@ -27,6 +29,7 @@ EXIT_HARBOR = 2
 EXIT_SKIPPED = 3
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+_JOB_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}__")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,9 +89,19 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = os.pathsep.join(
         [str(REPO_ROOT), *(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)]
     )
-    completed = subprocess.run(
-        argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
-    )
+    stop = threading.Event()
+    threading.Thread(
+        target=_watch_harbor_progress,
+        args=(jobs_dir, stop),
+        name="harbor-progress",
+        daemon=True,
+    ).start()
+    try:
+        completed = subprocess.run(
+            argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
+        )
+    finally:
+        stop.set()
     if completed.returncode != 0:
         print(f"harbor exited {completed.returncode}", file=sys.stderr)
         return EXIT_HARBOR
@@ -172,6 +185,35 @@ def _harbor_child_env(env: dict[str, str]) -> dict[str, str]:
     for key in _DOCKER_PROXY_KEYS:
         out.pop(key, None)
     return out
+
+
+def harbor_progress_line(jobs_dir: Path) -> str:
+    """One-line Harbor trial count for GHA logs while the CLI is still running."""
+    finished: list[str] = []
+    started: list[str] = []
+    if jobs_dir.is_dir():
+        for trial_dir in sorted(jobs_dir.glob("*/*")):
+            if not trial_dir.is_dir():
+                continue
+            if not _JOB_STAMP.match(trial_dir.parent.name):
+                continue
+            if "__" not in trial_dir.name:
+                continue
+            task = trial_dir.name.rsplit("__", 1)[0]
+            started.append(task)
+            if (trial_dir / "result.json").is_file():
+                finished.append(task)
+    line = f"harbor progress: {len(finished)}/{len(started)} trials done"
+    if finished:
+        line += f" ({', '.join(finished)})"
+    return line
+
+
+def _watch_harbor_progress(jobs_dir: Path, stop: threading.Event) -> None:
+    while True:
+        print(harbor_progress_line(jobs_dir), flush=True)
+        if stop.wait(60):
+            break
 
 
 def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:

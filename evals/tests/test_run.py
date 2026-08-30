@@ -10,6 +10,7 @@ from evals.run import (
     EXIT_USAGE,
     _harbor_child_env,
     _print_summary,
+    harbor_progress_line,
     main,
 )
 from evals.suite import STEERABLE_IMPORT_PATH
@@ -150,4 +151,19 @@ def test_harbor_child_env_moves_proxy_off_docker() -> None:
     assert "HTTP_PROXY" not in out
     assert out["STEERABLE_HOST_PROXY"] == "http://127.0.0.1:7890"
     assert out["OPENAI_API_KEY"] == "x"
+
+
+def test_harbor_progress_line_counts_finished_trials(tmp_path: Path) -> None:
+    assert harbor_progress_line(tmp_path / "missing") == (
+        "harbor progress: 0/0 trials done"
+    )
+    job = tmp_path / "2026-08-30__12-00-00"
+    done = job / "fix-git__abc"
+    running = job / "nginx-request-logging__def"
+    done.mkdir(parents=True)
+    running.mkdir()
+    (done / "result.json").write_text("{}")
+    (job / "result.json").write_text("{}")
+    line = harbor_progress_line(tmp_path)
+    assert line == "harbor progress: 1/2 trials done (fix-git)"
 
