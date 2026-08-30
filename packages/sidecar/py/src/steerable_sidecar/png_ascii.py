@@ -95,9 +95,52 @@ def _png_gray_rows(raw: bytes) -> tuple[int, int, list[list[int]]] | None:
     return width, height, rows
 
 
+def _bmp_gray_rows(raw: bytes) -> tuple[int, int, list[list[int]]] | None:
+    """Uncompressed 24/32-bit BMP (Doom ``/tmp/frame.bmp``, QEMU screenshots)."""
+    if len(raw) < 54 or raw[:2] != b"BM":
+        return None
+    pixel_off = struct.unpack_from("<I", raw, 10)[0]
+    dib = struct.unpack_from("<I", raw, 14)[0]
+    if dib < 40 or pixel_off < 14 or pixel_off >= len(raw):
+        return None
+    width, height_s = struct.unpack_from("<ii", raw, 18)
+    planes, bpp = struct.unpack_from("<HH", raw, 26)
+    compression = struct.unpack_from("<I", raw, 30)[0]
+    if (
+        width <= 0
+        or planes != 1
+        or compression != 0
+        or bpp not in (24, 32)
+        or width > 4096
+    ):
+        return None
+    top_down = height_s < 0
+    height = abs(height_s)
+    if height <= 0 or height > 4096:
+        return None
+    bpp_bytes = bpp // 8
+    stride = ((width * bpp_bytes + 3) // 4) * 4
+    if pixel_off + stride * height > len(raw):
+        return None
+    rows: list[list[int]] = []
+    for y in range(height):
+        src_y = y if top_down else height - 1 - y
+        off = pixel_off + src_y * stride
+        row: list[int] = []
+        for x in range(width):
+            i = off + x * bpp_bytes
+            row.append((raw[i + 2] + raw[i + 1] + raw[i]) // 3)
+        rows.append(row)
+    return width, height, rows
+
+
 def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | None:
-    """Return a bounded ASCII preview, or None when the bytes are not an 8-bit PNG."""
+    """Bounded ASCII preview for 8-bit PNG or uncompressed 24/32-bit BMP."""
     parsed = _png_gray_rows(raw)
+    label = "PNG"
+    if parsed is None:
+        parsed = _bmp_gray_rows(raw)
+        label = "BMP"
     if parsed is None:
         return None
     width, height, rows = parsed
@@ -106,7 +149,7 @@ def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | 
     nh = max(1, int(height / scale))
     ramp = _ASCII_RAMP
     lines = [
-        f"PNG {width}x{height} ASCII preview ({nw}x{nh}). Darker = denser char."
+        f"{label} {width}x{height} ASCII preview ({nw}x{nh}). Darker = denser char."
     ]
     for y in range(nh):
         src_y = min(height - 1, int(y * scale))

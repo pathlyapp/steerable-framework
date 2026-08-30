@@ -43,6 +43,20 @@ def _gray_png(width: int, height: int, rows: list[list[int]]) -> bytes:
     )
 
 
+def _bgr_bmp(width: int, height: int, pixels: list[list[tuple[int, int, int]]]) -> bytes:
+    stride = ((width * 3 + 3) // 4) * 4
+    body = bytearray()
+    for y in range(height - 1, -1, -1):
+        row = bytearray()
+        for r, g, b in pixels[y]:
+            row.extend((b, g, r))
+        row.extend(b"\x00" * (stride - width * 3))
+        body.extend(row)
+    header = struct.pack("<2sIHHI", b"BM", 54 + len(body), 0, 0, 54)
+    dib = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(body), 0, 0, 0, 0)
+    return header + dib + bytes(body)
+
+
 @pytest.mark.asyncio
 async def test_bash_read_write_roundtrip(tmp_path: Path) -> None:
     router = workspace_tools_for_cwd(tmp_path)
@@ -130,6 +144,19 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert "Rank 8 at top" in board_preview.data["content"]
     assert "a b c d e f g h" in board_preview.data["content"]
     assert "8 |" in board_preview.data["content"]
+    bmp = tmp_path / "frame.bmp"
+    bmp.write_bytes(
+        _bgr_bmp(4, 2, [[(0, 0, 0), (0, 0, 0), (255, 255, 255), (255, 255, 255)]] * 2)
+    )
+    bmp_preview = await _call(router, "read_file", {"path": "frame.bmp"})
+    assert bmp_preview.success is True
+    assert bmp_preview.data["kind"] == "bmp_ascii"
+    assert "BMP 4x2" in bmp_preview.data["content"]
+    junk = tmp_path / "junk.bmp"
+    junk.write_bytes(b"BM" + b"\xff" * 40)
+    junk_read = await _call(router, "read_file", {"path": "junk.bmp"})
+    assert junk_read.success is False
+    assert "BMP" in (junk_read.error or "")
 
 
 @pytest.mark.asyncio

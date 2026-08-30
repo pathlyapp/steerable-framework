@@ -60,6 +60,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "YYYY-MM-DD" in headless_mod._SYSTEM
     assert "acceptance criteria" in headless_mod._SYSTEM
     assert "scoring CLI" in headless_mod._SYSTEM
+    assert "quantize" in headless_mod._SYSTEM
     assert "rewritten sidecar" in headless_mod._SYSTEM
     assert "wget" in headless_mod._SYSTEM
     assert "dd" in headless_mod._SYSTEM
@@ -70,6 +71,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "PIL" in headless_mod._SYSTEM
     assert "ASCII" in headless_mod._SYSTEM
     assert "8x8" in headless_mod._SYSTEM
+    assert "uncompressed BMP" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
     assert "timeout N" in headless_mod._SYSTEM
     assert "wget -c" in headless_mod._SYSTEM

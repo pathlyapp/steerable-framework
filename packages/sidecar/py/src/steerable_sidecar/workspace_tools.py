@@ -277,7 +277,9 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
                     data={
                         "path": str(target),
                         "content": preview,
-                        "kind": "png_ascii",
+                        "kind": (
+                            "bmp_ascii" if preview.startswith("BMP ") else "png_ascii"
+                        ),
                     },
                 )
             kind = (
@@ -285,6 +287,8 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
                 if raw.startswith(b"\x89PNG")
                 else "JPEG"
                 if raw[:2] == b"\xff\xd8"
+                else "BMP"
+                if raw[:2] == b"BM"
                 else "binary"
             )
             return ToolResult(
