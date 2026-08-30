@@ -91,6 +91,8 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "concatenated dump" in headless_mod._SYSTEM
     assert "default query prompts" in headless_mod._SYSTEM
     assert "OCR" in headless_mod._SYSTEM
+    assert "1 fps" in headless_mod._SYSTEM
+    assert "BPE garbage" in headless_mod._SYSTEM
     assert "player moves" in headless_mod._SYSTEM
     assert "help iterations" in headless_mod._SYSTEM
     assert "adapt-control" in headless_mod._SYSTEM
