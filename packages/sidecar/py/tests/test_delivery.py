@@ -199,6 +199,16 @@ def test_named_output_paths_skips_usr_bin() -> None:
     assert paths == ("/app/re.json", "/tmp/frame.bmp", "/app/check.py")
 
 
+def test_named_output_paths_keeps_nested_extensionless_binary() -> None:
+    paths = named_output_paths(
+        "Build /app/polyglot/cmain after cloning Caffe into /app/caffe. "
+        "Also write /app/result.txt."
+    )
+    assert "/app/polyglot/cmain" in paths
+    assert "/app/result.txt" in paths
+    assert "/app/caffe" not in paths
+
+
 @pytest.mark.asyncio
 async def test_missing_named_output_retries_after_helper_write(
     tmp_path,

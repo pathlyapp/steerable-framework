@@ -61,11 +61,13 @@ _MISSING_NAMED_RETRY = (
     "not enough."
 )
 # Absolute paths TB instructions name as outputs (`/app/re.json`,
-# `/tmp/frame.bmp`). Existing paths at start are inputs, not outputs.
+# `/tmp/frame.bmp`, `/app/polyglot/cmain`). Existing paths at start are
+# inputs. Extensionless names must be nested so `/app/caffe` is not an
+# output just because the instruction mentions the clone dir.
 _NAMED_OUTPUT_PATH = re.compile(
     r"(?:^|[\s`'\"(\[])"
     r"((?:/app|/tmp|/workspace|/home/agent)"
-    r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]+)"
+    r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)"
 )
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
@@ -214,7 +216,10 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
     """Absolute output paths named in a TB instruction (not `/usr` inputs)."""
     seen: list[str] = []
     for match in _NAMED_OUTPUT_PATH.finditer(instruction or ""):
-        path = match.group(1)
+        path = match.group(1).rstrip(".,;:)")
+        name = path.rsplit("/", 1)[-1]
+        if "." not in name and path.count("/") < 3:
+            continue
         if path not in seen:
             seen.append(path)
     return tuple(seen)
