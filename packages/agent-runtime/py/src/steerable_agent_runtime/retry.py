@@ -72,7 +72,11 @@ class RetryHooks(NoopHooks):
             )
 
         self.retries += 1
+        delay_ms = next_retry_delay_ms(self._policy, self._attempt)
+        retry_after = getattr(error, "retry_after_ms", None)
+        if isinstance(retry_after, int) and retry_after > delay_ms:
+            delay_ms = retry_after
         return RetryAction(
             kind="retry",
-            delay_ms=next_retry_delay_ms(self._policy, self._attempt),
+            delay_ms=delay_ms,
         )

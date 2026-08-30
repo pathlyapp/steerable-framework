@@ -291,6 +291,23 @@ def test_openai_build_body_openrouter_pins_z_ai(monkeypatch) -> None:
     assert headers["X-Title"] == "TB"
 
 
+def test_http_error_copies_retry_after_header() -> None:
+    from types import SimpleNamespace
+
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(name="t", model="m", base_url="http://x/v1")
+    exc = SimpleNamespace(
+        response=SimpleNamespace(
+            status_code=429,
+            headers={"retry-after": "12"},
+        )
+    )
+    err = provider._http_error(exc, body_text="rate limited")
+    assert err.kind == "rate_limit"
+    assert err.retry_after_ms == 12_000
+
+
 def test_stream_timeout_is_idle_read_not_infinite(monkeypatch) -> None:
     monkeypatch.delenv("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", raising=False)
     monkeypatch.delenv("STEERABLE_LLM_CONNECT_TIMEOUT_SEC", raising=False)

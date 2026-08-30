@@ -17,6 +17,7 @@ from steerable_agent_runtime.llm.errors import (
     classify_error,
     classify_http_status,
     is_retryable,
+    parse_retry_after_ms,
 )
 
 # ---------------------------------------------------------------------------
@@ -33,6 +34,16 @@ def test_status_mapping() -> None:
     assert classify_http_status(408) == "transport"
     assert classify_http_status(400, "bad request") == "invalid_request"
     assert classify_http_status(404) == "invalid_request"
+
+
+def test_parse_retry_after_ms() -> None:
+    assert parse_retry_after_ms("30") == 30_000
+    assert parse_retry_after_ms("1.5") == 1_500
+    assert parse_retry_after_ms("9999") == 180_000
+    assert parse_retry_after_ms("Wed, 21 Oct 2015 07:28:00 GMT") is None
+    assert parse_retry_after_ms("") is None
+    assert parse_retry_after_ms(None) is None
+    assert parse_retry_after_ms("-1") is None
 
 
 def test_context_overflow_markers() -> None:

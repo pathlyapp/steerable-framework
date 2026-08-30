@@ -27,7 +27,7 @@ from steerable_agent_protocol.generated import ToolCall
 from ..model_info import clamp_reasoning_effort
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
-from .errors import LLMError, classify_http_status
+from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
 
 logger = logging.getLogger(__name__)
@@ -261,12 +261,15 @@ class OpenAICompatProvider:
         status = exc.response.status_code
         kind = classify_http_status(status, body_text)
         snippet = (body_text or "").strip().replace("\n", " ")[:300]
+        headers = getattr(exc.response, "headers", None) or {}
+        retry_after = parse_retry_after_ms(headers.get("retry-after"))
         return LLMError(
             f"{self.name}: HTTP {status} ({kind})"
             + (f": {snippet}" if snippet else ""),
             kind=kind,
             status_code=status,
             provider=self.name,
+            retry_after_ms=retry_after,
         )
 
     def _headers(self) -> dict[str, str]:
