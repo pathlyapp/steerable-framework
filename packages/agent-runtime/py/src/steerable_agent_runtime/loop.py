@@ -1677,9 +1677,11 @@ _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
 )
 
 #: Hard cap on before_completion-granted redos (discipline retries +
-#: narration rounds) per run. Hooks bound themselves; this is the
-#: defense-in-depth backstop so a faulty hook cannot spin the loop forever.
-_MAX_COMPLETION_REDOS = 4
+#: narration rounds) per run. Must cover DeliveryHooks empty-round retries
+#: (6) plus a missing-named-output retry, or think-only rounds never
+#: reach a forced write. Hooks still bound themselves; this is the
+#: defense-in-depth backstop so a faulty hook cannot spin forever.
+_MAX_COMPLETION_REDOS = 8
 
 _DISCIPLINE_RETRY_NOTICE = (
     "[system notice] The previous reply described an intended action but did "

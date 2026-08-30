@@ -17,6 +17,7 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.hooks import CompletionAction, NoopHooks
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
+from steerable_agent_runtime.loop import _MAX_COMPLETION_REDOS
 
 
 def make_provider(script: list[dict[str, Any]]):
@@ -326,3 +327,8 @@ async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
     ]
     assert retries
     assert events[-1].data["status"] == "completed"
+
+
+def test_max_completion_redos_covers_delivery_empty_rounds() -> None:
+    # DeliveryHooks retries empty_round 6 times then missing_named_output.
+    assert _MAX_COMPLETION_REDOS >= 8
