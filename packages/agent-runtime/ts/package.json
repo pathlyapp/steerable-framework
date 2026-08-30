@@ -1,7 +1,7 @@
 {
   "name": "@steerable/agent-runtime",
-  "version": "0.2.5",
-  "description": "Steerable framework — official TypeScript production runtime. Owns the embedded Python sidecar lifecycle (spawn / ready handshake / health / bounded auto-restart / graceful drain) and exposes the CoreLoop-level API over the sidecar JSON-RPC surface. There is no TS CoreLoop; this package drives the same Python CoreLoop the server uses, so cross-language conformance holds by construction.",
+  "version": "0.3.0",
+  "description": "Steerable framework \u2014 official TypeScript production runtime. Owns the embedded Python sidecar lifecycle (spawn / ready handshake / health / bounded auto-restart / graceful drain) and exposes the CoreLoop-level API over the sidecar JSON-RPC surface. There is no TS CoreLoop; this package drives the same Python CoreLoop the server uses, so cross-language conformance holds by construction.",
   "license": "Apache-2.0",
   "homepage": "https://steerableframework.com/",
   "repository": {

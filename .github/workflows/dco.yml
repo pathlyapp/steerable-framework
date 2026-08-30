@@ -15,7 +15,7 @@ jobs:
         run: |
           COMMITS=$(git rev-list --no-merges origin/${{ github.base_ref }}..HEAD)
           for c in $COMMITS; do
-            git log -1 --pretty=%B "$c" | rg -q "Signed-off-by:" || {
+            git log -1 --pretty=%B "$c" | grep -q "Signed-off-by:" || {
               echo "Missing Signed-off-by in commit $c"
               exit 1
             }
