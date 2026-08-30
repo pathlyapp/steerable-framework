@@ -60,6 +60,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "YYYY-MM-DD" in headless_mod._SYSTEM
     assert "acceptance criteria" in headless_mod._SYSTEM
     assert "scoring CLI" in headless_mod._SYSTEM
+    assert "rewritten sidecar" in headless_mod._SYSTEM
     assert "wget" in headless_mod._SYSTEM
     assert "dd" in headless_mod._SYSTEM
     assert "carving" in headless_mod._SYSTEM

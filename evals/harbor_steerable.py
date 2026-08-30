@@ -241,7 +241,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
                     '[ -x "$b" ] && ln -sf "$b" /usr/local/bin/python3 && break; '
                     "done && "
                     "/usr/local/bin/python3 -c "
-                    "'import sys; raise SystemExit("
+                    "'import ssl, zlib, sys; raise SystemExit("
                     "0 if sys.version_info >= (3, 10) else 1)'"
                 ),
                 timeout_sec=120,

@@ -204,6 +204,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     )
     assert "_linux_cpython_tarball(fetch=True)" in text
     assert "/opt/steerable-python" in text
+    assert "import ssl, zlib, sys" in text
     assert "_musl_uv_binary(fetch=True)" in text
     assert text.index("await self._ensure_python_310") < text.index(
         "py_tag = await self._python_tag"
