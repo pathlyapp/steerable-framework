@@ -42,16 +42,22 @@ The metadata for one run-of-the-loop. Pairs with N `TraceSpan`s.
 
 ## TraceSpan
 
-One unit of work — typically one LLM call or one tool dispatch. Maps
-1:1 to OpenTelemetry's notion of a span.
+One unit of work. Maps 1:1 to OpenTelemetry's notion of a span. The
+recorder produces three span kinds (W2.7.2):
+
+| `kind`       | Name            | Brackets                                              |
+| ------------ | --------------- | ----------------------------------------------------- |
+| `llm`        | `llm.request`   | One provider request — one per attempt, so retries within a round are visible |
+| `tool`       | `<tool name>`   | One tool dispatch                                     |
+| `approval`   | `approval.wait` | An interactive approval wait, parented to its tool span |
 
 | Field        | Type                       | Required | Notes                                                     |
 | ------------ | -------------------------- | -------- | --------------------------------------------------------- |
 | `spanId`     | `string`                   | yes      |                                                           |
-| `name`       | `string`                   | yes      | e.g. `llm.complete`, `tool.dispatch:read_file`            |
+| `name`       | `string`                   | yes      | e.g. `llm.request`, `read_file`                           |
 | `startAt`    | `string`                   | yes      | ISO 8601                                                  |
 | `endAt`      | `string`                   | no       |                                                           |
-| `parentId`   | `string`                   | no       | Parent span; absent for the root span                     |
+| `parentId`   | `string`                   | no       | Parent span; absent for spans hanging off the root        |
 | `attrs`      | `Record<string, unknown>`  | no       | Stage-specific attributes (token counts, tool name, etc.) |
 
 ## TraceEvent
@@ -66,6 +72,36 @@ duration).
 | `name`       | `string`                   | yes      | e.g. `llm.token`, `policy.denied`           |
 | `at`         | `string`                   | yes      | ISO 8601                                    |
 | `attrs`      | `Record<string, unknown>`  | no       |                                             |
+
+## Observability export decision (W2.7.1, 2026-08-30)
+
+**Decision: keep the zero-dependency hand-rolled OTLP/HTTP exporter; do not
+adopt `opentelemetry-sdk`.**
+
+Context: the framework exports traces to OTLP/HTTP collectors via a small
+hand-rolled mapping (`otel.py`). The open question was whether to keep
+thickening it (span model, sampling) or switch to the real SDK.
+
+Reasons:
+
+1. **Bundle budget.** The sidecar ships embedded in the desktop app under a
+   CI-enforced size budget; `opentelemetry-sdk` plus its exporter chain adds
+   megabytes of dependency weight for a mapping we already implement in
+   ~200 lines.
+2. **The wire format is the compatibility surface, not the SDK.** Backends
+   (Jaeger, Tempo, Honeycomb, Datadog) ingest OTLP/HTTP JSON regardless of
+   what produced it. Our exporter already speaks it; the SDK would not widen
+   the backend story.
+3. **The real gap was span coverage, which no SDK fixes.** LLM requests and
+   approval waits were invisible because the loop did not emit bracketing
+   events — closing that (W2.7.2) is loop work, not exporter work.
+
+Consequences: the span model thickens in `tracing.py` (llm/tool/approval
+kinds, parentage), head-based sampling lives in `TraceRecorder`
+(`sample_rate`, deterministic per trace id), and the OTLP mapping in
+`otel.py` stays the single export path. Revisit only if a backend requires
+features the hand-rolled mapping cannot express (e.g. exemplars, log
+correlation).
 
 ## Adapter interfaces (Tier 3)
 

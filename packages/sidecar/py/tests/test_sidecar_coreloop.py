@@ -276,8 +276,11 @@ async def test_coreloop_stream_persists_trace_fetchable() -> None:
     assert "error" not in response, response
     result = response["result"]
     assert result["trace"]["status"] == "completed"
-    assert result["trace"]["spanCount"] == 1  # one tool span
-    assert result["spans"][0]["name"] == "add"
+    # W2.7.2 span model: 2 llm.request spans (one per round) + 1 tool span
+    assert result["trace"]["spanCount"] == 3
+    span_names = [s["name"] for s in result["spans"]]
+    assert span_names.count("llm.request") == 2
+    assert "add" in span_names
     kinds = [e["kind"] for e in result["events"]]
     assert "tool_call_start" in kinds and "tool_call_result" in kinds
 

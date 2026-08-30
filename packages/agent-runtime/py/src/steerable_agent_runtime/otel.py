@@ -7,7 +7,9 @@ dependency — the runtime stays lean, and any OTLP/HTTP-JSON collector
 
 Mapping:
 - the HarnessTrace becomes the root span (``coreloop.run``);
-- each tool TraceSpan becomes a child span (``tool.<name>``);
+- each tool TraceSpan becomes a child span (``tool.<name>``); ``llm`` and
+  ``approval`` spans (W2.7.2) keep their semantic names (``llm.request``,
+  ``approval.wait``), the latter nested under its tool span;
 - TraceEvents become span events on the root (payload fields as attributes).
 
 ID encoding: OTel wants 32-hex trace IDs and 16-hex span IDs. Framework
@@ -169,8 +171,18 @@ def to_otlp_json(
             {
                 "traceId": otel_trace_id,
                 "spanId": _span_id(span.spanId, salt=trace.traceId),
-                "parentSpanId": root_span_id,
-                "name": f"tool.{span.name}",
+                # W2.7.2: approval.wait spans nest under their tool span;
+                # everything else hangs off the root.
+                "parentSpanId": (
+                    _span_id(span.parentSpanId, salt=trace.traceId)
+                    if span.parentSpanId
+                    else root_span_id
+                ),
+                # Tool spans keep the legacy `tool.<name>` shape; llm /
+                # approval spans carry their OTel-semantic name directly.
+                "name": (
+                    f"tool.{span.name}" if span.kind == "tool" else span.name
+                ),
                 "kind": 1,
                 "startTimeUnixNano": _ns(span.startMs),
                 "endTimeUnixNano": _ns(span.endMs),

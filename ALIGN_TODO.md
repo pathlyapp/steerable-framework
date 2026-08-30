@@ -168,9 +168,23 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.7 可观测性加厚（R9：落后）
 
-- [ ] **2.7.1** 决策：继续零依赖手写 OTLP 并补 span 模型/采样，还是引入真
+- [x] **2.7.1**（2026-08-30 完成：决策记录落 docs/spec/runtime.md「Observability
+      export decision」——维持零依赖手写 OTLP/HTTP。理由：sidecar 嵌入桌面受 CI
+      体积门禁，SDK 依赖链换不来后端适配面（OTLP/HTTP JSON 线格式即兼容面，
+      Jaeger/Tempo/Honeycomb 均可摄入）；真正的缺口是 span 覆盖而非导出器。
+      重访条件：后端需要手写映射表达不了的特性（exemplars、log 关联）时再议）
+      决策：继续零依赖手写 OTLP 并补 span 模型/采样，还是引入真
       opentelemetry-sdk（依赖体积换后端适配面）。先出决策记录再动手。
-- [ ] **2.7.2** span 模型对齐 OTel 语义（工具调用、LLM 请求、审批等待为独立 span）。
+- [x] **2.7.2**（2026-08-30 完成：span 模型对齐 OTel 语义——loop 新增
+      `llm_request`/`llm_response` 事件对（每次 provider 请求一对，重试按
+      attempt 可见，错误亦闭 span）；`ApprovalExecutor` 实际询问时把
+      `_approval{kind,category,waitMs}` 标记并入 ToolResult.data，loop 提升进
+      `tool_call_result` 事件；TraceRecorder 据此产出三类 span（`llm.request`
+      每请求一个、`tool` 每派发一个、`approval.wait` 挂为工具 span 子 span），
+      并实现确定性头采样（`sample_rate`，trace id 哈希定桶，未采样零持久化、
+      事件照常透传）；otel.py 导出按 kind 命名（tool.<name> 保持旧形）并兑现
+      parentSpanId 嵌套。runtime.md span 表同步。框架 945 + TS 29 + evals 37
+      全 PASS） span 模型对齐 OTel 语义（工具调用、LLM 请求、审批等待为独立 span）。
 
 ### 2.8 小项
 
