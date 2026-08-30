@@ -130,5 +130,5 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_REASONING_EFFORT", "high"' in text
     assert 'STEERABLE_TEMPERATURE", "1.0"' in text
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
-    assert 'STEERABLE_SOFT_TIMEOUT_MS", "7200000"' in text
+    assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text
     assert "--max-rounds 160" in text

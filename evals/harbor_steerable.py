@@ -330,8 +330,8 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_REASONING_EFFORT", "high")
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
-        # Harbor agent timeout × 3 is typically 135 min; wrap up before kill.
-        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "7200000")
+        # Harbor ×3 on 3600s tasks is 180 min; wrap up 10 min before the kill.
+        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "10200000")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,

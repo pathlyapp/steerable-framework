@@ -23,7 +23,11 @@ from steerable_agent_runtime.storage import InMemoryStorage
 
 from .acp_adapter import _env_provider_params
 from .delivery import DeliveryHooks
-from .sidecar import _default_loop_hooks, default_llm_provider_factory
+from .sidecar import (
+    _default_loop_hooks,
+    _summarizer_for,
+    default_llm_provider_factory,
+)
 from .workspace_tools import workspace_tools_for_cwd
 
 __version__ = "0.2.5"
@@ -39,6 +43,8 @@ _SYSTEM = (
     "apt-installing a binary, make `which <name>` work (symlink into /usr/bin "
     "if it landed in /usr/sbin). Do not wait with `while pgrep -f ...` — "
     "pgrep matches the wait loop; background the job and `wait $!`. "
+    "Downloads and compiles can take many minutes: do not treat a slow "
+    "wget/gcc as a deadlock. "
     "Before finishing, write a small local check for the instruction's "
     "acceptance criteria, run it, and fix failures. Hidden tests still run "
     "after you stop."
@@ -76,13 +82,16 @@ def _load_instruction(text: str | None, path: Path | None) -> str:
 
 
 def _soft_timeout_ms() -> int | None:
-    """Wrap up before Harbor's agent-timeout kill (~135 min at ×3).
+    """Wrap up before Harbor's agent-timeout kill.
 
-    ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables. Unset defaults to 120 minutes.
+    Long TB tasks set ``[agent] timeout_sec = 3600``; with Harbor ×3 that is
+    180 minutes. Unset defaults to 170 minutes so wrap-up beats the kill.
+    Short tasks (900s ×3 = 45 min) are still cut by Harbor first.
+    ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables.
     """
     raw = os.environ.get("STEERABLE_SOFT_TIMEOUT_MS")
     if raw is None or not str(raw).strip():
-        return 7_200_000
+        return 10_200_000
     value = int(raw)
     return None if value <= 0 else value
 
@@ -107,8 +116,9 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     if not params.get("model"):
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
     tools = workspace_tools_for_cwd(cwd, jailed=True)
+    provider = default_llm_provider_factory(params)
     loop = CoreLoop(
-        default_llm_provider_factory(params),
+        provider,
         RouterToolExecutor(tools, consent_granted=True),
         config=LoopConfig(
             max_rounds=max_rounds,
@@ -119,7 +129,10 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             soft_timeout_ms=_soft_timeout_ms(),
             tool_timeout_ms=3_600_000,
         ),
-        hooks=ChainHooks(DeliveryHooks(), _default_loop_hooks(params)),
+        hooks=ChainHooks(
+            DeliveryHooks(),
+            _default_loop_hooks(params, summarizer=_summarizer_for(provider)),
+        ),
         history_store=InMemoryStorage(),
         record_id="headless",
     )

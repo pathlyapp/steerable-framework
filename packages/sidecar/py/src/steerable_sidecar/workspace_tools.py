@@ -24,7 +24,7 @@ from .file_edit import EditError, EditOp, apply_edits, content_version
 
 _MAX_OUTPUT = 100_000
 # TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
-# does not kill a single bash at 300s. Harbor's agent timeout is ~135 min.
+# does not kill a single bash at 300s. Harbor's long-task kill is ~180 min.
 _BASH_TIMEOUT_SEC = 3600
 _tmp_counter = itertools.count()
 

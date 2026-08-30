@@ -59,6 +59,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "pgrep" in headless_mod._SYSTEM
     assert "YYYY-MM-DD" in headless_mod._SYSTEM
     assert "acceptance criteria" in headless_mod._SYSTEM
+    assert "wget" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
@@ -106,7 +107,7 @@ def test_run_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_soft_timeout_ms_default_and_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STEERABLE_SOFT_TIMEOUT_MS", raising=False)
-    assert _soft_timeout_ms() == 7_200_000
+    assert _soft_timeout_ms() == 10_200_000
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "0")
     assert _soft_timeout_ms() is None
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "60000")
