@@ -251,6 +251,9 @@ _UV_MUSL_URL = (
 )
 _UV_MUSL_BIN = "uv-x86_64-unknown-linux-musl"
 _UV_MUSL_MIN_BYTES = 1_000_000
+_CPYTHON_TGZ = "cpython-3.12-linux-x86_64-gnu.tgz"
+_CPYTHON_MIN_BYTES = 5_000_000
+_ELF_MAGIC = b"\x7fELF"
 
 
 def musl_uv_binary(*, fetch: bool = False) -> Path | None:
@@ -291,6 +294,66 @@ def musl_uv_binary(*, fetch: bool = False) -> Path | None:
     except OSError:
         return None
     if dest.is_file() and dest.stat().st_size >= _UV_MUSL_MIN_BYTES:
+        return dest
+    return None
+
+
+def linux_cpython_tarball(*, fetch: bool = False) -> Path | None:
+    """Relocatable Linux CPython for Debian 11 qemu trials.
+
+    ``uv python install`` inside those images hits GitHub and often leaves
+    the agent on 3.9.2. Pack on the Harbor host (GHA is Ubuntu). macOS
+    interpreters are skipped (not ELF). ``fetch=False`` never installs.
+    """
+    dest = _VENV_CACHE_DIR / _CPYTHON_TGZ
+    if dest.is_file() and dest.stat().st_size >= _CPYTHON_MIN_BYTES:
+        return dest
+    if not fetch:
+        return None
+    return _pack_host_cpython(dest)
+
+
+def _pack_host_cpython(dest: Path) -> Path | None:
+    import shutil
+    import subprocess
+    import tarfile
+
+    uv = shutil.which("uv")
+    if uv is None:
+        return None
+    try:
+        subprocess.run(
+            [uv, "python", "install", "3.12"],
+            check=False,
+            timeout=180,
+            capture_output=True,
+        )
+        found = subprocess.check_output(
+            [uv, "python", "find", "3.12"],
+            text=True,
+            timeout=30,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    py = Path(found)
+    if not py.is_file():
+        return None
+    try:
+        magic = py.read_bytes()[:4]
+    except OSError:
+        return None
+    if magic != _ELF_MAGIC:
+        return None
+    prefix = py.parent.parent
+    if not (prefix / "bin").is_dir():
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(dest, "w:gz") as tf:
+            tf.add(prefix, arcname=".")
+    except OSError:
+        return None
+    if dest.is_file() and dest.stat().st_size >= _CPYTHON_MIN_BYTES:
         return dest
     return None
 

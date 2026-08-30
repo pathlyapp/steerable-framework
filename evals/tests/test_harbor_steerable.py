@@ -19,6 +19,7 @@ from evals.harbor_helpers import (
     trial_python_venv,
     uv_tarball,
     musl_uv_binary,
+    linux_cpython_tarball,
     venv_tarball,
 )
 
@@ -122,6 +123,25 @@ def test_musl_uv_binary_uses_cached_file(tmp_path, monkeypatch) -> None:
     assert musl_uv_binary(fetch=False) == cached
 
 
+def test_linux_cpython_tarball_skips_network_without_fetch(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    assert linux_cpython_tarball(fetch=False) is None
+
+
+def test_linux_cpython_tarball_uses_cached_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    cached = tmp_path / "cpython-3.12-linux-x86_64-gnu.tgz"
+    cached.write_bytes(b"c" * 5_000_001)
+    assert linux_cpython_tarball(fetch=False) == cached
+
+
+def test_linux_cpython_tarball_rejects_tiny_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    tiny = tmp_path / "cpython-3.12-linux-x86_64-gnu.tgz"
+    tiny.write_bytes(b"c" * 100)
+    assert linux_cpython_tarball(fetch=False) is None
+
+
 def test_uv_seed_installs_from_tsinghua_without_github() -> None:
     assert "pypi.tuna.tsinghua.edu.cn" in _UV_PIP_INSTALL
     assert "uv==0.9.5" in _UV_PIP_INSTALL
@@ -177,8 +197,13 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
     assert "--max-rounds 250" in text
     assert text.index("await self._inject_host_uv") < text.index(
+        "await self._inject_host_python"
+    )
+    assert text.index("await self._inject_host_python") < text.index(
         "await self._ensure_python_310"
     )
+    assert "_linux_cpython_tarball(fetch=True)" in text
+    assert "/opt/steerable-python" in text
     assert "_musl_uv_binary(fetch=True)" in text
     assert text.index("await self._ensure_python_310") < text.index(
         "py_tag = await self._python_tag"

@@ -49,6 +49,8 @@ _SYSTEM = (
     "carving. If the instruction states a length, format, accuracy, or named "
     "path, do not write a candidate that violates it. A local numeric check "
     "must use the same metric and split the hidden tests will use. "
+    "If the instruction names a scoring CLI, run that CLI for the local "
+    "check, not a rewritten metric. "
     "Hidden tests score files on disk, not this chat: if a time-budget "
     "notice appears, wait for background jobs (`wait`), then write or "
     "verify the required files. Do not overwrite an existing complete "

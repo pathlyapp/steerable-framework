@@ -34,6 +34,7 @@ from evals.harbor_helpers import (
     ensure_github_no_proxy as _ensure_github_no_proxy,
     merge_trial_path as _merge_trial_path,
     musl_uv_binary as _musl_uv_binary,
+    linux_cpython_tarball as _linux_cpython_tarball,
     pip_install_command as _pip_install_command,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
@@ -110,6 +111,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             apt_env = {"DEBIAN_FRONTEND": "noninteractive", **proxy_env}
             await self._ensure_python_apt(environment, apt_env)
         await self._inject_host_uv(environment)
+        await self._inject_host_python(environment)
         await self._ensure_python_310(environment, proxy_env)
         # The 3.10+ interpreter is /usr/local/bin/python3. Apply that PATH
         # before `python3 -m venv`, not only after install().
@@ -212,6 +214,37 @@ class SteerableHarborAgent(BaseInstalledAgent):
                     "/usr/local/bin/uv --version"
                 ),
                 timeout_sec=30,
+            )
+        except Exception:
+            return
+
+    async def _inject_host_python(self, environment: BaseEnvironment) -> None:
+        """Install a host-packed Linux 3.12 before ``uv python install`` in-trial.
+
+        qemu-alpine-ssh / qemu-startup are Debian 11 (3.9.2). GitHub GETs of
+        python-build-standalone from inside those images fail; the GHA host
+        already has that tarball from setup-harbor.
+        """
+        src = _linux_cpython_tarball(fetch=True)
+        if src is None:
+            return
+        try:
+            await environment.upload_file(src, "/tmp/steerable-cpython.tgz")
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "mkdir -p /opt/steerable-python && "
+                    "tar -C /opt/steerable-python -xzf /tmp/steerable-cpython.tgz && "
+                    "for b in /opt/steerable-python/bin/python3 "
+                    "/opt/steerable-python/bin/python3.12 "
+                    "/opt/steerable-python/bin/python; do "
+                    '[ -x "$b" ] && ln -sf "$b" /usr/local/bin/python3 && break; '
+                    "done && "
+                    "/usr/local/bin/python3 -c "
+                    "'import sys; raise SystemExit("
+                    "0 if sys.version_info >= (3, 10) else 1)'"
+                ),
+                timeout_sec=120,
             )
         except Exception:
             return

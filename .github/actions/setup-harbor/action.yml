@@ -29,3 +29,15 @@ runs:
         bin=$(find /tmp -name uv -type f | head -1)
         cp "$bin" "$dest"
         chmod 0755 "$dest"
+    - name: Prefetch Linux CPython 3.12 for qemu trials
+      shell: bash
+      run: |
+        dest="${GITHUB_WORKSPACE}/evals/.cache/cpython-3.12-linux-x86_64-gnu.tgz"
+        mkdir -p "$(dirname "$dest")"
+        if [ -s "$dest" ]; then
+          exit 0
+        fi
+        uv python install 3.12
+        py=$(uv python find 3.12)
+        prefix=$(cd "$(dirname "$py")/.." && pwd)
+        tar -czf "$dest" -C "$prefix" .
