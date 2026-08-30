@@ -430,10 +430,13 @@ def trial_python_tag() -> str:
 
 
 def trial_python_venv(venv: str) -> str:
+    quoted = shlex.quote(venv)
     return (
         f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
         "0 if sys.version_info >= (3, 10) else 1)' && "
-        f"$p -m venv {shlex.quote(venv)}"
+        "if command -v uv >/dev/null 2>&1; then "
+        f'uv venv --python "$p" --seed {quoted}; '
+        f"else $p -m venv {quoted}; fi"
     )
 
 

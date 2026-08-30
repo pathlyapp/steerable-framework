@@ -413,8 +413,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
         # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap 10 min
         # before the kill. cheap-12 stays ×3 (45 min).
         env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "10200000")
-        # High GLM thinking can emit no SSE bytes for many minutes.
-        env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800")
+        # High GLM thinking can emit no SSE bytes for many minutes
+        # (regex-chess thought ~48 min). Idle read must cover the 170 min wrap.
+        env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "10200")
         # OpenRouter 429s during 16-shard GHA; default 3×200ms dies immediately.
         env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
         env.setdefault("STEERABLE_RETRY_BASE_DELAY_MS", "2000")

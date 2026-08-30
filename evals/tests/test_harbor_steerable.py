@@ -188,7 +188,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_TEMPERATURE", "1.0"' in text
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
     assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text
-    assert 'STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800"' in text
+    assert 'STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "10200"' in text
     assert 'STEERABLE_RETRY_MAX_ATTEMPTS", "12"' in text
     assert 'STEERABLE_RETRY_BASE_DELAY_MS", "2000"' in text
     assert 'STEERABLE_RETRY_MAX_DELAY_MS", "120000"' in text
@@ -214,5 +214,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert _PY310_BIN in trial_python_ok()
     assert _PY310_BIN in trial_python_tag()
     venv_cmd = trial_python_venv("/installed-agent/steerable/venv")
+    assert "uv venv --python" in venv_cmd
+    assert "--seed" in venv_cmd
     assert "$p -m venv" in venv_cmd
     assert "/installed-agent/steerable/venv" in venv_cmd
