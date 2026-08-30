@@ -35,6 +35,9 @@ from evals.harbor_helpers import (
     pip_install_command as _pip_install_command,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
+    trial_python_ok as _trial_python_ok,
+    trial_python_tag as _trial_python_tag,
+    trial_python_venv as _trial_python_venv,
     venv_tarball as _venv_tarball,
 )
 
@@ -114,6 +117,10 @@ class SteerableHarborAgent(BaseInstalledAgent):
             environment, command=f"mkdir -p {shlex.quote(_REMOTE_SRC)}"
         )
         py_tag = await self._python_tag(environment)
+        if py_tag and int(py_tag) < 310:
+            raise RuntimeError(
+                f"trial python cp{py_tag} is still <3.10 before venv"
+            )
         cached = _venv_tarball(py_tag) if py_tag else None
         restored = False
         if cached is not None and cached.is_file():
@@ -141,10 +148,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
 
     async def _python_tag(self, environment: BaseEnvironment) -> str:
         result = await environment.exec(
-            command=(
-                "python3 -c 'import sys; print(\"%s%s\" % "
-                "(sys.version_info.major, sys.version_info.minor))'"
-            ),
+            command=_trial_python_tag(),
             user="root",
         )
         if result.return_code != 0:
@@ -187,10 +191,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
     ) -> None:
         """Raise the trial interpreter to >=3.10 before creating the agent venv."""
         check = await environment.exec(
-            command=(
-                "python3 -c 'import sys; raise SystemExit("
-                "0 if sys.version_info >= (3, 10) else 1)'"
-            ),
+            command=_trial_python_ok(),
             user="root",
         )
         if check.return_code == 0:
@@ -205,10 +206,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             environment._persistent_env.get("PATH", "")
         )
         again = await environment.exec(
-            command=(
-                "python3 -c 'import sys; raise SystemExit("
-                "0 if sys.version_info >= (3, 10) else 1)'"
-            ),
+            command=_trial_python_ok(),
             user="root",
         )
         if again.return_code != 0:
@@ -290,14 +288,11 @@ class SteerableHarborAgent(BaseInstalledAgent):
     ) -> None:
         remote_pkgs = await self._upload_packages(environment)
         venv = f"{_REMOTE_SRC}/venv"
-        venv_check = await environment.exec(
-            command=f"python3 -m venv {shlex.quote(venv)}", user="root"
-        )
+        venv_cmd = _trial_python_venv(venv)
+        venv_check = await environment.exec(command=venv_cmd, user="root")
         if venv_check.return_code != 0:
             await self.ensure_system_dependencies(environment, ("python_venv",))
-            await self.exec_as_root(
-                environment, command=f"python3 -m venv {shlex.quote(venv)}"
-            )
+            await self.exec_as_root(environment, command=venv_cmd)
         await self._pip_install(environment, remote_pkgs, proxy_env)
 
     async def _pip_install(

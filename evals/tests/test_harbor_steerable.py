@@ -5,6 +5,7 @@ from pathlib import Path
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
     _ENSURE_PYTHON_310,
+    _PY310_BIN,
     _UV_MIN_BYTES,
     _UV_PIP_INSTALL,
     _UV_SEED,
@@ -13,6 +14,9 @@ from evals.harbor_helpers import (
     pip_install_command,
     rewrite_forwarded_env_value,
     rewrite_loopback_host,
+    trial_python_ok,
+    trial_python_tag,
+    trial_python_venv,
     uv_tarball,
     venv_tarball,
 )
@@ -153,6 +157,14 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in text
     assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
     assert "--max-rounds 250" in text
-    assert text.index("_ensure_python_310") < text.index("_python_tag")
-    assert text.index("_merge_trial_path") < text.index("_python_tag")
+    assert text.index("await self._ensure_python_310") < text.index(
+        "py_tag = await self._python_tag"
+    )
     assert "trial python is still <3.10" in text
+    assert "trial python cp" in text
+    assert "/usr/local/bin/python3" in _PY310_BIN
+    assert _PY310_BIN in trial_python_ok()
+    assert _PY310_BIN in trial_python_tag()
+    venv_cmd = trial_python_venv("/installed-agent/steerable/venv")
+    assert "$p -m venv" in venv_cmd
+    assert "/installed-agent/steerable/venv" in venv_cmd

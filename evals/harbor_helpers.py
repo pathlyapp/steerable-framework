@@ -296,6 +296,34 @@ def ensure_github_no_proxy(env: dict[str, str]) -> None:
     env["no_proxy"] = merged
 
 
+# Prefer the interpreter _ENSURE_PYTHON_310 installs. Harbor environment.exec
+# may ignore _persistent_env PATH, so `python3 -m venv` would still hit
+# /usr/bin/python3 3.9.2 on qemu-alpine-ssh.
+_PY310_BIN = 'p=/usr/local/bin/python3; [ -x "$p" ] || p=python3'
+
+
+def trial_python_ok() -> str:
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
+        "0 if sys.version_info >= (3, 10) else 1)'"
+    )
+
+
+def trial_python_tag() -> str:
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; print(\"%s%s\" % "
+        "(sys.version_info.major, sys.version_info.minor))'"
+    )
+
+
+def trial_python_venv(venv: str) -> str:
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
+        "0 if sys.version_info >= (3, 10) else 1)' && "
+        f"$p -m venv {shlex.quote(venv)}"
+    )
+
+
 _DEFAULT_TRIAL_PATH = (
     "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
 )
