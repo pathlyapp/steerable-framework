@@ -26,7 +26,9 @@ _MUTATING = frozenset({"write_file", "edit_file"})
 _EXPLORE = frozenset({"bash", "read_file"})
 # TB agents usually create scored files with bash (`python … open(…,'w')`,
 # `cat > /app/out`). Counting only write_file caused a false no_artifact
-# retry after the file already existed (count-dataset-tokens).
+# retry after the file already existed (count-dataset-tokens). When the
+# instruction names output paths, delivery is those paths existing — not
+# write_file of a helper like gen.py or `python3 gen.py`.
 _BASH_WRITES = re.compile(
     r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
     r"|\btee\b"
@@ -98,6 +100,7 @@ class DeliveryHooks(NoopHooks):
             else named_output_paths(instruction)
         )
         self._required = tuple(p for p in raw if not Path(p).exists())
+        self._delivered = 0
         self.writes = 0
         self.consecutive_explore = 0
         self.nudges = 0
@@ -152,7 +155,17 @@ class DeliveryHooks(NoopHooks):
     ) -> ToolResult:
         self._force_tool = False
         name = call.name
-        if name in _MUTATING or (name == "bash" and _bash_writes(call)):
+        if self._required:
+            delivered = sum(1 for p in self._required if Path(p).exists())
+            if delivered > self._delivered:
+                self.writes += delivered - self._delivered
+                self.consecutive_explore = 0
+            elif name in _EXPLORE or name in _MUTATING:
+                self.consecutive_explore += 1
+            self._delivered = delivered
+        elif result.success and (
+            name in _MUTATING or (name == "bash" and _bash_writes(call))
+        ):
             self.writes += 1
             self.consecutive_explore = 0
         elif name in _EXPLORE:

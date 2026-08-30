@@ -264,3 +264,26 @@ async def test_no_write_forces_tool_choice_until_first_write() -> None:
     ctx.round_index = 2
     done = await hooks.pre_step([], ctx)
     assert done.tool_choice is None
+
+
+@pytest.mark.asyncio
+async def test_helper_write_does_not_count_as_named_delivery(tmp_path) -> None:
+    target = tmp_path / "re.json"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(id="t", name="bash", arguments={"command": "python3 gen.py"}),
+        ctx,
+    )
+    assert hooks.writes == 0
+    action = await hooks.pre_step([], ctx)
+    assert action.tool_choice == "required"
+    assert action.reason == "no_write_force_tool"
+    target.write_text("[]", encoding="utf-8")
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    assert hooks.writes == 1
+    done = await hooks.pre_step([], ctx)
+    assert done.tool_choice is None
