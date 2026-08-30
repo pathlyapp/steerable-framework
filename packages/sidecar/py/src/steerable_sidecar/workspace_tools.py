@@ -39,9 +39,11 @@ _BASH_SCHEMA = {
             "type": "string",
             "description": (
                 "Shell command to run in the workspace. Timeout is 3600s; do "
-                "not poll with `sleep 290`. Do not wait with "
-                "`while pgrep -f ...` (pgrep matches the wait loop). "
-                "Background long jobs and `wait $!`, or poll a pidfile."
+                "not poll with `sleep 290`. Do not wrap compile, VM, or train "
+                "in `timeout N` with N under 300 — bash already caps at 3600s. "
+                "Do not wait with `while pgrep -f ...` (pgrep matches the "
+                "wait loop). Background long jobs and `wait $!`, or poll a "
+                "pidfile."
             ),
         },
     },

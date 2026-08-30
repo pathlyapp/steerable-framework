@@ -185,7 +185,10 @@ async def test_empty_round_forces_tool_choice_on_next_step() -> None:
     await hooks.post_tool_result(ok, _call("bash"), ctx)
     ctx.round_index = 1
     again = await hooks.pre_step([], ctx)
-    assert again.tool_choice is None
+    assert again.tool_choice == "required"
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    done = await hooks.pre_step([], ctx)
+    assert done.tool_choice is None
 
 
 def test_named_output_paths_skips_usr_bin() -> None:
@@ -231,13 +234,33 @@ async def test_existing_named_path_is_input_not_required(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_round_forces_tool_choice() -> None:
+async def test_missing_named_output_retries_more_than_once(tmp_path) -> None:
+    target = tmp_path / "re.json"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    first = await hooks.before_completion(_draft(tools=2), ctx)
+    assert first.kind == "retry"
+    second = await hooks.before_completion(_draft(tools=3), ctx)
+    assert second.kind == "retry"
+    assert second.reason == "missing_named_output"
+    target.write_text("[]", encoding="utf-8")
+    third = await hooks.before_completion(_draft(tools=4), ctx)
+    assert third.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_no_write_forces_tool_choice_until_first_write() -> None:
     hooks = DeliveryHooks()
     ctx = LoopContext()
     ctx.round_index = 0
     action = await hooks.pre_step([], ctx)
     assert action.tool_choice == "required"
-    assert action.reason == "first_round_force_tool"
+    assert action.reason == "no_write_force_tool"
     ctx.round_index = 1
     later = await hooks.pre_step([], ctx)
-    assert later.tool_choice is None
+    assert later.tool_choice == "required"
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    ctx.round_index = 2
+    done = await hooks.pre_step([], ctx)
+    assert done.tool_choice is None

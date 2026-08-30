@@ -11,6 +11,7 @@ from steerable_agent_runtime.errors import PolicyDeniedError
 
 from steerable_sidecar import workspace_tools as workspace_tools_mod
 from steerable_sidecar.workspace_tools import (
+    _BASH_SCHEMA,
     _MAX_OUTPUT,
     pgrep_self_wait,
     refuse_truncated_overwrite,
@@ -186,6 +187,12 @@ def test_pgrep_self_wait_detects_while_loop() -> None:
     assert not pgrep_self_wait("pgrep -f install3.R")
     assert not pgrep_self_wait("wait $pid")
     assert not pgrep_self_wait("")
+
+
+def test_bash_schema_warns_against_short_timeout() -> None:
+    desc = _BASH_SCHEMA["properties"]["command"]["description"]
+    assert "timeout N" in desc
+    assert "3600s" in desc
 
 
 @pytest.mark.asyncio

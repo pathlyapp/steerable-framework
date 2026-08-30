@@ -70,6 +70,9 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
+# Keep-tools wrap-up is 12 extra rounds; a single missing-path retry let
+# regex-chess stop after summarizing /app/re.json instead of writing it.
+_MAX_MISSING_NAMED_RETRIES = 8
 
 
 class DeliveryHooks(NoopHooks):
@@ -125,14 +128,14 @@ class DeliveryHooks(NoopHooks):
             append_action = "delivery_nudge"
         tool_choice = (
             "required"
-            if self._force_tool or ctx.round_index == 0
+            if self._force_tool or self.writes == 0
             else None
         )
         if tool_choice and reason is None:
             reason = (
                 "empty_round_force_tool"
                 if self._force_tool
-                else "first_round_force_tool"
+                else "no_write_force_tool"
             )
         if appends or tool_choice:
             return PreStepAction(
@@ -169,7 +172,7 @@ class DeliveryHooks(NoopHooks):
                 reason="empty_round",
             )
         missing = tuple(p for p in self._required if not Path(p).exists())
-        if missing and self.completion_retries < 1:
+        if missing and self.completion_retries < _MAX_MISSING_NAMED_RETRIES:
             self.completion_retries += 1
             self._force_tool = True
             listed = ", ".join(missing[:8])
@@ -185,6 +188,7 @@ class DeliveryHooks(NoopHooks):
             and self.completion_retries < 1
         ):
             self.completion_retries += 1
+            self._force_tool = True
             return CompletionAction(
                 kind="retry",
                 message=_NO_ARTIFACT_RETRY,
