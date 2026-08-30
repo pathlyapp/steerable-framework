@@ -82,14 +82,21 @@ async def test_recorder_persists_events_spans_and_trace() -> None:
     assert trace.status == "completed"
     assert trace.hadError is False
     assert trace.chatId == "chat_1"
-    assert trace.spanCount == 1
+    # W2.7.2 span model: one llm span per provider request (2 rounds) plus
+    # one tool span.
+    assert trace.spanCount == 3
     assert trace.eventCount == len(seen)
 
     spans = await storage.list_spans(recorder.trace_id)
-    assert len(spans) == 1
-    assert spans[0].name == "add"
-    assert spans[0].status == "ok"
-    assert spans[0].durationMs is not None
+    llm_spans = [s for s in spans if s.kind == "llm"]
+    tool_spans = [s for s in spans if s.kind == "tool"]
+    assert len(llm_spans) == 2
+    assert [s.name for s in llm_spans] == ["llm.request", "llm.request"]
+    assert [s.attrs["round"] for s in llm_spans] == [0, 1]  # type: ignore[index]
+    assert len(tool_spans) == 1
+    assert tool_spans[0].name == "add"
+    assert tool_spans[0].status == "ok"
+    assert tool_spans[0].durationMs is not None
 
     events = await storage.list_events(recorder.trace_id)
     kinds = [e.kind for e in events]
@@ -126,8 +133,10 @@ async def test_recorder_marks_failed_tool_span() -> None:
     trace = await storage.get_trace(recorder.trace_id)
     assert trace is not None and trace.hadError is True
     spans = await storage.list_spans(recorder.trace_id)
-    assert spans[0].status == "error"
-    assert "nope" in (spans[0].attrs or {}).get("error", "")
+    tool_spans = [s for s in spans if s.kind == "tool"]
+    assert len(tool_spans) == 1
+    assert tool_spans[0].status == "error"
+    assert "nope" in (tool_spans[0].attrs or {}).get("error", "")
 
 
 @pytest.mark.asyncio
@@ -211,3 +220,120 @@ async def test_trace_row_is_live_mid_turn() -> None:
     assert final is not None
     assert final.status == "completed"
     assert final.createdAt <= final.updatedAt
+
+
+@pytest.mark.asyncio
+async def test_recorder_llm_retry_produces_one_span_per_attempt() -> None:
+    """A retried provider call yields two llm spans: attempt 1 errored,
+    attempt 2 ok — the real request count is visible, not collapsed."""
+
+    class _FlakyProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self._calls = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            self._calls += 1
+            calls = self._calls
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if calls == 1:
+                    raise RuntimeError("connection reset")
+                yield LLMStreamChunk(content_delta="recovered")
+
+            return _gen()
+
+    from steerable_agent_runtime.hooks import NoopHooks, RetryAction
+
+    class _RetryHooks(NoopHooks):
+        async def on_request_error(self, exc, messages, ctx):
+            return RetryAction(kind="retry", reason="transient")
+
+    storage = InMemoryStorage()
+    recorder = TraceRecorder(storage)
+    loop = CoreLoop(_FlakyProvider(), RouterToolExecutor(ToolRouter()), hooks=_RetryHooks())
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "hi")])):
+        pass
+
+    spans = await storage.list_spans(recorder.trace_id)
+    llm = [s for s in spans if s.kind == "llm"]
+    assert len(llm) == 2
+    assert llm[0].status == "error"
+    assert "connection reset" in (llm[0].attrs or {}).get("error", "")
+    assert llm[1].status == "ok"
+    assert [s.attrs["attempt"] for s in llm] == [1, 2]  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_recorder_approval_wait_span_parented_to_tool() -> None:
+    """An interactive approval becomes an approval.wait span bracketing the
+    wait, parented to the tool span — approval latency is attributable."""
+    import asyncio as _asyncio
+
+    from steerable_agent_runtime import ApprovalDecision, ApprovalExecutor
+
+    class _SlowApprover:
+        async def approve(self, request):
+            await _asyncio.sleep(0.05)
+            return ApprovalDecision("allow_once", "ok")
+
+    provider = make_provider(
+        [{"content": "", "tool_calls": [tc("add", {"a": 1, "b": 2})]}, {"content": "3"}]
+    )
+    router = ToolRouter()
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    router.register(add)
+    storage = InMemoryStorage()
+    recorder = TraceRecorder(storage)
+    loop = CoreLoop(
+        provider,
+        ApprovalExecutor(RouterToolExecutor(router), _SlowApprover()),
+    )
+    async for _ in recorder.tee(loop.run([LLMMessage.text_of("user", "add")])):
+        pass
+
+    spans = await storage.list_spans(recorder.trace_id)
+    approval = [s for s in spans if s.kind == "approval"]
+    tool = [s for s in spans if s.kind == "tool"]
+    assert len(approval) == 1 and len(tool) == 1
+    assert approval[0].name == "approval.wait"
+    assert approval[0].parentSpanId == tool[0].spanId
+    assert (approval[0].durationMs or 0) >= 40
+    assert approval[0].attrs["kind"] == "allow_once"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_recorder_sampling_deterministic_and_drops_persistence() -> None:
+    """sample_rate=0 records nothing but events still tee through; the
+    sampling decision is a deterministic function of the trace id."""
+    provider = make_provider([{"content": "hi"}])
+    storage = InMemoryStorage()
+    recorder = TraceRecorder(storage, trace_id="trace_x", sample_rate=0.0)
+    loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
+
+    seen: list[LoopEvent] = []
+    async for event in recorder.tee(loop.run([LLMMessage.text_of("user", "hi")])):
+        seen.append(event)
+
+    assert seen[-1].data["status"] == "completed"
+    assert await storage.get_trace("trace_x") is None
+    assert await storage.list_events("trace_x") == []
+    # finalize still returns a summary object without persisting
+    summary = await recorder.finalize()
+    assert summary.traceId == "trace_x"
+
+    # Determinism: same trace id → same decision
+    r1 = TraceRecorder(storage, trace_id="trace_x", sample_rate=0.5)
+    r2 = TraceRecorder(storage, trace_id="trace_x", sample_rate=0.5)
+    assert r1._sampled == r2._sampled
+
+    with pytest.raises(ValueError):
+        TraceRecorder(storage, sample_rate=1.5)

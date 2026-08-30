@@ -20,6 +20,7 @@ spilled or not, traces should stay small).
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -50,7 +51,19 @@ def _truncate(value: Any, max_chars: int) -> Any:
 
 
 class TraceRecorder:
-    """Records a CoreLoop run into storage as trace + spans + events."""
+    """Records a CoreLoop run into storage as trace + spans + events.
+
+    Span model (W2.7.2, OTel semantics): the run is the root; each provider
+    request is an ``llm`` span (one per attempt — retries are visible), each
+    tool dispatch a ``tool`` span, and each interactive approval wait an
+    ``approval`` span parented to its tool span. Events stay point-in-time
+    annotations.
+
+    ``sample_rate`` is head-based sampling: the decision is made once per
+    trace from the trace id's hash (deterministic — re-recording the same
+    trace id lands in the same bucket), and unsampled traces pass events
+    through ``tee`` untouched without persisting anything.
+    """
 
     def __init__(
         self,
@@ -61,17 +74,25 @@ class TraceRecorder:
         session_id: str | None = None,
         user_id: str | None = None,
         max_payload_chars: int = 500,
+        sample_rate: float = 1.0,
     ) -> None:
+        if not 0.0 <= sample_rate <= 1.0:
+            raise ValueError(f"sample_rate must be in [0, 1], got {sample_rate}")
         self._storage = storage
         self.trace_id = trace_id or f"trace_{uuid.uuid4().hex}"
         self._chat_id = chat_id
         self._session_id = session_id
         self._user_id = user_id
         self._max_payload = max_payload_chars
+        # Deterministic head sampling: the same trace id always lands in the
+        # same bucket, so re-recording a run (resume, fork) is consistent.
+        bucket = int(hashlib.sha256(self.trace_id.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+        self._sampled = bucket <= sample_rate if sample_rate < 1.0 else True
 
         self._sequence = 0
         self._span_count = 0
         self._open_spans: dict[str, dict[str, Any]] = {}
+        self._open_llm: dict[tuple[int, int], dict[str, Any]] = {}
         self._started_ms = _now_ms()
         self._had_error = False
         self._final_status: str | None = None
@@ -85,6 +106,8 @@ class TraceRecorder:
         await self.finalize()
 
     async def record(self, event: LoopEvent) -> None:
+        if not self._sampled:
+            return
         if self._sequence == 0:
             # Write the trace row up front with status="running": events and
             # spans already persist incrementally, but without the row a
@@ -118,29 +141,40 @@ class TraceRecorder:
                 "name": event.data["name"],
                 "startMs": _now_ms(),
             }
-        elif event.kind in ("tool_call_result", "tool_error"):
-            opened = self._open_spans.pop(event.data["id"], None)
+        elif event.kind == "llm_request":
+            self._open_llm[(event.data["round"], event.data["attempt"])] = {
+                "startMs": _now_ms(),
+            }
+        elif event.kind == "llm_response":
+            opened = self._open_llm.pop(
+                (event.data["round"], event.data["attempt"]), None
+            )
             if opened is not None:
                 self._span_count += 1
-                success = bool(event.data.get("success", False))
+                error = event.data.get("error")
                 await self._storage.append_spans(
                     self.trace_id,
                     [
                         TraceSpan(
                             spanId=f"span_{self._span_count:04d}",
                             traceId=self.trace_id,
-                            name=opened["name"],
-                            kind="tool",
+                            name="llm.request",
+                            kind="llm",
                             startMs=opened["startMs"],
                             endMs=_now_ms(),
                             durationMs=event.data.get("durationMs"),
-                            status="ok" if success else "error",
+                            status="error" if error else "ok",
                             attrs=sanitize_for_trace(
                                 {
-                                    "toolCallId": event.data["id"],
+                                    "round": event.data["round"],
+                                    "attempt": event.data["attempt"],
+                                    "promptTokens": event.data.get("promptTokens"),
+                                    "cachedPromptTokens": event.data.get(
+                                        "cachedPromptTokens"
+                                    ),
                                     **(
-                                        {"error": str(event.data["error"])[: self._max_payload]}
-                                        if "error" in event.data
+                                        {"error": str(error)[: self._max_payload]}
+                                        if error
                                         else {}
                                     ),
                                 }
@@ -148,6 +182,63 @@ class TraceRecorder:
                         )
                     ],
                 )
+                if error:
+                    self._had_error = True
+        elif event.kind in ("tool_call_result", "tool_error"):
+            opened = self._open_spans.pop(event.data["id"], None)
+            if opened is not None:
+                self._span_count += 1
+                success = bool(event.data.get("success", False))
+                tool_span_id = f"span_{self._span_count:04d}"
+                spans = [
+                    TraceSpan(
+                        spanId=tool_span_id,
+                        traceId=self.trace_id,
+                        name=opened["name"],
+                        kind="tool",
+                        startMs=opened["startMs"],
+                        endMs=_now_ms(),
+                        durationMs=event.data.get("durationMs"),
+                        status="ok" if success else "error",
+                        attrs=sanitize_for_trace(
+                            {
+                                "toolCallId": event.data["id"],
+                                **(
+                                    {"error": str(event.data["error"])[: self._max_payload]}
+                                    if "error" in event.data
+                                    else {}
+                                ),
+                            }
+                        ),
+                    )
+                ]
+                # W2.7.2: an interactive approval wait inside the dispatch
+                # becomes its own span, parented to the tool span — approval
+                # latency is attributable instead of hiding in tool time.
+                approval = event.data.get("approval")
+                if isinstance(approval, dict) and approval.get("waitMs") is not None:
+                    self._span_count += 1
+                    wait_ms = int(approval["waitMs"])
+                    spans.append(
+                        TraceSpan(
+                            spanId=f"span_{self._span_count:04d}",
+                            traceId=self.trace_id,
+                            parentSpanId=tool_span_id,
+                            name="approval.wait",
+                            kind="approval",
+                            startMs=opened["startMs"],
+                            endMs=opened["startMs"] + wait_ms,
+                            durationMs=wait_ms,
+                            status="ok",
+                            attrs=sanitize_for_trace(
+                                {
+                                    "kind": approval.get("kind"),
+                                    "category": approval.get("category"),
+                                }
+                            ),
+                        )
+                    )
+                await self._storage.append_spans(self.trace_id, spans)
                 if not success:
                     self._had_error = True
         elif event.kind == "error":
@@ -163,14 +254,20 @@ class TraceRecorder:
         safe to call again from a finally guard after an abnormal exit."""
 
         if getattr(self, "_finalized", False):
+            if not self._sampled:
+                return self._build_trace(status or self._final_status or "failed")
             return await self._storage.get_trace(self.trace_id)  # type: ignore[return-value]
         self._finalized = True
+        if not self._sampled:
+            # Unsampled: nothing was persisted; return the summary object
+            # without touching storage.
+            return self._build_trace(status or self._final_status or "failed")
         return await self._upsert(status or self._final_status or "failed")
 
-    async def _upsert(self, status: str) -> HarnessTrace:
+    def _build_trace(self, status: str) -> HarnessTrace:
         now_iso = datetime.now(timezone.utc).isoformat()
         self._created_iso = self._created_iso or now_iso
-        trace = HarnessTrace(
+        return HarnessTrace(
             traceId=self.trace_id,
             userId=self._user_id,
             chatId=self._chat_id,
@@ -183,4 +280,6 @@ class TraceRecorder:
             createdAt=self._created_iso,
             updatedAt=now_iso,
         )
-        return await self._storage.upsert_trace(trace)
+
+    async def _upsert(self, status: str) -> HarnessTrace:
+        return await self._storage.upsert_trace(self._build_trace(status))

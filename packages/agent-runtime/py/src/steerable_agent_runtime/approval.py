@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
@@ -282,9 +283,27 @@ class ApprovalExecutor:
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         request = self._resolve(call, ctx)
         decision = self._stored_decision(request)
+        # W2.7.2: when the decision required asking (cache miss), record the
+        # wait on the result so the trace can show approval latency as its
+        # own span. Cache hits carry no marker — no wait happened.
+        waited_ms: int | None = None
         if decision is None:
+            ask_started = time.monotonic()
             decision = await self._ask(request)
+            waited_ms = int((time.monotonic() - ask_started) * 1000)
             self._persist(request, decision)
+
+        approval_marker = (
+            {
+                "_approval": {
+                    "kind": decision.kind,
+                    "category": request.category,
+                    "waitMs": waited_ms,
+                }
+            }
+            if waited_ms is not None
+            else None
+        )
 
         if decision.kind == "abort":
             raise ApprovalAborted(
@@ -300,6 +319,7 @@ class ApprovalExecutor:
                     "approval": decision.kind,
                     "category": request.category,
                     "reason": reason,
+                    **(approval_marker or {}),
                     "message": (
                         f"Tool call '{request.tool_name}' was denied "
                         f"({decision.kind}): {reason}"
@@ -307,7 +327,12 @@ class ApprovalExecutor:
                 },
             )
         ctx.consent_granted = True
-        return await self._inner.execute(call, ctx)
+        result = await self._inner.execute(call, ctx)
+        if approval_marker is not None:
+            result = result.model_copy(
+                update={"data": {**(result.data or {}), **approval_marker}}
+            )
+        return result
 
     def _stored_decision(self, request: ApprovalRequest) -> ApprovalDecision | None:
         """Durable wins over session: it is the stronger commitment."""

@@ -57,22 +57,28 @@ async def test_otlp_payload_structure() -> None:
     rs = payload["resourceSpans"][0]
     assert _attrs(rs["resource"])["service.name"] == "test-svc"
     otel_spans = rs["scopeSpans"][0]["spans"]
-    assert len(otel_spans) == 2  # root + 1 tool span
+    # W2.7.2 span model: root + 2 llm.request (one per round) + 1 tool span
+    assert len(otel_spans) == 4
 
-    root, tool = otel_spans[0], otel_spans[1]
+    root = otel_spans[0]
+    llm = [s for s in otel_spans if s["name"] == "llm.request"]
+    tool = next(s for s in otel_spans if s["name"] == "tool.add")
+    assert len(llm) == 2
     # 32-hex trace id shared, 16-hex span ids, parenting intact
     assert len(root["traceId"]) == 32 and root["traceId"] == tool["traceId"]
     assert len(root["spanId"]) == len(tool["spanId"]) == 16
     assert tool["parentSpanId"] == root["spanId"]
+    assert all(s["parentSpanId"] == root["spanId"] for s in llm)
 
     assert root["name"] == "coreloop.run"
-    assert tool["name"] == "tool.add"
     assert _attrs(root)["steerable.chat_id"] == "chat_1"
     assert _attrs(tool)["toolCallId"].startswith("call_add")
+    assert _attrs(llm[0])["steerable.kind"] == "llm"
 
-    # statuses: clean run → both OK
+    # statuses: clean run → all OK
     assert root["status"]["code"] == 1
     assert tool["status"]["code"] == 1
+    assert all(s["status"]["code"] == 1 for s in llm)
 
     # every recorded event became a root span event, in order
     names = [e["name"] for e in root["events"]]
@@ -108,7 +114,8 @@ async def test_otlp_error_status_mapping() -> None:
     )
     spans = payload["resourceSpans"][0]["scopeSpans"][0]["spans"]
     assert spans[0]["status"]["code"] == 2  # root: hadError
-    assert spans[1]["status"]["code"] == 2  # tool span: error
+    tool = next(s for s in spans if s["name"] == "tool.boom")
+    assert tool["status"]["code"] == 2  # tool span: error
 
 
 def test_id_encoding_is_deterministic_for_foreign_ids() -> None:

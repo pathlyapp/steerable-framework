@@ -97,6 +97,11 @@ LoopEventKind = Literal[
     # content stream
     "content_delta",
     "reasoning_delta",
+    # LLM request brackets (W2.7.2): one pair per provider call — retries
+    # within a round produce one pair per attempt, so traces show the real
+    # request count and latency instead of one collapsed round.
+    "llm_request",
+    "llm_response",
     # tool side
     "tool_call_start",
     "tool_call_result",
@@ -974,11 +979,18 @@ class CoreLoop:
             content_carry = ""
             reasoning_carry = ""
             stream_cancelled = False
+            llm_attempt = 0
             while True:
+                llm_attempt += 1
+                llm_started = time.monotonic()
                 try:
                     # Everything the model is about to see is durable first
                     # (also covers the overflow-recovery rewrite on retries).
                     await self._flush_history(manager, chat_id)
+                    yield LoopEvent(
+                        "llm_request",
+                        {"round": round_index, "attempt": llm_attempt},
+                    )
                     stream = self._provider.stream(
                         manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
@@ -1052,8 +1064,32 @@ class CoreLoop:
                                     decision,
                                 )
                                 return
+                    yield LoopEvent(
+                        "llm_response",
+                        {
+                            "round": round_index,
+                            "attempt": llm_attempt,
+                            "durationMs": int(
+                                (time.monotonic() - llm_started) * 1000
+                            ),
+                            "promptTokens": ctx.last_prompt_tokens or 0,
+                            "cachedPromptTokens": ctx.last_cached_prompt_tokens,
+                            "cancelled": stream_cancelled,
+                        },
+                    )
                     break  # stream completed (or cancelled) without error
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
+                    yield LoopEvent(
+                        "llm_response",
+                        {
+                            "round": round_index,
+                            "attempt": llm_attempt,
+                            "durationMs": int(
+                                (time.monotonic() - llm_started) * 1000
+                            ),
+                            "error": str(exc),
+                        },
+                    )
                     projection = manager.projection
                     action = await self._hooks.on_request_error(exc, projection, ctx)
                     if action.kind == "retry":
@@ -1527,6 +1563,15 @@ class CoreLoop:
                                 {"sandbox": result.data["_sandbox"]}
                                 if isinstance(result.data, dict)
                                 and isinstance(result.data.get("_sandbox"), dict)
+                                else {}
+                            ),
+                            # W2.7.2: same lift for the approval marker —
+                            # the trace recorder turns it into an
+                            # approval.wait span.
+                            **(
+                                {"approval": result.data["_approval"]}
+                                if isinstance(result.data, dict)
+                                and isinstance(result.data.get("_approval"), dict)
                                 else {}
                             ),
                             **(
