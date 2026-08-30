@@ -86,6 +86,7 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "hash -r" in _ENSURE_PYTHON_310
     assert "ca-certificates" in _ENSURE_PYTHON_310
     assert "python3-pip" in _ENSURE_PYTHON_310
+    assert "astral.sh/uv/0.9.5/install.sh" in _ENSURE_PYTHON_310
 
 
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:

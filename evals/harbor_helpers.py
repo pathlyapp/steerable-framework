@@ -94,6 +94,11 @@ hash -r
 ok && exit 0
 python3 -m pip install --quiet uv==0.9.5 || python3 -m pip install --quiet --user uv==0.9.5 || true
 hash -r
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh || true
+  export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+  hash -r
+fi
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
 uv python install 3.12
 ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
