@@ -42,6 +42,7 @@ class Suite:
     jobs_dir: str
     harbor_version: str
     catalog_minutes: dict[str, int]
+    pack_floor_minutes: int
     agents: dict[str, AgentSpec]
 
     @property
@@ -103,33 +104,47 @@ def shard_tasks(
     shard: int,
     shards: int,
     minutes: Mapping[str, int] | None = None,
+    pack_floor: int | None = None,
 ) -> tuple[str, ...]:
     """Split ``tasks`` into ``shards`` slices for GHA catalog jobs.
 
     With ``minutes``, pack longest-first onto the current lightest shard so
-    wall-clock stays even. Without it, round-robin by catalog order.
+    wall-clock stays even. ``pack_floor`` raises each weight so a 170-minute
+    wrap cannot stack six "short" recorded tasks onto one 360-minute job.
+    Without minutes, round-robin by catalog order.
     """
     if shards < 1:
         raise SuiteError("shards must be >= 1")
     if shard < 0 or shard >= shards:
         raise SuiteError(f"shard {shard} out of range 0..{shards - 1}")
     if minutes:
-        return _pack_by_minutes(tasks, shards, minutes)[shard]
+        return _pack_by_minutes(tasks, shards, minutes, pack_floor=pack_floor)[
+            shard
+        ]
     return tuple(task for index, task in enumerate(tasks) if index % shards == shard)
 
 
 def _pack_by_minutes(
-    tasks: Sequence[str], shards: int, minutes: Mapping[str, int]
+    tasks: Sequence[str],
+    shards: int,
+    minutes: Mapping[str, int],
+    *,
+    pack_floor: int | None = None,
 ) -> tuple[tuple[str, ...], ...]:
     known = [int(minutes[task]) for task in tasks if task in minutes]
     default = sorted(known)[len(known) // 2] if known else 15
+    floor = pack_floor if pack_floor and pack_floor > 0 else 0
+
+    def weight(task: str) -> int:
+        return max(int(minutes.get(task, default)), floor)
+
     loads = [0] * shards
     bins: list[list[str]] = [[] for _ in range(shards)]
-    ordered = sorted(tasks, key=lambda task: (-int(minutes.get(task, default)), task))
+    ordered = sorted(tasks, key=lambda task: (-weight(task), task))
     for task in ordered:
         index = min(range(shards), key=lambda item: (loads[item], len(bins[item]), item))
         bins[index].append(task)
-        loads[index] += int(minutes.get(task, default))
+        loads[index] += weight(task)
     catalog_order = {task: position for position, task in enumerate(tasks)}
     for bucket in bins:
         bucket.sort(key=lambda task: catalog_order[task])
@@ -312,6 +327,11 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
             f"{source}: run.harbor_version must be {PINNED_HARBOR_VERSION!r}"
         )
     catalog_minutes = _catalog_minutes(run.get("catalog_minutes"), catalog, source)
+    pack_floor_minutes = _require_int(
+        run.get("pack_floor_minutes"), "run.pack_floor_minutes", source
+    )
+    if pack_floor_minutes < 1:
+        raise SuiteError(f"{source}: run.pack_floor_minutes must be >= 1")
 
     return Suite(
         dataset_name=dataset_name,
@@ -324,6 +344,7 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
         harbor_version=harbor_version,
         catalog_minutes=catalog_minutes,
+        pack_floor_minutes=pack_floor_minutes,
         agents=agents,
     )
 

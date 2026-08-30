@@ -55,7 +55,11 @@ def test_dry_run_catalog_shard_selects_a_slice(capsys) -> None:
     assert 10 <= includes <= 12
     suite = load_suite()
     expected = shard_tasks(
-        suite.catalog, shard=0, shards=8, minutes=suite.catalog_minutes
+        suite.catalog,
+        shard=0,
+        shards=8,
+        minutes=suite.catalog_minutes,
+        pack_floor=suite.pack_floor_minutes,
     )
     for task in expected:
         assert f"--include-task-name terminal-bench/{task}" in captured.out
@@ -83,6 +87,7 @@ def test_dry_run_failed_prev_shard_selects_a_slice(capsys) -> None:
         shard=0,
         shards=4,
         minutes=suite.catalog_minutes,
+        pack_floor=suite.pack_floor_minutes,
     )
     assert expected
     includes = captured.out.count("--include-task-name")

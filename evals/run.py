@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
                 shard=args.shard,
                 shards=args.shards,
                 minutes=suite.catalog_minutes,
+                pack_floor=suite.pack_floor_minutes,
             )
             if not tasks:
                 raise SuiteError(

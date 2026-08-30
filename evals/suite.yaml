@@ -23,7 +23,9 @@ run:
   # in `.github/actions/setup-harbor/action.yml` together.
   harbor_version: "0.22.0"
   # Wall-clock minutes from GHA catalog run 33309282690 (n-concurrent=2).
-  # Used only to pack 8 shards; not a score.
+  # Used to pack shards; not a score. pack_floor_minutes is 180 so a 170-minute
+  # wrap cannot stack six "short" recorded tasks onto one 360-minute GHA job.
+  pack_floor_minutes: 180
   catalog_minutes:
     adaptive-rejection-sampler: 8
     bn-fit-modify: 4

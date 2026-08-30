@@ -95,6 +95,7 @@ def test_catalog_minutes_cover_every_catalog_id() -> None:
     suite = load_suite()
     assert set(suite.catalog_minutes) == suite.catalog_set
     assert all(value >= 1 for value in suite.catalog_minutes.values())
+    assert suite.pack_floor_minutes == 180
 
 
 def test_cheap_12_is_pinned_subset() -> None:
@@ -290,6 +291,37 @@ def test_shard_tasks_covers_catalog_without_overlap() -> None:
     assert max(loads) < max(rr_loads)
     with pytest.raises(SuiteError, match="out of range"):
         shard_tasks(suite.catalog, shard=8, shards=8)
+
+
+def test_pack_floor_keeps_24_catalog_shards_inside_gha_wall() -> None:
+    """Harbor ×12 wrap is 180 min. n-concurrent=2, 360-minute GHA cap → ≤4 tasks/shard."""
+    suite = load_suite()
+    catalog = [
+        shard_tasks(
+            suite.catalog,
+            shard=i,
+            shards=24,
+            minutes=suite.catalog_minutes,
+            pack_floor=suite.pack_floor_minutes,
+        )
+        for i in range(24)
+    ]
+    flat = [task for shard in catalog for task in shard]
+    assert len(flat) == 89
+    assert sorted(flat) == sorted(suite.catalog)
+    assert max(len(shard) for shard in catalog) <= 4
+    failed = [
+        shard_tasks(
+            suite.splits["failed-prev"],
+            shard=i,
+            shards=24,
+            minutes=suite.catalog_minutes,
+            pack_floor=suite.pack_floor_minutes,
+        )
+        for i in range(24)
+    ]
+    assert sum(len(shard) for shard in failed) == 41
+    assert max(len(shard) for shard in failed) <= 2
 
 
 def test_shard_tasks_round_robin_without_minutes() -> None:
