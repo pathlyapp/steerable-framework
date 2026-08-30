@@ -217,8 +217,14 @@ def _board_tile_grid(
     lines.append(
         "occupancy (#=internal contrast / piece-like, .=flat square)."
     )
+    occupied: list[str] = []
     for rank, row in enumerate(stats):
         cells = ["#" if mad >= occupied_cut else "." for _mean, mad in row]
         lines.append(f"{8 - rank} | {' '.join(cells)}")
+        for file, (_mean, mad) in enumerate(row):
+            if mad >= occupied_cut:
+                occupied.append(f"{chr(ord('a') + file)}{8 - rank}")
     lines.append("    a b c d e f g h")
+    if occupied:
+        lines.append("occupied squares: " + " ".join(occupied))
     return "\n".join(lines)

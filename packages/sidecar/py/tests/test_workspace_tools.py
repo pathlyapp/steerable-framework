@@ -147,6 +147,8 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert "8 |" in board_preview.data["content"]
     assert "occupancy" in board_preview.data["content"]
     assert "#" in board_preview.data["content"]
+    assert "occupied squares:" in board_preview.data["content"]
+    assert "a1" in board_preview.data["content"]
     bmp = tmp_path / "frame.bmp"
     bmp.write_bytes(
         _bgr_bmp(4, 2, [[(0, 0, 0), (0, 0, 0), (255, 255, 255), (255, 255, 255)]] * 2)
