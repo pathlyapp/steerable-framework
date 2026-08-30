@@ -126,6 +126,8 @@ _SYSTEM = (
     "nearby library default. When wrapping a model for pipeline or tensor "
     "parallel, keep the original forward's extra tensors (position "
     "embeddings, attention mask); do not drop them. "
+    "If you recover a matrix from queries, check that it reconstructs "
+    "the queried function on held-out inputs before stopping. "
     "When porting a sampler, pass the source warmup, thinning, and "
     "adapt-control values into the new client, not library defaults. "
     "Before finishing, write a small local check for the instruction's "
