@@ -74,6 +74,8 @@ _SYSTEM = (
     "for exact pixels. "
     "If you drafted required file contents in this chat, write_file them "
     "to the named path before stopping. "
+    "When extracting one scored string from a concatenated dump, match the "
+    "benchmark or dataset the instruction names — not an adjacent title. "
     "Before finishing, write a small local check for the instruction's "
     "acceptance criteria, run it, and fix failures. Hidden tests still run "
     "after you stop."

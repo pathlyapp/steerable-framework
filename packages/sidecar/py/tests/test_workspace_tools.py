@@ -15,6 +15,7 @@ from steerable_sidecar.workspace_tools import (
     _MAX_OUTPUT,
     pgrep_self_wait,
     refuse_truncated_overwrite,
+    short_timeout_wrap,
     sleep_poll,
     workspace_tools_for_cwd,
 )
@@ -198,6 +199,14 @@ def test_sleep_poll_detects_long_sleep_then_cat() -> None:
     assert not sleep_poll("cmd & pid=$!; wait \"$pid\"; cat out")
 
 
+def test_short_timeout_wrap_detects_vm_compile() -> None:
+    assert short_timeout_wrap("timeout 120 node vm.js")
+    assert short_timeout_wrap("timeout 60 make -C /app all")
+    assert not short_timeout_wrap("timeout 10 curl -I http://localhost")
+    assert not short_timeout_wrap("timeout 3600 node vm.js")
+    assert not short_timeout_wrap("timeout 10 qemu-system-x86_64 -nographic")
+
+
 def test_bash_schema_warns_against_short_timeout() -> None:
     desc = _BASH_SCHEMA["properties"]["command"]["description"]
     assert "timeout N" in desc
@@ -226,6 +235,17 @@ async def test_bash_refuses_sleep_poll(tmp_path: Path) -> None:
     assert refused.success is False
     assert "sleep" in (refused.error or "")
     assert "wait" in (refused.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_refuses_short_timeout_wrap(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    refused = await _call(
+        router, "bash", {"command": "timeout 120 node vm.js"}
+    )
+    assert refused.success is False
+    assert "timeout" in (refused.error or "")
+    assert "3600s" in (refused.error or "")
 
 
 def test_refuse_truncated_overwrite_thresholds() -> None:

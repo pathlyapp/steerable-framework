@@ -70,6 +70,18 @@ _SLEEP_POLL_ERROR = (
     "Refusing a long `sleep N; cat/tail/ls` poll. Bash already waits up to "
     "3600s. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`."
 )
+# Catalog-89 make-doom-for-mips: `timeout 120 node vm.js` killed the VM
+# before /tmp/frame.bmp existed. Bash already caps at 3600s.
+_SHORT_TIMEOUT = re.compile(
+    r"\btimeout\s+(?:--signal=\S+\s+|-[A-Za-z]\s+\S+\s+)*(\d+)\s+"
+    r"(?=[^;\n]{0,80}\b(?:node|make|gcc|g\+\+|rustc|clang\+\+|clang)\b)",
+    re.IGNORECASE,
+)
+_SHORT_TIMEOUT_MAX_SEC = 299
+_SHORT_TIMEOUT_ERROR = (
+    "Refusing `timeout N` around compile/VM with N under 300s. Bash already "
+    "caps at 3600s. Drop the timeout wrapper so the job can finish."
+)
 _READ_SCHEMA = {
     "type": "object",
     "properties": {
@@ -205,6 +217,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         if sleep_poll(command):
             return ToolResult(
                 success=False, error=_SLEEP_POLL_ERROR, needsFollowup=True
+            )
+        if short_timeout_wrap(command):
+            return ToolResult(
+                success=False, error=_SHORT_TIMEOUT_ERROR, needsFollowup=True
             )
         # Off the event loop so CoreLoop parallel_tools can overlap bash.
         return await asyncio.to_thread(_run_bash, command)
@@ -445,6 +461,14 @@ def sleep_poll(command: str) -> bool:
     """True when ``command`` is a long sleep followed by cat/tail/ls/head."""
     for match in _SLEEP_POLL.finditer(command or ""):
         if int(match.group(1)) >= _SLEEP_POLL_MIN_SEC:
+            return True
+    return False
+
+
+def short_timeout_wrap(command: str) -> bool:
+    """True when ``command`` wraps compile/VM in ``timeout N`` with N under 300s."""
+    for match in _SHORT_TIMEOUT.finditer(command or ""):
+        if int(match.group(1)) <= _SHORT_TIMEOUT_MAX_SEC:
             return True
     return False
 
