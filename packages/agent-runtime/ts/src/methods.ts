@@ -31,6 +31,7 @@ export const SIDECAR_METHODS = [
   'trace.export',
   'config.get',
   'config.set',
+  'compat.describe',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];
