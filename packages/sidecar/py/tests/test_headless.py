@@ -91,7 +91,11 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "runtime or speedup" in headless_mod._SYSTEM
     assert "meet the threshold" in headless_mod._SYSTEM
     assert "sequence verbatim" in headless_mod._SYSTEM
+    assert "expression tags" in headless_mod._SYSTEM
+    assert "ASCII raster" in headless_mod._SYSTEM
+    assert "annealing arm" in headless_mod._SYSTEM
     assert "javascript: URLs" in headless_mod._SYSTEM
+    assert "Connection refused" in headless_mod._SYSTEM
     assert "x-axis units" in headless_mod._SYSTEM
     assert "handwritten accuracy" in headless_mod._SYSTEM
 
