@@ -62,6 +62,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "wget" in headless_mod._SYSTEM
     assert "dd" in headless_mod._SYSTEM
     assert "carving" in headless_mod._SYSTEM
+    assert "Hidden tests score files" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
@@ -127,6 +128,13 @@ def test_temperature_and_max_tokens_from_env(monkeypatch: pytest.MonkeyPatch) ->
     assert _max_tokens() == 65536
     monkeypatch.setenv("STEERABLE_MAX_TOKENS", "0")
     assert _max_tokens() is None
+
+
+def test_headless_wrap_up_keeps_tools() -> None:
+    import inspect
+
+    src = inspect.getsource(headless_mod._run)
+    assert "wrap_up_keeps_tools=True" in src
 
 
 @pytest.mark.asyncio

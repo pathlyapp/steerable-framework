@@ -163,3 +163,96 @@ async def test_soft_timeout_never_interrupts_in_flight_tool() -> None:
     )
     await collect(loop.run([LLMMessage.text_of("user", "go")]))
     assert finished == ["slow"]
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_keeps_tools_executes_then_stops() -> None:
+    """Harbor scores files; wrap-up must still let the model write them."""
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("slow")]},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "files are on disk"},
+        ]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        executed.append("slow")
+        return "slept"
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(slow)
+    router.register(write)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=1,
+        ),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+
+    assert executed == ["slow", "write"]
+    assert [e for e in events if e.kind == "soft_timeout"]
+    assert provider.tools_seen[1] == schemas
+    assert any(
+        "Write the required output files" in m.content_text for m in provider.calls[1]
+    )
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_keeps_tools_caps_extra_act_rounds() -> None:
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("slow")]},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "done"},
+        ]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        executed.append("slow")
+        return "slept"
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(slow)
+    router.register(write)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=1,
+        ),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    await collect(loop.run([LLMMessage.text_of("user", "go")], tools=schemas))
+    # round 0: slow; wrap-up round 1: write; further writes dropped
+    assert executed == ["slow", "write"]
+    assert provider.tools_seen[2] is None

@@ -26,8 +26,9 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     hook rewrites go through the declared ``ContextManager.replace_all``
     path (the only rewrite, itself append-only)
   * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
-    round boundaries; once exceeded the loop stops offering tools and asks
-    the model for a final answer instead of hard-killing the run
+    round boundaries; once exceeded the loop wraps up. Chat withholds tools
+    and asks for a final answer; ``wrap_up_keeps_tools`` keeps offering
+    tools for a few act rounds so Harbor can still score files on disk
   * per-tool timeout (LoopConfig.tool_timeout_ms): a hung tool returns a
     failed ToolResult instead of hanging the turn; the consecutive-error
     breaker treats it like any other tool failure
@@ -240,10 +241,18 @@ class LoopConfig:
     budget: BudgetLimit | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    #: Wall-clock soft limit. When exceeded, the loop stops offering tools and
-    #: asks the model to wrap up with what it has (one final no-tools round),
-    #: instead of hard-killing the run. ``None`` disables.
+    #: Wall-clock soft limit. When exceeded, the loop asks the model to wrap
+    #: up instead of hard-killing the run. Default wrap-up withholds tools
+    #: (one text round). ``None`` disables.
     soft_timeout_ms: int | None = None
+    #: Coding evals (Harbor / Terminal-Bench) score files on disk, not chat
+    #: text. Keep offering tools after the soft timeout so the model can
+    #: still write those files. Chat stays False.
+    wrap_up_keeps_tools: bool = False
+    #: Extra act rounds after wrap-up when ``wrap_up_keeps_tools`` is set.
+    #: Then tools are withheld for a final text round. Keep this small so
+    #: Harbor's remaining wall clock can still kill the trial.
+    wrap_up_max_tool_rounds: int = 4
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
     #: repeat only burns tokens and can push the model into a retry loop
@@ -283,6 +292,8 @@ class LoopConfig:
             raise ValueError("tool_timeout_ms must be positive (or None to disable)")
         if self.max_steer_chars is not None and self.max_steer_chars <= 0:
             raise ValueError("max_steer_chars must be positive (or None to disable)")
+        if self.wrap_up_max_tool_rounds < 0:
+            raise ValueError("wrap_up_max_tool_rounds must be >= 0")
 
 
 # ---------------------------------------------------------------------------
@@ -674,6 +685,16 @@ class CoreLoop:
             else None
         )
         wrap_up = False
+        wrap_up_tool_rounds_used = 0
+
+        def withholding_tools() -> bool:
+            """True when this round must not offer or execute tools."""
+            if not wrap_up:
+                return False
+            if not self._config.wrap_up_keeps_tools:
+                return True
+            return wrap_up_tool_rounds_used >= self._config.wrap_up_max_tool_rounds
+
         self.trajectory = []
 
         def emit_completion(
@@ -844,7 +865,15 @@ class CoreLoop:
                         "softTimeoutMs": self._config.soft_timeout_ms,
                     },
                 )
-                manager.append_fragment(SoftTimeoutNotice())
+                manager.append_fragment(
+                    SoftTimeoutNotice(
+                        body=(
+                            _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS
+                            if self._config.wrap_up_keeps_tools
+                            else _SOFT_TIMEOUT_NOTICE
+                        )
+                    )
+                )
 
             # ── hook: pre_step (compaction / turn rejection / tool_choice) ──
             # Hooks receive a throwaway projection list and return
@@ -902,7 +931,9 @@ class CoreLoop:
                 )
             # tool_choice only makes sense when tools are actually offered.
             step_tool_choice = (
-                pre.tool_choice if (pre.tool_choice and tools and not wrap_up) else None
+                pre.tool_choice
+                if (pre.tool_choice and tools and not withholding_tools())
+                else None
             )
             if step_tool_choice:
                 yield LoopEvent(
@@ -937,7 +968,7 @@ class CoreLoop:
                         manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
                         # cannot start another act phase.
-                        tools=None if wrap_up else tools,
+                        tools=None if withholding_tools() else tools,
                         temperature=self._config.temperature,
                         max_tokens=self._config.max_tokens,
                         **(
@@ -1117,9 +1148,9 @@ class CoreLoop:
             # try to recover inline calls from the content so the act phase
             # runs instead of ending the turn tool-less. The cleaned text
             # (pseudo blocks removed) becomes the round's content.
-            # Skipped in wrap-up mode: tools are no longer offered, and any
-            # tool intent (structured or pseudo) is dropped so the turn ends.
-            if wrap_up:
+            # Skipped when wrap-up is withholding tools: any tool intent
+            # (structured or pseudo) is dropped so the turn ends.
+            if withholding_tools():
                 tool_calls = []
             elif not tool_calls and content:
                 recovered, cleaned = extract_inline_tool_calls(content)
@@ -1578,10 +1609,14 @@ class CoreLoop:
                         return
 
             # ── observe: continue to next round ──────────────────────────
-            # A narration grant broke out of the tool loop above — skip the
-            # "executing" bookkeeping and run the wrap-up round directly.
-            if wrap_up:
+            # A text wrap-up (tools withheld) broke out of the tool loop
+            # above — skip the "executing" bookkeeping and run the wrap-up
+            # round directly. Artifact wrap-up still executes tools, so it
+            # falls through and increments like a normal round.
+            if wrap_up and withholding_tools():
                 continue
+            if wrap_up:
+                wrap_up_tool_rounds_used += 1
             # Tool results are durable before the next round builds on them.
             await self._flush_history(manager, chat_id)
             yield LoopEvent(
@@ -1624,6 +1659,12 @@ _SOFT_TIMEOUT_NOTICE = (
     "final answer now."
 )
 
+_SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
+    "[system notice] The time budget for this task is nearly exhausted. "
+    "Write the required output files now with bash, write_file, or edit_file. "
+    "Hidden tests score those files, not this chat. Do not keep exploring."
+)
+
 #: Hard cap on before_completion-granted redos (discipline retries +
 #: narration rounds) per run. Hooks bound themselves; this is the
 #: defense-in-depth backstop so a faulty hook cannot spin the loop forever.
@@ -1648,8 +1689,11 @@ class SoftTimeoutNotice(ContextFragment):
 
     content_kind = "loop.soft_timeout_notice"
 
+    def __init__(self, body: str | None = None) -> None:
+        self._body = body or _SOFT_TIMEOUT_NOTICE
+
     def body(self) -> str:
-        return _SOFT_TIMEOUT_NOTICE
+        return self._body
 
     @classmethod
     def type_markers(cls) -> tuple[str, str]:
