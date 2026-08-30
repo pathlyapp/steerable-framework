@@ -432,13 +432,19 @@ def trial_python_tag() -> str:
 def trial_python_venv(venv: str) -> str:
     quoted = shlex.quote(venv)
     # Harbor environment.exec may ignore PATH, so pin uv like python3.
+    # qemu-startup Debian 11: `python3 -m venv` dies in ensurepip; a failed
+    # first attempt also leaves a half-dir that blocks the retry.
     return (
         f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
         "0 if sys.version_info >= (3, 10) else 1)' && "
         'u=/usr/local/bin/uv; [ -x "$u" ] || u=$(command -v uv 2>/dev/null || true); '
-        'if [ -n "$u" ] && [ -x "$u" ]; then '
-        f'"$u" venv --python "$p" --seed {quoted}; '
-        f"else $p -m venv {quoted}; fi"
+        f"rm -rf {quoted}; "
+        'if [ -n "$u" ] && [ -x "$u" ] && '
+        f'"$u" venv --python "$p" --seed {quoted}; then :; '
+        f"elif rm -rf {quoted} && $p -m venv {quoted}; then :; "
+        f"else rm -rf {quoted} && $p -m venv --without-pip {quoted} && "
+        '[ -n "$u" ] && [ -x "$u" ] && '
+        f'"$u" pip install --python {quoted}/bin/python pip; fi'
     )
 
 

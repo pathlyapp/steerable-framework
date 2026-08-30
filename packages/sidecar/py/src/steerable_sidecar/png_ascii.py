@@ -95,7 +95,7 @@ def _png_gray_rows(raw: bytes) -> tuple[int, int, list[list[int]]] | None:
     return width, height, rows
 
 
-def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 40) -> str | None:
+def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | None:
     """Return a bounded ASCII preview, or None when the bytes are not an 8-bit PNG."""
     parsed = _png_gray_rows(raw)
     if parsed is None:

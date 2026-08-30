@@ -69,6 +69,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "PIL" in headless_mod._SYSTEM
     assert "ASCII" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
+    assert "timeout N" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:

@@ -219,4 +219,6 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert "venv --python" in venv_cmd
     assert "--seed" in venv_cmd
     assert "$p -m venv" in venv_cmd
+    assert "--without-pip" in venv_cmd
+    assert "rm -rf /installed-agent/steerable/venv" in venv_cmd
     assert "/installed-agent/steerable/venv" in venv_cmd
