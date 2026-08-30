@@ -105,16 +105,26 @@ _EDIT_SCHEMA = {
 }
 
 
+# Harbor/headless already runs inside the trial container. Keep host-killing
+# rules (rm -rf /, fork bomb, chmod -R 777 /). Allow TB disk-image work:
+# password-recovery and qemu tasks use ``dd if=`` / mkfs as ordinary steps.
+_JAILED_DISABLED_SAFETY = ("sudo", "dd_if", "dd", "mkfs")
+
+
 def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
     ``jailed=True`` is for Harbor/headless: the process already runs inside
-    the trial container, so ``sudo`` is a normal TB agent step, not a host
-    privilege escalation. ``rm -rf /`` stays critical.
+    the trial container, so ``sudo`` and ``dd if=`` are normal TB agent steps,
+    not host privilege escalation. ``rm -rf /`` stays critical. File tools
+    may write anywhere in the container (hidden tests name ``/tmp`` and
+    ``/app``); non-jailed ACP sessions stay cwd-scoped.
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
-        CommandSafetyConfig(disabled_pattern_ids=["sudo"]) if jailed else None
+        CommandSafetyConfig(disabled_pattern_ids=list(_JAILED_DISABLED_SAFETY))
+        if jailed
+        else None
     )
     router = ToolRouter(shell_safety=safety)
     # Per-path serialisation for read-modify-write, so concurrent edits to the
@@ -205,7 +215,7 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
 
     def read_file(path: str) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
+            target = _resolve_under(root, path, jailed=jailed)
             text = target.read_text(encoding="utf-8")
         except (OSError, ValueError) as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
@@ -225,7 +235,7 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         path: str, content: str, expectedVersion: str | None = None
     ) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
+            target = _resolve_under(root, path, jailed=jailed)
         except ValueError as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         async with _lock_for(target):
@@ -253,7 +263,7 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         path: str, edits: list[dict], expectedVersion: str | None = None
     ) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
+            target = _resolve_under(root, path, jailed=jailed)
         except ValueError as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         ops = [
@@ -343,12 +353,12 @@ def pgrep_self_wait(command: str) -> bool:
     return bool(_PGREP_SELF_WAIT.search(command or ""))
 
 
-def _resolve_under(root: Path, path: str) -> Path:
+def _resolve_under(root: Path, path: str, *, jailed: bool = False) -> Path:
     if not path or not str(path).strip():
         raise ValueError("path is empty")
     raw = Path(path)
     target = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
-    if target != root and root not in target.parents:
+    if not jailed and target != root and root not in target.parents:
         raise ValueError(f"path escapes workspace: {path}")
     return target
 

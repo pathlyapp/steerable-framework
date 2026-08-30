@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
+from steerable_agent_runtime.errors import PolicyDeniedError
 
 from steerable_sidecar import workspace_tools as workspace_tools_mod
 from steerable_sidecar.workspace_tools import (
@@ -101,7 +102,36 @@ def test_jailed_workspace_disables_sudo_gate(tmp_path: Path) -> None:
     jailed = workspace_tools_for_cwd(tmp_path, jailed=True)
     assert open_router._shell_safety is None
     assert jailed._shell_safety is not None
-    assert "sudo" in jailed._shell_safety.disabled_pattern_ids
+    disabled = set(jailed._shell_safety.disabled_pattern_ids)
+    assert {"sudo", "dd_if", "dd", "mkfs"} <= disabled
+
+
+@pytest.mark.asyncio
+async def test_jailed_allows_dd_if_and_tmp_write(
+    tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    jailed = workspace_tools_for_cwd(tmp_path, jailed=True)
+    dd = await _call(
+        jailed,
+        "bash",
+        {"command": "dd if=/dev/zero of=disk.img bs=1024 count=1"},
+    )
+    assert dd.success is True
+    assert (tmp_path / "disk.img").is_file()
+    outside = tmp_path_factory.mktemp("outside-jail") / "result.txt"
+    written = await _call(
+        jailed, "write_file", {"path": str(outside), "content": "ok"}
+    )
+    assert written.success is True
+    assert outside.read_text() == "ok"
+    with pytest.raises(PolicyDeniedError):
+        await _call(jailed, "bash", {"command": "rm -rf /"})
+    blocked = workspace_tools_for_cwd(tmp_path)
+    escaped = await _call(
+        blocked, "write_file", {"path": str(outside), "content": "no"}
+    )
+    assert escaped.success is False
+    assert "escapes" in (escaped.error or "")
 
 
 def test_pgrep_self_wait_detects_while_loop() -> None:

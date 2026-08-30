@@ -83,17 +83,19 @@ if command -v apt-get >/dev/null 2>&1; then
     || apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip \
     || true
 fi
+export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 if command -v python3.12 >/dev/null 2>&1; then
   ln -sf "$(command -v python3.12)" /usr/local/bin/python3
 elif command -v python3.11 >/dev/null 2>&1; then
   ln -sf "$(command -v python3.11)" /usr/local/bin/python3
 fi
+hash -r
 ok && exit 0
 python3 -m pip install --quiet uv==0.9.5
-export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
 uv python install 3.12
 ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
+hash -r
 ok
 """.strip()
 _UV_SEED = r"""
@@ -260,6 +262,7 @@ _DEFAULT_TRIAL_PATH = (
 _TRIAL_PATH_EXTRAS = (
     "/root/.local/bin",
     "/usr/local/sbin",
+    "/usr/local/bin",
     "/usr/sbin",
 )
 

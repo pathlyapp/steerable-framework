@@ -105,6 +105,11 @@ class SteerableHarborAgent(BaseInstalledAgent):
             apt_env = {"DEBIAN_FRONTEND": "noninteractive", **proxy_env}
             await self._ensure_python_apt(environment, apt_env)
         await self._ensure_python_310(environment, proxy_env)
+        # The 3.10+ interpreter is /usr/local/bin/python3. Apply that PATH
+        # before `python3 -m venv`, not only after install().
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
         await self.exec_as_root(
             environment, command=f"mkdir -p {shlex.quote(_REMOTE_SRC)}"
         )

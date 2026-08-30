@@ -82,6 +82,8 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "python3.12" in _ENSURE_PYTHON_310
     assert "apk add" in _ENSURE_PYTHON_310
     assert "uv python install 3.12" in _ENSURE_PYTHON_310
+    assert 'PATH="/usr/local/bin:' in _ENSURE_PYTHON_310
+    assert "hash -r" in _ENSURE_PYTHON_310
 
 
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
@@ -115,6 +117,7 @@ def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:
 def test_merge_trial_path_adds_sbin_and_uv() -> None:
     merged = merge_trial_path("/usr/bin:/bin")
     assert merged.startswith("/root/.local/bin")
+    assert "/usr/local/bin" in merged.split(":")
     assert "/usr/sbin" in merged.split(":")
     assert merged.endswith("/usr/bin:/bin")
     empty = merge_trial_path("")
@@ -132,3 +135,5 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
     assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text
     assert "--max-rounds 160" in text
+    assert text.index("_ensure_python_310") < text.index("_python_tag")
+    assert text.index("_merge_trial_path") < text.index("_python_tag")
