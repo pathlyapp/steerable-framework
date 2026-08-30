@@ -33,6 +33,11 @@ export interface BranchFamily {
   children: unknown[];
 }
 
+export interface SessionMessages {
+  recordId: string;
+  messages: { seq: number; role: string; content: string }[];
+}
+
 export interface ToolDescriptor {
   name: string;
   description?: string;
@@ -374,6 +379,14 @@ export class AgentRuntime {
   /** Branch-family view for a lineage. */
   sessionBranches(lineage: string): Promise<BranchFamily> {
     return this.process.request('agent.session.branches', { lineage });
+  }
+
+  /**
+   * Projected post-boundary message span of a history record — what the
+   * model would see on resume. Fails loud on unknown records.
+   */
+  sessionMessages(recordId: string): Promise<SessionMessages> {
+    return this.process.request('agent.session.messages', { recordId });
   }
 
   // ---- chat ------------------------------------------------------------

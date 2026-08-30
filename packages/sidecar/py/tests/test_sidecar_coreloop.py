@@ -1245,3 +1245,52 @@ async def test_storage_path_config_selects_sqlite(tmp_path) -> None:
     )
     assert "error" not in fetched, fetched
     assert fetched["result"]["sessionId"] == "s_durable"
+
+
+@pytest.mark.asyncio
+async def test_session_messages_projects_branch_record() -> None:
+    """W1.2.1: agent.session.messages returns the post-boundary visible
+    span of a record — the read path for rendering/switching branches."""
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    sidecar = Sidecar()
+    await sidecar.storage.append_history(
+        "rec_a",
+        [
+            entry_to_dict(
+                HistoryItem(
+                    seq=1,
+                    kind=kind_for_role("user"),
+                    message=LLMMessage.text_of("user", "branch question"),
+                    token_estimate=3,
+                )
+            ),
+            entry_to_dict(
+                HistoryItem(
+                    seq=2,
+                    kind=kind_for_role("assistant"),
+                    message=LLMMessage.text_of("assistant", "branch answer"),
+                    token_estimate=3,
+                )
+            ),
+        ],
+    )
+    response = await sidecar.server.handle_frame(
+        _frame("agent.session.messages", {"recordId": "rec_a"})
+    )
+    assert "error" not in response, response
+    assert response["result"]["recordId"] == "rec_a"
+    assert response["result"]["messages"] == [
+        {"seq": 1, "role": "user", "content": "branch question"},
+        {"seq": 2, "role": "assistant", "content": "branch answer"},
+    ]
+
+    missing = await sidecar.server.handle_frame(
+        _frame("agent.session.messages", {"recordId": "nope"})
+    )
+    assert missing["error"]["kind"] == "invalid_request"

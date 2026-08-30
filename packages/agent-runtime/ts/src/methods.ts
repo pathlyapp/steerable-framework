@@ -19,6 +19,7 @@ export const SIDECAR_METHODS = [
   'agent.session.list',
   'agent.session.fork',
   'agent.session.branches',
+  'agent.session.messages',
   'agent.chat.stream',
   'agent.chat.cancel',
   'agent.chat.steer',

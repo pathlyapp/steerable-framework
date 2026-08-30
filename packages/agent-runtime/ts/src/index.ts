@@ -33,6 +33,7 @@ export {
   type ChatStreamHandle,
   type ChatStreamParams,
   type ChatStreamStatus,
+  type SessionMessages,
   type SkillInfo,
   type ToolDescriptor,
   type TraceExportResult,
