@@ -278,7 +278,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
                         "path": str(target),
                         "content": preview,
                         "kind": (
-                            "bmp_ascii" if preview.startswith("BMP ") else "png_ascii"
+                            "jpeg_ascii"
+                            if preview.startswith("JPEG ")
+                            else "bmp_ascii"
+                            if preview.startswith("BMP ")
+                            else "png_ascii"
                         ),
                     },
                 )

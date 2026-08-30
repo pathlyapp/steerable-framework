@@ -81,6 +81,10 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "every solution" in headless_mod._SYSTEM
     assert "stdout phrase" in headless_mod._SYSTEM
     assert "concatenated dump" in headless_mod._SYSTEM
+    assert "default query prompts" in headless_mod._SYSTEM
+    assert "OCR" in headless_mod._SYSTEM
+    assert "NameError" in headless_mod._SYSTEM
+    assert "baseline JPEG" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:

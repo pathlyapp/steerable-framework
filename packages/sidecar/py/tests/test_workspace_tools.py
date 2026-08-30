@@ -157,6 +157,18 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     junk_read = await _call(router, "read_file", {"path": "junk.bmp"})
     assert junk_read.success is False
     assert "BMP" in (junk_read.error or "")
+    jpeg_path = Path(__file__).with_name("half.jpg")
+    jpeg = tmp_path / "invoice.jpg"
+    jpeg.write_bytes(jpeg_path.read_bytes())
+    jpeg_preview = await _call(router, "read_file", {"path": "invoice.jpg"})
+    assert jpeg_preview.success is True
+    assert jpeg_preview.data["kind"] == "jpeg_ascii"
+    assert "JPEG 16x8" in jpeg_preview.data["content"]
+    junk_jpeg = tmp_path / "junk.jpg"
+    junk_jpeg.write_bytes(b"\xff\xd8\xff\x00" + b"\xff" * 40)
+    junk_jpeg_read = await _call(router, "read_file", {"path": "junk.jpg"})
+    assert junk_jpeg_read.success is False
+    assert "JPEG" in (junk_jpeg_read.error or "")
 
 
 @pytest.mark.asyncio

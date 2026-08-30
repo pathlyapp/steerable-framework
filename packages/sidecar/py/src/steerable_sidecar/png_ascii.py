@@ -135,12 +135,17 @@ def _bmp_gray_rows(raw: bytes) -> tuple[int, int, list[list[int]]] | None:
 
 
 def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | None:
-    """Bounded ASCII preview for 8-bit PNG or uncompressed 24/32-bit BMP."""
+    """Bounded ASCII preview for 8-bit PNG, baseline JPEG, or uncompressed BMP."""
     parsed = _png_gray_rows(raw)
     label = "PNG"
     if parsed is None:
         parsed = _bmp_gray_rows(raw)
         label = "BMP"
+    if parsed is None:
+        from .jpeg_ascii import jpeg_gray_rows
+
+        parsed = jpeg_gray_rows(raw)
+        label = "JPEG"
     if parsed is None:
         return None
     width, height, rows = parsed
