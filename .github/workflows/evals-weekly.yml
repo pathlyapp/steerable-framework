@@ -4,17 +4,26 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      split:
+        description: cheap-12 smoke (12 ids) or full catalog (89 ids, 8 shards)
+        type: choice
+        options:
+          - cheap-12
+          - catalog
+        default: cheap-12
 
 permissions:
   contents: read
 
 concurrency:
-  group: evals-weekly
+  group: evals-${{ github.event.inputs.split || 'cheap-12' }}
   cancel-in-progress: false
 
 jobs:
   eval:
     name: TB 2.1 cheap-12 × ${{ matrix.agent }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.split != 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -64,6 +73,51 @@ jobs:
             evals/jobs/${{ matrix.agent }}/*/result.json
           if-no-files-found: ignore
 
+  catalog:
+    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/8
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor catalog shard
+        env:
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+        run: |
+          set +e
+          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 8 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo ran > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo failed > eval-status-steerable.txt
+          echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-steerable-${{ matrix.shard }}
+          path: |
+            eval-status-steerable.txt
+            evals/jobs/steerable/*/result.json
+          if-no-files-found: ignore
+
   notify-start:
     name: Feishu started
     runs-on: ubuntu-latest
@@ -72,6 +126,7 @@ jobs:
       - name: Post start card
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
         run: |
           python3 - << 'PY'
           import os, json, urllib.request
@@ -79,16 +134,23 @@ jobs:
           if not url:
               print("FEISHU_BOT_WEBHOOK unset; skip")
               raise SystemExit(0)
+          split = os.environ.get("EVAL_SPLIT") or "cheap-12"
+          title = "开始 · GHA catalog 89" if split == "catalog" else "开始 · GHA cheap-12"
+          body = (
+              "产品 steerable × 全量 89 题，8 分片并行。"
+              if split == "catalog"
+              else "产品 steerable 用网关 key；对照无官方 key 会跳过。"
+          )
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           payload = {
               "msg_type": "interactive",
               "card": {
                   "header": {
-                      "title": {"tag": "plain_text", "content": "开始 · GHA cheap-12"},
+                      "title": {"tag": "plain_text", "content": title},
                       "template": "blue",
                   },
                   "elements": [
-                      {"tag": "div", "text": {"tag": "lark_md", "content": f"产品 steerable 用网关 key；对照无官方 key 会跳过。\n[GHA run]({run})"}},
+                      {"tag": "div", "text": {"tag": "lark_md", "content": f"{body}\n[GHA run]({run})"}},
                   ],
               },
           }
@@ -98,7 +160,7 @@ jobs:
 
   gather:
     name: At least one live agent ran
-    needs: [eval]
+    needs: [eval, catalog]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -110,10 +172,15 @@ jobs:
       - name: Feishu result
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
         run: |
+          label="GHA cheap-12"
+          if [ "$EVAL_SPLIT" = "catalog" ]; then
+            label="GHA catalog 89"
+          fi
           python3 -m evals.feishu \
             --root statuses \
-            --label "GHA cheap-12" \
+            --label "$label" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             || echo "::warning::Feishu post failed"
       - name: Fail if every live agent was skipped
