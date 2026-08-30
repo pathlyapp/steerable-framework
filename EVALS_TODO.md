@@ -22,7 +22,7 @@
 - [x] 本机 Harbor oracle × `fix-git`：**Mean 1.000**（题和隐藏测试通）
 - [x] Harbor CLI 版本钉在 suite：`run.harbor_version: "0.22.0"`
 
-本机产品 cheap-12 已有隐藏测试分：`evals/jobs/steerable/2026-08-29__23-02-40`，glm-5.3-flash，**Mean 0.750**（9 过 / 3 不过），12/12 pytest，`n_errored_trials=0`。GHA 正式分仍未落盘；本机 Claude Code 因容器 Debian 源失败，**忽略，改走 GHA**。
+本机产品 cheap-12：`evals/jobs/steerable/2026-08-29__23-02-40`，glm-5.3-flash，**Mean 0.750**。GHA 产品分已落盘（见 2.1）。本机 Claude Code 因容器 Debian 源失败，**忽略，改走 GHA**。
 
 ---
 
@@ -56,7 +56,7 @@
 
 出口：GHA 一张表：产品 vs `claude-code` / `codex` / `pi`，同一 cheap-12、同一隐藏 pytest、n-attempts=1。
 
-- [x] **2.1** weekly（或独立 workflow）跑产品 × cheap-12。GHA artifact：[33307477867](https://github.com/pathlyapp/steerable-framework/actions/runs/33307477867) glm-5.3-flash **Mean 0.750**（9 过 / 3 不过：`filter-js-from-html`, `password-recovery`, `git-multibranch`），12/12，`n_errored_trials=0`。本机 `2026-08-29__23-02-40` 同为 Mean 0.750（失败题不完全相同）。
+- [x] **2.1** weekly（或独立 workflow）跑产品 × cheap-12。GHA artifact：[33307477867](https://github.com/pathlyapp/steerable-framework/actions/runs/33307477867) glm-5.3-flash **Mean 0.750**（9 过 / 3 不过：`filter-js-from-html`, `password-recovery`, `git-multibranch`），12/12，`n_errored_trials=0`。硬化 `--n-concurrent 2`：[33308738073](https://github.com/pathlyapp/steerable-framework/actions/runs/33308738073) **Mean 0.833**（10 过 / 2 不过：`filter-js-from-html`, `password-recovery`；`git-multibranch` 这次过了），约 16 min，飞书 `成功 · GHA cheap-12 · steerable 0.833`（无 unknown）。本机 `2026-08-29__23-02-40` 同为 Mean 0.750（失败题不完全相同）。
 - [ ] **2.2** 钉模型档，便于和基线比 harness 而不是比模型（Claude/Pi 默认 `anthropic/claude-sonnet-4-5`，Codex `openai/gpt-5.5`；产品默认 `openai/z-ai/glm-5.3-flash`，同档对照时 `--model openai/gpt-5.5`）
 - [ ] **2.3** Mean / exception / artifact 进 job summary；周更
 - [ ] **2.4** 全量 89 题：可选、手动/`workflow_dispatch`（`Evals weekly` split=`catalog`，8 分片），**不上每 PR**
