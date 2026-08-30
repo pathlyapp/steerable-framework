@@ -194,3 +194,46 @@ def test_collect_rows_reads_nested_weekly_status_files(tmp_path: Path) -> None:
     assert rows["steerable"][0] == "ran"
     assert rows["steerable"][1] is not None
     assert rows["steerable"][1]["mean"] == 0.75
+
+
+def test_collect_rows_merges_catalog_shards(tmp_path: Path) -> None:
+    for i, (mean, passed, failed, n) in enumerate(
+        (
+            (1.0, ["fix-git__a"], [], 1),
+            (0.0, [], ["qemu-alpine-ssh__b"], 1),
+        )
+    ):
+        shard = tmp_path / f"eval-steerable-{i}"
+        job = shard / f"2026-08-30__12-0{i}-00"
+        job.mkdir(parents=True)
+        (shard / "eval-status-steerable.txt").write_text("ran\n")
+        reward: dict[str, list[str]] = {}
+        if passed:
+            reward["1.0"] = passed
+        if failed:
+            reward["0.0"] = failed
+        (job / "result.json").write_text(
+            json.dumps(
+                {
+                    "stats": {
+                        "n_completed_trials": n,
+                        "n_errored_trials": 0,
+                        "evals": {
+                            "steerable__z-ai/glm-5.3-flash__terminal-bench/terminal-bench-2-1": {
+                                "metrics": [{"mean": mean}],
+                                "reward_stats": {"reward": reward},
+                            }
+                        },
+                    }
+                }
+            )
+        )
+    rows = collect_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0][0] == "steerable"
+    assert rows[0][1] == "ran"
+    assert rows[0][2] is not None
+    assert rows[0][2]["mean"] == 0.5
+    assert rows[0][2]["n_completed"] == 2
+    assert rows[0][2]["passed"] == ["fix-git"]
+    assert rows[0][2]["failed"] == ["qemu-alpine-ssh"]

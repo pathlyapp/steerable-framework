@@ -35,6 +35,28 @@ def test_dry_run_oracle_prints_harbor_command(capsys) -> None:
     assert "--model" not in captured.out
 
 
+def test_dry_run_catalog_shard_selects_a_slice(capsys) -> None:
+    code = main(
+        [
+            "--agent",
+            "steerable",
+            "--split",
+            "catalog",
+            "--shard",
+            "0",
+            "--shards",
+            "8",
+            "--dry-run",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    includes = captured.out.count("--include-task-name")
+    assert includes == 12
+    assert "--include-task-name terminal-bench/adaptive-rejection-sampler" in captured.out
+    assert "--include-task-name terminal-bench/bn-fit-modify" not in captured.out
+
+
 def test_dry_run_steerable_uses_import_path(capsys) -> None:
     code = main(
         [

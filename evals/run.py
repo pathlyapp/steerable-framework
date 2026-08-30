@@ -21,6 +21,7 @@ from evals.suite import (
     load_suite,
     missing_env,
     resolve_tasks,
+    shard_tasks,
 )
 
 EXIT_OK = 0
@@ -43,6 +44,14 @@ def main(argv: list[str] | None = None) -> int:
         if spec.skipped:
             raise SuiteError(spec.reason or f"agent {args.agent!r} is skipped")
         tasks = resolve_tasks(suite, args.split, args.tasks)
+        if args.shard is not None or args.shards is not None:
+            if args.shard is None or args.shards is None:
+                raise SuiteError("--shard and --shards must be set together")
+            tasks = shard_tasks(tasks, shard=args.shard, shards=args.shards)
+            if not tasks:
+                raise SuiteError(
+                    f"shard {args.shard}/{args.shards} selected no tasks"
+                )
         jobs_dir = (
             Path(args.jobs_dir)
             if args.jobs_dir
@@ -136,6 +145,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--model", help="override suite.yaml model (provider/model)")
     parser.add_argument("--n-concurrent", type=int)
     parser.add_argument("--n-attempts", type=int)
+    parser.add_argument("--shard", type=int, help="0-based slice of the split (with --shards)")
+    parser.add_argument("--shards", type=int, help="how many GHA catalog slices to split into")
     parser.add_argument(
         "--agent-setup-timeout-multiplier",
         type=float,

@@ -35,7 +35,7 @@ python -m evals.run --agent claude-code --split cheap-12
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
-`--split cheap-12` is the live weekly gate (12 ids). `--split catalog` is all 89 and is not a CI job.
+`--split cheap-12` is the live weekly gate (12 ids). `--split catalog` is all 89; GitHub Actions runs it only via `workflow_dispatch` on `.github/workflows/evals-catalog.yml` (8 shards).
 
 ## Layers
 

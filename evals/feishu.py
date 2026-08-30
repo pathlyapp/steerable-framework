@@ -170,40 +170,78 @@ def load_job_result(path: Path) -> tuple[str | None, dict[str, Any] | None]:
     return agent, payload
 
 
-def latest_payloads(root: Path) -> dict[str, dict[str, Any]]:
-    """Last job stamp per agent. Artifact dirs must not share a relative path."""
-    latest: dict[str, dict[str, Any]] = {}
+def payloads_by_agent(root: Path) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for result in iter_job_result_paths(root):
         agent, payload = load_job_result(result)
         if agent and payload is not None:
-            latest[agent] = payload
-    return latest
+            grouped.setdefault(agent, []).append(payload)
+    return grouped
 
 
-def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
-    payloads = latest_payloads(root)
-    rows: list[tuple[str, str, dict[str, Any] | None]] = []
-    seen: set[str] = set()
+def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Weighted Mean and concatenated pass/fail lists across Harbor job shards."""
+    passed: list[str] = []
+    failed: list[str] = []
+    n_errored = 0
+    n_completed = 0
+    mean_acc = 0.0
+    mean_weight = 0
+    for summary in parts:
+        passed.extend(summary["passed"])
+        failed.extend(summary["failed"])
+        n_errored += int(summary["n_errored"] or 0)
+        n = int(summary["n_completed"] or 0)
+        n_completed += n
+        mean = summary.get("mean")
+        if isinstance(mean, float) and n:
+            mean_acc += mean * n
+            mean_weight += n
+    return {
+        "mean": (mean_acc / mean_weight) if mean_weight else None,
+        "passed": passed,
+        "failed": failed,
+        "n_errored": n_errored,
+        "n_completed": n_completed,
+    }
+
+
+def _status_by_agent(root: Path) -> dict[str, str]:
+    by_agent: dict[str, list[str]] = {}
     for status_file in sorted(root.rglob("eval-status-*.txt")):
         agent = status_file.name.removeprefix("eval-status-").removesuffix(".txt")
-        if agent in seen:
-            continue
-        seen.add(agent)
         status = (
             status_file.read_text().strip().splitlines()[0]
             if status_file.stat().st_size
             else "unknown"
         )
-        payload = payloads.get(agent)
-        summary = summarize_result(payload) if payload is not None else None
-        rows.append((agent, status, summary))
+        by_agent.setdefault(agent, []).append(status)
+    out: dict[str, str] = {}
+    for agent, statuses in by_agent.items():
+        if "failed" in statuses:
+            out[agent] = "failed"
+        elif "ran" in statuses:
+            out[agent] = "ran"
+        else:
+            out[agent] = statuses[0]
+    return out
+
+
+def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
+    grouped = payloads_by_agent(root)
+    summaries = {
+        agent: merge_summaries([summarize_result(payload) for payload in payloads])
+        for agent, payloads in grouped.items()
+    }
+    rows: list[tuple[str, str, dict[str, Any] | None]] = []
+    for agent, status in sorted(_status_by_agent(root).items()):
+        rows.append((agent, status, summaries.get(agent)))
     if rows:
         return rows
     # Oracle artifacts have no eval-status-*.txt. Skip trial result.json
     # (parent is ``fix-git__abc``, not a Harbor job stamp).
     out: list[tuple[str, str, dict[str, Any] | None]] = []
-    for agent, payload in sorted(payloads.items()):
-        summary = summarize_result(payload)
+    for agent, summary in sorted(summaries.items()):
         status = (
             "ran"
             if summary["n_errored"] == 0 and summary["mean"] is not None

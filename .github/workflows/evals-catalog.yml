@@ -1,0 +1,129 @@
+name: Evals catalog
+
+# Full Terminal-Bench 2.1 catalog (89 ids). Manual only — never on pull_request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-catalog
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor catalog shard
+        env:
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+        run: |
+          set +e
+          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 8 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo ran > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo failed > eval-status-steerable.txt
+          echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-steerable-${{ matrix.shard }}
+          path: |
+            eval-status-steerable.txt
+            evals/jobs/steerable/*/result.json
+          if-no-files-found: ignore
+
+  notify-start:
+    name: Feishu started
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Post start card
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+        run: |
+          python3 - << 'PY'
+          import os, json, urllib.request
+          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not url:
+              print("FEISHU_BOT_WEBHOOK unset; skip")
+              raise SystemExit(0)
+          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          payload = {
+              "msg_type": "interactive",
+              "card": {
+                  "header": {
+                      "title": {"tag": "plain_text", "content": "开始 · GHA catalog 89"},
+                      "template": "blue",
+                  },
+                  "elements": [
+                      {"tag": "div", "text": {"tag": "lark_md", "content": f"产品 steerable × 全量 89 题，8 分片并行。\n[GHA run]({run})"}},
+                  ],
+              },
+          }
+          req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+          urllib.request.urlopen(req, timeout=20).read()
+          PY
+
+  gather:
+    name: Merge shards and notify
+    needs: [eval]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eval-steerable-*
+          path: statuses
+      - name: Feishu result
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+        run: |
+          python3 -m evals.feishu \
+            --root statuses \
+            --label "GHA catalog 89" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            || echo "::warning::Feishu post failed"
+      - name: Fail if the product agent was skipped
+        run: |
+          shopt -s globstar nullglob
+          files=(statuses/**/eval-status-*.txt)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no eval-status artifacts; catalog shards did not start"
+            exit 1
+          fi
+          cat "${files[@]}"
+          if grep -qx ran "${files[@]}"; then
+            echo "at least one catalog shard ran"
+            exit 0
+          fi
+          if grep -qx failed "${files[@]}"; then
+            echo "a catalog shard ran and failed; the matrix job already failed"
+            exit 0
+          fi
+          echo "every catalog shard was skipped (set STEERABLE_API_KEY + STEERABLE_BASE_URL)"
+          exit 1

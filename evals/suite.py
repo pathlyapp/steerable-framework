@@ -96,6 +96,17 @@ def resolve_tasks(
     return selected
 
 
+def shard_tasks(
+    tasks: Sequence[str], *, shard: int, shards: int
+) -> tuple[str, ...]:
+    """Split ``tasks`` into ``shards`` round-robin slices (GHA catalog jobs)."""
+    if shards < 1:
+        raise SuiteError("shards must be >= 1")
+    if shard < 0 or shard >= shards:
+        raise SuiteError(f"shard {shard} out of range 0..{shards - 1}")
+    return tuple(task for index, task in enumerate(tasks) if index % shards == shard)
+
+
 def dataset_org(dataset_name: str) -> str:
     """Return the Harbor org prefix from a `org/dataset` package name."""
     if "/" not in dataset_name:

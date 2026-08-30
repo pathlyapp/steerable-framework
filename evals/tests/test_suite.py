@@ -18,6 +18,7 @@ from evals.suite import (
     load_suite,
     missing_env,
     resolve_tasks,
+    shard_tasks,
 )
 
 CHEAP_12 = (
@@ -115,6 +116,15 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "merge-multiple: true" not in weekly
     assert "--n-concurrent 2" in weekly
     assert "**/eval-status-*.txt" in weekly
+    catalog = (root / "evals-catalog.yml").read_text()
+    assert "pull_request:" not in catalog
+    assert "workflow_dispatch:" in catalog
+    assert "--split catalog" in catalog
+    assert "--shards 8" in catalog
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog
+    assert "OPENAI_API_KEY" not in catalog
+    assert "timeout-minutes: 360" in catalog
+    assert "python3 -m evals.feishu" in catalog
 
 
 def test_harbor_task_name_prefixes_org() -> None:
@@ -171,6 +181,17 @@ def test_resolve_tasks_override_must_be_in_catalog() -> None:
         resolve_tasks(suite, "cheap-12", ["not-a-task"])
     with pytest.raises(SuiteError, match="unknown split"):
         resolve_tasks(suite, "not-a-split")
+
+
+def test_shard_tasks_covers_catalog_without_overlap() -> None:
+    suite = load_suite()
+    shards = [shard_tasks(suite.catalog, shard=i, shards=8) for i in range(8)]
+    flat = [task for shard in shards for task in shard]
+    assert len(flat) == 89
+    assert sorted(flat) == sorted(suite.catalog)
+    assert all(10 <= len(shard) <= 12 for shard in shards)
+    with pytest.raises(SuiteError, match="out of range"):
+        shard_tasks(suite.catalog, shard=8, shards=8)
 
 
 def test_harbor_argv_oracle_omits_model() -> None:
