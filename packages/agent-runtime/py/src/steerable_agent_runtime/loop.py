@@ -277,12 +277,24 @@ class LoopConfig:
     #: injections are truncated with a visible marker. ``None`` disables
     #: (trusted hosts only).
     max_steer_chars: int | None = 32_000
+    #: What a mid-turn ``steer()`` does to in-flight tool calls (W2.8.1).
+    #: ``"boundary"`` (default): the message waits in the inbox and drains
+    #: at the next round boundary — running tools finish undisturbed.
+    #: ``"interrupt"``: the arrival cancels the in-flight tool phase (like
+    #: cooperative cancel, but the turn CONTINUES): interrupted calls get a
+    #: synthetic notice, unstarted calls are skipped, and the steer reaches
+    #: the model at the very next request. pi's ``steeringMode`` equivalent.
+    steer_mode: Literal["boundary", "interrupt"] = "boundary"
 
     def __post_init__(self) -> None:
         if self.tool_timeout_ms is not None and self.tool_timeout_ms <= 0:
             raise ValueError("tool_timeout_ms must be positive (or None to disable)")
         if self.max_steer_chars is not None and self.max_steer_chars <= 0:
             raise ValueError("max_steer_chars must be positive (or None to disable)")
+        if self.steer_mode not in ("boundary", "interrupt"):
+            raise ValueError(
+                f"steer_mode must be 'boundary' or 'interrupt', got {self.steer_mode!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +341,10 @@ class CoreLoop:
         # the transcript at the next round boundary (dsh-style "inject":
         # consumed at the next step, no separate wakeup semantics).
         self._inbox: asyncio.Queue[str] = asyncio.Queue()
+        # Set whenever a steer lands; in ``steer_mode="interrupt"`` the tool
+        # phase races against it (arrival ends the batch early). Cleared by
+        # the round-boundary drain.
+        self._steer_event = asyncio.Event()
         # Cooperative cancellation token (see cancel()). Sticky for the loop
         # instance — a CoreLoop is single-run in practice (the sidecar builds
         # one per stream), so a cancel issued before run() still applies.
@@ -365,6 +381,7 @@ class CoreLoop:
                     f"{content[:cap]}\n…[steer message truncated at {cap} chars]"
                 )
             self._inbox.put_nowait(content)
+            self._steer_event.set()
 
     def cancel(self) -> None:
         """Request cooperative cancellation of the current run.
@@ -549,37 +566,54 @@ class CoreLoop:
 
     async def _execute_tool_cancellable(
         self, call: ToolCall, ctx: LoopContext
-    ) -> tuple[ToolResult | None, bool]:
-        """Race one tool call against cooperative cancellation.
+    ) -> tuple[ToolResult | None, Literal["cancel", "steer"] | None]:
+        """Race one tool call against cooperative cancellation (and, in
+        ``steer_mode="interrupt"``, steer arrival).
 
-        Returns ``(result, False)`` on normal completion. When the cancel
-        token fires first, the in-flight coroutine is asyncio-cancelled (so a
-        hung tool does not pin the turn) and ``(None, True)`` is returned —
-        the caller records the call as cancelled and stops the batch.
+        Returns ``(result, None)`` on normal completion. When the cancel
+        token or steer event fires first, the in-flight coroutine is
+        asyncio-cancelled (so a hung tool does not pin the turn) and
+        ``(None, "cancel" | "steer")`` is returned — the caller records the
+        call accordingly and stops the batch.
         """
         exec_task = asyncio.ensure_future(self._execute_tool(call, ctx))
         cancel_waiter = asyncio.ensure_future(self._cancel_event.wait())
+        waiters: set[asyncio.Task] = {exec_task, cancel_waiter}
+        steer_waiter: asyncio.Task | None = None
+        if self._config.steer_mode == "interrupt":
+            steer_waiter = asyncio.ensure_future(self._steer_event.wait())
+            waiters.add(steer_waiter)
         try:
-            done, _ = await asyncio.wait(
-                {exec_task, cancel_waiter}, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            interrupt: Literal["cancel", "steer"] | None = None
             if cancel_waiter in done and not exec_task.done():
+                interrupt = "cancel"
+            elif (
+                steer_waiter is not None
+                and steer_waiter in done
+                and not exec_task.done()
+            ):
+                interrupt = "steer"
+            if interrupt is not None:
                 exec_task.cancel()
                 await asyncio.gather(exec_task, return_exceptions=True)
-                return None, True
-            return exec_task.result(), False
+                return None, interrupt
+            return exec_task.result(), None
         finally:
             cancel_waiter.cancel()
+            if steer_waiter is not None:
+                steer_waiter.cancel()
 
     async def _gather_tools_cancellable(
         self, pending: list[tuple[int, ToolCall, float]], ctx: LoopContext
-    ) -> tuple[list[ToolResult | BaseException], bool]:
-        """Race a parallel batch against cooperative cancellation.
+    ) -> tuple[list[ToolResult | BaseException], Literal["cancel", "steer"] | None]:
+        """Race a parallel batch against cooperative cancellation (and, in
+        ``steer_mode="interrupt"``, steer arrival).
 
-        Always returns per-call outcomes in pending order plus whether
-        cancellation fired. On cancel, in-flight children are
-        asyncio-cancelled; calls that already finished keep their real
-        results, cancelled ones surface as ``asyncio.CancelledError``.
+        Always returns per-call outcomes in pending order plus what fired.
+        On cancel/steer, in-flight children are asyncio-cancelled; calls
+        that already finished keep their real results, cancelled ones
+        surface as ``asyncio.CancelledError``.
         """
         call_tasks = [
             asyncio.ensure_future(self._execute_tool(call, ctx))
@@ -587,11 +621,23 @@ class CoreLoop:
         ]
         gather_task = asyncio.gather(*call_tasks, return_exceptions=True)
         cancel_waiter = asyncio.ensure_future(self._cancel_event.wait())
+        waiters: set[asyncio.Task] = {gather_task, cancel_waiter}
+        steer_waiter: asyncio.Task | None = None
+        if self._config.steer_mode == "interrupt":
+            steer_waiter = asyncio.ensure_future(self._steer_event.wait())
+            waiters.add(steer_waiter)
         try:
-            done, _ = await asyncio.wait(
-                {gather_task, cancel_waiter}, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            interrupt: Literal["cancel", "steer"] | None = None
             if cancel_waiter in done and not gather_task.done():
+                interrupt = "cancel"
+            elif (
+                steer_waiter is not None
+                and steer_waiter in done
+                and not gather_task.done()
+            ):
+                interrupt = "steer"
+            if interrupt is not None:
                 gather_task.cancel()
                 await asyncio.gather(gather_task, return_exceptions=True)
                 return [
@@ -599,10 +645,12 @@ class CoreLoop:
                     if task.done() and not task.cancelled()
                     else asyncio.CancelledError("cancelled")
                     for task in call_tasks
-                ], True
-            return list(gather_task.result()), False
+                ], interrupt
+            return list(gather_task.result()), None
         finally:
             cancel_waiter.cancel()
+            if steer_waiter is not None:
+                steer_waiter.cancel()
 
     async def _offer_narration(
         self,
@@ -760,6 +808,8 @@ class CoreLoop:
                 yield LoopEvent(
                     "steer", {"content": injected, "round": round_index}
                 )
+            # Drained: a later steer re-arms the interrupt race.
+            self._steer_event.clear()
 
             # ── cooperative cancel: round boundary ───────────────────────
             # Checked after the steer drain so an accepted injection is
@@ -1244,8 +1294,30 @@ class CoreLoop:
                     batches.append((safe, [call]))
 
             breaker_tripped = False
+            steer_interrupted = False
             for batch_idx, (batch_safe, batch) in enumerate(batches):
-                if breaker_tripped:
+                if breaker_tripped or steer_interrupted:
+                    break
+
+                # Steer interrupt between batches (W2.8.1): nothing in this
+                # batch has started — every remaining call gets a skip
+                # notice and the turn continues to the observe section.
+                if (
+                    self._config.steer_mode == "interrupt"
+                    and self._steer_event.is_set()
+                ):
+                    _append_unexecuted_tool_results(
+                        manager,
+                        batch=batch,
+                        batch_idx=batch_idx,
+                        batches=batches,
+                        call_idx=-1,
+                        errors={},
+                        results={},
+                        skip_message=_STEER_INTERRUPT_SKIP_MESSAGE,
+                        skip_kind="loop.steer_skip",
+                    )
+                    steer_interrupted = True
                     break
 
                 # Cooperative cancel between batches: nothing in this batch
@@ -1343,9 +1415,14 @@ class CoreLoop:
                 # never started get synthetic skip notices (phase 3), and the
                 # turn ends with status "cancelled".
                 cancel_idx: int | None = None
+                # Steer interrupt (W2.8.1, ``steer_mode="interrupt"``) shares
+                # the early-stop machinery but the turn CONTINUES: the batch
+                # is recorded, unstarted calls get skip notices, and the next
+                # round drains the steer into the transcript.
+                steer_idx: int | None = None
                 if pending:
                     if batch_safe and len(pending) > 1:
-                        outcomes, cancel_hit = await self._gather_tools_cancellable(
+                        outcomes, interrupt = await self._gather_tools_cancellable(
                             pending, ctx
                         )
                         for (call_idx, _, _), outcome in zip(pending, outcomes):
@@ -1355,21 +1432,28 @@ class CoreLoop:
                                     abort_exc = outcome
                                     abort_idx = call_idx
                             elif isinstance(outcome, asyncio.CancelledError):
-                                errors[call_idx] = "cancelled"
+                                errors[call_idx] = (
+                                    _STEER_INTERRUPT_MESSAGE
+                                    if interrupt == "steer"
+                                    else "cancelled"
+                                )
                             elif isinstance(outcome, BaseException):
                                 errors[call_idx] = str(outcome)
                             else:
                                 results[call_idx] = outcome
-                        if cancel_hit:
+                        if interrupt is not None:
                             # Every call in this batch has an outcome (real or
                             # cancelled); phase 3 records them all, then the
-                            # cancel finalize at the batch's last call covers
-                            # later batches with skip notices.
-                            cancel_idx = len(batch) - 1
+                            # finalize at the batch's last call covers later
+                            # batches with skip notices.
+                            if interrupt == "cancel":
+                                cancel_idx = len(batch) - 1
+                            else:
+                                steer_idx = len(batch) - 1
                     else:
                         for call_idx, call, _ in pending:
                             try:
-                                result, cancel_hit = (
+                                result, interrupt = (
                                     await self._execute_tool_cancellable(call, ctx)
                                 )
                             except ApprovalAborted as exc:
@@ -1382,9 +1466,13 @@ class CoreLoop:
                             except Exception as exc:  # noqa: BLE001 — tool_error event
                                 errors[call_idx] = str(exc)
                                 continue
-                            if cancel_hit:
-                                errors[call_idx] = "cancelled"
-                                cancel_idx = call_idx
+                            if interrupt is not None:
+                                if interrupt == "cancel":
+                                    errors[call_idx] = "cancelled"
+                                    cancel_idx = call_idx
+                                else:
+                                    errors[call_idx] = _STEER_INTERRUPT_MESSAGE
+                                    steer_idx = call_idx
                                 break
                             results[call_idx] = result
 
@@ -1392,7 +1480,10 @@ class CoreLoop:
                 # transcript append, error breaker.
                 for call_idx, call in enumerate(batch):
                     if call_idx in errors:
-                        ctx.consecutive_tool_errors += 1
+                        # A steer interrupt is a redirect, not a tool
+                        # failure — it must not feed the error breaker.
+                        if errors[call_idx] != _STEER_INTERRUPT_MESSAGE:
+                            ctx.consecutive_tool_errors += 1
                         yield LoopEvent(
                             "tool_error",
                             {"id": call.id, "name": call.name, "error": errors[call_idx]},
@@ -1488,6 +1579,25 @@ class CoreLoop:
                             ),
                         )
                         return
+
+                    # Steer interrupt ends the TOOL PHASE, not the turn:
+                    # record the batch like the cancel path does, then break
+                    # to the observe section — the next round's boundary
+                    # drain delivers the steer to the model.
+                    if call_idx == steer_idx:
+                        _append_unexecuted_tool_results(
+                            manager,
+                            batch=batch,
+                            batch_idx=batch_idx,
+                            batches=batches,
+                            call_idx=call_idx,
+                            errors=errors,
+                            results=results,
+                            skip_message=_STEER_INTERRUPT_SKIP_MESSAGE,
+                            skip_kind="loop.steer_skip",
+                        )
+                        steer_interrupted = True
+                        break
 
                     # Cooperative cancel ends the turn: the batch's calls are
                     # recorded above (real results, or "cancelled" for the
@@ -1722,6 +1832,20 @@ _APPROVAL_ABORT_SKIP_MESSAGE = (
 _CANCEL_SKIP_MESSAGE = (
     "[not executed: the turn was cancelled before this call ran. "
     "Do not claim this call produced a result.]"
+)
+
+#: W2.8.1 steer-interrupt (``steer_mode="interrupt"``): a mid-turn steer
+#: arrival ends the tool phase early. The turn CONTINUES — the steer drains
+#: at the next round boundary — so these are redirects, not failures: they
+#: must not count toward the consecutive-error breaker.
+_STEER_INTERRUPT_MESSAGE = (
+    "interrupted: the user sent a mid-turn message; this call was stopped "
+    "so the model can respond to it"
+)
+_STEER_INTERRUPT_SKIP_MESSAGE = (
+    "[not executed: the user sent a mid-turn message and this call was "
+    "skipped so the model can respond to it. Do not claim this call "
+    "produced a result.]"
 )
 
 

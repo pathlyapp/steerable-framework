@@ -647,6 +647,26 @@ class Sidecar:
 
         stream_id = params.get("streamId") or _new_stream_id()
         messages = _coerce_messages(params.get("messages") or [])
+        # W2.8.2: the host's assembled system prompt arrives as a typed
+        # fragment (token cap enforced at this boundary), not an opaque seed
+        # message. Supplying both is a host bug — fail loud.
+        system_prompt = params.get("systemPrompt")
+        if system_prompt is not None:
+            if any(m.role == "system" for m in messages):
+                raise JsonRpcError(
+                    "systemPrompt param and a system message in messages are "
+                    "mutually exclusive",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            from steerable_agent_runtime import (
+                SystemPromptFragment,
+                render_fragment_capped,
+            )
+
+            messages.insert(
+                0, render_fragment_capped(SystemPromptFragment(str(system_prompt)))
+            )
 
         transport = self._transport
         if _use_coreloop(params):
@@ -1748,6 +1768,14 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         **(
             {"tool_timeout_ms": int(params["toolTimeoutMs"])}
             if params.get("toolTimeoutMs") is not None
+            else {}
+        ),
+        # W2.8.1: mid-turn steer policy — "boundary" (default) drains at the
+        # next round boundary; "interrupt" cancels the in-flight tool phase
+        # so the steer reaches the model at the very next request.
+        **(
+            {"steer_mode": params["steerMode"]}
+            if params.get("steerMode") in ("boundary", "interrupt")
             else {}
         ),
     )
