@@ -247,6 +247,14 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 timeout_sec=120,
             )
         except Exception:
+            try:
+                await self.exec_as_root(
+                    environment,
+                    command="rm -f /usr/local/bin/python3",
+                    timeout_sec=15,
+                )
+            except Exception:
+                return
             return
 
     async def _ensure_python_310(

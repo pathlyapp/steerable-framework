@@ -21,6 +21,7 @@ from steerable_agent_protocol.generated import ToolResult
 from steerable_agent_runtime import ToolRouter
 
 from .file_edit import EditError, EditOp, apply_edits, content_version
+from .png_ascii import ascii_png_preview
 
 _MAX_OUTPUT = 100_000
 # Catalog-89 bn-fit-modify: a no_artifact retry overwrote a 10k-row sample
@@ -236,6 +237,16 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
+            preview = ascii_png_preview(raw)
+            if preview is not None:
+                return ToolResult(
+                    success=True,
+                    data={
+                        "path": str(target),
+                        "content": preview,
+                        "kind": "png_ascii",
+                    },
+                )
             kind = (
                 "PNG"
                 if raw.startswith(b"\x89PNG")

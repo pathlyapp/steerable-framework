@@ -67,6 +67,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "wait for background jobs" in headless_mod._SYSTEM
     assert "truncated write_file" in headless_mod._SYSTEM
     assert "PIL" in headless_mod._SYSTEM
+    assert "ASCII" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
 
 

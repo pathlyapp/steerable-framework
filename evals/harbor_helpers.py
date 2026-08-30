@@ -431,11 +431,13 @@ def trial_python_tag() -> str:
 
 def trial_python_venv(venv: str) -> str:
     quoted = shlex.quote(venv)
+    # Harbor environment.exec may ignore PATH, so pin uv like python3.
     return (
         f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
         "0 if sys.version_info >= (3, 10) else 1)' && "
-        "if command -v uv >/dev/null 2>&1; then "
-        f'uv venv --python "$p" --seed {quoted}; '
+        'u=/usr/local/bin/uv; [ -x "$u" ] || u=$(command -v uv 2>/dev/null || true); '
+        'if [ -n "$u" ] && [ -x "$u" ]; then '
+        f'"$u" venv --python "$p" --seed {quoted}; '
         f"else $p -m venv {quoted}; fi"
     )
 

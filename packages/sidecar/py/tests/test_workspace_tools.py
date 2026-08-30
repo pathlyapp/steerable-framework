@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import struct
 import time
+import zlib
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,21 @@ async def _call(router, name: str, arguments: dict) -> object:
     return await router.dispatch(
         ToolCall(id="t", name=name, arguments=arguments),
         consent_granted=True,
+    )
+
+
+def _gray_png(width: int, height: int, rows: list[list[int]]) -> bytes:
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
     )
 
 
@@ -92,6 +109,12 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert as_text.success is False
     assert "PNG" in (as_text.error or "")
     assert "PIL" in (as_text.error or "")
+    good = tmp_path / "gray.png"
+    good.write_bytes(_gray_png(4, 2, [[0, 0, 255, 255], [0, 0, 255, 255]]))
+    preview = await _call(router, "read_file", {"path": "gray.png"})
+    assert preview.success is True
+    assert preview.data["kind"] == "png_ascii"
+    assert "PNG 4x2" in preview.data["content"]
 
 
 @pytest.mark.asyncio
