@@ -200,7 +200,7 @@ def install_sidecar(
     """Install steerable framework into the embedded interpreter.
 
     Two modes:
-    * **Source** (default): pip-install the four framework packages from their
+    * **Source** (default): pip-install the five framework packages from their
       sibling source trees. Best during development — picks up local changes.
     * **Wheels**: when ``wheels_dir`` is provided, pip-install the matching
       wheels from there. Use this for reproducible release builds — pair with
@@ -223,6 +223,9 @@ def install_sidecar(
             "steerable_agent_harness",
             "steerable_agent_runtime",
             "steerable_sidecar",
+            # W1.3.3: the desktop's opt-in per-host egress mode spawns
+            # `python -m steerable_egress_proxy` from the bundled runtime.
+            "steerable_egress_proxy",
         )
         for stem in wanted:
             matches = sorted(wheels_dir.glob(f"{stem}-*.whl"))
@@ -244,6 +247,7 @@ def install_sidecar(
         ROOT / "packages" / "agent-harness" / "py",
         ROOT / "packages" / "agent-runtime" / "py",
         ROOT / "packages" / "sidecar" / "py",
+        ROOT / "packages" / "egress-proxy" / "py",
     )
     for path in pkg_paths:
         print(f"[pip] install (source) {path}")

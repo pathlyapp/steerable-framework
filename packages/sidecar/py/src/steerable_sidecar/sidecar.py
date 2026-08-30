@@ -231,6 +231,7 @@ class Sidecar:
         register("trace.export", self._handle_trace_export)
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
+        register("compat.describe", self._handle_compat_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
         register("agent.chat.steer", self._handle_chat_steer)
@@ -591,6 +592,19 @@ class Sidecar:
         if log_level is not None:
             self.config.log_level = str(log_level)
             logging.getLogger().setLevel(self.config.log_level)
+
+    async def _handle_compat_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the compat-flag wire vocabulary to host settings UIs.
+
+        The framework owns the flag definitions (`describe_compat_flags`);
+        hosts render their compat section from this payload so a new flag
+        needs no host-side constant to stay in sync (ALIGN 2.3.3).
+        """
+        from steerable_agent_runtime.llm import describe_compat_flags
+
+        return {"flags": describe_compat_flags()}
 
     async def _handle_chat_stream(
         self, params: dict[str, Any] | None

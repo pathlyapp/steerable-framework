@@ -65,6 +65,20 @@ export interface TraceExportResult {
   privacyMode: string;
 }
 
+/**
+ * Wire-level descriptor of one OpenAI-compat flag, as served by
+ * `compat.describe`. `kind` is `"bool"`, `"string-list"`, or
+ * `"enum:<opt1>,<opt2>"`-style; `default` mirrors the framework's
+ * `OpenAICompatFlags` defaults.
+ */
+export interface CompatFlagDescriptor {
+  key: string;
+  field: string;
+  kind: string;
+  default: unknown;
+  description: string;
+}
+
 export type ChatStreamStatus =
   | 'completed'
   | 'cancelled'
@@ -407,6 +421,16 @@ export class AgentRuntime {
 
   async setConfig(patch: Record<string, unknown>): Promise<void> {
     await this.process.request('config.set', patch);
+  }
+
+  /**
+   * The framework-owned OpenAI-compat flag vocabulary (`describe_compat_flags`
+   * on the Python side). Host settings UIs render their compat section from
+   * these descriptors instead of hardcoding flag names, so a new flag needs
+   * no host-side constant to stay in sync.
+   */
+  describeCompatFlags(): Promise<{ flags: CompatFlagDescriptor[] }> {
+    return this.process.request('compat.describe');
   }
 
   // ---- internals ---------------------------------------------------------

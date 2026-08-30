@@ -20,6 +20,71 @@ from typing import Any, Literal
 
 _MAX_TOKENS_FIELDS = ("max_tokens", "max_completion_tokens")
 
+#: Single source of truth for the wire surface: ``(wire_key, field_name,
+#: kind, description)`` per flag. ``from_dict`` derives its key map from
+#: this table and `describe_compat_flags` serves it to hosts, so a new
+#: flag appears on the wire and in host settings UIs by adding one row.
+#: ``kind`` is ``"bool"``, ``"enum:max_tokens,max_completion_tokens"``-style,
+#: or ``"string-list"`` (comma-separated in host UIs).
+_FLAG_WIRE_SPEC: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "supportsUsageInStreaming",
+        "supports_usage_in_streaming",
+        "bool",
+        "Send stream_options.include_usage; disable for vendors that reject it",
+    ),
+    (
+        "maxTokensField",
+        "max_tokens_field",
+        "enum:max_tokens,max_completion_tokens",
+        "Request field that caps the response length",
+    ),
+    (
+        "supportsReasoningEffort",
+        "supports_reasoning_effort",
+        "bool",
+        "Send reasoning_effort when the env clamp yields a level",
+    ),
+    (
+        "supportsTemperature",
+        "supports_temperature",
+        "bool",
+        "Send temperature; disable for fixed-temperature reasoning models",
+    ),
+    (
+        "reasoningDeltaFields",
+        "reasoning_delta_fields",
+        "string-list",
+        "Delta keys read as reasoning text, in preference order",
+    ),
+    (
+        "cachedTokensFields",
+        "cached_tokens_fields",
+        "string-list",
+        "Usage locations read for cached prompt tokens (dotted paths ok)",
+    ),
+)
+
+
+def describe_compat_flags() -> list[dict[str, Any]]:
+    """Wire-level descriptor of every compat flag for host settings UIs.
+
+    Hosts (desktop settings page) render their compat section from this
+    list instead of hardcoding flag names, so the framework stays the
+    single source of truth for the flag vocabulary (ALIGN 2.3.3).
+    """
+    defaults = OpenAICompatFlags()
+    return [
+        {
+            "key": wire,
+            "field": field_name,
+            "kind": kind,
+            "default": getattr(defaults, field_name),
+            "description": description,
+        }
+        for wire, field_name, kind, description in _FLAG_WIRE_SPEC
+    ]
+
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatFlags:
@@ -63,14 +128,7 @@ class OpenAICompatFlags:
         """Build flags from a camelCase host payload (sidecar ``compat``
         param). Unknown keys fail loud — a typo'd flag must not silently
         degrade to reference behavior."""
-        key_map = {
-            "supportsUsageInStreaming": "supports_usage_in_streaming",
-            "maxTokensField": "max_tokens_field",
-            "supportsReasoningEffort": "supports_reasoning_effort",
-            "supportsTemperature": "supports_temperature",
-            "reasoningDeltaFields": "reasoning_delta_fields",
-            "cachedTokensFields": "cached_tokens_fields",
-        }
+        key_map = {wire: field for wire, field, *_ in _FLAG_WIRE_SPEC}
         unknown = set(data) - set(key_map)
         if unknown:
             raise ValueError(
@@ -115,6 +173,67 @@ PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
                 "prompt_cache_hit_tokens",
                 "prompt_tokens_details.cached_tokens",
             ),
+        ),
+    ),
+    # Moonshot (kimi-k2.5/k2.6/k2.7-code/k3): thinking models REJECT an
+    # explicit ``temperature`` (fixed 1.0 thinking / 0.6 non-thinking, any
+    # other value → HTTP 400 ``invalid temperature`` — platform.kimi.ai
+    # model-parameter reference, reproduced live by vercel/ai#19543) and
+    # reject ``reasoning_effort`` on every k2.x model (only k3 accepts
+    # low/high/max). Both flags flip off for the host; a host that knows it
+    # drives k3 can still pass either field explicitly — host extra kwargs
+    # always win over flags. Reasoning arrives as ``reasoning_content``
+    # (default covers it; pinned as data). Doc-verified 2026-08-30 against
+    # platform.kimi.ai/docs/api/models-overview; live-key run pending.
+    (
+        "api.moonshot.cn",
+        OpenAICompatFlags(
+            supports_temperature=False,
+            supports_reasoning_effort=False,
+            reasoning_delta_fields=("reasoning_content", "reasoning"),
+        ),
+    ),
+    (
+        "api.moonshot.ai",
+        OpenAICompatFlags(
+            supports_temperature=False,
+            supports_reasoning_effort=False,
+            reasoning_delta_fields=("reasoning_content", "reasoning"),
+        ),
+    ),
+    # OpenRouter normalizes every upstream reasoning shape into the
+    # ``reasoning`` delta field (docs: "reasoning tokens will appear in the
+    # ``reasoning`` field"; SDK ChatStreamDelta.reasoning), with
+    # ``reasoning_details`` as the structured companion. Pin ``reasoning``
+    # first so the normalized path wins; ``reasoning_content`` stays as the
+    # pass-through fallback for upstreams OpenRouter does not rewrite.
+    # Doc-verified 2026-08-30 against openrouter.ai/docs reasoning-tokens
+    # guide; live-key run pending.
+    (
+        "openrouter.ai",
+        OpenAICompatFlags(
+            reasoning_delta_fields=("reasoning", "reasoning_content"),
+        ),
+    ),
+    # DashScope / Alibaba Model Studio compatible mode (Qwen3 thinking,
+    # DeepSeek hosted): reasoning arrives as ``reasoning_content`` and
+    # ``stream_options.include_usage`` is documented-supported, so the
+    # reference defaults already fit — this entry pins that coverage as
+    # data. Thinking is toggled by the nonstandard ``enable_thinking``
+    # extra-body field; hosts opt in via explicit extra kwargs, which
+    # always win over flags. Doc-verified 2026-08-30 against
+    # help.aliyun.com/en/model-studio deep-thinking guide; live-key run
+    # pending.
+    (
+        "dashscope.aliyuncs.com",
+        OpenAICompatFlags(
+            reasoning_delta_fields=("reasoning_content", "reasoning"),
+        ),
+    ),
+    (
+        "dashscope-intl.aliyuncs.com",
+        OpenAICompatFlags(
+            reasoning_delta_fields=("reasoning_content", "reasoning"),
         ),
     ),
 ]

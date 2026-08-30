@@ -236,11 +236,12 @@ def test_install_sidecar_from_wheels_validates_inventory(
     """``--from-wheels`` must refuse to bundle a runtime that's missing a wheel."""
     wheels = tmp_path / "dist-py"
     wheels.mkdir()
-    # Three of the four required wheels — agent-runtime is intentionally absent.
+    # Four of the five required wheels — agent-runtime is intentionally absent.
     for stem in (
         "steerable_agent_protocol",
         "steerable_agent_harness",
         "steerable_sidecar",
+        "steerable_egress_proxy",
     ):
         (wheels / f"{stem}-0.1.0-py3-none-any.whl").write_bytes(b"PK\x03\x04stub\n")
 
@@ -265,6 +266,7 @@ def test_install_sidecar_from_wheels_picks_latest(
         "steerable_agent_harness",
         "steerable_agent_runtime",
         "steerable_sidecar",
+        "steerable_egress_proxy",
     ):
         (wheels / f"{stem}-0.1.0-py3-none-any.whl").write_bytes(b"stub")
         (wheels / f"{stem}-0.2.0-py3-none-any.whl").write_bytes(b"stub")
@@ -285,8 +287,8 @@ def test_install_sidecar_from_wheels_picks_latest(
     pip_install_targets = [
         cmd[-1] for cmd in invocations if "install" in cmd and cmd[-1].endswith(".whl")
     ]
-    # Four wheels, all the 0.2.0 variants.
-    assert len(pip_install_targets) == 4
+    # Five wheels, all the 0.2.0 variants.
+    assert len(pip_install_targets) == 5
     for path in pip_install_targets:
         assert "0.2.0" in path
         assert "0.1.0" not in path

@@ -112,6 +112,35 @@ async def test_config_get_set_round_trip(sidecar: Sidecar) -> None:
     assert after["result"]["logLevel"] == "DEBUG"
 
 
+async def test_compat_describe_serves_the_framework_flag_vocabulary(
+    sidecar: Sidecar,
+) -> None:
+    # The host settings UI renders from this payload; every wire key must
+    # round-trip through OpenAICompatFlags.from_dict (unknown keys fail
+    # loud there, so a describe/from_dict skew cannot pass silently).
+    from steerable_agent_runtime.llm import OpenAICompatFlags
+
+    response = await _call(sidecar, "compat.describe")
+    flags = response["result"]["flags"]
+    assert {f["key"] for f in flags} == {
+        "supportsUsageInStreaming",
+        "maxTokensField",
+        "supportsReasoningEffort",
+        "supportsTemperature",
+        "reasoningDeltaFields",
+        "cachedTokensFields",
+    }
+    for f in flags:
+        assert f["kind"] in ("bool", "string-list") or f["kind"].startswith("enum:")
+        # Every described key builds flags without raising.
+        value = (
+            f["default"]
+            if f["kind"] != "string-list"
+            else list(f["default"])
+        )
+        OpenAICompatFlags.from_dict({f["key"]: value})
+
+
 async def test_workspace_apply_edits_returns_content_diff_and_matches(
     sidecar: Sidecar,
 ) -> None:

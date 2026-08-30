@@ -153,6 +153,53 @@ def test_registry_covers_documented_vendors() -> None:
     assert compat_for_base_url("https://api.openai.com/v1") is None
 
 
+def test_registry_moonshot_flips_temperature_and_effort() -> None:
+    # kimi thinking models HTTP-400 on an explicit temperature (fixed per
+    # mode) and on reasoning_effort below k3 — platform.kimi.ai parameter
+    # reference, reproduced live by vercel/ai#19543. Both .cn and .ai
+    # endpoints carry the entry.
+    for host in ("https://api.moonshot.cn/v1", "https://api.moonshot.ai/v1"):
+        entry = compat_for_base_url(host)
+        assert entry is not None, host
+        assert entry.supports_temperature is False
+        assert entry.supports_reasoning_effort is False
+    # And the resolved flags drive the request builder with no code path
+    # change: temperature and reasoning_effort stay out of the body.
+    monkey = pytest.MonkeyPatch()
+    monkey.setenv("STEERABLE_REASONING_EFFORT", "low")
+    entry = compat_for_base_url("https://api.moonshot.cn/v1")
+    provider = _provider(
+        model="kimi-k2.6", default_temperature=0.7, compat=entry
+    )
+    body = _stream_body(provider, temperature=0.5)
+    assert "temperature" not in body
+    assert "reasoning_effort" not in body
+    monkey.undo()
+
+
+def test_registry_openrouter_pins_normalized_reasoning_field() -> None:
+    # OpenRouter normalizes upstream reasoning into the ``reasoning``
+    # delta field; the entry pins it first with reasoning_content as the
+    # pass-through fallback.
+    entry = compat_for_base_url("https://openrouter.ai/api/v1")
+    assert entry is not None
+    assert entry.reasoning_delta_fields[0] == "reasoning"
+    chunk = {"choices": [{"delta": {"reasoning": "hmm"}, "finish_reason": None}]}
+    assert _parse_stream_chunk(chunk, compat=entry).reasoning_delta == "hmm"
+
+
+def test_registry_dashscope_pins_reasoning_content_coverage() -> None:
+    # DashScope compatible mode fits the reference defaults; the entries
+    # (cn + intl) pin reasoning_content coverage as data.
+    for host in (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    ):
+        entry = compat_for_base_url(host)
+        assert entry is not None, host
+        assert "reasoning_content" in entry.reasoning_delta_fields
+
+
 def test_from_dict_roundtrip_and_unknown_key_fails_loud() -> None:
     flags = OpenAICompatFlags.from_dict(
         {"supportsUsageInStreaming": False, "maxTokensField": "max_completion_tokens"}

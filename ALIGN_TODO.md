@@ -47,14 +47,34 @@ agent-ui 的 `OrchestrationPlanCard` 组件。桌面零调用点。
 
 - [x] **1.3.1**（2026-08-30 完成：whenSidecarSupervisor 启动承诺；handle/skill-loader 测试 19 例） skill-loader 启动竞态：sidecar 未就绪时静默返回空（实测启动日志
       `no skills loaded`）。加就绪后重试，或挂到 supervisor 的 ready 事件上。
-- [ ] **1.3.2** compat 显式开关：桌面设置页暴露 `OpenAICompatFlags` 关键旗标，
-      传给 `chat.stream` 的 `compat` 参数。当前靠框架 URL 自动探测兜底，
-      用户自建 OpenAI 兼容端点（私有部署）可能漏配。
-- [ ] **1.3.3**（可选）桌面集成 `steerable-egress-proxy`：`main.ts` 已有注释指引，
-      集成后 Seatbelt 的端口级管控升级为按主机名管控。
-- [ ] **1.3.4**（卫生）桌面自绘组件与 agent-ui 导出的去重评估：`ToolCallRenderer`、
-      `state/` 会话原语（`useChatList` / `useChatSession` / `ChatSessionProvider`）
-      vs 桌面 `MessageList` / `LocalChatPanel`。能换则换，不能换写明理由。
+- [x] **1.3.2**（2026-08-30 完成：sidecar `compat.describe` RPC 服务化旗标词汇表（2.3.3 单一真源），
+      桌面设置页"高级兼容旗标"区按描述符动态渲染（bool 三态/枚举/列表），
+      `sanitizeCompatOverrides` 收敛持久化；canary 第 11 节模拟用户操作
+      验证开关-保存-持久化全链路） compat 显式开关：桌面设置页暴露
+      `OpenAICompatFlags` 关键旗标，传给 `chat.stream` 的 `compat` 参数。
+- [x] **1.3.3**（2026-08-30 完成：默认关、`STEERABLE_EGRESS_PROXY=1` 显式开启；
+      `src/sidecar/egress-proxy.ts` 计划/启动/TCP 探针就绪；开启后 Seatbelt
+      只放行代理端口、主机名单由代理持有；启动失败回退端口级管控（加固
+      不断 LLM 通路）；build_sidecar.py 打包 egress-proxy。实盘验证：
+      curl 经代理 401（隧道通）/ 禁主机 000（拒绝）；桌面开启后
+      DeepSeek 请求经隧道拿到真实 401（key 过期，路径通），Seatbelt
+      egress 只剩 127.0.0.1:57780）桌面集成 `steerable-egress-proxy`。
+- [x] **1.3.4**（2026-08-30 评估完成，结论：2 项早已去重、3 项不换并写明理由）
+      - **已去重**：`useChatList`（桌面 `useChatsAndAgents.ts` 就是它的 transport
+        适配器）、`useChatStream`（AgentPage 直接用）、`ToolExecutionCard`
+        （桌面 `ExecutedActionsCard` 已委托它渲染，自身只是 executed_actions
+        SSE 形状的薄适配器）。加上 W1.1 的 `OrchestrationPlanCard`，桌面消费
+        agent-ui 表面达 4 处（出口线 4/8 达成）。
+      - **不换 `MessageList`**：agent-ui 版是 headless 最小滚动容器（恒
+        auto-scroll）；桌面版有 near-bottom 检测 + 回到底部浮钮 + agent 徽标
+        + executed-actions + 编排子代理卡片 + 轮次状态，换 = UX 回退。
+      - **不换 `useChatSession`/`ChatSessionProvider`**：它只是 useChatStream
+        +useChatComposer 的便捷组合；桌面 ChatInput（1566 行：轮中转向、
+        ⌘+Enter 排队、skill 提及、文件拖拽）远超 useChatComposer 的
+        draft+enter 模型；底层原语已在用，组合层无换的价值。
+      - **不换 `ToolCallRenderer`**：其内联审批按钮模式与桌面模态审批流
+        （ApprovalModal + 反向通道桥）冲突；工具执行展示已由
+        ToolExecutionCard 覆盖。
 
 **出口**：`framework-desktop-parity` 复测，RPC 接通 11 → 15+，agent-ui 组件 2/8 → 4/8+。
 
@@ -68,9 +88,9 @@ agent-ui 的 `OrchestrationPlanCard` 组件。桌面零调用点。
 
 MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH 有 client，我们为零。
 
-- [ ] **2.1.1** 先做 **MCP 客户端**：框架作为 MCP client 接入外部 MCP server 的工具，
+- [x] **2.1.1**（2026-08-29 已落地（9e612ea）：mcp.py 限定名/目录上限/stdio client；test_mcp.py 14 例含 loop 端到端） 先做 **MCP 客户端**：框架作为 MCP client 接入外部 MCP server 的工具，
       经既有 `@tool` 契约投影进 CoreLoop（工具面不变，多一个来源）。
-- [ ] **2.1.2** 与桌面的关系定义：deeppath-agent 已有 `mcp-executor.ts`（宿主侧 MCP），
+- [x] **2.1.2**（分工已定并文档化：桌面宿主侧 MCP（toolsViaHost 一等工具），框架 client 服务嵌入型宿主；roadmap L224/L398） 与桌面的关系定义：deeppath-agent 已有 `mcp-executor.ts`（宿主侧 MCP），
       框架侧客户端落地后明确两者分工——框架管循环内工具，桌面管宿主集成，避免双头。
 - [ ] **2.1.3**（二期再定）MCP 服务端：把框架工具面暴露为 MCP server。先不做，
       客户端落地后复评必要性。
@@ -87,10 +107,10 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.3 Provider 注册表兑现（R9 最大差距 ③：机制已建成，注册表只有 1 条）
 
-- [ ] **2.3.1** 真实接入第二、第三家 OpenAI 兼容厂商（建议：一个国产 reasoning 厂商 +
+- [x] **2.3.1**（接入 Moonshot（温度/effort 双翻转，platform.kimi.ai 文档 + vercel/ai#19543 实测 400 佐证）、OpenRouter、DashScope；纯数据零解析改动；compat 测试 16 例） 真实接入第二、第三家 OpenAI 兼容厂商（建议：一个国产 reasoning 厂商 +
       一个海外主流厂商），只填 `OpenAICompatFlags` 数据、不改解析代码——
       这正是 P2.1 验收测试承诺的边际成本。
-- [ ] **2.3.2** 每接一家，`PROVIDER_COMPAT_HOSTS` 加条目 + 对应厂商的实测记录
+- [x] **2.3.2**（每厂商注释含旗标翻转原因与文档出处，标注 doc-verified 2026-08-30 待 key 实测） 每接一家，`PROVIDER_COMPAT_HOSTS` 加条目 + 对应厂商的实测记录
       （哪个旗标必须翻、为什么）留在 compat.py 注释里。
 - [ ] **2.3.3** 与 1.3.2 联动：桌面设置页的 compat 开关复用同一份旗标定义。
 

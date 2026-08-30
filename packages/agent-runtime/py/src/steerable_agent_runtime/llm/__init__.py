@@ -136,6 +136,7 @@ from .compat import (
     PROVIDER_COMPAT_HOSTS,
     OpenAICompatFlags,
     compat_for_base_url,
+    describe_compat_flags,
 )
 from .errors import (
     RETRYABLE_KINDS,
@@ -161,6 +162,7 @@ __all__ = [
     "LLMStreamChunk",
     "LLMUsage",
     "OpenAICompatFlags",
+    "describe_compat_flags",
     "OpenAICompatProvider",
     "TextPart",
     "classify_error",
