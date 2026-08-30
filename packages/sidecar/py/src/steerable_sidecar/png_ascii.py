@@ -117,4 +117,42 @@ def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | 
             v = row[src_x]
             chars.append(ramp[min(len(ramp) - 1, v * len(ramp) // 256)])
         lines.append("".join(chars))
+    tiles = _board_tile_grid(width, height, rows)
+    if tiles:
+        lines.append(tiles)
+    return "\n".join(lines)
+
+
+def _board_tile_grid(
+    width: int, height: int, rows: list[list[int]]
+) -> str | None:
+    """Labeled 8x8 mean-brightness grid for square diagrams (chess boards)."""
+    if abs(width - height) > max(8, min(width, height) // 16):
+        return None
+    side = min(width, height)
+    if side < 64:
+        return None
+    tile = side // 8
+    if tile < 8:
+        return None
+    lines = [
+        "8x8 mean-brightness (0 dark .. 9 light). Rank 8 at top, file a at left."
+    ]
+    for rank in range(8):
+        y0 = rank * tile
+        y1 = side if rank == 7 else (rank + 1) * tile
+        cells: list[str] = []
+        for file in range(8):
+            x0 = file * tile
+            x1 = side if file == 7 else (file + 1) * tile
+            total = n = 0
+            for y in range(y0, y1):
+                row = rows[y]
+                for x in range(x0, x1):
+                    total += row[x]
+                    n += 1
+            v = (total // n) if n else 0
+            cells.append(str(min(9, v * 10 // 256)))
+        lines.append(f"{8 - rank} | {' '.join(cells)}")
+    lines.append("    a b c d e f g h")
     return "\n".join(lines)

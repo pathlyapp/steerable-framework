@@ -115,6 +115,7 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert preview.success is True
     assert preview.data["kind"] == "png_ascii"
     assert "PNG 4x2" in preview.data["content"]
+    assert "mean-brightness" not in preview.data["content"]
     square = [[0] * 80 for _ in range(80)]
     for i in range(80):
         square[i][i] = 255
@@ -123,6 +124,9 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     board_preview = await _call(router, "read_file", {"path": "board80.png"})
     assert board_preview.success is True
     assert "PNG 80x80 ASCII preview (80x80)" in board_preview.data["content"]
+    assert "Rank 8 at top" in board_preview.data["content"]
+    assert "a b c d e f g h" in board_preview.data["content"]
+    assert "8 |" in board_preview.data["content"]
 
 
 @pytest.mark.asyncio
