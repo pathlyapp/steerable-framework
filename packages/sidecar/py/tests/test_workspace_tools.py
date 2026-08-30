@@ -114,7 +114,7 @@ async def test_jailed_allows_dd_if_and_tmp_write(
     dd = await _call(
         jailed,
         "bash",
-        {"command": "dd if=/dev/zero of=disk.img bs=1024 count=1"},
+        {"command": "dd if=/dev/zero of=disk.img bs=1024 count=1 2>/dev/null"},
     )
     assert dd.success is True
     assert (tmp_path / "disk.img").is_file()

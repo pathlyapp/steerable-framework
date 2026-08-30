@@ -73,17 +73,18 @@ apt-get update && apt-get install -y python3 python3-pip python3-venv
 _ENSURE_PYTHON_310 = r"""
 ok() { python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; }
 ok && exit 0
+export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 if command -v apk >/dev/null 2>&1; then
-  apk add --no-cache python3 py3-pip py3-virtualenv || true
+  apk add --no-cache python3 py3-pip py3-virtualenv curl ca-certificates || true
 fi
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update || true
-  apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip \
-    || apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip \
+  apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip curl ca-certificates \
+    || apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip curl ca-certificates \
+    || apt-get install -y python3-pip curl ca-certificates \
     || true
 fi
-export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 if command -v python3.12 >/dev/null 2>&1; then
   ln -sf "$(command -v python3.12)" /usr/local/bin/python3
 elif command -v python3.11 >/dev/null 2>&1; then
@@ -91,11 +92,13 @@ elif command -v python3.11 >/dev/null 2>&1; then
 fi
 hash -r
 ok && exit 0
-python3 -m pip install --quiet uv==0.9.5
+python3 -m pip install --quiet uv==0.9.5 || python3 -m pip install --quiet --user uv==0.9.5 || true
+hash -r
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
 uv python install 3.12
 ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
 hash -r
+python3 -V >&2
 ok
 """.strip()
 _UV_SEED = r"""

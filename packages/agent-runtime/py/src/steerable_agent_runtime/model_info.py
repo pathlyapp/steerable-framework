@@ -71,7 +71,11 @@ class ModelInfo:
 MODEL_INFOS: tuple[ModelInfo, ...] = (
     ModelInfo("deepseek-reasoner", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("deepseek", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
-    ModelInfo("z-ai/glm", 202_752, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
+    # GLM-5.3 / Flash: 1M context (OpenRouter + Z.AI). Compacting at the
+    # old 202k window folded tool results on long Terminal-Bench tasks.
+    ModelInfo("z-ai/glm", 1_048_576, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
+    ModelInfo("glm-5", 1_048_576, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
+    ModelInfo("glm", 1_048_576, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
     ModelInfo("gpt-oss", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("llama3", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     ModelInfo("qwen3", 129_024, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
@@ -102,16 +106,30 @@ def register_model_info(info: ModelInfo) -> None:
     _custom_infos.append(info)
 
 
+def _name_candidates(model: str) -> tuple[str, ...]:
+    """Full id plus the last path segment.
+
+    Harbor ``--model openai/z-ai/glm-5.3-flash`` becomes
+    ``z-ai/glm-5.3-flash``. A gateway that forwards the whole string still
+    matches ``glm-5`` / ``glm`` on the leaf.
+    """
+    name = model.lower()
+    leaf = name.rsplit("/", 1)[-1]
+    if leaf == name:
+        return (name,)
+    return (name, leaf)
+
+
 def _match(model: str | None) -> ModelInfo:
     """Longest-prefix match over custom + built-in tables (custom first)."""
     if not model:
         return _DEFAULT_INFO
-    name = model.lower()
     best = _DEFAULT_INFO
     best_len = -1
-    for info in (*_custom_infos, *MODEL_INFOS):
-        if name.startswith(info.pattern) and len(info.pattern) > best_len:
-            best, best_len = info, len(info.pattern)
+    for cand in _name_candidates(model):
+        for info in (*_custom_infos, *MODEL_INFOS):
+            if cand.startswith(info.pattern) and len(info.pattern) > best_len:
+                best, best_len = info, len(info.pattern)
     return best
 
 

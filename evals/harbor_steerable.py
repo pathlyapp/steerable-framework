@@ -201,6 +201,21 @@ class SteerableHarborAgent(BaseInstalledAgent):
             env=proxy_env or None,
             timeout_sec=900,
         )
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
+        again = await environment.exec(
+            command=(
+                "python3 -c 'import sys; raise SystemExit("
+                "0 if sys.version_info >= (3, 10) else 1)'"
+            ),
+            user="root",
+        )
+        if again.return_code != 0:
+            raise RuntimeError(
+                "trial python is still <3.10 after _ENSURE_PYTHON_310 "
+                f"(stdout={again.stdout!r} stderr={again.stderr!r})"
+            )
 
     async def _seed_uv(self, environment: BaseEnvironment) -> None:
         """Install uv from a PyPI mirror so TB ``test.sh`` need not hit GitHub.

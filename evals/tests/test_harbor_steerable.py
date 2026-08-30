@@ -84,6 +84,8 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "uv python install 3.12" in _ENSURE_PYTHON_310
     assert 'PATH="/usr/local/bin:' in _ENSURE_PYTHON_310
     assert "hash -r" in _ENSURE_PYTHON_310
+    assert "ca-certificates" in _ENSURE_PYTHON_310
+    assert "python3-pip" in _ENSURE_PYTHON_310
 
 
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
@@ -140,3 +142,4 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert "--max-rounds 160" in text
     assert text.index("_ensure_python_310") < text.index("_python_tag")
     assert text.index("_merge_trial_path") < text.index("_python_tag")
+    assert "trial python is still <3.10" in text

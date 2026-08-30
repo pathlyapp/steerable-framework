@@ -36,6 +36,7 @@ async def test_nudge_after_explore_without_write() -> None:
     assert action.appends
     assert action.append_action == "delivery_nudge"
     assert "write_file" in action.appends[0].message.content_text
+    assert "placeholders" in action.appends[0].message.content_text
     assert hooks.nudges == 1
     # Counter reset so the next step is not nudged immediately.
     again = await hooks.pre_step([], ctx)

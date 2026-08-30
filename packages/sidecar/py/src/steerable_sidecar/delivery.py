@@ -35,13 +35,16 @@ _BASH_WRITES = re.compile(
 )
 
 _EXPLORE_NUDGE = (
-    "You have inspected the workspace but not written the required output "
-    "files. Stop reading sources. Create those files now with write_file or "
-    "edit_file, then verify with bash."
+    "You have inspected the workspace for many steps without creating the "
+    "required output files. If you already know contents that satisfy every "
+    "constraint the instruction states (path, length, format, metric), write "
+    "those files now with write_file, edit_file, or bash. Do not write "
+    "placeholders, decoys, or guesses that violate those constraints."
 )
 _NO_ARTIFACT_RETRY = (
-    "The turn is ending without write_file or edit_file. Hidden tests look "
-    "for named output files. Write them now; do not only describe the plan."
+    "The turn is ending without a write to the named output files. Hidden "
+    "tests look for those paths. Write the real contents now; do not only "
+    "describe a plan or dump a placeholder."
 )
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
@@ -56,7 +59,7 @@ class DeliveryHooks:
     def __init__(
         self,
         *,
-        explore_before_nudge: int = 8,
+        explore_before_nudge: int = 20,
         max_nudges: int = 3,
         min_tools_for_completion_retry: int = 2,
         max_empty_round_retries: int = 6,

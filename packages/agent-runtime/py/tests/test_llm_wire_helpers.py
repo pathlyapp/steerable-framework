@@ -226,6 +226,7 @@ def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:
         extra={},
     )
     assert openrouter["reasoning_effort"] == "max"
+    assert openrouter["reasoning"] == {"effort": "max"}
     assert "thinking" not in openrouter
     assert "tool_stream" not in openrouter
 

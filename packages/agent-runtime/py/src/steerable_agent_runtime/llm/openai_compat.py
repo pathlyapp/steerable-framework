@@ -52,6 +52,10 @@ def _glm_z_ai_host(base_url: str | None) -> bool:
     return "z.ai" in host or "bigmodel.cn" in host
 
 
+def _openrouter_host(base_url: str | None) -> bool:
+    return "openrouter.ai" in (base_url or "").lower()
+
+
 def _stream_timeout():
     """Idle gap between SSE lines; ``Timeout(None)`` left hung thinks uncapped."""
     import httpx
@@ -279,14 +283,14 @@ class OpenAICompatProvider:
         effort = clamp_reasoning_effort(
             self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
         )
-        if (
-            effort
-            and compat.supports_reasoning_effort
-            and "reasoning_effort" not in body
-            and "reasoning" not in body
-        ):
+        if effort and compat.supports_reasoning_effort:
             # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
-            body["reasoning_effort"] = effort
+            if "reasoning_effort" not in body:
+                body["reasoning_effort"] = effort
+            # OpenRouter documents ``reasoning.effort``; some providers ignore
+            # the Z.AI ``reasoning_effort`` pass-through.
+            if _openrouter_host(self.base_url) and "reasoning" not in body:
+                body["reasoning"] = {"effort": effort}
         if _glm_z_ai_host(self.base_url) and "thinking" not in body:
             # Forced-on for GLM-5.3; omitting is fine, disabling 400s.
             body["thinking"] = {"type": "enabled"}
