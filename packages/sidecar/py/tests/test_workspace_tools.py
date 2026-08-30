@@ -15,6 +15,7 @@ from steerable_sidecar.workspace_tools import (
     _MAX_OUTPUT,
     pgrep_self_wait,
     refuse_truncated_overwrite,
+    sleep_poll,
     workspace_tools_for_cwd,
 )
 
@@ -189,6 +190,14 @@ def test_pgrep_self_wait_detects_while_loop() -> None:
     assert not pgrep_self_wait("")
 
 
+def test_sleep_poll_detects_long_sleep_then_cat() -> None:
+    assert sleep_poll("sleep 290; cat /tmp/out.log")
+    assert sleep_poll("sleep 120 && tail -f log")
+    assert not sleep_poll("sleep 5; ls")
+    assert not sleep_poll("sleep 300")
+    assert not sleep_poll("cmd & pid=$!; wait \"$pid\"; cat out")
+
+
 def test_bash_schema_warns_against_short_timeout() -> None:
     desc = _BASH_SCHEMA["properties"]["command"]["description"]
     assert "timeout N" in desc
@@ -205,6 +214,17 @@ async def test_bash_refuses_pgrep_self_wait(tmp_path: Path) -> None:
     )
     assert refused.success is False
     assert "pgrep" in (refused.error or "")
+    assert "wait" in (refused.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_refuses_sleep_poll(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    refused = await _call(
+        router, "bash", {"command": "sleep 290; cat /tmp/out.log"}
+    )
+    assert refused.success is False
+    assert "sleep" in (refused.error or "")
     assert "wait" in (refused.error or "")
 
 

@@ -59,6 +59,17 @@ _PGREP_WAIT_ERROR = (
     "exits. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`, or poll "
     "a pidfile."
 )
+# Catalog-89 mteb-leaderboard: `sleep 290; cat log` under the old 300s bash
+# cap. Bash now waits 3600s — `wait $!` instead of a long sleep-then-cat.
+_SLEEP_POLL = re.compile(
+    r"\bsleep\s+(\d+)\s*(?:;|&&|\n)\s*(?:cat|tail|ls|head)\b",
+    re.IGNORECASE,
+)
+_SLEEP_POLL_MIN_SEC = 120
+_SLEEP_POLL_ERROR = (
+    "Refusing a long `sleep N; cat/tail/ls` poll. Bash already waits up to "
+    "3600s. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`."
+)
 _READ_SCHEMA = {
     "type": "object",
     "properties": {
@@ -190,6 +201,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         if pgrep_self_wait(command):
             return ToolResult(
                 success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
+            )
+        if sleep_poll(command):
+            return ToolResult(
+                success=False, error=_SLEEP_POLL_ERROR, needsFollowup=True
             )
         # Off the event loop so CoreLoop parallel_tools can overlap bash.
         return await asyncio.to_thread(_run_bash, command)
@@ -424,6 +439,14 @@ def _truncated_overwrite_error(target: Path, content: str) -> str | None:
 def pgrep_self_wait(command: str) -> bool:
     """True when ``command`` is a ``while pgrep -f`` wait that matches itself."""
     return bool(_PGREP_SELF_WAIT.search(command or ""))
+
+
+def sleep_poll(command: str) -> bool:
+    """True when ``command`` is a long sleep followed by cat/tail/ls/head."""
+    for match in _SLEEP_POLL.finditer(command or ""):
+        if int(match.group(1)) >= _SLEEP_POLL_MIN_SEC:
+            return True
+    return False
 
 
 def _resolve_under(root: Path, path: str, *, jailed: bool = False) -> Path:

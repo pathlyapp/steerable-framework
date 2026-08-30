@@ -331,4 +331,4 @@ async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
 
 def test_max_completion_redos_covers_delivery_empty_rounds() -> None:
     # DeliveryHooks retries empty_round 6 times then missing_named_output.
-    assert _MAX_COMPLETION_REDOS >= 8
+    assert _MAX_COMPLETION_REDOS >= 16
