@@ -70,6 +70,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "ASCII" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
     assert "timeout N" in headless_mod._SYSTEM
+    assert "wget -c" in headless_mod._SYSTEM
+    assert "sleep 290" in headless_mod._SYSTEM
+    assert "BOS/EOS" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
