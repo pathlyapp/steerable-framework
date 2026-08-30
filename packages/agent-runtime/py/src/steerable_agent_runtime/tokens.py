@@ -115,6 +115,13 @@ def estimate_tokens(messages: Sequence[LLMMessage], model: str | None = None) ->
                     call.arguments or {}, ensure_ascii=False, separators=(",", ":")
                 )
                 total += estimate_text_tokens(args)
+        # Match the wire: OpenRouter gets details XOR plaintext, not both.
+        if m.reasoning_details:
+            total += estimate_text_tokens(
+                json.dumps(m.reasoning_details, ensure_ascii=False, separators=(",", ":"))
+            )
+        elif m.reasoning:
+            total += estimate_text_tokens(m.reasoning)
     return math.ceil(total * factor_for_model(model))
 
 

@@ -129,6 +129,31 @@ def test_openai_parse_stream_chunk_openrouter_reasoning_field() -> None:
     assert parsed.reasoning_delta == "plan the edit"
 
 
+def test_openai_parse_and_encode_reasoning_details() -> None:
+    details = [{"id": "r1", "type": "reasoning.text", "text": "step", "format": "unknown"}]
+    parsed = _parse_stream_chunk(
+        {"choices": [{"delta": {"reasoning_details": details}, "finish_reason": None}]}
+    )
+    assert parsed is not None
+    assert parsed.reasoning_details == details
+    encoded = _encode_message(
+        LLMMessage.text_of(
+            "assistant",
+            "",
+            tool_calls=[ToolCall(id="c1", name="bash", arguments={"command": "ls"})],
+            reasoning="step",
+            reasoning_details=details,
+        )
+    )
+    assert encoded["reasoning_details"] == details
+    assert "reasoning" not in encoded
+    plaintext = _encode_message(
+        LLMMessage.text_of("assistant", "ok", reasoning="just think")
+    )
+    assert plaintext["reasoning"] == "just think"
+    assert "reasoning_details" not in plaintext
+
+
 def test_openai_parse_stream_chunk_usage_only() -> None:
     chunk = {
         "choices": [],

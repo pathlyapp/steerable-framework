@@ -139,6 +139,8 @@ class OpenAICompatProvider:
             "assistant",
             message.get("content") or "",
             tool_calls=_decode_tool_calls(message.get("tool_calls")),
+            reasoning=_reasoning_text(message, ("reasoning_content", "reasoning")),
+            reasoning_details=_reasoning_details_list(message.get("reasoning_details")),
         )
         return out, _parse_usage(payload.get("usage") or {}, compat=self.compat)
 
@@ -201,6 +203,7 @@ class OpenAICompatProvider:
                         parsed = LLMStreamChunk(
                             content_delta=parsed.content_delta,
                             reasoning_delta=parsed.reasoning_delta,
+                            reasoning_details=parsed.reasoning_details,
                             finish_reason=parsed.finish_reason,
                             usage=parsed.usage,
                             raw=parsed.raw,
@@ -208,6 +211,7 @@ class OpenAICompatProvider:
                     if (
                         parsed.content_delta
                         or parsed.reasoning_delta
+                        or parsed.reasoning_details
                         or parsed.finish_reason
                         or parsed.usage is not None
                     ):
@@ -426,6 +430,12 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
             }
             for tc in message.tool_calls
         ]
+    # OpenRouter: echo reasoning_details unmodified so GLM continues after
+    # tools. Prefer the structured block; plaintext is the fallback.
+    if message.reasoning_details:
+        out["reasoning_details"] = message.reasoning_details
+    elif message.reasoning:
+        out["reasoning"] = message.reasoning
     return out
 
 
@@ -527,10 +537,18 @@ def _parse_stream_chunk(
     return LLMStreamChunk(
         content_delta=content,
         reasoning_delta=reasoning,
+        reasoning_details=_reasoning_details_list(delta.get("reasoning_details")),
         tool_call_delta=tool_call_delta,
         finish_reason=finish_reason,
         raw=chunk,
     )
+
+
+def _reasoning_details_list(value: Any) -> list[Any] | None:
+    """Keep a non-empty ``reasoning_details`` array; otherwise omit."""
+    if isinstance(value, list) and value:
+        return list(value)
+    return None
 
 
 def _reasoning_text(delta: dict[str, Any], fields: tuple[str, ...]) -> str | None:

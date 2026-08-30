@@ -725,12 +725,25 @@ class CoreLoop:
             """
             if tool_calls or not content.strip():
                 return
-            manager.append(LLMMessage.text_of("assistant", content))
+            manager.append(_assistant_message(content))
+
+        def _assistant_message(
+            content: str, tool_calls: list[ToolCall] | None = None
+        ) -> LLMMessage:
+            return LLMMessage.text_of(
+                "assistant",
+                content,
+                tool_calls=tool_calls,
+                reasoning="".join(reasoning_parts) or None,
+                reasoning_details=list(reasoning_details_acc) or None,
+            )
 
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
         decision = CompletionDecision(status="failed", reason="loop did not run")
         round_index = 0
+        reasoning_parts: list[str] = []
+        reasoning_details_acc: list[Any] = []
         # Discipline retries / narration rounds granted by before_completion do
         # not consume the round budget (mirrors the TS loop's `turn -= 1`), but
         # the loop still caps them so a faulty hook cannot spin forever.
@@ -905,6 +918,8 @@ class CoreLoop:
             # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
+            reasoning_parts.clear()
+            reasoning_details_acc.clear()
             # Display pipeline: raw text is accumulated for recovery and the
             # transcript, but content_delta events pass through a surrogate
             # carry (half-emoji split across chunks) and the pseudo stripper
@@ -946,11 +961,14 @@ class CoreLoop:
                             if display:
                                 yield LoopEvent("content_delta", {"delta": display})
                         if chunk.reasoning_delta:
+                            reasoning_parts.append(chunk.reasoning_delta)
                             emit, reasoning_carry = split_trailing_high_surrogate(
                                 chunk.reasoning_delta, reasoning_carry
                             )
                             if emit:
                                 yield LoopEvent("reasoning_delta", {"delta": emit})
+                        if chunk.reasoning_details:
+                            reasoning_details_acc.extend(chunk.reasoning_details)
                         if chunk.tool_call_delta is not None:
                             tool_calls.append(chunk.tool_call_delta)
                         if chunk.usage is not None:
@@ -1162,7 +1180,7 @@ class CoreLoop:
                         # what it said, then the discipline notice corrects it.
                         completion_redos += 1
                         if content.strip():
-                            manager.append(LLMMessage.text_of("assistant", content))
+                            manager.append(_assistant_message(content))
                         manager.append_fragment(DisciplineRetryNotice(action.message))
                         yield LoopEvent(
                             "hook_action",
@@ -1210,9 +1228,7 @@ class CoreLoop:
                 return
 
             # ── act: append assistant turn, then run each tool ───────────
-            manager.append(
-                LLMMessage.text_of("assistant", content, tool_calls=tool_calls)
-            )
+            manager.append(_assistant_message(content, tool_calls))
 
             # Parallel batching: consecutive concurrency-safe calls run under
             # one asyncio.gather; any other call is a barrier batch of one.
