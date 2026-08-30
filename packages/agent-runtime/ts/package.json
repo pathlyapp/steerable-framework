@@ -1,0 +1,49 @@
+{
+  "name": "@steerable/agent-runtime",
+  "version": "0.2.5",
+  "description": "Steerable framework — official TypeScript production runtime. Owns the embedded Python sidecar lifecycle (spawn / ready handshake / health / bounded auto-restart / graceful drain) and exposes the CoreLoop-level API over the sidecar JSON-RPC surface. There is no TS CoreLoop; this package drives the same Python CoreLoop the server uses, so cross-language conformance holds by construction.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/agent-runtime/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "keywords": [
+    "steerable",
+    "agent",
+    "runtime",
+    "coreloop",
+    "sidecar",
+    "typescript"
+  ],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen": "echo agent-runtime-ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@steerable/agent-ui": "workspace:*",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

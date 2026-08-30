@@ -1,0 +1,27 @@
+[project]
+name = "steerable-egress-proxy"
+version = "0.2.5"
+description = "Steerable optional component — local allow-listing CONNECT egress proxy. Gives per-host egress control on platforms whose sandbox can only pin ports (Seatbelt) or only drop the network namespace (bwrap): confine the sidecar to localhost:<proxy> and let the proxy own the host list."
+readme = "README.md"
+requires-python = ">=3.10"
+# Zero runtime dependencies by design: the proxy sits on the security
+# boundary, so its supply chain must stay auditable. asyncio streams only.
+dependencies = []
+
+[project.scripts]
+steerable-egress-proxy = "steerable_egress_proxy.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
