@@ -110,8 +110,20 @@ if ! command -v uv >/dev/null 2>&1; then
   hash -r
 fi
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
-uv python install 3.12
-ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
+i=0
+while [ "$i" -lt 3 ]; do
+  uv python install 3.12 && break
+  i=$((i+1))
+  sleep 5
+done
+py=$(uv python find 3.12 2>/dev/null || true)
+if [ -z "$py" ] || [ ! -x "$py" ]; then
+  uv python install 3.11 || true
+  py=$(uv python find 3.11 2>/dev/null || true)
+fi
+if [ -n "$py" ] && [ -x "$py" ]; then
+  ln -sf "$py" /usr/local/bin/python3
+fi
 pin_usr_bin
 hash -r
 python3 -V >&2

@@ -90,6 +90,9 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "pin_usr_bin" in _ENSURE_PYTHON_310
     assert "/usr/bin/python3.9" in _ENSURE_PYTHON_310
     assert 'ln -sf /usr/local/bin/python3 /usr/bin/python3' in _ENSURE_PYTHON_310
+    assert 'while [ "$i" -lt 3 ]' in _ENSURE_PYTHON_310
+    assert "uv python find 3.12" in _ENSURE_PYTHON_310
+    assert "uv python install 3.11" in _ENSURE_PYTHON_310
 
 
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
