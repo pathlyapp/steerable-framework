@@ -91,9 +91,10 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "ca-certificates" in _ENSURE_PYTHON_310
     assert "python3-pip" in _ENSURE_PYTHON_310
     assert "astral.sh/uv/0.9.5/install.sh" in _ENSURE_PYTHON_310
-    assert "pin_usr_bin" in _ENSURE_PYTHON_310
-    assert "/usr/bin/python3.9" in _ENSURE_PYTHON_310
-    assert 'ln -sf /usr/local/bin/python3 /usr/bin/python3' in _ENSURE_PYTHON_310
+    assert "pin_usr_bin" not in _ENSURE_PYTHON_310
+    assert "/usr/bin/python3.9" not in _ENSURE_PYTHON_310
+    assert "ln -sf /usr/local/bin/python3 /usr/bin/python3" not in _ENSURE_PYTHON_310
+    assert "/usr/local/bin/python3" in _ENSURE_PYTHON_310
     assert 'while [ "$i" -lt 3 ]' in _ENSURE_PYTHON_310
     assert "uv python find 3.12" in _ENSURE_PYTHON_310
     assert "uv python install 3.11" in _ENSURE_PYTHON_310

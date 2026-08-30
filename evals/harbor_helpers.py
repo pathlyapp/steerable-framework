@@ -71,15 +71,10 @@ apt-get update && apt-get install -y python3 python3-pip python3-venv
 # ship 3.9.2; pip then fails with NonZeroAgentExitCodeError before the
 # agent runs. Distro python3.11/3.12 first; uv's standalone 3.12 last.
 _ENSURE_PYTHON_310 = r"""
-ok() { python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; }
-pin_usr_bin() {
-  [ -x /usr/local/bin/python3 ] || return 0
-  [ -e /usr/bin/python3 ] || return 0
-  /usr/bin/python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' && return 0
-  if [ ! -e /usr/bin/python3.9 ]; then
-    cp -a /usr/bin/python3 /usr/bin/python3.9 || true
-  fi
-  ln -sf /usr/local/bin/python3 /usr/bin/python3
+ok() {
+  p=/usr/local/bin/python3
+  [ -x "$p" ] || p=python3
+  "$p" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
 }
 ok && exit 0
 export PATH="/usr/local/bin:/root/.local/bin:$PATH"
@@ -100,7 +95,6 @@ elif command -v python3.11 >/dev/null 2>&1; then
   ln -sf "$(command -v python3.11)" /usr/local/bin/python3
 fi
 hash -r
-pin_usr_bin
 ok && exit 0
 python3 -m pip install --quiet uv==0.9.5 || python3 -m pip install --quiet --user uv==0.9.5 || true
 hash -r
@@ -124,7 +118,6 @@ fi
 if [ -n "$py" ] && [ -x "$py" ]; then
   ln -sf "$py" /usr/local/bin/python3
 fi
-pin_usr_bin
 hash -r
 python3 -V >&2
 ok

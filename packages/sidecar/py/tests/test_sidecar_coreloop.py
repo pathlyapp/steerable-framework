@@ -621,13 +621,15 @@ async def test_steer_requires_content() -> None:
 def test_default_loop_hooks_resolves_window_from_model() -> None:
     """Fixed-60k default is gone: known models compact against their real
     context window; explicit maxContextTokens still wins."""
-    from steerable_agent_runtime import ChainHooks, CompactionHooks
+    from steerable_agent_runtime import ChainHooks, CompactionHooks, SpillHooks
     from steerable_sidecar.sidecar import _default_loop_hooks
 
     hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
     assert isinstance(hooks, ChainHooks)
     compaction = next(h for h in hooks._hooks if isinstance(h, CompactionHooks))
     assert compaction._max_tokens == 131_072
+    spill = next(h for h in hooks._hooks if isinstance(h, SpillHooks))
+    assert spill._max_inline == 16_000
 
     explicit = _default_loop_hooks(
         {"model": "gpt-oss:20b-cloud", "maxContextTokens": 24_000}
@@ -642,6 +644,16 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
         h for h in unknown._hooks if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 60_000
+    assert compaction._keep_last_tools == 2
+
+    glm = _default_loop_hooks({"model": "z-ai/glm-5.3-flash"})
+    compaction = next(h for h in glm._hooks if isinstance(h, CompactionHooks))
+    assert compaction._max_tokens == 1_048_576
+    assert compaction._keep_last_tools == 16
+    assert compaction._keep_last == 16
+    spill = next(h for h in glm._hooks if isinstance(h, SpillHooks))
+    assert spill._max_inline == 100_000
+    assert spill._preview == 8_000
 
 
 def test_default_loop_hooks_retry_policy_from_env(monkeypatch) -> None:

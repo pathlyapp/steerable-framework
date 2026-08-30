@@ -1625,11 +1625,16 @@ def _default_loop_hooks(
         params.get("model"),
         explicit=int(params.get("maxContextTokens") or 0) or None,
     )
+    # Desktop 60k–131k windows keep 2 tool results. GLM 1M Harbor traces
+    # otherwise fold compile/train tails after two bash calls.
+    large = max_ctx >= 200_000
     return ChainHooks(
         CompactionHooks(
             max_context_tokens=max_ctx,
             model=params.get("model"),
             summarizer=summarizer,
+            keep_last_tool_results=16 if large else 2,
+            keep_last_messages=16 if large else 6,
         ),
         # Spill oversized tool results to disk instead of inlining them into
         # the transcript (W4-7: this hook existed since Wave 0 but was never
@@ -1637,7 +1642,7 @@ def _default_loop_hooks(
         # blow the context in one round). Opt out with
         # STEERABLE_SIDECAR_SPILL=0; override the spill directory with
         # STEERABLE_SPILL_DIR (default: a per-process temp dir).
-        *_spill_hooks(),
+        *_spill_hooks(large=large),
         RetryHooks(policy=_retry_policy_from_env()),
     )
 
@@ -1662,7 +1667,7 @@ def _retry_policy_from_env() -> RetryPolicy:
     )
 
 
-def _spill_hooks() -> list[LoopHooks]:
+def _spill_hooks(*, large: bool = False) -> list[LoopHooks]:
     flag = os.environ.get("STEERABLE_SIDECAR_SPILL", "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
         return []
@@ -1673,7 +1678,15 @@ def _spill_hooks() -> list[LoopHooks]:
     directory = os.environ.get("STEERABLE_SPILL_DIR") or os.path.join(
         tempfile.gettempdir(), "steerable-spill"
     )
-    return [SpillHooks(FilesystemSpillStore(directory))]
+    # Desktop 16k inline. GLM 1M Harbor keeps full 100k bash clips until
+    # compaction; 2k previews hid compile/train endings.
+    return [
+        SpillHooks(
+            FilesystemSpillStore(directory),
+            max_inline_bytes=100_000 if large else 16_000,
+            preview_bytes=8_000 if large else 2_000,
+        )
+    ]
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
