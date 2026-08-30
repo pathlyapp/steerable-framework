@@ -383,6 +383,17 @@ class CoreLoop:
         """
         self._cancel_event.set()
 
+    def reset_cancel(self) -> None:
+        """Clear a prior cancel request so the loop can run again.
+
+        Multi-turn child resume (orchestration ``agent_send`` to a finished
+        or interrupted child) re-runs the same loop instance; without this
+        the sticky cancel would end the fresh run at its first boundary.
+        Only meaningful between runs — clearing mid-run is the caller's
+        responsibility (the in-flight run simply stops winding down).
+        """
+        self._cancel_event.clear()
+
     @property
     def last_run_usage(self) -> LLMUsage | None:
         """Accumulated billable usage of the current/last run (W6-9).
@@ -1290,11 +1301,19 @@ class CoreLoop:
                     )
                     duplicate = False
                     if self._config.tool_dedup:
-                        sig = (call.name, _stable_json_hash(call.arguments or {}))
-                        if sig in tool_call_signatures:
-                            duplicate = True
-                        else:
-                            tool_call_signatures.add(sig)
+                        # Stateful tools (e.g. the orchestration family:
+                        # spawn/send/wait/close/list/interrupt) return
+                        # different results for identical args as pool state
+                        # changes — the executor that owns them declares the
+                        # exemption, mirroring the concurrency_safe protocol.
+                        exempt = getattr(self._executor, "dedup_exempt", None)
+                        exempted = bool(exempt and exempt(call))
+                        if not exempted:
+                            sig = (call.name, _stable_json_hash(call.arguments or {}))
+                            if sig in tool_call_signatures:
+                                duplicate = True
+                            else:
+                                tool_call_signatures.add(sig)
                     if duplicate:
                         results[call_idx] = ToolResult(
                             success=False,

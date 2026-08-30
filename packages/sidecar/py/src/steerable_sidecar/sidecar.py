@@ -1168,8 +1168,8 @@ class Sidecar:
                     tools = [*(tools or []), skill_tool_descriptor()]
         # orchestration: opt-in multi-agent seam (P3.1) — the parent model
         # drives parallel child CoreLoops through agent_spawn/send/wait/
-        # close. Wrapped outermost so children inherit every gate below
-        # (approval, skills, subagent). Budgets fail closed
+        # close/list/interrupt. Wrapped outermost so children inherit every
+        # gate below (approval, skills, subagent). Budgets fail closed
         # (maxDepth/maxParallel); depth is structural — a child only has
         # orchestration tools when its own pool is nested inside.
         orchestration_param = params.get("orchestration")
