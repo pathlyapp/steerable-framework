@@ -183,9 +183,11 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]" in weekly
     assert "timeout-minutes: 360" in weekly
     assert weekly.count("--agent-timeout-multiplier 12") == 2
+    assert weekly.count("--verifier-timeout-multiplier 2") == 2
     cheap_job = weekly.split("  failed-prev:", 1)[0]
     assert "--agent-timeout-multiplier 3" in cheap_job
     assert "--agent-timeout-multiplier 12" not in cheap_job
+    assert "--verifier-timeout-multiplier" not in cheap_job
     assert "options:" in weekly
     assert "- failed-prev" in weekly
     assert "github.event.inputs.split == 'cheap-12'" in weekly
@@ -329,6 +331,7 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
         agent_setup_timeout_multiplier=3,
         environment_build_timeout_multiplier=3,
         agent_timeout_multiplier=3,
+        verifier_timeout_multiplier=2,
     )
     assert argv[argv.index("--agent") + 1] == STEERABLE_IMPORT_PATH
     assert argv[argv.index("--model") + 1] == "openai/z-ai/glm-5.3-flash"
@@ -336,6 +339,7 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
     assert argv[argv.index("--agent-setup-timeout-multiplier") + 1] == "3"
     assert argv[argv.index("--environment-build-timeout-multiplier") + 1] == "3"
     assert argv[argv.index("--agent-timeout-multiplier") + 1] == "3"
+    assert argv[argv.index("--verifier-timeout-multiplier") + 1] == "2"
 
 
 def test_harbor_argv_rejects_dsh() -> None:

@@ -245,6 +245,56 @@ def uv_tarball() -> Path | None:
     return None
 
 
+_UV_MUSL_URL = (
+    "https://github.com/astral-sh/uv/releases/download/0.9.5/"
+    "uv-x86_64-unknown-linux-musl.tar.gz"
+)
+_UV_MUSL_BIN = "uv-x86_64-unknown-linux-musl"
+_UV_MUSL_MIN_BYTES = 1_000_000
+
+
+def musl_uv_binary(*, fetch: bool = False) -> Path | None:
+    """Linux musl-static uv for Debian 11 / Alpine trial images.
+
+    Downloaded on the Harbor host (GHA has GitHub). ``fetch=False`` is for
+    tests and never touches the network.
+    """
+    dest = _VENV_CACHE_DIR / _UV_MUSL_BIN
+    if dest.is_file() and dest.stat().st_size >= _UV_MUSL_MIN_BYTES:
+        return dest
+    if not fetch:
+        return None
+    _VENV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tar_path = _VENV_CACHE_DIR / f"{_UV_MUSL_BIN}.tar.gz"
+    try:
+        import tarfile
+        import urllib.request
+
+        urllib.request.urlretrieve(_UV_MUSL_URL, tar_path)
+        with tarfile.open(tar_path, "r:gz") as tf:
+            member = next(
+                (
+                    m
+                    for m in tf.getmembers()
+                    if m.isfile()
+                    and (m.name.endswith("/uv") or m.name == "uv")
+                ),
+                None,
+            )
+            if member is None:
+                return None
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                return None
+            dest.write_bytes(extracted.read())
+        dest.chmod(0o755)
+    except OSError:
+        return None
+    if dest.is_file() and dest.stat().st_size >= _UV_MUSL_MIN_BYTES:
+        return dest
+    return None
+
+
 def rewrite_loopback_host(value: str) -> str:
     """Docker Desktop: host Clash on 127.0.0.1 is not the container loopback."""
     return value.replace("127.0.0.1", "host.docker.internal").replace(

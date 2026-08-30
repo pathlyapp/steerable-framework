@@ -33,6 +33,7 @@ from evals.harbor_helpers import (
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
     merge_trial_path as _merge_trial_path,
+    musl_uv_binary as _musl_uv_binary,
     pip_install_command as _pip_install_command,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
@@ -189,18 +190,20 @@ class SteerableHarborAgent(BaseInstalledAgent):
             )
 
     async def _inject_host_uv(self, environment: BaseEnvironment) -> None:
-        """Copy GHA/host ``uv`` into the trial before Python upgrade.
+        """Put a Linux musl ``uv`` in the trial before Python upgrade.
 
-        Debian 11 / Alpine 3.9 cannot pip-install a recent uv. setup-uv on
-        the runner already has a musl-static binary that can ``uv python
-        install 3.12`` inside those images. A macOS host binary fails
-        ``--version`` and is ignored.
+        Debian 11 / Alpine 3.9 cannot pip-install a recent uv. A musl-static
+        binary from GitHub (downloaded on the Harbor host) runs in those
+        images; copying a macOS ``uv`` does not. Fall back to ``which uv``.
         """
-        host = shutil.which("uv")
-        if not host:
-            return
+        src = _musl_uv_binary(fetch=True)
+        if src is None:
+            host = shutil.which("uv")
+            if not host:
+                return
+            src = Path(host)
         try:
-            await environment.upload_file(Path(host), "/tmp/steerable-host-uv")
+            await environment.upload_file(src, "/tmp/steerable-host-uv")
             await self.exec_as_root(
                 environment,
                 command=(

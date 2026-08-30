@@ -18,6 +18,7 @@ from evals.harbor_helpers import (
     trial_python_tag,
     trial_python_venv,
     uv_tarball,
+    musl_uv_binary,
     venv_tarball,
 )
 
@@ -109,6 +110,18 @@ def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
     assert uv_tarball() is None
 
 
+def test_musl_uv_binary_skips_network_without_fetch(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    assert musl_uv_binary(fetch=False) is None
+
+
+def test_musl_uv_binary_uses_cached_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    cached = tmp_path / "uv-x86_64-unknown-linux-musl"
+    cached.write_bytes(b"u" * 1_000_001)
+    assert musl_uv_binary(fetch=False) == cached
+
+
 def test_uv_seed_installs_from_tsinghua_without_github() -> None:
     assert "pypi.tuna.tsinghua.edu.cn" in _UV_PIP_INSTALL
     assert "uv==0.9.5" in _UV_PIP_INSTALL
@@ -166,6 +179,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert text.index("await self._inject_host_uv") < text.index(
         "await self._ensure_python_310"
     )
+    assert "_musl_uv_binary(fetch=True)" in text
     assert text.index("await self._ensure_python_310") < text.index(
         "py_tag = await self._python_tag"
     )
