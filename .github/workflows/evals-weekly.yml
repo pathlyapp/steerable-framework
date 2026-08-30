@@ -126,14 +126,14 @@ jobs:
           if-no-files-found: ignore
 
   catalog:
-    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/16
+    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/24
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -146,7 +146,7 @@ jobs:
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 16 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 24 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt

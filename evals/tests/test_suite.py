@@ -181,15 +181,18 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "pull_request:" not in weekly
     assert "--split catalog" in weekly
     assert "--split failed-prev" in weekly
-    assert "--shards 16" in weekly
-    assert "--shards 24" in weekly
+    assert "--shards 16" not in weekly
+    assert weekly.count("--shards 24") == 2
     assert "--shards 8" not in weekly
     assert "--shards 4" not in weekly
-    assert "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]" in weekly
     assert (
         "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
         "16, 17, 18, 19, 20, 21, 22, 23]"
     ) in weekly
+    assert weekly.count(
+        "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+        "16, 17, 18, 19, 20, 21, 22, 23]"
+    ) == 2
     assert "timeout-minutes: 360" in weekly
     assert weekly.count("--agent-timeout-multiplier 12") == 2
     assert weekly.count("--verifier-timeout-multiplier 2") == 2
