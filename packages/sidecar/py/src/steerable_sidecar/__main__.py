@@ -22,13 +22,24 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the __SIDECAR_READY__ stderr marker.",
     )
+    parser.add_argument(
+        "--storage-path",
+        default=None,
+        metavar="PATH",
+        help="Persist sessions/traces/history to a sqlite database at PATH "
+        "(W2.6.1). Default: in-memory, per-process only.",
+    )
     return parser
 
 
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
-    config = SidecarConfig(log_level=args.log_level, quiet_stderr=args.quiet_ready)
+    config = SidecarConfig(
+        log_level=args.log_level,
+        quiet_stderr=args.quiet_ready,
+        storage_path=args.storage_path,
+    )
     sidecar = Sidecar(config=config)
     try:
         asyncio.run(sidecar.serve())

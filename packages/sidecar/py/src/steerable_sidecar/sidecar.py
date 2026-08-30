@@ -146,6 +146,10 @@ class SidecarConfig:
     grace_period_seconds: float = 5.0
     install_signal_handlers: bool = True
     initial_tools: list[Any] = field(default_factory=list)
+    #: W2.6.1: when set, sessions/traces/history persist to a zero-dependency
+    #: SqliteStorage database at this path instead of vanishing with the
+    #: process (the InMemoryStorage default).
+    storage_path: str | None = None
 
 
 class Sidecar:
@@ -166,7 +170,14 @@ class Sidecar:
         loop_hooks_factory: Any | None = None,
     ) -> None:
         self.config = config or SidecarConfig()
-        self.storage: StorageAdapter = storage or InMemoryStorage()
+        if storage is not None:
+            self.storage: StorageAdapter = storage
+        elif self.config.storage_path:
+            from steerable_agent_runtime.storage import SqliteStorage
+
+            self.storage = SqliteStorage(self.config.storage_path)
+        else:
+            self.storage = InMemoryStorage()
         self.tools: ToolRouter = tools or ToolRouter()
         self.server = JsonRpcServer()
         self._llm_provider_factory = (

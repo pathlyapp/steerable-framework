@@ -164,10 +164,26 @@ class StorageAdapter(Protocol):
     ) -> list[dict[str, Any]]: ...
 ```
 
-Reference implementations: `InMemoryStorage` (for tests / sidecar) and
-`SqlAlchemyStorage` (for the FastAPI server). Resume reads the record
-tail-first (`reverse=True` paging) and stops at the newest compaction
-boundary — O(tail), never the superseded prefix.
+Reference implementations: `InMemoryStorage` (tests / dev), `SqliteStorage`
+(W2.6.1 — the sidecar's durable backend, stdlib `sqlite3`, zero dependency
+weight in the embedded bundle; wire it with `steerable-sidecar
+--storage-path PATH`), and `SqlAlchemyStorage` (the FastAPI server, optional
+dependency). Resume reads the record tail-first (`reverse=True` paging) and
+stops at the newest compaction boundary — O(tail), never the superseded
+prefix.
+
+`SqliteStorage` keeps every entity's full pydantic JSON in a `data` column
+and duplicates the filter/order fields (ids, `chat_id`, `seq`,
+`created_at`) as indexed columns, so session enumeration and the resume
+tail-scan are indexed lookups. `search_sessions(query)` (an
+implementation-specific extension beyond the protocol) finds sessions by
+message content via SQL. Offline maintenance lives in
+`steerable_agent_runtime.maintenance` (`check` / `compact` / `archive` /
+`salvage`; W2.6.2): `compact` prunes old traces and VACUUMs, `archive`
+moves old sessions+messages into a separate database file, `salvage`
+exports decodable rows to JSONL for corrupt databases. Content compaction
+stays in the loop's declared `CompactionBoundary` — maintenance never
+rewrites the history record (W2.6.3).
 
 ### `TransportAdapter`
 
