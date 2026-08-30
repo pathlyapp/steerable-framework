@@ -217,12 +217,15 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 env=_NO_PROXY_ENV,
                 timeout_sec=180,
             )
-            await self.exec_as_root(environment, command=_UV_SEED)
+            await self.exec_as_root(
+                environment, command=_UV_SEED, timeout_sec=600
+            )
         except Exception:
             return
         environment._persistent_env["PATH"] = _merge_trial_path(
             environment._persistent_env.get("PATH", "")
         )
+        environment._persistent_env["UV_PYTHON_INSTALL_DIR"] = "/opt/uv-python"
 
     async def _restore_venv(
         self, environment: BaseEnvironment, tarball: Path
@@ -337,6 +340,8 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
         # Harbor ×3 on 3600s tasks is 180 min; wrap up 10 min before the kill.
         env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "10200000")
+        # High GLM thinking can emit no SSE bytes for many minutes.
+        env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,

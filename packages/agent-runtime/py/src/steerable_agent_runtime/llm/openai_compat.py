@@ -280,7 +280,7 @@ class OpenAICompatProvider:
             and "reasoning_effort" not in body
             and "reasoning" not in body
         ):
-            # GLM-5.3-Flash defaults to max thinking; Harbor sets `low`.
+            # GLM-5.3-Flash defaults to max thinking; Harbor TB sets `high`.
             body["reasoning_effort"] = effort
         return body
 

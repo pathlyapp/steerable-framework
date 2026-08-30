@@ -169,6 +169,10 @@ echo "curl: not installed" >&2
 exit 1
 EOF
 chmod +x /usr/local/bin/curl
+export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+# TB test.sh often runs `uvx -p 3.13`. Prefetch so the verifier is not a
+# 30-minute GitHub GET (mcmc-sampling-stan VerifierTimeoutError).
+/root/.local/bin/uv python install 3.13 || true
 /root/.local/bin/uv --version
 """.strip()
 _UV_PIP_INSTALL = (

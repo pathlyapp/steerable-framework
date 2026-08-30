@@ -104,6 +104,8 @@ def test_uv_seed_installs_from_tsinghua_without_github() -> None:
     assert "HTTP_PROXY" in _UV_SEED
     assert "uvx.real" in _UV_SEED
     assert '"$arg" == 3.13' in _UV_SEED
+    assert "/root/.local/bin/uv python install 3.13" in _UV_SEED
+    assert "UV_PYTHON_INSTALL_DIR" in _UV_SEED
 
 
 def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:
@@ -134,6 +136,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_TEMPERATURE", "1.0"' in text
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
     assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text
+    assert 'STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800"' in text
     assert "--max-rounds 160" in text
     assert text.index("_ensure_python_310") < text.index("_python_tag")
     assert text.index("_merge_trial_path") < text.index("_python_tag")
