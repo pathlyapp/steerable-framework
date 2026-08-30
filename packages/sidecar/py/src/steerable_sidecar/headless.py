@@ -55,6 +55,8 @@ _SYSTEM = (
     "path, do not write a candidate that violates it (quantize or shrink an "
     "oversized model). A local numeric check "
     "must use the same metric and split the hidden tests will use. "
+    "When fitting peaks or converting measurements, use the x-axis units "
+    "already in the data file unless the instruction specifies a conversion. "
     "If hidden tests compare runtime or speedup against a golden or "
     "baseline, time both on the same input before stopping. "
     "If the instruction names a scoring CLI, run that CLI for the local "

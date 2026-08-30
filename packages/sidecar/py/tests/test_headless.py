@@ -88,6 +88,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
     assert "runtime or speedup" in headless_mod._SYSTEM
+    assert "x-axis units" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:

@@ -71,6 +71,19 @@ _NAMED_OUTPUT_PATH = re.compile(
     r"((?:/app|/tmp|/workspace|/home/agent)"
     r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)"
 )
+# TB often says "called vm.js" / "run `node vm.js`" without `/app/`.
+_CALLED_WITH_EXT = re.compile(
+    r"\bcalled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
+)
+_FILE_CALLED = re.compile(
+    r"\b(?:file|program|script|binary|elf)\s+called\s+"
+    r"([A-Za-z][A-Za-z0-9._-]*)\b",
+    re.IGNORECASE,
+)
+_RUN_ENTRY = re.compile(
+    r"`(?:node|python3?|pypy3?)\s+"
+    r"([A-Za-z0-9./_-]+\.[A-Za-z][A-Za-z0-9]*)`"
+)
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
     "Continue the task now with bash, read_file, write_file, or edit_file. "
@@ -227,13 +240,23 @@ class DeliveryHooks(NoopHooks):
 def named_output_paths(instruction: str) -> tuple[str, ...]:
     """Absolute output paths named in a TB instruction (not `/usr` inputs)."""
     seen: list[str] = []
-    for match in _NAMED_OUTPUT_PATH.finditer(instruction or ""):
+    text = instruction or ""
+    for match in _NAMED_OUTPUT_PATH.finditer(text):
         path = match.group(1).rstrip(".,;:)")
         name = path.rsplit("/", 1)[-1]
         if "." not in name and path.count("/") < 3:
             continue
         if path not in seen:
             seen.append(path)
+    for pattern in (_CALLED_WITH_EXT, _FILE_CALLED, _RUN_ENTRY):
+        for match in pattern.finditer(text):
+            name = match.group(1).rstrip(".,;:)")
+            if name.startswith("/"):
+                path = name
+            else:
+                path = f"/app/{name.lstrip('./')}"
+            if path not in seen:
+                seen.append(path)
     return tuple(seen)
 
 

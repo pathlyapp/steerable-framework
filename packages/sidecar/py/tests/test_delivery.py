@@ -235,6 +235,20 @@ def test_named_output_paths_keeps_nested_extensionless_binary() -> None:
     assert "/app/caffe" not in paths
 
 
+def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
+    mips = named_output_paths(
+        "implement a MIPS interpreter called vm.js so that I can run "
+        "`node vm.js` and this should run the MIPS file"
+    )
+    assert "/app/vm.js" in mips
+    doom = named_output_paths(
+        "vm.js will expect a file called doomgeneric_mips and will run it, "
+        "so that I can run `node vm.js`."
+    )
+    assert "/app/doomgeneric_mips" in doom
+    assert "/app/vm.js" in doom
+
+
 @pytest.mark.asyncio
 async def test_missing_named_output_retries_after_helper_write(
     tmp_path,
