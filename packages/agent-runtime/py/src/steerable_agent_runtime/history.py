@@ -269,6 +269,63 @@ class ContextFragment:
         return not (end and not trimmed.lower().endswith(end.lower()))
 
 
+def render_fragment_capped(
+    fragment: ContextFragment,
+    *,
+    name: str | None = None,
+    tool_call_id: str | None = None,
+) -> LLMMessage:
+    """Render a fragment to a message with its token cap enforced.
+
+    The single enforcement point shared by ``ContextManager.append_fragment``
+    (mid-run injections) and seed-time typing at the host boundary (e.g. the
+    sidecar wrapping a ``systemPrompt`` param): an over-cap rendering is
+    degraded before it lands, never appended whole.
+    """
+    rendered = fragment.render()
+    cap = fragment.effective_max_tokens()
+    if estimate_text_tokens(rendered) > cap:
+        degraded = fragment.degrade(rendered, max_tokens=cap)
+        logger.warning(
+            "fragment %s exceeded its %d-token cap; degraded before append",
+            fragment.content_kind,
+            cap,
+        )
+        return LLMMessage.text_of(
+            fragment.role, degraded, name=name, tool_call_id=tool_call_id
+        )
+    return fragment.to_message(name=name, tool_call_id=tool_call_id)
+
+
+class SystemPromptFragment(ContextFragment):
+    """The host-assembled system prompt, typed at the seed boundary (W2.8.2).
+
+    Unmarked and byte-stable: the rendering is the bare prompt so the
+    provider's prefix cache keeps working across turns. The cap is a
+    backstop against runaway host-side assembly — persona preambles, eager
+    skill modules, environment blocks and reality checks accrete without a
+    budget unless one is enforced where the prompt enters the record.
+    """
+
+    role: LLMRole = "system"
+    content_kind: str = "system_prompt"
+    max_tokens: int | None = 4096
+    review_note: str | None = (
+        "Desktop production prompts (persona + eager skill layer + runtime "
+        "environment + tool reality check) measure 1-3k tokens; 4k is the "
+        "headroom for larger skill stacks, not the target. Crossings "
+        "degrade with a visible marker so an over-budget assembly is "
+        "discoverable in the transcript instead of silently inflating every "
+        "request."
+    )
+
+    def __init__(self, prompt: str) -> None:
+        self._prompt = prompt
+
+    def body(self) -> str:
+        return self._prompt
+
+
 class ContextManager:
     """Owns the append-only record; projects the model-visible transcript.
 
@@ -336,20 +393,9 @@ class ContextManager:
         (``fragment.degrade``) before it lands, so the record — and therefore
         the provider request — never carries an unbounded injection.
         """
-        rendered = fragment.render()
-        cap = fragment.effective_max_tokens()
-        if estimate_text_tokens(rendered) > cap:
-            degraded = fragment.degrade(rendered, max_tokens=cap)
-            logger.warning(
-                "fragment %s exceeded its %d-token cap; degraded before append",
-                fragment.content_kind,
-                cap,
-            )
-            message = LLMMessage.text_of(
-                fragment.role, degraded, name=name, tool_call_id=tool_call_id
-            )
-        else:
-            message = fragment.to_message(name=name, tool_call_id=tool_call_id)
+        message = render_fragment_capped(
+            fragment, name=name, tool_call_id=tool_call_id
+        )
         return self.append(
             message,
             kind=fragment.content_kind,

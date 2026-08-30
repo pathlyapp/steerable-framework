@@ -1144,3 +1144,76 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
     spawned = next(p for p in child_events if p["kind"] == "child_spawned")
     assert spawned["childId"] == "0.1"
     assert spawned["streamId"] == stream_id
+
+
+# ─── W2.8.2: systemPrompt as a typed fragment param ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_param_lands_as_first_message() -> None:
+    provider = _ScriptedProvider([_text_round("ok")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "你是桌面助手的系统提示词。",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+        },
+    )
+
+    first = provider.seen_messages[0]
+    assert first[0].role == "system"
+    assert first[0].content_text == "你是桌面助手的系统提示词。"
+    assert first[1].role == "user"
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_param_and_system_message_conflict() -> None:
+    provider = _ScriptedProvider([_text_round("ok")])
+    sidecar = _make_sidecar(provider)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "systemPrompt": "param prompt",
+                "messages": [
+                    {"role": "system", "content": "seed prompt"},
+                    {"role": "user", "content": "hi"},
+                ],
+                "useCoreLoop": True,
+            },
+        )
+    )
+    assert "error" in response
+    assert "mutually exclusive" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_over_cap_is_degraded() -> None:
+    provider = _ScriptedProvider([_text_round("ok")])
+    sidecar = _make_sidecar(provider)
+
+    # ~5 chars/token estimate → 30k chars comfortably crosses the 4096 cap.
+    huge = "规则。\n" * 10_000
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": huge,
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+        },
+    )
+
+    first = provider.seen_messages[0]
+    assert first[0].role == "system"
+    assert len(first[0].content_text) < len(huge)
+    assert "fragment truncated" in first[0].content_text

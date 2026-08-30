@@ -180,3 +180,29 @@ async def test_loop_enforces_fragment_cap_for_hook_appends() -> None:
     assert "truncated" in text
     # The provider saw the degraded text, not the full body.
     assert estimate_text_tokens(provider.calls[0][-1].content_text) <= 60 + 20
+
+
+def test_system_prompt_fragment_contract() -> None:
+    """W2.8.2: the host's system prompt is a typed fragment — system-roled,
+    unmarked (byte-stable for prefix caching), capped with a review note."""
+    from steerable_agent_runtime import (
+        SystemPromptFragment,
+        render_fragment_capped,
+    )
+
+    fragment = SystemPromptFragment("你是助手。")
+    assert fragment.role == "system"
+    assert fragment.markers() == ("", "")
+    assert fragment.render() == "你是助手。"  # bare body, no wrapper
+    assert SystemPromptFragment.effective_max_tokens() == 4096
+    assert SystemPromptFragment.review_note  # over the no-review line
+
+    message = render_fragment_capped(fragment)
+    assert message.role == "system"
+    assert message.content_text == "你是助手。"
+
+    # Over-cap: degraded with the visible marker, never appended whole.
+    huge = SystemPromptFragment("规则。\n" * 10_000)
+    capped = render_fragment_capped(huge)
+    assert "fragment truncated" in capped.content_text
+    assert estimate_text_tokens(capped.content_text) <= 4096 + 20

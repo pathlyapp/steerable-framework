@@ -126,7 +126,10 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
       这正是 P2.1 验收测试承诺的边际成本。
 - [x] **2.3.2**（每厂商注释含旗标翻转原因与文档出处，标注 doc-verified 2026-08-30 待 key 实测） 每接一家，`PROVIDER_COMPAT_HOSTS` 加条目 + 对应厂商的实测记录
       （哪个旗标必须翻、为什么）留在 compat.py 注释里。
-- [ ] **2.3.3** 与 1.3.2 联动：桌面设置页的 compat 开关复用同一份旗标定义。
+- [x] **2.3.3**（2026-08-30 随 1.3.2 完成：桌面设置页 compat 区由 sidecar
+      `compat.describe` RPC 的旗标描述符动态渲染，框架 compat.py 是唯一真源，
+      新增旗标零桌面改动；canary 第 11 节验证） 与 1.3.2 联动：桌面设置页的
+      compat 开关复用同一份旗标定义。
 
 ### 2.4 审批策略机（R9：决策格追平，策略机落后）
 
@@ -141,7 +144,9 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
       二次输入）、`interrupt_agent`、`list_agents`、`followup_task`。
 - [ ] **2.5.2**（二期）跨厂商委派：编排执行器支持把子任务委派给非自家循环
       （DSH 可路由 claude-code/codex/acp）。依赖 2.1 MCP 客户端落地后再评。
-- [ ] **2.5.3** 与 1.1 联动：桌面接线时工具面应已是补齐后的版本，避免桌面接两次。
+- [x] **2.5.3**（2026-08-30 满足：1.1 桌面接线（组一）在 2.5.1 工具面补齐之后
+      落地，桌面一次接到六工具版本，无二次接线） 与 1.1 联动：桌面接线时工具面
+      应已是补齐后的版本，避免桌面接两次。
 
 ### 2.6 会话工程设施（R9：语义领先，设施薄）
 
@@ -158,10 +163,23 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.8 小项
 
-- [ ] **2.8.1** 循环内核排空策略可配置化（pi 的 steeringMode 比我们的轮次边界排空更细）：
-      `steer` 到达时排空中断 vs 排空完成的策略做成 `CoreLoopConfig` 字段。
-- [ ] **2.8.2** 上下文片段覆盖扩展：机制（max_tokens/degrade/CI 门禁）已领先，
-      片段类型从个位数向 codex 的 53 处 impl 靠拢——优先把桌面实际注入的片段类型全部类型化。
+- [x] **2.8.1**（2026-08-30 完成：`LoopConfig.steer_mode`（`"boundary"` 默认 /
+      `"interrupt"`）落地——interrupt 模式下 steer 到达即在途工具阶段被取消
+      （与 cancel 共用竞速机制，但轮次继续：在途调用记 synthetic 中断结果、
+      未启动调用记 skip 通知、不计入连续错误熔断），下一轮边界 drain 把 steer
+      交给模型；sidecar `steerMode` 参数接线；steer 测试 8 例（中断在途/
+      跳过未启动/默认边界不变/非法值拒绝）） 循环内核排空策略可配置化
+      （pi 的 steeringMode 比我们的轮次边界排空更细）：`steer` 到达时排空中断
+      vs 排空完成的策略做成 `CoreLoopConfig` 字段。
+- [x] **2.8.2**（2026-08-30 完成：`SystemPromptFragment`（role=system、无标记
+      保前缀缓存、4096 cap + review_note）+ `render_fragment_capped` 单一强制
+      点（append_fragment 与种子边界共用）；sidecar `systemPrompt` 参数（与
+      messages 内 system 消息互斥，fail loud）；桌面 router 改为参数下发。
+      桌面注入面盘点：system prompt（本次类型化）、worldState/skills 目录
+      （已类型化）、@引用摘录与附件说明（用户发起内容，桌面侧已封顶，立场：
+      不算框架片段）。框架门禁测试自动覆盖新类型） 上下文片段覆盖扩展：
+      机制（max_tokens/degrade/CI 门禁）已领先，片段类型从个位数向 codex 的
+      53 处 impl 靠拢——优先把桌面实际注入的片段类型全部类型化。
 
 ---
 
