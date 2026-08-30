@@ -40,7 +40,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
-from steerable_agent_harness import BudgetLimit
+from steerable_agent_harness import BudgetLimit, RetryPolicy
 from steerable_agent_protocol.generated import (
     AgentSession,
     SidecarHealth,
@@ -1638,7 +1638,27 @@ def _default_loop_hooks(
         # STEERABLE_SIDECAR_SPILL=0; override the spill directory with
         # STEERABLE_SPILL_DIR (default: a per-process temp dir).
         *_spill_hooks(),
-        RetryHooks(),
+        RetryHooks(policy=_retry_policy_from_env()),
+    )
+
+
+def _retry_policy_from_env() -> RetryPolicy:
+    """Desktop default is 3×200ms. Harbor OpenRouter 429s need minutes."""
+
+    def _positive_int(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    return RetryPolicy(
+        max_attempts=_positive_int("STEERABLE_RETRY_MAX_ATTEMPTS", 3),
+        base_delay_ms=_positive_int("STEERABLE_RETRY_BASE_DELAY_MS", 200),
+        max_delay_ms=_positive_int("STEERABLE_RETRY_MAX_DELAY_MS", 5000),
     )
 
 

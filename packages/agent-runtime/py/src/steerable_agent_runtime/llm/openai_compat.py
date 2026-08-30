@@ -294,7 +294,9 @@ class OpenAICompatProvider:
             # OpenRouter documents ``reasoning.effort``; some providers ignore
             # the Z.AI ``reasoning_effort`` pass-through.
             if _openrouter_host(self.base_url) and "reasoning" not in body:
-                body["reasoning"] = {"effort": effort}
+                # ``exclude: false`` keeps thinking tokens in the response so
+                # we can round-trip ``reasoning_details`` after tool turns.
+                body["reasoning"] = {"effort": effort, "exclude": False}
         if _glm_z_ai_host(self.base_url) and "thinking" not in body:
             # Forced-on for GLM-5.3; omitting is fine, disabling 400s.
             body["thinking"] = {"type": "enabled"}

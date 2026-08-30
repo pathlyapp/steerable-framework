@@ -11,6 +11,7 @@ from steerable_sidecar import workspace_tools as workspace_tools_mod
 from steerable_sidecar.workspace_tools import (
     _MAX_OUTPUT,
     pgrep_self_wait,
+    refuse_truncated_overwrite,
     workspace_tools_for_cwd,
 )
 
@@ -157,3 +158,27 @@ async def test_bash_refuses_pgrep_self_wait(tmp_path: Path) -> None:
     assert refused.success is False
     assert "pgrep" in (refused.error or "")
     assert "wait" in (refused.error or "")
+
+
+def test_refuse_truncated_overwrite_thresholds() -> None:
+    assert refuse_truncated_overwrite(8192, 100) is True
+    assert refuse_truncated_overwrite(8192, 4096) is False
+    assert refuse_truncated_overwrite(100, 10) is False
+
+
+@pytest.mark.asyncio
+async def test_write_file_refuses_shrinking_large_file(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    big = "row\n" * 3000
+    written = await _call(router, "write_file", {"path": "sample.csv", "content": big})
+    assert written.success is True
+    refused = await _call(
+        router, "write_file", {"path": "sample.csv", "content": "row\nonly\n"}
+    )
+    assert refused.success is False
+    assert "Refusing to overwrite" in (refused.error or "")
+    assert (tmp_path / "sample.csv").read_text() == big
+    grown = await _call(
+        router, "write_file", {"path": "sample.csv", "content": big + "extra\n"}
+    )
+    assert grown.success is True

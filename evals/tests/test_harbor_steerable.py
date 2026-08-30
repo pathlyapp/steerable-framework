@@ -144,7 +144,10 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_MAX_TOKENS", "65536"' in text
     assert 'STEERABLE_SOFT_TIMEOUT_MS", "10200000"' in text
     assert 'STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800"' in text
-    assert "--max-rounds 160" in text
+    assert 'STEERABLE_RETRY_MAX_ATTEMPTS", "12"' in text
+    assert 'STEERABLE_RETRY_BASE_DELAY_MS", "2000"' in text
+    assert 'STEERABLE_RETRY_MAX_DELAY_MS", "120000"' in text
+    assert "--max-rounds 250" in text
     assert text.index("_ensure_python_310") < text.index("_python_tag")
     assert text.index("_merge_trial_path") < text.index("_python_tag")
     assert "trial python is still <3.10" in text

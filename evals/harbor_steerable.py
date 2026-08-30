@@ -352,17 +352,22 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_REASONING_EFFORT", "max")
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
-        # Harbor ×3 on 3600s tasks is 180 min; wrap up 10 min before the kill.
+        # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap 10 min
+        # before the kill. cheap-12 stays ×3 (45 min).
         env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "10200000")
         # High GLM thinking can emit no SSE bytes for many minutes.
         env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "1800")
+        # OpenRouter 429s during 16-shard GHA; default 3×200ms dies immediately.
+        env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
+        env.setdefault("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
+        env.setdefault("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,
             command=(
                 f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
                 f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
-                f"--max-rounds 160 "
+                f"--max-rounds 250 "
                 f"> {shlex.quote(log)} 2>&1"
             ),
             env=env,

@@ -23,6 +23,9 @@ from steerable_agent_runtime import ToolRouter
 from .file_edit import EditError, EditOp, apply_edits, content_version
 
 _MAX_OUTPUT = 100_000
+# Catalog-89 bn-fit-modify: a no_artifact retry overwrote a 10k-row sample
+# with two write_file rows. Refuse shrinking an already-large file that far.
+_MIN_KEEP_BYTES = 8192
 # TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
 # does not kill a single bash at 300s. Harbor's long-task kill is ~180 min.
 _BASH_TIMEOUT_SEC = 3600
@@ -63,7 +66,13 @@ _WRITE_SCHEMA = {
     "type": "object",
     "properties": {
         "path": {"type": "string", "description": "File path relative to the workspace"},
-        "content": {"type": "string", "description": "Full file contents to write"},
+        "content": {
+            "type": "string",
+            "description": (
+                "Full file contents to write. Do not replace an existing "
+                "complete output with a truncated body."
+            ),
+        },
         "expectedVersion": {
             "type": "string",
             "description": (
@@ -250,6 +259,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
                         return ToolResult(
                             success=False, error=conflict, needsFollowup=True
                         )
+                shrink = _truncated_overwrite_error(target, content)
+                if shrink:
+                    return ToolResult(
+                        success=False, error=shrink, needsFollowup=True
+                    )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 _atomic_write(target, content)
             except (OSError, ValueError) as exc:
@@ -350,6 +364,28 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         require_consent=False,
     )
     return router
+
+
+def refuse_truncated_overwrite(existing_bytes: int, new_bytes: int) -> bool:
+    """True when replacing a large file with a much smaller body."""
+    if existing_bytes < _MIN_KEEP_BYTES:
+        return False
+    return new_bytes < max(512, existing_bytes // 4)
+
+
+def _truncated_overwrite_error(target: Path, content: str) -> str | None:
+    try:
+        existing = target.stat().st_size
+    except OSError:
+        return None
+    new_len = len(content.encode("utf-8"))
+    if not refuse_truncated_overwrite(existing, new_len):
+        return None
+    return (
+        f"Refusing to overwrite {existing}-byte {target} with {new_len} bytes. "
+        "The existing file is already complete. Use edit_file for a patch, or "
+        "bash to replace it after reading the current contents."
+    )
 
 
 def pgrep_self_wait(command: str) -> bool:

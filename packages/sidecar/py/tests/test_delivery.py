@@ -167,3 +167,19 @@ async def test_empty_round_retries_even_with_zero_tools() -> None:
     )
     assert action.kind == "retry"
     assert action.reason == "empty_round"
+
+
+@pytest.mark.asyncio
+async def test_empty_round_forces_tool_choice_on_next_step() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    await hooks.before_completion(
+        _draft(tools=0, content="", had_tool_calls=False), ctx
+    )
+    action = await hooks.pre_step([], ctx)
+    assert action.tool_choice == "required"
+    assert action.reason == "empty_round_force_tool"
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    again = await hooks.pre_step([], ctx)
+    assert again.tool_choice is None

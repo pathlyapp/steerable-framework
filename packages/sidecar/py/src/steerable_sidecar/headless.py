@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--instruction", help="Task instruction text")
     parser.add_argument("--instruction-file", type=Path)
-    parser.add_argument("--max-rounds", type=int, default=160)
+    parser.add_argument("--max-rounds", type=int, default=250)
     args = parser.parse_args(argv)
     if args.version:
         print(__version__)

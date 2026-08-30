@@ -13,8 +13,8 @@ from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import (
     CompletionAction,
     CompletionDraft,
+    NoopHooks,
     PreStepAction,
-    RetryAction,
     TranscriptAppend,
 )
 from steerable_agent_runtime.llm import LLMMessage
@@ -56,7 +56,7 @@ _EMPTY_ROUND_RETRY = (
 )
 
 
-class DeliveryHooks:
+class DeliveryHooks(NoopHooks):
     """Nudge, then veto completion, when a coding turn never mutates files."""
 
     def __init__(
@@ -76,10 +76,14 @@ class DeliveryHooks:
         self.nudges = 0
         self.completion_retries = 0
         self.empty_round_retries = 0
+        self._force_tool = False
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: LoopContext
     ) -> PreStepAction:
+        appends = None
+        append_action = None
+        reason = None
         if (
             self.writes == 0
             and self.consecutive_explore >= self._explore_before_nudge
@@ -87,22 +91,31 @@ class DeliveryHooks:
         ):
             self.nudges += 1
             self.consecutive_explore = 0
+            appends = [
+                TranscriptAppend(
+                    message=LLMMessage.text_of("user", _EXPLORE_NUDGE),
+                    kind="delivery.explore_nudge",
+                )
+            ]
+            reason = "explore_without_write"
+            append_action = "delivery_nudge"
+        tool_choice = "required" if self._force_tool else None
+        if tool_choice and reason is None:
+            reason = "empty_round_force_tool"
+        if appends or tool_choice:
             return PreStepAction(
                 kind="proceed",
-                appends=[
-                    TranscriptAppend(
-                        message=LLMMessage.text_of("user", _EXPLORE_NUDGE),
-                        kind="delivery.explore_nudge",
-                    )
-                ],
-                reason="explore_without_write",
-                append_action="delivery_nudge",
+                appends=appends,
+                reason=reason,
+                tool_choice=tool_choice,
+                append_action=append_action,
             )
         return PreStepAction(kind="proceed")
 
     async def post_tool_result(
         self, result: ToolResult, call: ToolCall, ctx: LoopContext
     ) -> ToolResult:
+        self._force_tool = False
         name = call.name
         if name in _MUTATING or (name == "bash" and _bash_writes(call)):
             self.writes += 1
@@ -111,17 +124,13 @@ class DeliveryHooks:
             self.consecutive_explore += 1
         return result
 
-    async def on_request_error(
-        self, error: Exception, transcript: list[LLMMessage], ctx: LoopContext
-    ) -> RetryAction:
-        return RetryAction(kind="fail", reason=str(error))
-
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
+            self._force_tool = True
             return CompletionAction(
                 kind="retry",
                 message=_EMPTY_ROUND_RETRY,

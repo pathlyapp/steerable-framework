@@ -644,6 +644,29 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
     assert compaction._max_tokens == 60_000
 
 
+def test_default_loop_hooks_retry_policy_from_env(monkeypatch) -> None:
+    from steerable_agent_runtime import RetryHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks
+
+    monkeypatch.delenv("STEERABLE_RETRY_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("STEERABLE_RETRY_BASE_DELAY_MS", raising=False)
+    monkeypatch.delenv("STEERABLE_RETRY_MAX_DELAY_MS", raising=False)
+    default = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    retry = next(h for h in default._hooks if isinstance(h, RetryHooks))
+    assert retry._policy.max_attempts == 3
+    assert retry._policy.base_delay_ms == 200
+    assert retry._policy.max_delay_ms == 5000
+
+    monkeypatch.setenv("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
+    monkeypatch.setenv("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
+    monkeypatch.setenv("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
+    harbor = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    retry = next(h for h in harbor._hooks if isinstance(h, RetryHooks))
+    assert retry._policy.max_attempts == 12
+    assert retry._policy.base_delay_ms == 2000
+    assert retry._policy.max_delay_ms == 120_000
+
+
 
 
 def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
