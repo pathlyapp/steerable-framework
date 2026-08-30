@@ -58,7 +58,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "write_file" in headless_mod._SYSTEM
     assert "pgrep" in headless_mod._SYSTEM
     assert "YYYY-MM-DD" in headless_mod._SYSTEM
-    assert "acceptance criteria" in headless_mod._SYSTEM
+    assert "named thresholds" in headless_mod._SYSTEM
     assert "scoring CLI" in headless_mod._SYSTEM
     assert "quantize" in headless_mod._SYSTEM
     assert "rewritten sidecar" in headless_mod._SYSTEM
@@ -89,6 +89,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
     assert "runtime or speedup" in headless_mod._SYSTEM
+    assert "meet the threshold" in headless_mod._SYSTEM
+    assert "sequence verbatim" in headless_mod._SYSTEM
+    assert "javascript: URLs" in headless_mod._SYSTEM
     assert "x-axis units" in headless_mod._SYSTEM
     assert "handwritten accuracy" in headless_mod._SYSTEM
 
