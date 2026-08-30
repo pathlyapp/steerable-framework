@@ -40,7 +40,7 @@ jobs:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
         run: |
           set +e
-          uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-${{ matrix.agent }}.txt"
@@ -99,38 +99,37 @@ jobs:
   gather:
     name: At least one live agent ran
     needs: [eval]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           pattern: eval-*
-          merge-multiple: true
           path: statuses
       - name: Feishu result
-        if: always()
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
         run: |
           python3 -m evals.feishu \
             --root statuses \
             --label "GHA cheap-12" \
-            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            || echo "::warning::Feishu post failed"
       - name: Fail if every live agent was skipped
         run: |
-          shopt -s nullglob
-          files=(statuses/eval-status-*.txt)
+          shopt -s globstar nullglob
+          files=(statuses/**/eval-status-*.txt)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "no eval-status artifacts; live agents did not start"
             exit 1
           fi
-          cat statuses/eval-status-*.txt
-          if grep -qx ran statuses/eval-status-*.txt; then
+          cat "${files[@]}"
+          if grep -qx ran "${files[@]}"; then
             echo "at least one live agent ran"
             exit 0
           fi
-          if grep -qx failed statuses/eval-status-*.txt; then
+          if grep -qx failed "${files[@]}"; then
             echo "a live agent ran and failed; the matrix job already failed"
             exit 0
           fi

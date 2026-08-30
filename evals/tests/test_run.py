@@ -120,6 +120,29 @@ def test_print_summary_no_result(tmp_path: Path) -> None:
     assert _print_summary(tmp_path) == EXIT_HARBOR
 
 
+def test_print_summary_appends_github_step_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    job = tmp_path / "2026-08-29__12-00-00"
+    job.mkdir()
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_errored_trials": 0,
+                    "evals": {"steerable": {"metrics": [{"mean": 0.75}]}},
+                }
+            }
+        )
+    )
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert _print_summary(tmp_path) == EXIT_OK
+    text = summary.read_text()
+    assert "Mean: 0.750" in text
+    assert "n_errored_trials: 0" in text
+
+
 def test_harbor_child_env_moves_proxy_off_docker() -> None:
     out = _harbor_child_env(
         {"HTTP_PROXY": "http://127.0.0.1:7890", "OPENAI_API_KEY": "x"}

@@ -150,56 +150,67 @@ def agent_from_path(result: Path) -> str | None:
     return None
 
 
+def iter_job_result_paths(root: Path) -> list[Path]:
+    """Harbor job ``result.json`` only (parent is ``YYYY-MM-DD__HH-MM-SS``)."""
+    return [
+        path
+        for path in sorted(root.rglob("result.json"))
+        if _JOB_DIR.match(path.parent.name)
+    ]
+
+
+def load_job_result(path: Path) -> tuple[str | None, dict[str, Any] | None]:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    agent = agent_from_payload(payload) or agent_from_path(path)
+    return agent, payload
+
+
+def latest_payloads(root: Path) -> dict[str, dict[str, Any]]:
+    """Last job stamp per agent. Artifact dirs must not share a relative path."""
+    latest: dict[str, dict[str, Any]] = {}
+    for result in iter_job_result_paths(root):
+        agent, payload = load_job_result(result)
+        if agent and payload is not None:
+            latest[agent] = payload
+    return latest
+
+
 def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
+    payloads = latest_payloads(root)
     rows: list[tuple[str, str, dict[str, Any] | None]] = []
-    for status_file in sorted(root.glob("eval-status-*.txt")):
+    seen: set[str] = set()
+    for status_file in sorted(root.rglob("eval-status-*.txt")):
         agent = status_file.name.removeprefix("eval-status-").removesuffix(".txt")
+        if agent in seen:
+            continue
+        seen.add(agent)
         status = (
             status_file.read_text().strip().splitlines()[0]
             if status_file.stat().st_size
             else "unknown"
         )
-        results = [
-            path
-            for path in sorted(root.glob(f"evals/jobs/{agent}/*/result.json"))
-            if _JOB_DIR.match(path.parent.name)
-        ]
-        if not results:
-            results = [
-                path
-                for path in sorted(root.rglob("result.json"))
-                if _JOB_DIR.match(path.parent.name) and agent_from_path(path) == agent
-            ]
-        summary = None
-        if results:
-            try:
-                summary = summarize_result(json.loads(results[-1].read_text()))
-            except (OSError, json.JSONDecodeError):
-                summary = None
+        payload = payloads.get(agent)
+        summary = summarize_result(payload) if payload is not None else None
         rows.append((agent, status, summary))
     if rows:
         return rows
     # Oracle artifacts have no eval-status-*.txt. Skip trial result.json
     # (parent is ``fix-git__abc``, not a Harbor job stamp).
-    latest: dict[str, tuple[str, dict[str, Any] | None]] = {}
-    for result in sorted(root.rglob("result.json")):
-        if not _JOB_DIR.match(result.parent.name):
-            continue
-        try:
-            payload = json.loads(result.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        agent = agent_from_payload(payload) or agent_from_path(result) or "unknown"
+    out: list[tuple[str, str, dict[str, Any] | None]] = []
+    for agent, payload in sorted(payloads.items()):
         summary = summarize_result(payload)
         status = (
             "ran"
             if summary["n_errored"] == 0 and summary["mean"] is not None
             else "failed"
         )
-        latest[agent] = (status, summary)
-    return [(agent, status, summary) for agent, (status, summary) in sorted(latest.items())]
+        out.append((agent, status, summary))
+    return out
 
 
 def build_message(
@@ -217,15 +228,15 @@ def build_message(
     ]
     title = f"{word} · {label}"
     if means:
-        title = f"{word} · {label} · {means[0]}"
+        title = f"{word} · {label} · " + " · ".join(means)
     lines = [agent_line(agent, status, summary) for agent, status, summary in rows]
-    for _agent, _status, summary in rows:
+    for agent, _status, summary in rows:
         if not summary:
             continue
         if summary["failed"]:
-            lines.append("未过: " + ", ".join(summary["failed"]))
+            lines.append(f"{agent} 未过: " + ", ".join(summary["failed"]))
         if summary["passed"]:
-            lines.append("已过: " + ", ".join(summary["passed"]))
+            lines.append(f"{agent} 已过: " + ", ".join(summary["passed"]))
     if run_url:
         lines.append(f"[GHA run]({run_url})")
     body = "\n".join(lines) if lines else "没有 Harbor result.json"

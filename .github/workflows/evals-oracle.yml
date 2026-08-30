@@ -89,7 +89,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: "*-fix-git"
-          merge-multiple: true
           path: statuses
       - name: Feishu result
         env:
@@ -98,4 +97,5 @@ jobs:
           python3 -m evals.feishu \
             --root statuses \
             --label "GHA oracle canary" \
-            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            || echo "::warning::Feishu post failed"

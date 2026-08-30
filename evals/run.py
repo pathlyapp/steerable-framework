@@ -192,10 +192,11 @@ def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:
         return EXIT_HARBOR
     print(json.dumps(stats, indent=2, sort_keys=True))
     errored = stats.get("n_errored_trials") or 0
+    mean = _job_mean(stats)
+    _append_github_step_summary(latest, mean=mean, n_errored=int(errored))
     if errored:
         print(f"harbor reported {errored} errored trial(s)", file=sys.stderr)
         return EXIT_HARBOR
-    mean = _job_mean(stats)
     if require_mean is not None:
         if mean is None or mean + 1e-9 < require_mean:
             print(
@@ -204,6 +205,22 @@ def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:
             )
             return EXIT_HARBOR
     return EXIT_OK
+
+
+def _append_github_step_summary(
+    result: Path, *, mean: float | None, n_errored: int
+) -> None:
+    target = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not target:
+        return
+    mean_s = f"{mean:.3f}" if isinstance(mean, float) else "n/a"
+    try:
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(f"Mean: {mean_s}\n")
+            handle.write(f"n_errored_trials: {n_errored}\n")
+            handle.write(f"result: {result}\n")
+    except OSError:
+        return
 
 
 def _job_mean(stats: dict) -> float | None:

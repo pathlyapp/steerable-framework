@@ -13,6 +13,8 @@ dataset:
 
 run:
   n_attempts: 1
+  # Local default. GitHub Actions weekly overrides with --n-concurrent 2
+  # (ubuntu-latest is 4 vCPU / 16GB; keep 1 on a laptop).
   n_concurrent: 1
   jobs_dir: evals/jobs
   # Pinned Harbor CLI. Workflows install this exact version; bump here and

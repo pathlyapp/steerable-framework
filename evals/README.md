@@ -45,4 +45,4 @@ python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 | Oracle smoke | PR when `evals/**` changes | Harbor `-a oracle` on `fix-git` (Mean 1.0). Product canary (`steerable` × `fix-git`) when `STEERABLE_API_KEY` is set |
 | L2 weekly | schedule + `workflow_dispatch` | cheap-12 × `steerable` (gateway) / `claude-code` / `codex` / `pi` (official keys, skip if unset). Not a required merge check. |
 
-Job outputs land in `evals/jobs/` (gitignored). GitHub Actions posts a Feishu card when `FEISHU_BOT_WEBHOOK` is set; the card title starts with 成功 or 失败.
+Job outputs land in `evals/jobs/` (gitignored). GitHub Actions posts a Feishu card when `FEISHU_BOT_WEBHOOK` is set; the card title starts with 成功 or 失败. Weekly GHA passes `--n-concurrent 2`. Feishu posting is best-effort.

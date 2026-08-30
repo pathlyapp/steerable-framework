@@ -70,7 +70,7 @@ def test_title_starts_with_success_or_failure() -> None:
     assert ok is True
     assert title.startswith("成功 · ")
     assert "0.750" in title
-    assert "nginx-request-logging" in body
+    assert "steerable 未过: nginx-request-logging" in body
     assert "https://example.test/run" in body
     card = card_payload(ok=ok, title=title, body=body)
     assert card["msg_type"] == "interactive"
@@ -131,3 +131,66 @@ def test_collect_rows_skips_trial_json_and_names_agent_from_evals_key(tmp_path: 
     assert rows[0][2] is not None
     assert rows[0][2]["mean"] == 1.0
     assert rows[0][2]["passed"] == ["fix-git"]
+
+
+def test_collect_rows_keeps_both_agents_when_job_stamps_collide(tmp_path: Path) -> None:
+    """GHA download-artifact without merge-multiple: artifact name is the prefix."""
+    stamp = "2026-08-30__11-00-06"
+    for agent, mean in (("oracle", 1.0), ("steerable", 1.0)):
+        job = tmp_path / f"{agent}-fix-git" / stamp
+        job.mkdir(parents=True)
+        (job / "result.json").write_text(
+            json.dumps(
+                {
+                    "stats": {
+                        "n_completed_trials": 1,
+                        "n_errored_trials": 0,
+                        "evals": {
+                            f"{agent}__terminal-bench/terminal-bench-2-1": {
+                                "metrics": [{"mean": mean}],
+                                "reward_stats": {"reward": {"1.0": ["fix-git__x"]}},
+                            }
+                        },
+                    }
+                }
+            )
+        )
+    rows = collect_rows(tmp_path)
+    assert [r[0] for r in rows] == ["oracle", "steerable"]
+    assert all(r[2] is not None and r[2]["mean"] == 1.0 for r in rows)
+    _ok, title, body = build_message(rows, label="GHA oracle canary", run_url="")
+    assert "oracle 1.000" in title
+    assert "steerable 1.000" in title
+    assert "oracle 已过: fix-git" in body
+    assert "steerable 已过: fix-git" in body
+
+
+def test_collect_rows_reads_nested_weekly_status_files(tmp_path: Path) -> None:
+    steerable = tmp_path / "eval-steerable"
+    job = steerable / "2026-08-30__12-00-00"
+    job.mkdir(parents=True)
+    (steerable / "eval-status-steerable.txt").write_text("ran\n")
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 1,
+                    "n_errored_trials": 0,
+                    "evals": {
+                        "steerable__z-ai/glm-5.3-flash__terminal-bench/terminal-bench-2-1": {
+                            "metrics": [{"mean": 0.75}],
+                            "reward_stats": {"reward": {"1.0": ["fix-git__a"], "0.0": ["nginx-request-logging__b"]}},
+                        }
+                    },
+                }
+            }
+        )
+    )
+    pi = tmp_path / "eval-pi"
+    pi.mkdir()
+    (pi / "eval-status-pi.txt").write_text("skipped\n")
+    rows = {name: (status, summary) for name, status, summary in collect_rows(tmp_path)}
+    assert rows["pi"][0] == "skipped"
+    assert rows["steerable"][0] == "ran"
+    assert rows["steerable"][1] is not None
+    assert rows["steerable"][1]["mean"] == 0.75
