@@ -378,6 +378,16 @@ def _kill_process_group(pid: int) -> None:
 
 
 def _clip(text: str) -> str:
+    """Bound tool output without dropping the tail.
+
+    Catalog-89 train/compile logs put the accuracy line, linker error, or
+    qemu boot banner at the end. A prefix-only clip (then spill of that
+    prefix) hid those lines, so the model stopped on a truncated success
+    or never saw the failure.
+    """
     if len(text) <= _MAX_OUTPUT:
         return text
-    return text[:_MAX_OUTPUT] + "\n...[truncated]..."
+    head = _MAX_OUTPUT // 5
+    tail = _MAX_OUTPUT - head
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n...[{omitted} chars truncated]...\n{text[-tail:]}"

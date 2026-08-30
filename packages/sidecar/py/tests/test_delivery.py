@@ -100,6 +100,27 @@ async def test_completion_accepts_after_bash_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_completion_accepts_after_python_script_or_make() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(id="t", name="bash", arguments={"command": "python3 render.py"}),
+        ctx,
+    )
+    assert hooks.writes == 1
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(id="t", name="bash", arguments={"command": "make -C /app all"}),
+        ctx,
+    )
+    action = await hooks.before_completion(_draft(tools=2), ctx)
+    assert action.kind == "accept"
+    assert hooks.writes == 2
+
+
+@pytest.mark.asyncio
 async def test_explore_bash_does_not_count_as_write() -> None:
     hooks = DeliveryHooks()
     ctx = LoopContext()

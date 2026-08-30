@@ -87,6 +87,9 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "ca-certificates" in _ENSURE_PYTHON_310
     assert "python3-pip" in _ENSURE_PYTHON_310
     assert "astral.sh/uv/0.9.5/install.sh" in _ENSURE_PYTHON_310
+    assert "pin_usr_bin" in _ENSURE_PYTHON_310
+    assert "/usr/bin/python3.9" in _ENSURE_PYTHON_310
+    assert 'ln -sf /usr/local/bin/python3 /usr/bin/python3' in _ENSURE_PYTHON_310
 
 
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
@@ -109,6 +112,7 @@ def test_uv_seed_installs_from_tsinghua_without_github() -> None:
     assert '"$arg" == 3.13' in _UV_SEED
     assert "/root/.local/bin/uv python install 3.13" in _UV_SEED
     assert "UV_PYTHON_INSTALL_DIR" in _UV_SEED
+    assert 'while [ "$i" -lt 3 ]' in _UV_SEED
 
 
 def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:

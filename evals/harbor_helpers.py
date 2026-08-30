@@ -72,6 +72,15 @@ apt-get update && apt-get install -y python3 python3-pip python3-venv
 # agent runs. Distro python3.11/3.12 first; uv's standalone 3.12 last.
 _ENSURE_PYTHON_310 = r"""
 ok() { python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; }
+pin_usr_bin() {
+  [ -x /usr/local/bin/python3 ] || return 0
+  [ -e /usr/bin/python3 ] || return 0
+  /usr/bin/python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' && return 0
+  if [ ! -e /usr/bin/python3.9 ]; then
+    cp -a /usr/bin/python3 /usr/bin/python3.9 || true
+  fi
+  ln -sf /usr/local/bin/python3 /usr/bin/python3
+}
 ok && exit 0
 export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 if command -v apk >/dev/null 2>&1; then
@@ -91,6 +100,7 @@ elif command -v python3.11 >/dev/null 2>&1; then
   ln -sf "$(command -v python3.11)" /usr/local/bin/python3
 fi
 hash -r
+pin_usr_bin
 ok && exit 0
 python3 -m pip install --quiet uv==0.9.5 || python3 -m pip install --quiet --user uv==0.9.5 || true
 hash -r
@@ -102,6 +112,7 @@ fi
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
 uv python install 3.12
 ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
+pin_usr_bin
 hash -r
 python3 -V >&2
 ok
@@ -180,7 +191,12 @@ chmod +x /usr/local/bin/curl
 export UV_PYTHON_INSTALL_DIR=/opt/uv-python
 # TB test.sh often runs `uvx -p 3.13`. Prefetch so the verifier is not a
 # 30-minute GitHub GET (mcmc-sampling-stan VerifierTimeoutError).
-/root/.local/bin/uv python install 3.13 || true
+i=0
+while [ "$i" -lt 3 ]; do
+  /root/.local/bin/uv python install 3.13 && break
+  i=$((i+1))
+  sleep 5
+done
 /root/.local/bin/uv --version
 """.strip()
 _UV_PIP_INSTALL = (

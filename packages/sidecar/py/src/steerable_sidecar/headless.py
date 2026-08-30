@@ -50,7 +50,9 @@ _SYSTEM = (
     "path, do not write a candidate that violates it. A local numeric check "
     "must use the same metric and split the hidden tests will use. "
     "Hidden tests score files on disk, not this chat: if a time-budget "
-    "notice appears, write the required files immediately. "
+    "notice appears, wait for background jobs (`wait`), then write or "
+    "verify the required files. Do not overwrite an existing complete "
+    "output with a truncated write_file. "
     "Before finishing, write a small local check for the instruction's "
     "acceptance criteria, run it, and fix failures. Hidden tests still run "
     "after you stop."
@@ -135,6 +137,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             soft_timeout_ms=_soft_timeout_ms(),
             tool_timeout_ms=3_600_000,
             wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=12,
         ),
         hooks=ChainHooks(
             DeliveryHooks(),

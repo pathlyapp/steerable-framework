@@ -74,11 +74,15 @@ async def test_missing_file(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     router = workspace_tools_for_cwd(tmp_path)
-    huge = "a" * (_MAX_OUTPUT + 10)
+    huge = "H" * 40 + "M" * (_MAX_OUTPUT) + "T" * 40
     (tmp_path / "big.txt").write_text(huge)
     read = await _call(router, "read_file", {"path": "big.txt"})
     assert read.success is True
-    assert read.data["content"].endswith("...[truncated]...")
+    content = read.data["content"]
+    assert content.startswith("H" * 40)
+    assert content.endswith("T" * 40)
+    assert "truncated" in content
+    assert len(content) <= _MAX_OUTPUT + 80
     binary = await _call(router, "bash", {"command": r"printf '\x99\xff'"})
     assert binary.success is True
 
