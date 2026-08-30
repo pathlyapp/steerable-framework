@@ -121,8 +121,9 @@ _SYSTEM = (
     "adapt-control values into the new client, not library defaults. "
     "Before finishing, write a small local check for the instruction's "
     "named thresholds (cosine, KL, Levenshtein, runtime, P@1), run it, "
-    "and fix failures. Hidden tests still run "
-    "after you stop."
+    "and fix failures. If a local check prints a number below the named "
+    "bar, that is a failure — keep iterating; do not mark it passed. "
+    "Hidden tests still run after you stop."
 )
 
 

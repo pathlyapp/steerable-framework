@@ -159,7 +159,16 @@ async def test_explore_bash_does_not_count_as_write() -> None:
     await hooks.post_tool_result(
         ok, ToolCall(id="t", name="bash", arguments={"command": "python -c 'print(2 > 1)'"}), ctx
     )
-    first = await hooks.before_completion(_draft(tools=2), ctx)
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "qemu-system-x86_64 -daemonize -cdrom /app/alpine.iso"},
+        ),
+        ctx,
+    )
+    first = await hooks.before_completion(_draft(tools=3), ctx)
     assert first.kind == "retry"
     assert first.reason == "no_artifact"
 
