@@ -10,11 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+_JOB_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}__")
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -127,14 +130,46 @@ def post_feishu(webhook: str, payload: dict[str, Any]) -> None:
         resp.read()
 
 
+def agent_from_payload(payload: dict[str, Any]) -> str | None:
+    """Harbor job ``stats.evals`` keys start with the agent name."""
+    stats = payload.get("stats") if isinstance(payload, dict) else None
+    if not isinstance(stats, dict):
+        return None
+    evals = stats.get("evals") or {}
+    if not isinstance(evals, dict) or not evals:
+        return None
+    return str(next(iter(evals))).split("__", 1)[0] or None
+
+
+def agent_from_path(result: Path) -> str | None:
+    parts = result.parts
+    if "jobs" in parts:
+        idx = parts.index("jobs")
+        if idx + 1 < len(parts):
+            return parts[idx + 1]
+    return None
+
+
 def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
     rows: list[tuple[str, str, dict[str, Any] | None]] = []
     for status_file in sorted(root.glob("eval-status-*.txt")):
         agent = status_file.name.removeprefix("eval-status-").removesuffix(".txt")
-        status = status_file.read_text().strip().splitlines()[0] if status_file.stat().st_size else "unknown"
-        results = sorted(root.glob(f"evals/jobs/{agent}/*/result.json"))
+        status = (
+            status_file.read_text().strip().splitlines()[0]
+            if status_file.stat().st_size
+            else "unknown"
+        )
+        results = [
+            path
+            for path in sorted(root.glob(f"evals/jobs/{agent}/*/result.json"))
+            if _JOB_DIR.match(path.parent.name)
+        ]
         if not results:
-            results = sorted(root.glob(f"**/{agent}/**/result.json"))
+            results = [
+                path
+                for path in sorted(root.rglob("result.json"))
+                if _JOB_DIR.match(path.parent.name) and agent_from_path(path) == agent
+            ]
         summary = None
         if results:
             try:
@@ -144,21 +179,27 @@ def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
         rows.append((agent, status, summary))
     if rows:
         return rows
-    # Oracle workflow artifacts have no eval-status-*.txt.
-    for result in sorted(root.glob("**/result.json")):
-        agent = "unknown"
-        parts = result.parts
-        if "jobs" in parts:
-            idx = parts.index("jobs")
-            if idx + 1 < len(parts):
-                agent = parts[idx + 1]
+    # Oracle artifacts have no eval-status-*.txt. Skip trial result.json
+    # (parent is ``fix-git__abc``, not a Harbor job stamp).
+    latest: dict[str, tuple[str, dict[str, Any] | None]] = {}
+    for result in sorted(root.rglob("result.json")):
+        if not _JOB_DIR.match(result.parent.name):
+            continue
         try:
-            summary = summarize_result(json.loads(result.read_text()))
+            payload = json.loads(result.read_text())
         except (OSError, json.JSONDecodeError):
-            summary = None
-        status = "ran" if summary and not summary["n_errored"] else "failed"
-        rows.append((agent, status, summary))
-    return rows
+            continue
+        if not isinstance(payload, dict):
+            continue
+        agent = agent_from_payload(payload) or agent_from_path(result) or "unknown"
+        summary = summarize_result(payload)
+        status = (
+            "ran"
+            if summary["n_errored"] == 0 and summary["mean"] is not None
+            else "failed"
+        )
+        latest[agent] = (status, summary)
+    return [(agent, status, summary) for agent, (status, summary) in sorted(latest.items())]
 
 
 def build_message(

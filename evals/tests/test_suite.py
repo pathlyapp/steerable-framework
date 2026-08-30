@@ -109,6 +109,7 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "FEISHU_BOT_WEBHOOK" in weekly
     assert "python3 -m evals.feishu" in weekly
     assert "python3 -m evals.feishu" in oracle
+    assert "if: ${{ !cancelled() }}" in oracle
 
 
 def test_harbor_task_name_prefixes_org() -> None:

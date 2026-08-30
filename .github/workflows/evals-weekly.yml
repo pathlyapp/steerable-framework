@@ -61,7 +61,7 @@ jobs:
           name: eval-${{ matrix.agent }}
           path: |
             eval-status-${{ matrix.agent }}.txt
-            evals/jobs/${{ matrix.agent }}/**/result.json
+            evals/jobs/${{ matrix.agent }}/*/result.json
           if-no-files-found: ignore
 
   notify-start:

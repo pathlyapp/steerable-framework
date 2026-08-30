@@ -99,3 +99,35 @@ def test_collect_rows_from_weekly_artifact_layout(tmp_path: Path) -> None:
     assert rows[1][2] is not None
     assert rows[1][2]["mean"] == 1.0
     assert agent_line("pi", "skipped", None) == "pi: 跳过"
+
+
+def test_collect_rows_skips_trial_json_and_names_agent_from_evals_key(tmp_path: Path) -> None:
+    job = tmp_path / "2026-08-30__10-52-39"
+    job.mkdir()
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 1,
+                    "n_errored_trials": 0,
+                    "evals": {
+                        "oracle__terminal-bench/terminal-bench-2-1": {
+                            "metrics": [{"mean": 1.0}],
+                            "reward_stats": {"reward": {"1.0": ["fix-git__abc"]}},
+                        }
+                    },
+                }
+            }
+        )
+    )
+    trial = job / "fix-git__abc"
+    trial.mkdir()
+    (trial / "result.json").write_text(
+        json.dumps({"stats": {"n_completed_trials": 1, "evals": {}}})
+    )
+    rows = collect_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0][0] == "oracle"
+    assert rows[0][2] is not None
+    assert rows[0][2]["mean"] == 1.0
+    assert rows[0][2]["passed"] == ["fix-git"]
