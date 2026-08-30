@@ -247,6 +247,10 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
     )
     assert "/app/doomgeneric_mips" in doom
     assert "/app/vm.js" in doom
+    titled = named_output_paths(
+        "Output the primers in a fasta file titled primers.fasta."
+    )
+    assert "/app/primers.fasta" in titled
 
 
 @pytest.mark.asyncio

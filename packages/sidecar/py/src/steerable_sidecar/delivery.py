@@ -84,6 +84,9 @@ _RUN_ENTRY = re.compile(
     r"`(?:node|python3?|pypy3?)\s+"
     r"([A-Za-z0-9./_-]+\.[A-Za-z][A-Za-z0-9]*)`"
 )
+_TITLED_FILE = re.compile(
+    r"\btitled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
+)
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
     "Continue the task now with bash, read_file, write_file, or edit_file. "
@@ -248,7 +251,7 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             continue
         if path not in seen:
             seen.append(path)
-    for pattern in (_CALLED_WITH_EXT, _FILE_CALLED, _RUN_ENTRY):
+    for pattern in (_CALLED_WITH_EXT, _FILE_CALLED, _RUN_ENTRY, _TITLED_FILE):
         for match in pattern.finditer(text):
             name = match.group(1).rstrip(".,;:)")
             if name.startswith("/"):
