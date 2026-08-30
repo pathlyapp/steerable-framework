@@ -51,8 +51,8 @@ _EXPLORE_NUDGE = (
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "
     "tests look for those paths. If you already drafted the contents in "
-    "this chat, write_file them now; do not only describe a plan or dump "
-    "a placeholder."
+    "this chat, write them now with write_file, edit_file, or bash; do not "
+    "only describe a plan, dump a placeholder, or truncate an existing file."
 )
 _MISSING_NAMED_RETRY = (
     "The turn is ending but these instruction-named output files still "
