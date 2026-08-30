@@ -61,6 +61,36 @@ def test_dry_run_catalog_shard_selects_a_slice(capsys) -> None:
         assert f"--include-task-name terminal-bench/{task}" in captured.out
 
 
+def test_dry_run_failed_prev_shard_selects_a_slice(capsys) -> None:
+    code = main(
+        [
+            "--agent",
+            "steerable",
+            "--split",
+            "failed-prev",
+            "--shard",
+            "0",
+            "--shards",
+            "4",
+            "--dry-run",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    suite = load_suite()
+    expected = shard_tasks(
+        suite.splits["failed-prev"],
+        shard=0,
+        shards=4,
+        minutes=suite.catalog_minutes,
+    )
+    assert expected
+    includes = captured.out.count("--include-task-name")
+    assert includes == len(expected)
+    for task in expected:
+        assert f"--include-task-name terminal-bench/{task}" in captured.out
+
+
 def test_dry_run_steerable_uses_import_path(capsys) -> None:
     code = main(
         [

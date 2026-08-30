@@ -6,10 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke (12 ids) or full catalog (89 ids, 8 shards)
+        description: cheap-12 smoke, failed-prev iteration (~41 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12
+          - failed-prev
           - catalog
         default: cheap-12
 
@@ -23,7 +24,7 @@ concurrency:
 jobs:
   eval:
     name: TB 2.1 cheap-12 × ${{ matrix.agent }}
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.split != 'catalog' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.split == 'cheap-12' }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -74,6 +75,54 @@ jobs:
             evals/jobs/${{ matrix.agent }}/*/*/agent/headless.log
             evals/jobs/${{ matrix.agent }}/*/*/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/*/*/exception.txt
+          if-no-files-found: ignore
+
+  failed-prev:
+    name: TB 2.1 failed-prev × steerable shard ${{ matrix.shard }}/4
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'failed-prev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor failed-prev shard
+        env:
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+        run: |
+          set +e
+          uv run python -m evals.run --agent steerable --split failed-prev --shard "${{ matrix.shard }}" --shards 4 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo ran > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo failed > eval-status-steerable.txt
+          echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-steerable-${{ matrix.shard }}
+          path: |
+            eval-status-steerable.txt
+            evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/agent/headless.log
+            evals/jobs/steerable/*/*/verifier/test-stdout.txt
+            evals/jobs/steerable/*/*/exception.txt
           if-no-files-found: ignore
 
   catalog:
@@ -141,12 +190,15 @@ jobs:
               print("FEISHU_BOT_WEBHOOK unset; skip")
               raise SystemExit(0)
           split = os.environ.get("EVAL_SPLIT") or "cheap-12"
-          title = "开始 · GHA catalog 89" if split == "catalog" else "开始 · GHA cheap-12"
-          body = (
-              "产品 steerable × 全量 89 题，8 分片并行。"
-              if split == "catalog"
-              else "产品 steerable 用网关 key；对照无官方 key 会跳过。"
-          )
+          if split == "catalog":
+              title = "开始 · GHA catalog 89"
+              body = "产品 steerable × 全量 89 题，8 分片并行。"
+          elif split == "failed-prev":
+              title = "开始 · GHA failed-prev"
+              body = "产品 steerable × 上次 catalog 失败题（约 41），4 分片。用来迭代 harness，不是正式分。"
+          else:
+              title = "开始 · GHA cheap-12"
+              body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           payload = {
               "msg_type": "interactive",
@@ -166,7 +218,7 @@ jobs:
 
   gather:
     name: At least one live agent ran
-    needs: [eval, catalog]
+    needs: [eval, catalog, failed-prev]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -183,6 +235,8 @@ jobs:
           label="GHA cheap-12"
           if [ "$EVAL_SPLIT" = "catalog" ]; then
             label="GHA catalog 89"
+          elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
+            label="GHA failed-prev"
           fi
           python3 -m evals.feishu \
             --root statuses \

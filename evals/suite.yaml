@@ -3,8 +3,10 @@
 # may run. Homemade prompts are not a CI gate.
 #
 # cheap-12 avoids QEMU, GPU, video, and long compiles. It must stay a
-# subset of catalog. The catalog lists the 89 task ids published at
-# git_rev; do not invent extra ids.
+# subset of catalog. failed-prev is the previous GHA catalog's zeros,
+# install errors, and 1→0 flips so harness iteration does not rerun all
+# 89. The catalog lists the 89 task ids published at git_rev; do not
+# invent extra ids.
 
 dataset:
   name: terminal-bench/terminal-bench-2-1
@@ -202,6 +204,48 @@ splits:
     - tune-mjcf
     - video-processing
     - vulnerable-secret
+    - winning-avg-corewars
+    - write-compressor
+  failed-prev:
+    - bn-fit-modify
+    - build-pov-ray
+    - cancel-async-tasks
+    - chess-best-move
+    - circuit-fibsqrt
+    - crack-7z-hash
+    - db-wal-recovery
+    - dna-assembly
+    - dna-insert
+    - extract-moves-from-video
+    - filter-js-from-html
+    - financial-document-processor
+    - gcode-to-text
+    - gpt2-codegolf
+    - install-windows-3.11
+    - large-scale-text-editing
+    - mailman
+    - make-doom-for-mips
+    - make-mips-interpreter
+    - merge-diff-arc-agi-task
+    - mteb-leaderboard
+    - mteb-retrieve
+    - overfull-hbox
+    - password-recovery
+    - path-tracing
+    - path-tracing-reverse
+    - polyglot-rust-c
+    - protein-assembly
+    - qemu-alpine-ssh
+    - qemu-startup
+    - query-optimize
+    - raman-fitting
+    - regex-chess
+    - sam-cell-seg
+    - sanitize-git-repo
+    - schemelike-metacircular-eval
+    - torch-pipeline-parallelism
+    - train-fasttext
+    - video-processing
     - winning-avg-corewars
     - write-compressor
   cheap-12:

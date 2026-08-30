@@ -38,7 +38,10 @@ _SYSTEM = (
     "print dates as YYYY-MM-DD when a check must show expiry; after "
     "apt-installing a binary, make `which <name>` work (symlink into /usr/bin "
     "if it landed in /usr/sbin). Do not wait with `while pgrep -f ...` — "
-    "pgrep matches the wait loop; background the job and `wait $!`."
+    "pgrep matches the wait loop; background the job and `wait $!`. "
+    "Before finishing, write a small local check for the instruction's "
+    "acceptance criteria, run it, and fix failures. Hidden tests still run "
+    "after you stop."
 )
 
 
@@ -48,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--instruction", help="Task instruction text")
     parser.add_argument("--instruction-file", type=Path)
-    parser.add_argument("--max-rounds", type=int, default=80)
+    parser.add_argument("--max-rounds", type=int, default=160)
     args = parser.parse_args(argv)
     if args.version:
         print(__version__)
@@ -73,13 +76,28 @@ def _load_instruction(text: str | None, path: Path | None) -> str:
 
 
 def _soft_timeout_ms() -> int | None:
-    """Harbor agent timeout × 3 is typically 45 min; wrap up before the kill.
+    """Wrap up before Harbor's agent-timeout kill (~135 min at ×3).
 
-    ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables. Unset defaults to 30 minutes.
+    ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables. Unset defaults to 120 minutes.
     """
     raw = os.environ.get("STEERABLE_SOFT_TIMEOUT_MS")
     if raw is None or not str(raw).strip():
-        return 1_800_000
+        return 7_200_000
+    value = int(raw)
+    return None if value <= 0 else value
+
+
+def _temperature() -> float | None:
+    raw = os.environ.get("STEERABLE_TEMPERATURE")
+    if raw is None or not str(raw).strip():
+        return None
+    return float(raw)
+
+
+def _max_tokens() -> int | None:
+    raw = os.environ.get("STEERABLE_MAX_TOKENS")
+    if raw is None or not str(raw).strip():
+        return None
     value = int(raw)
     return None if value <= 0 else value
 
@@ -94,9 +112,12 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         RouterToolExecutor(tools, consent_granted=True),
         config=LoopConfig(
             max_rounds=max_rounds,
-            max_tool_errors=16,
+            max_tool_errors=32,
             tool_dedup=False,
+            temperature=_temperature(),
+            max_tokens=_max_tokens(),
             soft_timeout_ms=_soft_timeout_ms(),
+            tool_timeout_ms=3_600_000,
         ),
         hooks=ChainHooks(DeliveryHooks(), _default_loop_hooks(params)),
         history_store=InMemoryStorage(),

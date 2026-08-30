@@ -67,6 +67,35 @@ wait_dpkg() {
 wait_dpkg
 apt-get update && apt-get install -y python3 python3-pip python3-venv
 """.strip()
+# Packages require Python >=3.10. qemu-alpine-ssh (and Debian 11 images)
+# ship 3.9.2; pip then fails with NonZeroAgentExitCodeError before the
+# agent runs. Distro python3.11/3.12 first; uv's standalone 3.12 last.
+_ENSURE_PYTHON_310 = r"""
+ok() { python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; }
+ok && exit 0
+if command -v apk >/dev/null 2>&1; then
+  apk add --no-cache python3 py3-pip py3-virtualenv || true
+fi
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update || true
+  apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip \
+    || apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip \
+    || true
+fi
+if command -v python3.12 >/dev/null 2>&1; then
+  ln -sf "$(command -v python3.12)" /usr/local/bin/python3
+elif command -v python3.11 >/dev/null 2>&1; then
+  ln -sf "$(command -v python3.11)" /usr/local/bin/python3
+fi
+ok && exit 0
+python3 -m pip install --quiet uv==0.9.5
+export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+uv python install 3.12
+ln -sf "$(uv python find 3.12)" /usr/local/bin/python3
+ok
+""".strip()
 _UV_SEED = r"""
 set -e
 mkdir -p /root/.local/bin

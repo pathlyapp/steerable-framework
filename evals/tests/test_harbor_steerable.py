@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
+    _ENSURE_PYTHON_310,
     _UV_MIN_BYTES,
     _UV_PIP_INSTALL,
     _UV_SEED,
@@ -74,6 +77,13 @@ def test_apt_python_install_waits_without_fuser() -> None:
     assert "archive.ubuntu.com" in _APT_PYTHON_INSTALL
 
 
+def test_ensure_python_310_upgrades_before_venv() -> None:
+    assert "sys.version_info >= (3, 10)" in _ENSURE_PYTHON_310
+    assert "python3.12" in _ENSURE_PYTHON_310
+    assert "apk add" in _ENSURE_PYTHON_310
+    assert "uv python install 3.12" in _ENSURE_PYTHON_310
+
+
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
     assert uv_tarball() is None
@@ -112,3 +122,13 @@ def test_merge_trial_path_adds_sbin_and_uv() -> None:
     assert "/usr/bin" in empty.split(":")
     already = merge_trial_path("/usr/sbin:/usr/bin")
     assert already.split(":").count("/usr/sbin") == 1
+
+
+def test_harbor_run_matches_claude_code_tb_knobs() -> None:
+    src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
+    text = src.read_text()
+    assert 'STEERABLE_REASONING_EFFORT", "high"' in text
+    assert 'STEERABLE_TEMPERATURE", "1.0"' in text
+    assert 'STEERABLE_MAX_TOKENS", "65536"' in text
+    assert 'STEERABLE_SOFT_TIMEOUT_MS", "7200000"' in text
+    assert "--max-rounds 160" in text

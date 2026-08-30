@@ -7,7 +7,14 @@ from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
 from steerable_sidecar import headless as headless_mod
-from steerable_sidecar.headless import _load_instruction, _run, _soft_timeout_ms, main
+from steerable_sidecar.headless import (
+    _load_instruction,
+    _max_tokens,
+    _run,
+    _soft_timeout_ms,
+    _temperature,
+    main,
+)
 
 
 class _ScriptedProvider:
@@ -51,6 +58,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "write_file" in headless_mod._SYSTEM
     assert "pgrep" in headless_mod._SYSTEM
     assert "YYYY-MM-DD" in headless_mod._SYSTEM
+    assert "acceptance criteria" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
@@ -98,11 +106,24 @@ def test_run_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_soft_timeout_ms_default_and_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STEERABLE_SOFT_TIMEOUT_MS", raising=False)
-    assert _soft_timeout_ms() == 1_800_000
+    assert _soft_timeout_ms() == 7_200_000
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "0")
     assert _soft_timeout_ms() is None
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "60000")
     assert _soft_timeout_ms() == 60_000
+
+
+def test_temperature_and_max_tokens_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEERABLE_TEMPERATURE", raising=False)
+    monkeypatch.delenv("STEERABLE_MAX_TOKENS", raising=False)
+    assert _temperature() is None
+    assert _max_tokens() is None
+    monkeypatch.setenv("STEERABLE_TEMPERATURE", "1.0")
+    monkeypatch.setenv("STEERABLE_MAX_TOKENS", "65536")
+    assert _temperature() == 1.0
+    assert _max_tokens() == 65536
+    monkeypatch.setenv("STEERABLE_MAX_TOKENS", "0")
+    assert _max_tokens() is None
 
 
 @pytest.mark.asyncio

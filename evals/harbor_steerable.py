@@ -24,6 +24,7 @@ from harbor.models.agent.context import AgentContext
 
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
+    _ENSURE_PYTHON_310,
     _NO_PROXY_ENV,
     _REMOTE_SRC,
     _REPO_ROOT,
@@ -103,6 +104,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         if pip_check.return_code != 0:
             apt_env = {"DEBIAN_FRONTEND": "noninteractive", **proxy_env}
             await self._ensure_python_apt(environment, apt_env)
+        await self._ensure_python_310(environment, proxy_env)
         await self.exec_as_root(
             environment, command=f"mkdir -p {shlex.quote(_REMOTE_SRC)}"
         )
@@ -174,6 +176,26 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await self.ensure_system_dependencies(
                 environment, ("python3", "python_pip")
             )
+
+    async def _ensure_python_310(
+        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+    ) -> None:
+        """Raise the trial interpreter to >=3.10 before creating the agent venv."""
+        check = await environment.exec(
+            command=(
+                "python3 -c 'import sys; raise SystemExit("
+                "0 if sys.version_info >= (3, 10) else 1)'"
+            ),
+            user="root",
+        )
+        if check.return_code == 0:
+            return
+        await self.exec_as_root(
+            environment,
+            command=_ENSURE_PYTHON_310,
+            env=proxy_env or None,
+            timeout_sec=900,
+        )
 
     async def _seed_uv(self, environment: BaseEnvironment) -> None:
         """Install uv from a PyPI mirror so TB ``test.sh`` need not hit GitHub.
@@ -302,17 +324,21 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = self._parsed_model_name or ""
         env["PYTHONUNBUFFERED"] = "1"
-        # GLM-5.3-Flash thinking defaults to max and can sit silent for many
-        # minutes before the first tool call. Harbor wants cheap/fast rounds.
-        env.setdefault("STEERABLE_REASONING_EFFORT", "low")
-        # Wrap up before Harbor's agent-timeout kill (typically 45 min × 3).
-        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "1800000")
+        # Z.AI's TB 2.1 84.3 used Claude Code 2.1.207, temperature=1.0,
+        # max_new_tokens=65536, 6h. `low` thinking was a speed knob that
+        # also produced empty rounds and weaker solutions.
+        env.setdefault("STEERABLE_REASONING_EFFORT", "high")
+        env.setdefault("STEERABLE_TEMPERATURE", "1.0")
+        env.setdefault("STEERABLE_MAX_TOKENS", "65536")
+        # Harbor agent timeout × 3 is typically 135 min; wrap up before kill.
+        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "7200000")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,
             command=(
                 f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
                 f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
+                f"--max-rounds 160 "
                 f"> {shlex.quote(log)} 2>&1"
             ),
             env=env,

@@ -44,9 +44,9 @@ class DeliveryHooks:
         self,
         *,
         explore_before_nudge: int = 8,
-        max_nudges: int = 2,
+        max_nudges: int = 3,
         min_tools_for_completion_retry: int = 2,
-        max_empty_round_retries: int = 3,
+        max_empty_round_retries: int = 6,
     ) -> None:
         self._explore_before_nudge = explore_before_nudge
         self._max_nudges = max_nudges

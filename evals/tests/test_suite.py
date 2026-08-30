@@ -36,6 +36,50 @@ CHEAP_12 = (
     "sqlite-with-gcov",
 )
 
+FAILED_PREV = (
+    "bn-fit-modify",
+    "build-pov-ray",
+    "cancel-async-tasks",
+    "chess-best-move",
+    "circuit-fibsqrt",
+    "crack-7z-hash",
+    "db-wal-recovery",
+    "dna-assembly",
+    "dna-insert",
+    "extract-moves-from-video",
+    "filter-js-from-html",
+    "financial-document-processor",
+    "gcode-to-text",
+    "gpt2-codegolf",
+    "install-windows-3.11",
+    "large-scale-text-editing",
+    "mailman",
+    "make-doom-for-mips",
+    "make-mips-interpreter",
+    "merge-diff-arc-agi-task",
+    "mteb-leaderboard",
+    "mteb-retrieve",
+    "overfull-hbox",
+    "password-recovery",
+    "path-tracing",
+    "path-tracing-reverse",
+    "polyglot-rust-c",
+    "protein-assembly",
+    "qemu-alpine-ssh",
+    "qemu-startup",
+    "query-optimize",
+    "raman-fitting",
+    "regex-chess",
+    "sam-cell-seg",
+    "sanitize-git-repo",
+    "schemelike-metacircular-eval",
+    "torch-pipeline-parallelism",
+    "train-fasttext",
+    "video-processing",
+    "winning-avg-corewars",
+    "write-compressor",
+)
+
 
 def test_suite_yaml_exists() -> None:
     assert SUITE_PATH.is_file()
@@ -57,6 +101,14 @@ def test_cheap_12_is_pinned_subset() -> None:
     suite = load_suite()
     assert suite.splits["cheap-12"] == CHEAP_12
     assert set(CHEAP_12) <= suite.catalog_set
+
+
+def test_failed_prev_is_pinned_catalog_subset() -> None:
+    suite = load_suite()
+    assert suite.splits["failed-prev"] == FAILED_PREV
+    assert len(FAILED_PREV) == 41
+    assert set(FAILED_PREV) <= suite.catalog_set
+    assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
 
 def test_oracle_canary_is_in_cheap_12() -> None:
@@ -124,11 +176,18 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "**/eval-status-*.txt" in weekly
     assert "pull_request:" not in weekly
     assert "--split catalog" in weekly
+    assert "--split failed-prev" in weekly
     assert "--shards 8" in weekly
+    assert "--shards 4" in weekly
     assert "timeout-minutes: 360" in weekly
     assert "options:" in weekly
+    assert "- failed-prev" in weekly
+    assert "github.event.inputs.split == 'cheap-12'" in weekly
+    assert "github.event.inputs.split != 'catalog'" not in weekly
     catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
     assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
+    failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
+    assert "OPENAI_API_KEY" not in failed_job.split("upload-artifact", 1)[0]
     assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog_job
     assert "agent/headless.log" in weekly
     assert "verifier/test-stdout.txt" in weekly

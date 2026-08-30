@@ -22,8 +22,10 @@ from steerable_agent_runtime import ToolRouter
 
 from .file_edit import EditError, EditOp, apply_edits, content_version
 
-_MAX_OUTPUT = 32_768
-_BASH_TIMEOUT_SEC = 300
+_MAX_OUTPUT = 100_000
+# TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
+# does not kill a single bash at 300s. Harbor's agent timeout is ~135 min.
+_BASH_TIMEOUT_SEC = 3600
 _tmp_counter = itertools.count()
 
 _BASH_SCHEMA = {
