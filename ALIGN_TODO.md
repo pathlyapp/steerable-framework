@@ -262,3 +262,19 @@ W2.3 Provider 兑现 ──→ W1.3.2 桌面 compat 开关
 - 每条完成时在对应 canvas 复测更新判定，证据精确到 file:line（沿用 R9 纪律：
   未能定位 file:line 的能力不计入判定）。
 - 全部完成后出 R10 四方复评 + 桌面 parity 复测，两份 canvas 同步刷新。
+
+### 修复期收尾实测（2026-08-30，R10 复评的输入基线）
+
+- **范围闭环**：W1/W2 全部条目完成，仅 2.1.3（MCP 服务端）与 2.5.2（跨厂商
+  委派）按计划留二期。
+- **RPC 接通 11 → 16**（出口线 15+ 达成）：sidecar 注册 22 个方法，桌面实际
+  调用 16 个（本轮新增 session.branches / session.messages / session.fork /
+  compat.describe / workspace.apply_edits）。
+- **agent-ui 用量**：ChatPanel + useChatStream + transport 类型；消息气泡系
+  桌面自有 Tier-1 移植（W1.3.4 决策：换框架组件 = UX 回退），4/8 组件目标
+  被移植策略取代，不再作为缺口计入。
+- **最终回归**：框架 996 passed + TS 228（agent-ui 159 / conformance 40 /
+  runtime 29）+ 桌面 396 passed + desktop-canary 全程 PASS（含第 12 节分支
+  UI 模拟用户操作：重新生成 → 分支菜单 → 切换根分支 → 投影回退验证）。
+- **CICD**：框架 PR #7–#13 全部合入 main（每组全绿：CI/DCO/Docs/Evals
+  oracle）；桌面 develop 连续绿（最新 85a4c71）。
