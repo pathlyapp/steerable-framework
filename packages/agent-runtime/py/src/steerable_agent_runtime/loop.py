@@ -1662,10 +1662,11 @@ _SOFT_TIMEOUT_NOTICE = (
 _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
     "[system notice] The time budget for this task is nearly exhausted. "
     "Wait for background jobs (`wait`). Write the required output files "
-    "now with bash, write_file, or edit_file. If those files already "
-    "exist and look complete, verify them — do not overwrite with a "
-    "truncated copy. Hidden tests score those files, not this chat. "
-    "Do not keep exploring."
+    "now with bash, write_file, or edit_file. If you already drafted "
+    "those contents in this chat, write_file them to the named paths. "
+    "If those files already exist and look complete, verify them — do "
+    "not overwrite with a truncated copy. Hidden tests score those "
+    "files, not this chat. Do not keep exploring."
 )
 
 #: Hard cap on before_completion-granted redos (discipline retries +

@@ -46,8 +46,9 @@ _EXPLORE_NUDGE = (
 )
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "
-    "tests look for those paths. Write the real contents now; do not only "
-    "describe a plan or dump a placeholder."
+    "tests look for those paths. If you already drafted the contents in "
+    "this chat, write_file them now; do not only describe a plan or dump "
+    "a placeholder."
 )
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "

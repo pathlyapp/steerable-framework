@@ -210,7 +210,9 @@ async def test_wrap_up_keeps_tools_executes_then_stops() -> None:
     assert [e for e in events if e.kind == "soft_timeout"]
     assert provider.tools_seen[1] == schemas
     assert any(
-        "Write the required output files" in m.content_text for m in provider.calls[1]
+        "Write the required output files" in m.content_text
+        and "drafted" in m.content_text
+        for m in provider.calls[1]
     )
     assert events[-1].data["status"] == "completed"
 

@@ -66,6 +66,7 @@ async def test_completion_retry_without_artifacts() -> None:
     first = await hooks.before_completion(_draft(tools=2), ctx)
     assert first.kind == "retry"
     assert first.reason == "no_artifact"
+    assert "drafted" in (first.message or "")
     second = await hooks.before_completion(_draft(tools=2), ctx)
     assert second.kind == "accept"
 
