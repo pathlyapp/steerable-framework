@@ -418,11 +418,12 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_REASONING_EFFORT", "max")
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
-        # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap 10 min
-        # before the kill. cheap-12 stays ×3 (45 min).
-        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "10200000")
+        # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap at
+        # 150 min so keep-tools wrap-up has ~30 min before the kill
+        # (regex-chess drafted /app/re.json in chat, then wrap-up had ~10 min).
+        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "9000000")
         # High GLM thinking can emit no SSE bytes for many minutes
-        # (regex-chess thought ~48 min). Idle read must cover the 170 min wrap.
+        # (regex-chess thought ~48 min). Idle read must cover the wrap.
         env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "10200")
         # OpenRouter 429s during 16-shard GHA; default 3×200ms dies immediately.
         env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")

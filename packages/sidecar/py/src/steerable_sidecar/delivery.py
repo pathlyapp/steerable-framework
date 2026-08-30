@@ -8,6 +8,8 @@ pytest `FileNotFoundError` on the named output (`eval.scm`, `program.py`,
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from pathlib import Path
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import (
@@ -50,6 +52,19 @@ _NO_ARTIFACT_RETRY = (
     "this chat, write_file them now; do not only describe a plan or dump "
     "a placeholder."
 )
+_MISSING_NAMED_RETRY = (
+    "The turn is ending but these instruction-named output files still "
+    "do not exist: {paths}. Hidden tests look for those paths. Write them "
+    "now with write_file, edit_file, or bash — helper scripts alone are "
+    "not enough."
+)
+# Absolute paths TB instructions name as outputs (`/app/re.json`,
+# `/tmp/frame.bmp`). Existing paths at start are inputs, not outputs.
+_NAMED_OUTPUT_PATH = re.compile(
+    r"(?:^|[\s`'\"(\[])"
+    r"((?:/app|/tmp|/workspace|/home/agent)"
+    r"/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\.[A-Za-z0-9]+)"
+)
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
     "Continue the task now with bash, read_file, write_file, or edit_file. "
@@ -67,11 +82,19 @@ class DeliveryHooks(NoopHooks):
         max_nudges: int = 3,
         min_tools_for_completion_retry: int = 2,
         max_empty_round_retries: int = 6,
+        instruction: str = "",
+        named_outputs: Iterable[str] | None = None,
     ) -> None:
         self._explore_before_nudge = explore_before_nudge
         self._max_nudges = max_nudges
         self._min_tools_for_completion_retry = min_tools_for_completion_retry
         self._max_empty_round_retries = max_empty_round_retries
+        raw = (
+            tuple(named_outputs)
+            if named_outputs is not None
+            else named_output_paths(instruction)
+        )
+        self._required = tuple(p for p in raw if not Path(p).exists())
         self.writes = 0
         self.consecutive_explore = 0
         self.nudges = 0
@@ -137,8 +160,19 @@ class DeliveryHooks(NoopHooks):
                 message=_EMPTY_ROUND_RETRY,
                 reason="empty_round",
             )
+        missing = tuple(p for p in self._required if not Path(p).exists())
+        if missing and self.completion_retries < 1:
+            self.completion_retries += 1
+            self._force_tool = True
+            listed = ", ".join(missing[:8])
+            return CompletionAction(
+                kind="retry",
+                message=_MISSING_NAMED_RETRY.format(paths=listed),
+                reason="missing_named_output",
+            )
         if (
-            self.writes == 0
+            not self._required
+            and self.writes == 0
             and draft.tool_calls_used >= self._min_tools_for_completion_retry
             and self.completion_retries < 1
         ):
@@ -149,6 +183,16 @@ class DeliveryHooks(NoopHooks):
                 reason="no_artifact",
             )
         return CompletionAction(kind="accept")
+
+
+def named_output_paths(instruction: str) -> tuple[str, ...]:
+    """Absolute output paths named in a TB instruction (not `/usr` inputs)."""
+    seen: list[str] = []
+    for match in _NAMED_OUTPUT_PATH.finditer(instruction or ""):
+        path = match.group(1)
+        if path not in seen:
+            seen.append(path)
+    return tuple(seen)
 
 
 def _bash_writes(call: ToolCall) -> bool:

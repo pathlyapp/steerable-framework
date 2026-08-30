@@ -111,14 +111,14 @@ def _soft_timeout_ms() -> int | None:
     """Wrap up before Harbor's agent-timeout kill.
 
     Long TB tasks set ``[agent] timeout_sec = 3600``; with Harbor ×3 that is
-    180 minutes. Unset defaults to 170 minutes so wrap-up beats the kill.
-    Short tasks are 900s; catalog/failed-prev GHA uses Harbor ×12 (180 min)
-    so wrap-up still beats the kill. cheap-12 stays at ×3 (45 min).
+    180 minutes. Unset defaults to 150 minutes so keep-tools wrap-up has
+    ~30 minutes before Harbor ×12 kills a 900s task (180 min). cheap-12
+    stays at ×3 (45 min).
     ``STEERABLE_SOFT_TIMEOUT_MS=0`` disables.
     """
     raw = os.environ.get("STEERABLE_SOFT_TIMEOUT_MS")
     if raw is None or not str(raw).strip():
-        return 10_200_000
+        return 9_000_000
     value = int(raw)
     return None if value <= 0 else value
 
@@ -159,7 +159,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             wrap_up_max_tool_rounds=12,
         ),
         hooks=ChainHooks(
-            DeliveryHooks(),
+            DeliveryHooks(instruction=instruction),
             _default_loop_hooks(params, summarizer=_summarizer_for(provider)),
         ),
         history_store=InMemoryStorage(),

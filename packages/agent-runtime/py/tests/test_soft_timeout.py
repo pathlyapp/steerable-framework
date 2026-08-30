@@ -15,6 +15,7 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     ToolRouter,
 )
+from steerable_agent_runtime.hooks import CompletionAction, NoopHooks
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
 
 
@@ -258,3 +259,70 @@ async def test_wrap_up_keeps_tools_caps_extra_act_rounds() -> None:
     # round 0: slow; wrap-up round 1: write; further writes dropped
     assert executed == ["slow", "write"]
     assert provider.tools_seen[2] is None
+
+
+class _RetryTextOnce(NoopHooks):
+    def __init__(self) -> None:
+        self.retries = 0
+
+    async def before_completion(self, draft, ctx):
+        if self.retries == 0 and (draft.content or "").strip():
+            self.retries += 1
+            return CompletionAction(
+                kind="retry",
+                message="write the named output files now",
+                reason="missing_named_output",
+            )
+        return CompletionAction(kind="accept")
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
+    """regex-chess: wrap-up summarized instead of writing /app/re.json."""
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("slow")]},
+            {"content": "cannot write the file"},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "files are on disk"},
+        ]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        executed.append("slow")
+        return "slept"
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(slow)
+    router.register(write)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=2,
+        ),
+        hooks=_RetryTextOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    assert executed == ["slow", "write"]
+    retries = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("reason") == "missing_named_output"
+    ]
+    assert retries
+    assert events[-1].data["status"] == "completed"

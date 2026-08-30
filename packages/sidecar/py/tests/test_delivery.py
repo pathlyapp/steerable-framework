@@ -5,7 +5,7 @@ from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import CompletionDraft
 from steerable_agent_runtime.loop import LoopContext
 
-from steerable_sidecar.delivery import DeliveryHooks
+from steerable_sidecar.delivery import DeliveryHooks, named_output_paths
 
 
 def _call(name: str) -> ToolCall:
@@ -185,3 +185,45 @@ async def test_empty_round_forces_tool_choice_on_next_step() -> None:
     await hooks.post_tool_result(ok, _call("bash"), ctx)
     again = await hooks.pre_step([], ctx)
     assert again.tool_choice is None
+
+
+def test_named_output_paths_skips_usr_bin() -> None:
+    paths = named_output_paths(
+        "Write /app/re.json and /tmp/frame.bmp using /usr/bin/python3 "
+        "and the existing /app/check.py"
+    )
+    assert paths == ("/app/re.json", "/tmp/frame.bmp", "/app/check.py")
+
+
+@pytest.mark.asyncio
+async def test_missing_named_output_retries_after_helper_write(
+    tmp_path,
+) -> None:
+    target = tmp_path / "re.json"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    first = await hooks.before_completion(_draft(tools=2), ctx)
+    assert first.kind == "retry"
+    assert first.reason == "missing_named_output"
+    assert str(target) in (first.message or "")
+    action = await hooks.pre_step([], ctx)
+    assert action.tool_choice == "required"
+    target.write_text("[]", encoding="utf-8")
+    second = await hooks.before_completion(_draft(tools=3), ctx)
+    assert second.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_existing_named_path_is_input_not_required(tmp_path) -> None:
+    existing = tmp_path / "check.py"
+    existing.write_text("pass", encoding="utf-8")
+    missing = tmp_path / "re.json"
+    hooks = DeliveryHooks(named_outputs=(str(existing), str(missing)))
+    ctx = LoopContext()
+    first = await hooks.before_completion(_draft(tools=2), ctx)
+    assert first.kind == "retry"
+    assert first.reason == "missing_named_output"
+    assert str(missing) in (first.message or "")
+    assert str(existing) not in (first.message or "")

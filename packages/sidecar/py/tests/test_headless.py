@@ -123,7 +123,7 @@ def test_run_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_soft_timeout_ms_default_and_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STEERABLE_SOFT_TIMEOUT_MS", raising=False)
-    assert _soft_timeout_ms() == 10_200_000
+    assert _soft_timeout_ms() == 9_000_000
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "0")
     assert _soft_timeout_ms() is None
     monkeypatch.setenv("STEERABLE_SOFT_TIMEOUT_MS", "60000")
@@ -149,6 +149,7 @@ def test_headless_wrap_up_keeps_tools() -> None:
     src = inspect.getsource(headless_mod._run)
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=12" in src
+    assert "DeliveryHooks(instruction=instruction)" in src
 
 
 @pytest.mark.asyncio

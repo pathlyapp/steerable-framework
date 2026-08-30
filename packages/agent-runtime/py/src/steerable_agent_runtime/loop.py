@@ -1183,15 +1183,22 @@ class CoreLoop:
                         reason="no tool calls and no final response",
                         confidence=0.75,
                     )
-                # A wrap-up round IS the final answer — offering a NON-empty
-                # wrap-up back to before_completion would loop (its content
-                # is exactly what a discipline retry would flag). An EMPTY
-                # wrap-up is different: the model glitched on the narration
-                # ask itself, so give hooks one bounded second chance
-                # (AntiHallucinationHooks caps narrations at 2).
+                # A no-tools wrap-up with text is the final answer — offering
+                # it back to before_completion would loop. Keep-tools wrap-up
+                # is different: Harbor still scores files, so hooks may veto
+                # a text-only stop while extra act rounds remain (regex-chess
+                # summarized instead of writing /app/re.json). An empty
+                # wrap-up still gets one bounded second chance.
                 if (
-                    (not wrap_up or not content.strip())
-                    and completion_redos < _MAX_COMPLETION_REDOS
+                    completion_redos < _MAX_COMPLETION_REDOS
+                    and (
+                        not wrap_up
+                        or not content.strip()
+                        or (
+                            self._config.wrap_up_keeps_tools
+                            and not withholding_tools()
+                        )
+                    )
                 ):
                     action = await self._hooks.before_completion(
                         CompletionDraft(
