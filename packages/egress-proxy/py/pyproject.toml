@@ -1,6 +1,6 @@
 [project]
 name = "steerable-egress-proxy"
-version = "0.2.5"
+version = "0.3.0"
 description = "Steerable optional component — local allow-listing CONNECT egress proxy. Gives per-host egress control on platforms whose sandbox can only pin ports (Seatbelt) or only drop the network namespace (bwrap): confine the sidecar to localhost:<proxy> and let the proxy own the host list."
 readme = "README.md"
 requires-python = ">=3.10"

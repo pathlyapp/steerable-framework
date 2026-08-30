@@ -1004,7 +1004,7 @@ wheels = [
 
 [[package]]
 name = "steerable-agent-harness"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "packages/agent-harness/py" }
 dependencies = [
     { name = "pydantic" },
@@ -1019,7 +1019,7 @@ requires-dist = [
 
 [[package]]
 name = "steerable-agent-protocol"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "packages/agent-protocol/py" }
 dependencies = [
     { name = "pydantic" },
@@ -1030,7 +1030,7 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.10.0" }]
 
 [[package]]
 name = "steerable-agent-runtime"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "packages/agent-runtime/py" }
 dependencies = [
     { name = "pydantic" },
@@ -1080,7 +1080,7 @@ provides-extras = ["sqlalchemy", "fastapi", "openai", "anthropic", "all"]
 
 [[package]]
 name = "steerable-egress-proxy"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "packages/egress-proxy/py" }
 
 [[package]]
@@ -1148,7 +1148,7 @@ dev = [
 
 [[package]]
 name = "steerable-sidecar"
-version = "0.2.5"
+version = "0.3.0"
 source = { editable = "packages/sidecar/py" }
 dependencies = [
     { name = "ag-ui-protocol" },
