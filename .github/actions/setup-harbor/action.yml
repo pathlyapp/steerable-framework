@@ -25,8 +25,9 @@ runs:
         fi
         curl -fsSL -o /tmp/uv-musl.tgz \
           https://github.com/astral-sh/uv/releases/download/0.9.5/uv-x86_64-unknown-linux-musl.tar.gz
-        tar -xzf /tmp/uv-musl.tgz -C /tmp
-        bin=$(find /tmp -name uv -type f | head -1)
+        extract=$(mktemp -d)
+        tar -xzf /tmp/uv-musl.tgz -C "$extract"
+        bin=$(find "$extract" -name uv -type f | head -1)
         cp "$bin" "$dest"
         chmod 0755 "$dest"
     - name: Prefetch Linux CPython 3.12 for qemu trials

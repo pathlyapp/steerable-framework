@@ -152,11 +152,14 @@ def test_live_agents_include_product() -> None:
 
 def test_setup_harbor_action_matches_pin() -> None:
     action = Path(__file__).resolve().parents[2] / ".github" / "actions" / "setup-harbor" / "action.yml"
-    assert f'default: "{PINNED_HARBOR_VERSION}"' in action.read_text()
-    assert "uv-x86_64-unknown-linux-musl" in action.read_text()
-    assert "uv-x86_64-unknown-linux-musl.tar.gz" in action.read_text()
-    assert "cpython-3.12-linux-x86_64-gnu.tgz" in action.read_text()
-    assert "uv python install 3.12" in action.read_text()
+    text = action.read_text()
+    assert f'default: "{PINNED_HARBOR_VERSION}"' in text
+    assert "uv-x86_64-unknown-linux-musl" in text
+    assert "uv-x86_64-unknown-linux-musl.tar.gz" in text
+    assert "find /tmp -name uv" not in text
+    assert 'find "$extract" -name uv' in text
+    assert "cpython-3.12-linux-x86_64-gnu.tgz" in text
+    assert "uv python install 3.12" in text
 
 
 def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
