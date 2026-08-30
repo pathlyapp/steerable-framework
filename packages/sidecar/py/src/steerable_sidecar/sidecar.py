@@ -249,6 +249,7 @@ class Sidecar:
         register("agent.chat.fork", self._handle_chat_fork)
         register("agent.session.fork", self._handle_session_fork)
         register("agent.session.branches", self._handle_session_branches)
+        register("agent.session.messages", self._handle_session_messages)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -958,6 +959,41 @@ class Sidecar:
             ],
             "children": children,
         }
+
+    async def _handle_session_messages(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Projected transcript of a history record (W1.2.1).
+
+        ``{"recordId", "messages": [{seq, role, content}...]}`` — the
+        post-boundary visible span, i.e. what the model would see on resume.
+        This is the read path a host needs to render/switch branches: the
+        branch's messages live in the framework record, not the host's UI
+        store. Unknown record → invalid_request (fail loud, not an empty
+        list that looks like an empty branch).
+        """
+        from steerable_agent_runtime.resume import load_history_items
+
+        params = _require_params(params)
+        record_id = params.get("recordId")
+        if not record_id:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+        items = await load_history_items(self.storage, str(record_id))
+        if items is None:
+            raise JsonRpcError(
+                f"record not found: {record_id}", code=-32004, kind="invalid_request"
+            )
+        messages = []
+        for item in items:
+            content = "".join(
+                getattr(part, "text", "")
+                for part in item.message.content
+                if getattr(part, "type", None) == "text"
+            ) if isinstance(item.message.content, list) else str(item.message.content)
+            messages.append(
+                {"seq": item.seq, "role": item.message.role, "content": content}
+            )
+        return {"recordId": str(record_id), "messages": messages}
 
     async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Inject a user message into a running CoreLoop turn.

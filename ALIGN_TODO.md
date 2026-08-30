@@ -37,9 +37,24 @@ agent-ui 的 `OrchestrationPlanCard` 组件。桌面零调用点。
 
 ### 1.2 会话分支与可移植性
 
-- [ ] **1.2.1** `agent.session.branches` 接入桌面 UI：regenerate 产生的分叉可见、可切换
+- [x] **1.2.1**（2026-08-30 完成：框架补 `agent.session.messages` RPC（记录投影
+      读取路径，分支切换的渲染数据源）；桌面 local-backend 加
+      `GET /chats/:id/branches`（分支族：lineage+children+活跃记录）与
+      `POST /chats/:id/branches/activate`（fail-closed 校验目标在分支族内，
+      切换后用框架记录重投影桌面消息存储）；UI 三件套——助手气泡 hover 出
+      「重新生成」按钮（此前 regenerate 路由无任何 UI 入口）、聊天头部
+      「分支」菜单（AgentSelect 式 popover，行列签+活跃勾选）、切换/重生成后
+      按 branchTick 重挂重水合。canary 第 12 节模拟用户操作：点重新生成 →
+      开分支菜单 → 切根分支 → 验证投影内容回退。桌面 396 + 框架 997 全过）
+      `agent.session.branches` 接入桌面 UI：regenerate 产生的分叉可见、可切换
       （现在 fork 只用于 regenerate，分支列表用户看不见）。
-- [ ] **1.2.2** 评估 `agent.session.create/list/resume` 与桌面本地聊天存储的关系：
+- [x] **1.2.2**（2026-08-30 完成：选"文档明确立场"——桌面聊天库是宿主私有的
+      UI 投影（parts/附件/标题/置顶等展示态），不可移植；可移植的是框架侧模型
+      可见历史记录（SqliteStorage，resume/fork/分支的唯一真源）。两者经
+      `chat_record:${chatId}` 显式关联，分支族 UI 可见——不再是"互不知道"。
+      立场写入 deeppath-agent README 数据存储节。不选全量适配的理由：跨端
+      恢复需要服务端，桌面没有；适配是大迁移且无用户收益）
+      评估 `agent.session.create/list/resume` 与桌面本地聊天存储的关系：
       二选一——桌面存储适配到框架会话（获得跨端恢复），或文档明确"桌面会话是宿主私有、
       不可移植"的立场。不允许维持"两套都在但互不知道"的现状。
 
