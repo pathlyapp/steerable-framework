@@ -249,6 +249,73 @@ confinement matrix. Until that lands, Windows reports
 `enforcement: "none"` on every call and `requireFull` refuses — the
 honest-degradation contract holds there exactly as elsewhere.
 
+## Host capability surface (W2.2, contract 2026-08-30)
+
+Two capabilities live on the host side because only the host can hold
+them: **confined spawn** (the spawning process must own the restricted
+token) and **credential brokerage** (the secret must never enter the
+sandboxed process). This section is their shared contract.
+
+### `host.process.spawn` (reverse channel)
+
+The sidecar delegates a shell call to the host when the platform has no
+command-rewriting backend *and* the request opted in via
+`execSandbox.hostSpawn: true`. Routing: `select_exec_backend` returns
+`None` → `HostSpawnExecutor` replaces `SandboxedToolExecutor`.
+
+Request params:
+
+```json
+{
+  "command": "echo hi",
+  "cwd": "C:\\work",
+  "policy": { "writableRoots": ["C:\\work"], "network": true, "allowedHosts": ["api.deepseek.com"] },
+  "context": { "chatId": "…" }
+}
+```
+
+Reply:
+
+```json
+{
+  "exitCode": 0,
+  "stdout": "…", "stderr": "…", "truncated": false,
+  "sandbox": { "backend": "windows-restricted-token", "enforcement": "full" }
+}
+```
+
+Rules:
+
+- The host reports the enforcement it **actually** applied in
+  `sandbox.enforcement` (`full` / `partial` / `none`). A missing report is
+  surfaced as `none` — the sidecar never upgrades on the host's behalf.
+- A host without the capability rejects the reverse call; the sidecar
+  fails closed: the command never runs unsandboxed just because the
+  capability is absent (tool error, `needsFollowup`).
+- The policy mirrors `execSandbox` semantics: `writableRoots` are the only
+  writable paths, `network: false` means no egress, `allowedHosts` bounds
+  egress when network is on. Hosts that cannot honor a policy field must
+  report `partial`/`none`, not silently ignore the field.
+- TS hosts implement it via `AgentRuntime.onProcessSpawn`; the Electron
+  desktop wires its own reverse handler to the same method name.
+
+### Credential broker (egress-proxy inject mode)
+
+`steerable_egress_proxy --inject-host api.deepseek.com --inject-secret-env
+STEERABLE_EGRESS_SECRET` turns the proxy into the credential holder: the
+sandboxed sidecar points its provider `baseUrl` at the *http* scheme of
+the same host and sends requests through the proxy, which terminates the
+plain-HTTP request, dials the real upstream over TLS, and injects the
+credential header. The secret enters the proxy process via env var (never
+argv, never the sidecar, never the sandboxed child) — the agent side holds
+no real token, the codex network-proxy route.
+
+Fail-closed rules: no inject rule → non-CONNECT methods stay 405;
+absolute-URI host ≠ rule host → 403; client-supplied credential headers
+are stripped, never forwarded; chunked request bodies → 501. One rule per
+proxy (one provider per sidecar is the deployment reality). CONNECT
+tunneling is unaffected and still governed by the allow-list.
+
 ## Current product posture (2026-08-29, Wave 4 wired)
 
 All three layers are **on by default** in the DeepPath desktop build:

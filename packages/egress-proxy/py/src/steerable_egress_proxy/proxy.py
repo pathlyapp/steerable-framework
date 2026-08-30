@@ -1,17 +1,22 @@
-"""Allow-listing CONNECT forward proxy (v1: HTTPS tunneling only).
+"""Allow-listing CONNECT forward proxy + optional credential broker.
 
-The proxy accepts only ``CONNECT host:port`` requests, checks the target
-against an explicit allow-list, dials, and pipes bytes bidirectionally.
-Everything else fails closed:
+The proxy accepts ``CONNECT host:port`` requests, checks the target against
+an explicit allow-list, dials, and pipes bytes bidirectionally. Everything
+else fails closed:
 
 - target not on the list            → 403
-- non-CONNECT method                → 405 (no plain-HTTP forwarding in v1)
+- non-CONNECT method w/o inject rule → 405
+- non-CONNECT to a non-inject host  → 403
 - malformed request line / headers  → 400
 - unreachable target                → 502
 
-TLS is NOT intercepted: the proxy sees the CONNECT target only, which is
-exactly the metadata the host allow-list needs. v1 scope per PARITY_TODO
-0.4.2 — no TLS interception, no plain-HTTP forwarding.
+TLS is NOT intercepted on the CONNECT path: the proxy sees the CONNECT
+target only, which is exactly the metadata the host allow-list needs.
+
+When an ``InjectRule`` is configured (W2.2.2 credential broker), plain-HTTP
+requests naming that host in the absolute URI are forwarded over TLS with
+the credential header injected — see `forward.py`. The secret lives only in
+this process; the sandboxed peer never holds it.
 
 Bounds that keep the security boundary tight:
 
@@ -27,6 +32,8 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+
+from .forward import InjectRule, forward_request
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +105,8 @@ class ProxyConfig:
     bind_host: str = "127.0.0.1"
     bind_port: int = 8899
     connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S
+    #: W2.2.2 credential broker. None → non-CONNECT methods stay 405.
+    inject: InjectRule | None = None
 
     def __post_init__(self) -> None:
         if self.allow is None:
@@ -158,6 +167,18 @@ class EgressProxyServer:
                 return
             method, host, port = parsed
             if method != "CONNECT":
+                if self.config.inject is not None:
+                    # Credential-broker path: forward plain HTTP to the rule's
+                    # upstream with the secret injected. Off-host requests and
+                    # malformed heads are answered inside (403/400/501).
+                    await forward_request(
+                        reader,
+                        writer,
+                        head,
+                        self.config.inject,
+                        self.config.connect_timeout_s,
+                    )
+                    return
                 # Checked before authority validity: a GET with a weird
                 # target is still a 405, not a 400.
                 await self._reply(writer, 405, "Method Not Allowed")
@@ -189,15 +210,22 @@ class EgressProxyServer:
                 pass  # peer already gone
 
     async def _read_head(self, reader: asyncio.StreamReader) -> bytes | None:
-        """Read up to the blank line ending the request head; None = over cap."""
-        data = b""
-        while b"\r\n\r\n" not in data:
-            chunk = await reader.read(min(4096, MAX_HEAD_BYTES - len(data) + 4))
-            if not chunk:
-                return data if data else b""
-            data += chunk
-            if len(data) > MAX_HEAD_BYTES:
-                return None
+        """Read up to the blank line ending the request head; None = over cap.
+
+        Uses `readuntil`, not `read`: anything past the head delimiter (e.g.
+        the request body, which the credential-broker path forwards by exact
+        Content-Length) must stay in the StreamReader buffer for the next
+        reader. A plain `read` would over-consume the body and deadlock the
+        forward path.
+        """
+        try:
+            data = await reader.readuntil(b"\r\n\r\n")
+        except asyncio.IncompleteReadError as exc:
+            return exc.partial if exc.partial else b""
+        except asyncio.LimitOverrunError:
+            return None
+        if len(data) > MAX_HEAD_BYTES:
+            return None
         return data
 
     @staticmethod

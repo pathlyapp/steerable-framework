@@ -1072,17 +1072,43 @@ class Sidecar:
                 allowed_hosts=exec_sandbox.get("allowedHosts") or None,
                 shell=str(exec_sandbox.get("shell") or "/bin/sh"),
             )
-            executor = SandboxedToolExecutor(
-                executor,
-                backend,
-                shell_tools=(
-                    exec_sandbox["tools"]
-                    if exec_sandbox.get("tools") is not None
-                    else DEFAULT_SHELL_TOOLS
-                ),
-                command_arg=str(exec_sandbox.get("commandArg") or "command"),
-                require_full=bool(exec_sandbox.get("requireFull")),
-            )
+            if backend is None and exec_sandbox.get("hostSpawn"):
+                # W2.2.1: no local rewriter backend (Windows) — delegate
+                # confined spawn to the host over the reverse channel
+                # instead of rewriting the command. The host owns the real
+                # confinement (restricted token + JobObject) and reports the
+                # enforcement it applied; absent capability fails closed.
+                from .host_spawn import HostSpawnExecutor
+
+                executor = HostSpawnExecutor(
+                    executor,
+                    self.server,
+                    policy={
+                        "writableRoots": [
+                            str(r) for r in exec_sandbox.get("writableRoots") or []
+                        ],
+                        "network": bool(exec_sandbox.get("network")),
+                        "allowedHosts": exec_sandbox.get("allowedHosts") or [],
+                    },
+                    shell_tools=(
+                        exec_sandbox["tools"]
+                        if exec_sandbox.get("tools") is not None
+                        else DEFAULT_SHELL_TOOLS
+                    ),
+                    command_arg=str(exec_sandbox.get("commandArg") or "command"),
+                )
+            else:
+                executor = SandboxedToolExecutor(
+                    executor,
+                    backend,
+                    shell_tools=(
+                        exec_sandbox["tools"]
+                        if exec_sandbox.get("tools") is not None
+                        else DEFAULT_SHELL_TOOLS
+                    ),
+                    command_arg=str(exec_sandbox.get("commandArg") or "command"),
+                    require_full=bool(exec_sandbox.get("requireFull")),
+                )
         # approval: opt-in approval algebra (Wave 3). ``{"mode": "auto"}`` is
         # the headless policy (safe modes auto-approve, the rest auto-deny —
         # a run never hangs on a prompt nobody answers); ``{"mode": "host"}``

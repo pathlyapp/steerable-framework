@@ -103,6 +103,42 @@ describe('AgentRuntime', () => {
     expect(text).toContain('msg:hi');
   });
 
+  it('routes host.process.spawn to the registered spawn handler (W2.2.1)', { timeout: PROC_TEST_TIMEOUT }, async () => {
+    rt = runtime({ FAKE_SPAWN: '1' });
+    const seen: unknown[] = [];
+    rt.onProcessSpawn(async (request) => {
+      seen.push(request);
+      return {
+        exitCode: 0,
+        stdout: 'hi',
+        stderr: '',
+        sandbox: { backend: 'windows-restricted-token', enforcement: 'full' },
+      };
+    });
+    await rt.start();
+    const handle = await rt.chatStream({ provider: 'mock', model: 'm', messages: [{ role: 'user', content: 'hi' }] });
+    let text = '';
+    for await (const ev of handle.events) {
+      if (ev.type === 'content') text += ev.content ?? '';
+    }
+    expect(seen).toEqual([
+      { command: 'echo hi', policy: { writableRoots: [], network: false, allowedHosts: [] } },
+    ]);
+    expect(text).toContain('windows-restricted-token');
+  });
+
+  it('rejects host.process.spawn when no handler is registered', { timeout: PROC_TEST_TIMEOUT }, async () => {
+    rt = runtime({ FAKE_SPAWN: '1' });
+    await rt.start();
+    const handle = await rt.chatStream({ provider: 'mock', model: 'm', messages: [{ role: 'user', content: 'hi' }] });
+    let text = '';
+    for await (const ev of handle.events) {
+      if (ev.type === 'content') text += ev.content ?? '';
+    }
+    // The sidecar's fail-closed path depends on the reverse call erroring.
+    expect(text).toContain('capability not implemented');
+  });
+
   it('covers the session / tool / skills / workspace / trace / config surface', { timeout: PROC_TEST_TIMEOUT }, async () => {
     rt = runtime();
     await rt.start();
