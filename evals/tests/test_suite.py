@@ -95,6 +95,22 @@ def test_setup_harbor_action_matches_pin() -> None:
     assert f'default: "{PINNED_HARBOR_VERSION}"' in action.read_text()
 
 
+def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
+    root = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    weekly = (root / "evals-weekly.yml").read_text()
+    oracle = (root / "evals-oracle.yml").read_text()
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in weekly
+    assert "STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}" in weekly
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in oracle
+    assert "STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}" in oracle
+    steerable_job = oracle.split("name: Harbor product canary", 1)[1]
+    assert "OPENAI_API_KEY" not in steerable_job.split("upload-artifact", 1)[0]
+    assert "set STEERABLE_API_KEY + STEERABLE_BASE_URL for the product agent" in weekly
+    assert "FEISHU_BOT_WEBHOOK" in weekly
+    assert "python3 -m evals.feishu" in weekly
+    assert "python3 -m evals.feishu" in oracle
+
+
 def test_harbor_task_name_prefixes_org() -> None:
     assert harbor_task_name("terminal-bench/terminal-bench-2-1", "fix-git") == (
         "terminal-bench/fix-git"

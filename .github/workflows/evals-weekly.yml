@@ -29,10 +29,15 @@ jobs:
       - run: docker info
       - name: Harbor cheap-12
         env:
+          # Product agent: same OpenAI-compatible gateway as local glm
+          # (OpenRouter / 万界). Do not put that key in OPENAI_API_KEY —
+          # Codex would send it to api.openai.com.
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+          # Baseline agents: official vendor keys, skipped when unset.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
         run: |
           set +e
           uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
@@ -59,17 +64,59 @@ jobs:
             evals/jobs/${{ matrix.agent }}/**/result.json
           if-no-files-found: ignore
 
+  notify-start:
+    name: Feishu started
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Post start card
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+        run: |
+          python3 - << 'PY'
+          import os, json, urllib.request
+          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not url:
+              print("FEISHU_BOT_WEBHOOK unset; skip")
+              raise SystemExit(0)
+          run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          payload = {
+              "msg_type": "interactive",
+              "card": {
+                  "header": {
+                      "title": {"tag": "plain_text", "content": "开始 · GHA cheap-12"},
+                      "template": "blue",
+                  },
+                  "elements": [
+                      {"tag": "div", "text": {"tag": "lark_md", "content": f"产品 steerable 用网关 key；对照无官方 key 会跳过。\n[GHA run]({run})"}},
+                  ],
+              },
+          }
+          req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+          urllib.request.urlopen(req, timeout=20).read()
+          PY
+
   gather:
     name: At least one live agent ran
     needs: [eval]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           pattern: eval-*
           merge-multiple: true
           path: statuses
+      - name: Feishu result
+        if: always()
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+        run: |
+          python3 -m evals.feishu \
+            --root statuses \
+            --label "GHA cheap-12" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
       - name: Fail if every live agent was skipped
         run: |
           shopt -s nullglob
@@ -87,5 +134,5 @@ jobs:
             echo "a live agent ran and failed; the matrix job already failed"
             exit 0
           fi
-          echo "every live agent was skipped (set ANTHROPIC_API_KEY and/or OPENAI_API_KEY / CODEX_API_KEY)"
+          echo "every live agent was skipped (set STEERABLE_API_KEY + STEERABLE_BASE_URL for the product agent)"
           exit 1

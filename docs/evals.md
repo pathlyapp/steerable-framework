@@ -12,7 +12,7 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 | Oracle smoke | PR / push when `evals/**` changes, plus `workflow_dispatch` | Harbor `oracle` (Mean 1.0); product `steerable` canary when a key is set | `oracle-canary` (`fix-git`) |
 | L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi` | `cheap-12` (1 attempt) |
 
-L2 is **not** a required merge check. A matrix cell whose API key secret is empty is skipped. The workflow fails if every live agent was skipped.
+L2 is **not** a required merge check. A matrix cell whose API key secret is empty is skipped. The product cell needs `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (the same OpenAI-compatible gateway used locally). Baseline cells need official Anthropic / OpenAI keys. The workflow fails if every live agent was skipped.
 
 DeepSeek Harness is listed in `suite.yaml` as skipped: it has no Harbor `BaseInstalledAgent`. Its own ACP snapshots remain L0 harness-contract tests in that repository. Headless `pnpm dsh --profile headless` is not this gate.
 
@@ -47,10 +47,11 @@ Wrapper flags map onto Harbor: `--dataset terminal-bench/terminal-bench-2-1`, `-
 
 | Agent | GitHub Actions secret |
 | ----- | --------------------- |
-| `steerable` | `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY` / `STEERABLE_API_KEY`) |
-| `claude-code`, `pi` | `ANTHROPIC_API_KEY` |
-| `codex` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
+| `steerable` | `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (OpenRouter / 万界; same pair as local glm) |
+| `claude-code`, `pi` | `ANTHROPIC_API_KEY` (official; optional, cell skips) |
+| `codex` | `OPENAI_API_KEY` or `CODEX_API_KEY` (official; optional, cell skips) |
 | `oracle` | none |
+| Feishu 结果通知 | `FEISHU_BOT_WEBHOOK`（自定义机器人 webhook，标题为「成功」或「失败」） |
 
 ## Out of scope
 
