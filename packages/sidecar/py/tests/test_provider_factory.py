@@ -9,7 +9,6 @@ tests run unconditionally.
 from __future__ import annotations
 
 import pytest
-
 from steerable_agent_runtime import CalibratingProvider, RecordingProvider
 from steerable_sidecar import sidecar as sidecar_module
 from steerable_sidecar.sidecar import default_llm_provider_factory
@@ -70,6 +69,48 @@ def test_anthropic_constructs() -> None:
 def test_unknown_provider_rejected() -> None:
     with pytest.raises(ValueError, match="unknown provider"):
         default_llm_provider_factory({"provider": "nope", "model": "m"})
+
+
+def test_compat_auto_detected_from_base_url_host() -> None:
+    """The deepseek registry entry is selected by base-URL host — the
+    provider kinds are generic, so the host is the vendor signal."""
+    provider = default_llm_provider_factory(
+        {
+            "provider": "openai_compat",
+            "model": "deepseek-reasoner",
+            "baseUrl": "https://api.deepseek.com/v1",
+        }
+    )
+    assert provider.compat is not None
+    assert "reasoning_content" in provider.compat.reasoning_delta_fields
+    assert "prompt_cache_hit_tokens" in provider.compat.cached_tokens_fields
+
+
+def test_compat_explicit_param_wins_over_auto_detection() -> None:
+    provider = default_llm_provider_factory(
+        {
+            "provider": "openai_compat",
+            "model": "m",
+            "baseUrl": "https://api.deepseek.com/v1",
+            "compat": {"supportsUsageInStreaming": False},
+        }
+    )
+    assert provider.compat is not None
+    assert provider.compat.supports_usage_in_streaming is False
+    # Fields not in the payload keep reference defaults, not the registry's.
+    assert provider.compat.max_tokens_field == "max_tokens"
+
+
+def test_compat_unknown_key_fails_loud() -> None:
+    with pytest.raises(ValueError, match="unknown"):
+        default_llm_provider_factory(
+            {
+                "provider": "openai_compat",
+                "model": "m",
+                "baseUrl": "http://x/v1",
+                "compat": {"supportsEverything": True},
+            }
+        )
 
 
 def test_model_required() -> None:

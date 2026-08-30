@@ -69,7 +69,7 @@ from .history import (
     entry_from_dict,
     entry_to_dict,
 )
-from .hooks import CompletionAction, CompletionDraft, LoopHooks, NoopHooks
+from .hooks import CompletionDraft, LoopHooks, NoopHooks
 from .llm import LLMMessage, LLMProvider, LLMUsage
 from .pseudo import (
     PseudoStreamStripper,
@@ -126,7 +126,9 @@ class LoopEvent:
 # Completion decision
 # ---------------------------------------------------------------------------
 
-CompletionStatus = Literal["executing", "completed", "failed", "budget_exhausted"]
+CompletionStatus = Literal[
+    "executing", "completed", "failed", "budget_exhausted", "cancelled"
+]
 
 
 @dataclass(slots=True)
@@ -327,6 +329,10 @@ class CoreLoop:
         # the transcript at the next round boundary (dsh-style "inject":
         # consumed at the next step, no separate wakeup semantics).
         self._inbox: asyncio.Queue[str] = asyncio.Queue()
+        # Cooperative cancellation token (see cancel()). Sticky for the loop
+        # instance — a CoreLoop is single-run in practice (the sidecar builds
+        # one per stream), so a cancel issued before run() still applies.
+        self._cancel_event = asyncio.Event()
         # Compact trajectory recorded during run(); replayable via
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
@@ -359,6 +365,23 @@ class CoreLoop:
                     f"{content[:cap]}\n…[steer message truncated at {cap} chars]"
                 )
             self._inbox.put_nowait(content)
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation of the current run.
+
+        Called from the same event loop (e.g. a sidecar RPC handler) while
+        ``run()`` is active. The loop winds down at the next safe point —
+        round boundary, stream chunk, or tool-call slot — records the partial
+        turn (streamed content as the terminal assistant message; real
+        results for executed tool calls, a "cancelled" error for the
+        in-flight one, synthetic skip notices for the rest, so the record
+        never has dangling tool_calls), and emits a terminal completion with
+        status ``"cancelled"``. An in-flight tool coroutine is
+        asyncio-cancelled so a hung tool does not pin the turn. Sticky for
+        the loop instance: a cancel issued before ``run()`` ends the run at
+        the first round boundary.
+        """
+        self._cancel_event.set()
 
     @property
     def last_run_usage(self) -> LLMUsage | None:
@@ -512,6 +535,63 @@ class CoreLoop:
                     ),
                 },
             )
+
+    async def _execute_tool_cancellable(
+        self, call: ToolCall, ctx: LoopContext
+    ) -> tuple[ToolResult | None, bool]:
+        """Race one tool call against cooperative cancellation.
+
+        Returns ``(result, False)`` on normal completion. When the cancel
+        token fires first, the in-flight coroutine is asyncio-cancelled (so a
+        hung tool does not pin the turn) and ``(None, True)`` is returned —
+        the caller records the call as cancelled and stops the batch.
+        """
+        exec_task = asyncio.ensure_future(self._execute_tool(call, ctx))
+        cancel_waiter = asyncio.ensure_future(self._cancel_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {exec_task, cancel_waiter}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancel_waiter in done and not exec_task.done():
+                exec_task.cancel()
+                await asyncio.gather(exec_task, return_exceptions=True)
+                return None, True
+            return exec_task.result(), False
+        finally:
+            cancel_waiter.cancel()
+
+    async def _gather_tools_cancellable(
+        self, pending: list[tuple[int, ToolCall, float]], ctx: LoopContext
+    ) -> tuple[list[ToolResult | BaseException], bool]:
+        """Race a parallel batch against cooperative cancellation.
+
+        Always returns per-call outcomes in pending order plus whether
+        cancellation fired. On cancel, in-flight children are
+        asyncio-cancelled; calls that already finished keep their real
+        results, cancelled ones surface as ``asyncio.CancelledError``.
+        """
+        call_tasks = [
+            asyncio.ensure_future(self._execute_tool(call, ctx))
+            for _, call, _ in pending
+        ]
+        gather_task = asyncio.gather(*call_tasks, return_exceptions=True)
+        cancel_waiter = asyncio.ensure_future(self._cancel_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {gather_task, cancel_waiter}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancel_waiter in done and not gather_task.done():
+                gather_task.cancel()
+                await asyncio.gather(gather_task, return_exceptions=True)
+                return [
+                    task.result()
+                    if task.done() and not task.cancelled()
+                    else asyncio.CancelledError("cancelled")
+                    for task in call_tasks
+                ], True
+            return list(gather_task.result()), False
+        finally:
+            cancel_waiter.cancel()
 
     async def _offer_narration(
         self,
@@ -670,6 +750,27 @@ class CoreLoop:
                     "steer", {"content": injected, "round": round_index}
                 )
 
+            # ── cooperative cancel: round boundary ───────────────────────
+            # Checked after the steer drain so an accepted injection is
+            # recorded even when the turn is ending. Nothing from this round
+            # has reached the transcript yet, so there is nothing to rewind.
+            if self._cancel_event.is_set():
+                await self._flush_history(manager, chat_id)
+                yield emit_completion(
+                    step_summary(
+                        round_index=round_index,
+                        finish_reason="cancelled",
+                        content="",
+                        tool_calls=[],
+                    ),
+                    CompletionDecision(
+                        status="cancelled",
+                        reason="cancelled by host request",
+                        confidence=1.0,
+                    ),
+                )
+                return
+
             # ── runaway guard: round budget exhausted ────────────────────
             # A terminal like any other: offer narration (the model may have
             # produced only tool calls), then emit if no hook intervenes.
@@ -771,7 +872,12 @@ class CoreLoop:
                 )
             if pre.appends:
                 for item in pre.appends:
-                    manager.append(item.message, kind=item.kind)
+                    if item.fragment is not None:
+                        # Fragment-carrying appends go through the bounded
+                        # path so an over-cap injection degrades predictably.
+                        manager.append_fragment(item.fragment)
+                    else:
+                        manager.append(item.message, kind=item.kind)
                 yield LoopEvent(
                     "hook_action",
                     {
@@ -806,12 +912,13 @@ class CoreLoop:
             stripper = PseudoStreamStripper()
             content_carry = ""
             reasoning_carry = ""
+            stream_cancelled = False
             while True:
                 try:
                     # Everything the model is about to see is durable first
                     # (also covers the overflow-recovery rewrite on retries).
                     await self._flush_history(manager, chat_id)
-                    async for chunk in self._provider.stream(
+                    stream = self._provider.stream(
                         manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
                         # cannot start another act phase.
@@ -823,7 +930,13 @@ class CoreLoop:
                             if step_tool_choice
                             else {}
                         ),
-                    ):
+                    )
+                    async for chunk in stream:
+                        # Cooperative cancel: stop consuming at the next
+                        # chunk rather than mid-processing one.
+                        if self._cancel_event.is_set():
+                            stream_cancelled = True
+                            break
                         if chunk.content_delta:
                             content_parts.append(chunk.content_delta)
                             emit, content_carry = split_trailing_high_surrogate(
@@ -878,7 +991,7 @@ class CoreLoop:
                                     decision,
                                 )
                                 return
-                    break  # stream completed without error
+                    break  # stream completed (or cancelled) without error
                 except Exception as exc:  # noqa: BLE001 — hook decides retry/fail
                     projection = manager.projection
                     action = await self._hooks.on_request_error(exc, projection, ctx)
@@ -938,6 +1051,32 @@ class CoreLoop:
                         decision,
                     )
                     return
+
+            if stream_cancelled:
+                # Cancelled mid-stream: keep the partial content as the
+                # terminal assistant message. Tool calls the model streamed
+                # but never executed are dropped from the record — recording
+                # them would leave dangling tool_calls — but stay on the
+                # completion event's step summary for the trace.
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+                record_terminal_content("".join(content_parts), [])
+                await self._flush_history(manager, chat_id)
+                yield emit_completion(
+                    step_summary(
+                        round_index=round_index,
+                        finish_reason="cancelled",
+                        content="".join(content_parts),
+                        tool_calls=tool_calls,
+                    ),
+                    CompletionDecision(
+                        status="cancelled",
+                        reason="cancelled by host request",
+                        confidence=1.0,
+                    ),
+                )
+                return
 
             # Flush the display pipeline: any held-back tail (partial marker
             # that never completed, deferred surrogate half) goes out now.
@@ -1098,6 +1237,37 @@ class CoreLoop:
                 if breaker_tripped:
                     break
 
+                # Cooperative cancel between batches: nothing in this batch
+                # has started, so every remaining call gets a skip notice.
+                if self._cancel_event.is_set():
+                    _append_unexecuted_tool_results(
+                        manager,
+                        batch=batch,
+                        batch_idx=batch_idx,
+                        batches=batches,
+                        call_idx=-1,
+                        errors={},
+                        results={},
+                        skip_message=_CANCEL_SKIP_MESSAGE,
+                        skip_kind="loop.cancel_skip",
+                    )
+                    record_terminal_content(content, tool_calls)
+                    await self._flush_history(manager, chat_id)
+                    yield emit_completion(
+                        step_summary(
+                            round_index=round_index,
+                            finish_reason="tool_calls",
+                            content=content,
+                            tool_calls=tool_calls,
+                        ),
+                        CompletionDecision(
+                            status="cancelled",
+                            reason="cancelled by host request",
+                            confidence=1.0,
+                        ),
+                    )
+                    return
+
                 # Phase 1 (sequential): start events + dedup guard. The dedup
                 # guard skips execution for an identical (name, args) call
                 # that already ran this run, feeding back a soft "you already
@@ -1149,11 +1319,15 @@ class CoreLoop:
                 # from a denial, which is an ordinary failed ToolResult.
                 abort_exc: ApprovalAborted | None = None
                 abort_idx: int | None = None
+                # Cooperative cancel landing mid-batch mirrors the abort
+                # path: the in-flight call is recorded as cancelled, calls
+                # never started get synthetic skip notices (phase 3), and the
+                # turn ends with status "cancelled".
+                cancel_idx: int | None = None
                 if pending:
                     if batch_safe and len(pending) > 1:
-                        outcomes = await asyncio.gather(
-                            *(self._execute_tool(call, ctx) for _, call, _ in pending),
-                            return_exceptions=True,
+                        outcomes, cancel_hit = await self._gather_tools_cancellable(
+                            pending, ctx
                         )
                         for (call_idx, _, _), outcome in zip(pending, outcomes):
                             if isinstance(outcome, ApprovalAborted):
@@ -1161,14 +1335,24 @@ class CoreLoop:
                                 if abort_exc is None:
                                     abort_exc = outcome
                                     abort_idx = call_idx
+                            elif isinstance(outcome, asyncio.CancelledError):
+                                errors[call_idx] = "cancelled"
                             elif isinstance(outcome, BaseException):
                                 errors[call_idx] = str(outcome)
                             else:
                                 results[call_idx] = outcome
+                        if cancel_hit:
+                            # Every call in this batch has an outcome (real or
+                            # cancelled); phase 3 records them all, then the
+                            # cancel finalize at the batch's last call covers
+                            # later batches with skip notices.
+                            cancel_idx = len(batch) - 1
                     else:
                         for call_idx, call, _ in pending:
                             try:
-                                results[call_idx] = await self._execute_tool(call, ctx)
+                                result, cancel_hit = (
+                                    await self._execute_tool_cancellable(call, ctx)
+                                )
                             except ApprovalAborted as exc:
                                 errors[call_idx] = str(exc)
                                 abort_exc = exc
@@ -1178,6 +1362,12 @@ class CoreLoop:
                                 break
                             except Exception as exc:  # noqa: BLE001 — tool_error event
                                 errors[call_idx] = str(exc)
+                                continue
+                            if cancel_hit:
+                                errors[call_idx] = "cancelled"
+                                cancel_idx = call_idx
+                                break
+                            results[call_idx] = result
 
                 # Phase 3 (call order): counters, hook, result event,
                 # transcript append, error breaker.
@@ -1275,6 +1465,39 @@ class CoreLoop:
                             CompletionDecision(
                                 status="failed",
                                 reason=f"approval aborted: {abort_exc}",
+                                confidence=1.0,
+                            ),
+                        )
+                        return
+
+                    # Cooperative cancel ends the turn: the batch's calls are
+                    # recorded above (real results, or "cancelled" for the
+                    # in-flight one); everything never started gets a skip
+                    # notice — no dangling tool_calls.
+                    if call_idx == cancel_idx:
+                        _append_unexecuted_tool_results(
+                            manager,
+                            batch=batch,
+                            batch_idx=batch_idx,
+                            batches=batches,
+                            call_idx=call_idx,
+                            errors=errors,
+                            results=results,
+                            skip_message=_CANCEL_SKIP_MESSAGE,
+                            skip_kind="loop.cancel_skip",
+                        )
+                        record_terminal_content(content, tool_calls)
+                        await self._flush_history(manager, chat_id)
+                        yield emit_completion(
+                            step_summary(
+                                round_index=round_index,
+                                finish_reason="tool_calls",
+                                content=content,
+                                tool_calls=tool_calls,
+                            ),
+                            CompletionDecision(
+                                status="cancelled",
+                                reason="cancelled by host request",
                                 confidence=1.0,
                             ),
                         )
@@ -1472,6 +1695,13 @@ _BREAKER_SKIP_MESSAGE = (
 
 _APPROVAL_ABORT_SKIP_MESSAGE = (
     "[not executed: the turn was stopped by an approval abort. "
+    "Do not claim this call produced a result.]"
+)
+
+#: Synthetic tool message for calls that never ran because the turn was
+#: cancelled (same no-dangling-tool_calls invariant as the breaker/abort).
+_CANCEL_SKIP_MESSAGE = (
+    "[not executed: the turn was cancelled before this call ran. "
     "Do not claim this call produced a result.]"
 )
 

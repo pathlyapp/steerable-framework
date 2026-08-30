@@ -71,6 +71,7 @@ class ModelInfo:
 MODEL_INFOS: tuple[ModelInfo, ...] = (
     ModelInfo("deepseek-reasoner", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("deepseek", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
+    ModelInfo("z-ai/glm", 202_752, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("gpt-oss", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("llama3", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     ModelInfo("qwen3", 129_024, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
@@ -149,6 +150,6 @@ def clamp_reasoning_effort(model: str | None, effort: str | None) -> str | None:
         for fallback in ("medium", "low", "high", "minimal"):
             if fallback in levels:
                 return fallback
-        return sorted(levels)[0]
+        return min(levels)
     target = REASONING_EFFORT_ORDER.index(requested)
     return min(levels, key=lambda lv: abs(REASONING_EFFORT_ORDER.index(lv) - target))

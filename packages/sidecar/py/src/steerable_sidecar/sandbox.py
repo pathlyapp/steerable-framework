@@ -35,13 +35,16 @@ What the sidecar legitimately needs:
   escape hatch (the codex stance), and denying them breaks Python
   internals that fork helpers.
 
-Layer 2 (per-exec) has two backends: Seatbelt on macOS and bubblewrap on
-Linux (``BwrapExecBackend`` — the dsh-proven profile: read-only root bind,
-private PID namespace with its own /proc, private /tmp, network namespace
-removed unless the call declares egress). Windows has no command-rewriting
-sandbox primitive (restricted tokens need host-side spawn support, not a
-wrapper string), so it constructs no backend and ``require_full`` refuses —
-a documented follow-up, see docs/spec/safety.md.
+Layer 2 (per-exec) has three backends: Seatbelt on macOS; on Linux,
+bubblewrap first (``BwrapExecBackend`` — the dsh-proven profile: read-only
+root bind, private PID namespace with its own /proc, private /tmp, network
+namespace removed unless the call declares egress), then Landlock
+(``LandlockExecBackend`` in ``landlock.py`` — kernel LSM, no external
+binary, for hosts/containers where bwrap cannot run). Windows has no
+command-rewriting sandbox primitive (restricted tokens need host-side
+spawn support, not a wrapper string), so it constructs no backend and
+``require_full`` refuses — a documented follow-up, see
+docs/spec/safety.md.
 """
 
 from __future__ import annotations
@@ -54,7 +57,9 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Sequence
-from functools import lru_cache
+from functools import cache
+
+from .landlock import LandlockExecBackend, landlock_available
 
 MACOS_SEATBELT_EXECUTABLE = "/usr/bin/sandbox-exec"
 
@@ -410,7 +415,7 @@ class BwrapExecBackend:
         return " ".join(shlex.quote(part) for part in self.argv_for(command))
 
 
-@lru_cache(maxsize=None)
+@cache
 def _probe_bwrap(executable: str) -> bool:
     """Functional availability probe: build a real maximal wrap (network
     namespace included — the default wraps use it, so a host that cannot
@@ -461,12 +466,16 @@ def select_exec_backend(
     network: bool = False,
     allowed_hosts: Sequence[str] | None = None,
     shell: str = "/bin/sh",
-) -> SeatbeltExecBackend | BwrapExecBackend | None:
+) -> SeatbeltExecBackend | BwrapExecBackend | LandlockExecBackend | None:
     """Pick the platform's per-exec backend, fail-closed.
 
-    macOS → Seatbelt, Linux → bwrap (probe-gated: a host that cannot create
-    the namespaces gets no backend, not a weaker one). Anything else →
-    ``None`` and the executor reports ``enforcement: "none"`` (with
+    macOS → Seatbelt. Linux → bwrap, then Landlock (both probe-gated: a
+    host that cannot create the namespaces gets no bwrap, not a weaker one;
+    a kernel/seccomp that refuses the landlock syscalls gets no Landlock).
+    bwrap ranks first because it confines more dimensions (mount/PID
+    namespaces, private /tmp); Landlock needs no external binary and still
+    confines fs (+ egress on ABI v4) where bwrap cannot run. Anything else
+    → ``None`` and the executor reports ``enforcement: "none"`` (with
     ``require_full`` the call is denied instead of running unconfined).
     """
 
@@ -485,6 +494,13 @@ def select_exec_backend(
             allowed_hosts=allowed_hosts,
             shell=shell,
             executable=path,
+        )
+    if landlock_available():
+        return LandlockExecBackend(
+            writable_roots=writable_roots,
+            network=network,
+            allowed_hosts=allowed_hosts,
+            shell=shell,
         )
     return None
 

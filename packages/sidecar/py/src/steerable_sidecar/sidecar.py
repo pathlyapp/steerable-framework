@@ -47,6 +47,7 @@ from steerable_agent_protocol.generated import (
     ToolCall,
 )
 from steerable_agent_runtime import (
+    DEFAULT_SHELL_TOOLS,
     AntiHallucinationConfig,
     AntiHallucinationHooks,
     ApprovalExecutor,
@@ -55,12 +56,13 @@ from steerable_agent_runtime import (
     ChainHooks,
     CompactionHooks,
     CoreLoop,
-    DEFAULT_SHELL_TOOLS,
     FilesystemSkillProvider,
     HistorySeed,
     JsonApprovalStore,
     LoopConfig,
     LoopHooks,
+    OrchestrationConfig,
+    OrchestrationExecutor,
     PolicyDeniedError,
     RetryHooks,
     RouterToolExecutor,
@@ -77,12 +79,13 @@ from steerable_agent_runtime import (
     ToolRouter,
     TraceRecorder,
     WorldStateHooks,
-    estimate_cost_usd,
-    export_trace,
     branch_label,
     entry_from_dict,
+    estimate_cost_usd,
+    export_trace,
     fork_record,
     lineage,
+    orchestration_tool_descriptors,
     resolve_fork_seq,
     select_catalog,
     select_skills,
@@ -128,6 +131,11 @@ READY_PREFIX = "__SIDECAR_READY__:"
 #: only re-asks a cached *_for_session decision once; decisions are cheap.
 _APPROVAL_SESSION_CACHE_CAP = 64
 
+#: Grace window between a cooperative cancel (loop.cancel()) and the
+#: hard-cancel backstop. The loop normally winds down within one await
+#: point; 5s covers a slow final history flush without masking a wedge.
+_CANCEL_GRACE_S = 5.0
+
 
 @dataclass
 class SidecarConfig:
@@ -161,7 +169,9 @@ class Sidecar:
         self.storage: StorageAdapter = storage or InMemoryStorage()
         self.tools: ToolRouter = tools or ToolRouter()
         self.server = JsonRpcServer()
-        self._llm_provider_factory = llm_provider_factory or default_llm_provider_factory
+        self._llm_provider_factory = (
+            llm_provider_factory or default_llm_provider_factory
+        )
         # Optional embedder hook for the CoreLoop chat path — receives the
         # request params, returns a LoopHooks (e.g. ChainHooks of retry +
         # compaction + spill). Defaults to RetryHooks alone.
@@ -170,6 +180,9 @@ class Sidecar:
         #: Active CoreLoop instances by stream id — the steer RPC targets
         #: these to inject user messages into a running turn.
         self._coreloops: dict[str, CoreLoop] = {}
+        #: Hard-cancel watchdogs armed by agent.chat.cancel on CoreLoop
+        #: streams; tracked so the tasks are not garbage-collected early.
+        self._cancel_watchdogs: set[asyncio.Task[None]] = set()
         #: Session-scope approval caches per chat (Wave 3 approval algebra).
         #: LRU-bounded so a long-lived sidecar hosting many chats doesn't
         #: grow without limit; eviction only means a cached *_for_session
@@ -331,7 +344,9 @@ class Sidecar:
         _flush_shared_calibration()
         self._shutdown_requested.set()
 
-    async def _handle_session_create(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_session_create(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         params = _require_params(params)
         session = AgentSession(
             sessionId=params.get("sessionId") or _new_session_id(),
@@ -351,7 +366,9 @@ class Sidecar:
             raise JsonRpcError(str(exc), code=-32011, kind="internal") from exc
         return stored.model_dump(exclude_none=True)
 
-    async def _handle_session_resume(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_session_resume(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         params = _require_params(params)
         session_id = params.get("sessionId")
         if not session_id:
@@ -363,7 +380,9 @@ class Sidecar:
             )
         return session.model_dump(exclude_none=True)
 
-    async def _handle_session_list(self, params: dict[str, Any] | None) -> list[dict[str, Any]]:
+    async def _handle_session_list(
+        self, params: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
         params = params or {}
         sessions = await self.storage.list_sessions(
             user_id=params.get("userId"),
@@ -372,10 +391,14 @@ class Sidecar:
         )
         return [s.model_dump(exclude_none=True) for s in sessions]
 
-    async def _handle_tool_list(self, _params: dict[str, Any] | None) -> list[dict[str, Any]]:
+    async def _handle_tool_list(
+        self, _params: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
         return self.tools.describe()
 
-    async def _handle_tool_invoke(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_tool_invoke(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         params = _require_params(params)
         try:
             call = ToolCall(
@@ -432,7 +455,9 @@ class Sidecar:
                 kind="invalid_params",
             )
         ops = [
-            EditOp(old_text=str(e.get("oldText", "")), new_text=str(e.get("newText", "")))
+            EditOp(
+                old_text=str(e.get("oldText", "")), new_text=str(e.get("newText", ""))
+            )
             for e in raw_edits
             if isinstance(e, dict)
         ]
@@ -457,7 +482,9 @@ class Sidecar:
             ],
         }
 
-    async def _handle_skills_list(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_skills_list(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Parse + select skills from host-supplied roots (single source of
         truth for SKILL.md parsing, so the desktop no longer re-parses).
 
@@ -481,7 +508,9 @@ class Sidecar:
         selected = select_skills(definitions, conditions, exclude, ignore_conditions)
         return {"skills": [skill_to_dict(d) for d in selected]}
 
-    async def _handle_trace_fetch(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_trace_fetch(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         params = _require_params(params)
         trace_id = params.get("traceId")
         if not trace_id:
@@ -499,7 +528,9 @@ class Sidecar:
             "events": [e.model_dump(exclude_none=True) for e in events],
         }
 
-    async def _handle_trace_export(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_trace_export(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Export a stored trace to an OTLP/HTTP collector (W6-6).
 
         Params: ``traceId`` (required), ``endpoint`` (required, the collector's
@@ -518,7 +549,9 @@ class Sidecar:
         privacy_mode = params.get("privacyMode", "metadata")
         if privacy_mode not in ("full", "metadata"):
             raise JsonRpcError(
-                f"invalid privacyMode: {privacy_mode}", code=-32602, kind="invalid_params"
+                f"invalid privacyMode: {privacy_mode}",
+                code=-32602,
+                kind="invalid_params",
             )
         trace = await self.storage.get_trace(trace_id)
         if trace is None:
@@ -542,7 +575,9 @@ class Sidecar:
             ) from exc
         return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
 
-    async def _handle_config_get(self, _params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_config_get(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         return {
             "logLevel": self.config.log_level,
             "gracePeriodSeconds": self.config.grace_period_seconds,
@@ -557,7 +592,9 @@ class Sidecar:
             self.config.log_level = str(log_level)
             logging.getLogger().setLevel(self.config.log_level)
 
-    async def _handle_chat_stream(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_chat_stream(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Start a streaming chat-completion run.
 
         Params shape (all optional unless noted)::
@@ -584,9 +621,7 @@ class Sidecar:
 
         params = _require_params(params)
         if self._transport is None:
-            raise JsonRpcError(
-                "transport not ready", code=-32099, kind="internal"
-            )
+            raise JsonRpcError("transport not ready", code=-32099, kind="internal")
         try:
             provider = self._llm_provider_factory(params)
         except Exception as exc:  # surface as RPC error before scheduling task
@@ -602,7 +637,9 @@ class Sidecar:
         transport = self._transport
         if _use_coreloop(params):
             task = asyncio.create_task(
-                self._run_chat_stream_coreloop(provider, messages, params, stream_id, transport)
+                self._run_chat_stream_coreloop(
+                    provider, messages, params, stream_id, transport
+                )
             )
         else:
             kwargs = _build_provider_kwargs(params)
@@ -617,8 +654,38 @@ class Sidecar:
         stream_id = params.get("streamId")
         if not stream_id:
             raise JsonRpcError("streamId required", code=-32602, kind="invalid_params")
+        # CoreLoop streams cancel cooperatively: the loop winds down at the
+        # next safe point, records the partial turn (no dangling tool_calls),
+        # and its terminal completion surfaces as stream.done with
+        # status="cancelled". A watchdog hard-cancels the task if the wind-
+        # down wedges (e.g. a provider stream that never yields).
+        loop = self._coreloops.get(stream_id)
+        if loop is not None:
+            loop.cancel()
+            task = self._streams.get(stream_id)
+            if task is not None and not task.done():
+                watchdog = asyncio.ensure_future(
+                    self._hard_cancel_after(task, stream_id)
+                )
+                self._cancel_watchdogs.add(watchdog)
+                watchdog.add_done_callback(self._cancel_watchdogs.discard)
+            return
         task = self._streams.pop(stream_id, None)
         if task is not None and not task.done():
+            task.cancel()
+
+    async def _hard_cancel_after(
+        self, task: asyncio.Task[None], stream_id: str
+    ) -> None:
+        """Backstop for cooperative cancel: if the loop has not finished
+        within the grace window, cancel the task outright."""
+        await asyncio.sleep(_CANCEL_GRACE_S)
+        if not task.done():
+            logger.warning(
+                "stream %s did not wind down within %.0fs of cancel; hard-cancelling",
+                stream_id,
+                _CANCEL_GRACE_S,
+            )
             task.cancel()
 
     async def _handle_chat_fork(self, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -654,9 +721,7 @@ class Sidecar:
         """
         params = _require_params(params)
         if self._transport is None:
-            raise JsonRpcError(
-                "transport not ready", code=-32099, kind="internal"
-            )
+            raise JsonRpcError("transport not ready", code=-32099, kind="internal")
         stream_id = params.get("streamId") or _new_stream_id()
         source_record = params.get("recordId")
         if source_record is not None:
@@ -718,7 +783,9 @@ class Sidecar:
         self._streams[stream_id] = task
         return {"streamId": stream_id, "seedMessages": len(seed)}
 
-    async def _handle_session_fork(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_session_fork(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Fork a durable record WITHOUT running a turn (Wave 5).
 
         Params::
@@ -794,7 +861,9 @@ class Sidecar:
             "seedMessages": len(fork.messages),
         }
 
-    async def _handle_session_branches(self, params: dict[str, Any] | None) -> dict[str, Any]:
+    async def _handle_session_branches(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Branch-family view of a record (Wave 5).
 
         Returns ``{"lineage": [...root-first BranchPoints...], "children":
@@ -819,7 +888,10 @@ class Sidecar:
                 if not first:
                     continue
                 entry = entry_from_dict(first[0])
-                if isinstance(entry, HistorySeed) and entry.source_record_id == record_id:
+                if (
+                    isinstance(entry, HistorySeed)
+                    and entry.source_record_id == record_id
+                ):
                     children.append(
                         {
                             "recordId": candidate,
@@ -1064,7 +1136,10 @@ class Sidecar:
         # not adopted layered disclosure). Roots are host-local paths — the
         # sidecar shares the filesystem with the desktop host.
         skills_param = params.get("skills")
-        if isinstance(skills_param, dict) and skills_param.get("mode", "layered") != "eager":
+        if (
+            isinstance(skills_param, dict)
+            and skills_param.get("mode", "layered") != "eager"
+        ):
             roots = [str(r) for r in skills_param.get("roots") or []]
             conditions = set(skills_param.get("conditions") or [])
             exclude = list(skills_param.get("exclude") or [])
@@ -1091,6 +1166,34 @@ class Sidecar:
                         ignore_conditions=ignore_conditions,
                     )
                     tools = [*(tools or []), skill_tool_descriptor()]
+        # orchestration: opt-in multi-agent seam (P3.1) — the parent model
+        # drives parallel child CoreLoops through agent_spawn/send/wait/
+        # close. Wrapped outermost so children inherit every gate below
+        # (approval, skills, subagent). Budgets fail closed
+        # (maxDepth/maxParallel); depth is structural — a child only has
+        # orchestration tools when its own pool is nested inside.
+        orchestration_param = params.get("orchestration")
+        orchestration: OrchestrationExecutor | None = None
+        if isinstance(orchestration_param, dict) and orchestration_param:
+            orch_config = OrchestrationConfig(
+                max_depth=int(orchestration_param.get("maxDepth", 1)),
+                max_parallel=int(orchestration_param.get("maxParallel", 4)),
+                child_max_rounds=int(orchestration_param.get("childMaxRounds", 8)),
+            )
+            orchestration = OrchestrationExecutor(
+                executor,
+                provider,
+                orch_config,
+                tools=list(tools or []),
+                event_sink=lambda kind, data: self._emit_child_event(
+                    transport, stream_id, kind, data
+                ),
+            )
+            executor = orchestration
+            tools = [
+                *(tools or []),
+                *orchestration_tool_descriptors(orch_config),
+            ]
         loop = CoreLoop(
             provider,
             executor,
@@ -1146,8 +1249,37 @@ class Sidecar:
             )
         finally:
             self._coreloops.pop(stream_id, None)
+            if orchestration is not None:
+                # Wind down any children still running when the parent ends
+                # (completion, error, or cancel) — cooperative first.
+                await orchestration.shutdown()
             await recorder.finalize()
             self._streams.pop(stream_id, None)
+
+    def _emit_child_event(
+        self,
+        transport: StdioJsonRpcTransport,
+        stream_id: str,
+        kind: str,
+        data: dict[str, Any],
+    ) -> None:
+        """Forward a child-lifecycle event from the orchestration pool.
+
+        The pool's sink is synchronous (it fires inside tool execution), so
+        the notification is scheduled fire-and-forget; ordering against the
+        surrounding stream events is not guaranteed, lineage ids are.
+        """
+        task = asyncio.ensure_future(
+            transport.emit_notification(
+                "agent.child", {"streamId": stream_id, "kind": kind, **data}
+            )
+        )
+        task.add_done_callback(
+            lambda t: (
+                t.exception()
+                and logger.warning("child event emit failed: %s", t.exception())
+            )
+        )
 
     @staticmethod
     async def _emit_loop_event(
@@ -1199,7 +1331,8 @@ class Sidecar:
             )
         elif kind in ("soft_timeout", "budget_exhausted"):
             await transport.emit_notification(
-                "stream.chunk", {"streamId": stream_id, "notice": {"kind": kind, **data}}
+                "stream.chunk",
+                {"streamId": stream_id, "notice": {"kind": kind, **data}},
             )
         elif kind == "hook_action":
             # Hook-driven control flow (compaction / retry / narration /
@@ -1240,6 +1373,10 @@ class Sidecar:
                 "reason": data["reason"],
                 **({"traceId": trace_id} if trace_id else {}),
             }
+            if data["status"] == "cancelled":
+                # Same terminal signal the hard-cancel path emits, so hosts
+                # handle cooperative and forced cancellation uniformly.
+                done["cancelled"] = True
             usage = data.get("usage")
             if isinstance(usage, dict):
                 done["usage"] = usage
@@ -1259,7 +1396,9 @@ class Sidecar:
     def _emit_ready_marker(self, health: SidecarHealth) -> None:
         if self.config.quiet_stderr:
             return
-        payload = json.dumps(health.model_dump(exclude_none=True), separators=(",", ":"))
+        payload = json.dumps(
+            health.model_dump(exclude_none=True), separators=(",", ":")
+        )
         sys.stderr.write(f"{READY_PREFIX}{payload}\n")
         sys.stderr.flush()
 
@@ -1287,7 +1426,9 @@ class Sidecar:
         reader = asyncio.StreamReader(limit=STDIO_STREAM_LIMIT)
         protocol = asyncio.StreamReaderProtocol(reader)
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-        transport, _ = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
+        transport, _ = await loop.connect_write_pipe(
+            asyncio.streams.FlowControlMixin, sys.stdout
+        )
         writer = asyncio.StreamWriter(transport, protocol, reader, loop)
         return reader, writer
 
@@ -1308,7 +1449,9 @@ class Sidecar:
 
 def _require_params(params: Any) -> dict[str, Any]:
     if not isinstance(params, dict):
-        raise JsonRpcError("params must be an object", code=-32602, kind="invalid_params")
+        raise JsonRpcError(
+            "params must be an object", code=-32602, kind="invalid_params"
+        )
     return params
 
 
@@ -1337,7 +1480,9 @@ def _coerce_part(item: Any) -> ContentPart:
     ChatMessage; ``content`` is then just its text projection.
     """
     if not isinstance(item, dict):
-        raise JsonRpcError("each part must be an object", code=-32602, kind="invalid_params")
+        raise JsonRpcError(
+            "each part must be an object", code=-32602, kind="invalid_params"
+        )
     kind = item.get("type")
     if kind == "text":
         return TextPart(str(item.get("text") or ""))
@@ -1355,12 +1500,16 @@ def _coerce_part(item: Any) -> ContentPart:
         raise JsonRpcError(
             "image part needs url or data", code=-32602, kind="invalid_params"
         )
-    raise JsonRpcError(f"invalid part type: {kind!r}", code=-32602, kind="invalid_params")
+    raise JsonRpcError(
+        f"invalid part type: {kind!r}", code=-32602, kind="invalid_params"
+    )
 
 
 def _coerce_messages(items: Any) -> list[LLMMessage]:
     if not isinstance(items, list):
-        raise JsonRpcError("messages must be a list", code=-32602, kind="invalid_params")
+        raise JsonRpcError(
+            "messages must be a list", code=-32602, kind="invalid_params"
+        )
     out: list[LLMMessage] = []
     for entry in items:
         if not isinstance(entry, dict):
@@ -1456,7 +1605,9 @@ def _summarizer_for(provider: Any) -> Any | None:
     return provider
 
 
-def _default_loop_hooks(params: dict[str, Any], summarizer: Any | None = None) -> LoopHooks:
+def _default_loop_hooks(
+    params: dict[str, Any], summarizer: Any | None = None
+) -> LoopHooks:
     """Default hook chain for the CoreLoop chat path.
 
     CompactionHooks comes first: its ``on_request_error`` intercepts
@@ -1540,11 +1691,17 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         max_tool_errors=int(params.get("maxToolErrors", 3)),
         budget=budget,
         temperature=(
-            float(params["temperature"]) if params.get("temperature") is not None else None
+            float(params["temperature"])
+            if params.get("temperature") is not None
+            else None
         ),
-        max_tokens=int(params["maxTokens"]) if params.get("maxTokens") is not None else None,
+        max_tokens=int(params["maxTokens"])
+        if params.get("maxTokens") is not None
+        else None,
         soft_timeout_ms=(
-            int(params["softTimeoutMs"]) if params.get("softTimeoutMs") is not None else None
+            int(params["softTimeoutMs"])
+            if params.get("softTimeoutMs") is not None
+            else None
         ),
         # Per-tool backstop against hung executors (in-process or remote).
         # LoopConfig carries the default; the param only overrides.
@@ -1645,7 +1802,11 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     api_key = params.get("apiKey") or params.get("api_key") or ""
 
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
-        from steerable_agent_runtime.llm import OpenAICompatProvider
+        from steerable_agent_runtime.llm import (
+            OpenAICompatFlags,
+            OpenAICompatProvider,
+            compat_for_base_url,
+        )
 
         if provider_kind == "ollama":
             # Ollama's OpenAI-compatible API lives under /v1. Callers that
@@ -1656,13 +1817,23 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             if not base_url.endswith("/v1"):
                 base_url = f"{base_url}/v1"
 
+        resolved_base_url = base_url or "https://api.openai.com/v1"
+        # Vendor divergences arrive as data: an explicit ``compat`` payload
+        # wins; otherwise auto-detect from the base-URL host (pi-style).
+        compat_param = params.get("compat")
+        compat = (
+            OpenAICompatFlags.from_dict(compat_param)
+            if isinstance(compat_param, dict)
+            else compat_for_base_url(resolved_base_url)
+        )
         return _wrap_with_recording(
             _wrap_with_calibration(
                 OpenAICompatProvider(
                     name=provider_kind or "openai_compat",
-                    base_url=base_url or "https://api.openai.com/v1",
+                    base_url=resolved_base_url,
                     api_key=api_key,
                     model=str(model),
+                    compat=compat,
                 )
             )
         )
@@ -1673,7 +1844,9 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             _wrap_with_calibration(
                 _wrap_with_cache_control(
                     AnthropicProvider(
-                        name=provider_kind or "anthropic", api_key=api_key, model=str(model)
+                        name=provider_kind or "anthropic",
+                        api_key=api_key,
+                        model=str(model),
                     )
                 )
             )

@@ -102,8 +102,11 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         elif event.kind == "reasoning_delta":
             if not thinking:
                 sys.stdout.write("[thinking]\n")
-                sys.stdout.flush()
                 thinking = True
+            # Log reasoning text too: a long generation must keep the log
+            # growing so external stall watchdogs see liveness.
+            sys.stdout.write(str(event.data.get("delta", "")))
+            sys.stdout.flush()
         elif event.kind == "tool_call_start":
             thinking = False
             sys.stdout.write(

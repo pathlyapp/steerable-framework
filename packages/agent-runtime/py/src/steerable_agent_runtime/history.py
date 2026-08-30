@@ -28,15 +28,19 @@ module in later Wave 1 steps.
 
 from __future__ import annotations
 
+import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall
 
 from .llm import LLMMessage, LLMRole
 from .llm.parts import ImagePart, TextPart
-from .tokens import estimate_tokens
+from .tokens import estimate_text_tokens, estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 #: Content-kind classification, stable ``<feature>.<name>`` strings (the
 #: codex ``ContentItemKind`` convention). Base conversational kinds are the
@@ -155,6 +159,19 @@ class RecordFormatError(ValueError):
     """
 
 
+#: Default per-fragment token cap — the no-review line. Fragments stay
+#: under it silently; crossing it requires an explicit ``review_note`` on
+#: the class (the Codex "P0 items crossing 1k tokens" rule, gated in tests).
+DEFAULT_FRAGMENT_MAX_TOKENS = 1024
+
+#: Absolute per-fragment ceiling. No injected item may exceed this,
+#: reviewed or not (the Codex "no items larger than 10K tokens" rule).
+FRAGMENT_TOKEN_CEILING = 10_000
+
+#: Appended by the default degradation when a fragment exceeds its cap.
+_TRUNCATION_MARKER = "\n…[fragment truncated: exceeded its token cap]"
+
+
 class ContextFragment:
     """Injected content with a stable, self-recognisable rendering.
 
@@ -172,10 +189,47 @@ class ContextFragment:
 
     Subclasses with constant markers should also override ``type_markers``
     so ``matches_text`` works without an instance.
+
+    Every fragment is bounded: ``append_fragment`` enforces the class's
+    token cap via ``degrade`` — an over-cap injection degrades predictably
+    instead of inflating the transcript and leaning on compaction later.
     """
 
     role: LLMRole = "user"
     content_kind: str = "generic"
+    #: Hard token cap for the rendered text. ``None`` selects
+    #: ``DEFAULT_FRAGMENT_MAX_TOKENS``. Values above the default require
+    #: ``review_note``; values above ``FRAGMENT_TOKEN_CEILING`` are rejected
+    #: by the gate test.
+    max_tokens: int | None = None
+    #: Explicit-review record required when ``max_tokens`` crosses the
+    #: no-review line: why this fragment legitimately needs the larger cap.
+    review_note: str | None = None
+
+    @classmethod
+    def effective_max_tokens(cls) -> int:
+        return cls.max_tokens if cls.max_tokens is not None else DEFAULT_FRAGMENT_MAX_TOKENS
+
+    def degrade(self, rendered: str, *, max_tokens: int) -> str:
+        """Reduce an over-cap rendering to fit ``max_tokens``.
+
+        The default truncates with a visible marker; fragments with line or
+        section structure override this to drop whole units instead of
+        cutting mid-line.
+        """
+        marker = _TRUNCATION_MARKER
+        budget = max_tokens - estimate_text_tokens(marker)
+        if budget <= 0:
+            return marker.strip()
+        text = rendered
+        # Proportional first cut, then refine against the estimator — the
+        # estimator is monotonic in length, so this converges in a few steps.
+        estimate = estimate_text_tokens(text)
+        if estimate > budget:
+            text = text[: max(0, int(len(text) * (budget / estimate) * 0.95))]
+        while text and estimate_text_tokens(text) > budget:
+            text = text[: max(0, int(len(text) * 0.9))]
+        return text + marker
 
     def markers(self) -> tuple[str, str]:
         return ("", "")
@@ -212,9 +266,7 @@ class ContextFragment:
         trimmed = text.strip()
         if start and not trimmed.lower().startswith(start.lower()):
             return False
-        if end and not trimmed.lower().endswith(end.lower()):
-            return False
-        return True
+        return not (end and not trimmed.lower().endswith(end.lower()))
 
 
 class ContextManager:
@@ -278,9 +330,28 @@ class ContextManager:
         tool_call_id: str | None = None,
         turn_id: str | None = None,
     ) -> HistoryItem:
-        """Render a fragment and append it under its ``content_kind``."""
+        """Render a fragment and append it under its ``content_kind``.
+
+        Enforces the fragment's token cap: an over-cap rendering is degraded
+        (``fragment.degrade``) before it lands, so the record — and therefore
+        the provider request — never carries an unbounded injection.
+        """
+        rendered = fragment.render()
+        cap = fragment.effective_max_tokens()
+        if estimate_text_tokens(rendered) > cap:
+            degraded = fragment.degrade(rendered, max_tokens=cap)
+            logger.warning(
+                "fragment %s exceeded its %d-token cap; degraded before append",
+                fragment.content_kind,
+                cap,
+            )
+            message = LLMMessage.text_of(
+                fragment.role, degraded, name=name, tool_call_id=tool_call_id
+            )
+        else:
+            message = fragment.to_message(name=name, tool_call_id=tool_call_id)
         return self.append(
-            fragment.to_message(name=name, tool_call_id=tool_call_id),
+            message,
             kind=fragment.content_kind,
             turn_id=turn_id,
         )

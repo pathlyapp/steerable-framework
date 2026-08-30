@@ -33,7 +33,7 @@ from typing import Any, Protocol, runtime_checkable
 from .history import ContextFragment
 from .hooks import NoopHooks, PreStepAction, TranscriptAppend
 from .llm import LLMMessage
-
+from .tokens import estimate_text_tokens
 
 # ---------------------------------------------------------------------------
 # Sections
@@ -177,6 +177,11 @@ class WorldStateFragment(ContextFragment):
     the previous snapshot (e.g. compaction folded it)."""
 
     content_kind = "world_state.snapshot"
+    max_tokens = 4096
+    review_note = (
+        "Aggregate cap over the per-section 8 KiB byte caps; backstops a "
+        "host registering many sections. Reviewed 2026-08-30 (P2.2)."
+    )
 
     def __init__(self, snapshot: Mapping[str, Any]) -> None:
         self._snapshot = dict(snapshot)
@@ -194,6 +199,18 @@ class WorldStateFragment(ContextFragment):
             f"{_json(self._snapshot)}\n"
         )
 
+    def degrade(self, rendered: str, *, max_tokens: int) -> str:
+        # Drop trailing whole sections and re-render, keeping the result
+        # decodable (closing marker intact, snapshot comment consistent).
+        # A single section is byte-capped well under this cap, so the loop
+        # converges before empty in any realistic configuration.
+        kept = dict(self._snapshot)
+        text = rendered
+        while kept and estimate_text_tokens(text) > max_tokens:
+            kept.pop(next(reversed(kept)))
+            text = WorldStateFragment(kept).render()
+        return text
+
 
 class WorldStatePatchFragment(ContextFragment):
     """Tail patch injection — only the sections that changed since the
@@ -201,6 +218,11 @@ class WorldStatePatchFragment(ContextFragment):
     snapshot so the next turn diffs against it."""
 
     content_kind = "world_state.patch"
+    max_tokens = 4096
+    review_note = (
+        "Aggregate cap over the per-section 8 KiB byte caps; backstops a "
+        "host registering many sections. Reviewed 2026-08-30 (P2.2)."
+    )
 
     def __init__(self, patch: Mapping[str, Any], snapshot: Mapping[str, Any]) -> None:
         self._patch = dict(patch)
@@ -219,6 +241,23 @@ class WorldStatePatchFragment(ContextFragment):
             f"{_PATCH_PREAMBLE}\n"
             f"{_json(self._patch)}\n"
         )
+
+    def degrade(self, rendered: str, *, max_tokens: int) -> str:
+        # Drop trailing patch entries while keeping the embedded full
+        # snapshot intact — the model sees a partial patch, and the next
+        # turn still diffs against the complete snapshot. If the snapshot
+        # comment alone exceeds the cap, fall back to plain truncation
+        # (closing marker lost → next turn re-injects the full state).
+        kept = dict(self._patch)
+        while kept:
+            text = WorldStatePatchFragment(kept, self._snapshot).render()
+            if estimate_text_tokens(text) <= max_tokens:
+                return text
+            kept.pop(next(reversed(kept)))
+        text = WorldStatePatchFragment({}, self._snapshot).render()
+        if estimate_text_tokens(text) <= max_tokens:
+            return text
+        return super().degrade(rendered, max_tokens=max_tokens)
 
 
 def last_world_state_snapshot(
@@ -297,7 +336,9 @@ class WorldStateHooks(NoopHooks):
             kind="proceed",
             appends=[
                 TranscriptAppend(
-                    message=fragment.to_message(), kind=fragment.content_kind
+                    message=fragment.to_message(),
+                    kind=fragment.content_kind,
+                    fragment=fragment,
                 )
             ],
             append_action="world_state",

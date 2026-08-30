@@ -7,7 +7,6 @@ import asyncio
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
-
 from steerable_sidecar.sidecar import Sidecar
 
 
@@ -294,7 +293,7 @@ async def test_trace_export_pushes_redacted_payload_to_collector() -> None:
     received: dict = {}
 
     class _Handler(BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802
+        def do_POST(self):
             received["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             self.send_response(200)
             self.end_headers()
@@ -355,6 +354,8 @@ async def test_trace_export_pushes_redacted_payload_to_collector() -> None:
         assert "error" in bad
     finally:
         server.shutdown()
+
+
 
 
 @pytest.mark.asyncio
@@ -548,6 +549,67 @@ async def test_steer_unknown_stream_soft_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_coreloop_cancel_winds_down_cooperatively() -> None:
+    """agent.chat.cancel on a CoreLoop stream is cooperative: the loop
+    asyncio-cancels the in-flight tool, records the partial turn, and the
+    terminal stream.done carries status="cancelled" — not a hard task kill."""
+    tool_started = asyncio.Event()
+    tool_cancelled = False
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="hanging", arguments={})),
+            _text_round("never reached"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def hanging() -> str:
+        nonlocal tool_cancelled
+        tool_started.set()
+        try:
+            await asyncio.Event().wait()  # held open so cancel lands mid-tool
+        except asyncio.CancelledError:
+            tool_cancelled = True
+            raise
+        return "done"  # pragma: no cover
+
+    sidecar.tools.register(hanging)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "go"}],
+                "useCoreLoop": True,
+            },
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+
+    await asyncio.wait_for(tool_started.wait(), timeout=2)
+    cancel_resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.cancel", {"streamId": stream_id})
+    )
+    assert "error" not in cancel_resp, cancel_resp
+
+    task = sidecar._streams.get(stream_id)
+    if task is not None:
+        await asyncio.wait_for(task, timeout=2)
+
+    assert tool_cancelled, "in-flight tool coroutine was not asyncio-cancelled"
+    events = sidecar._transport.events  # type: ignore[attr-defined]
+    done = [p for m, p in events if m == "stream.done"]
+    assert len(done) == 1
+    assert done[0]["ok"] is False
+    assert done[0]["status"] == "cancelled"
+    assert done[0]["cancelled"] is True
+
+
+@pytest.mark.asyncio
 async def test_steer_requires_content() -> None:
     sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
     resp = await sidecar.server.handle_frame(
@@ -582,12 +644,14 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
     assert compaction._max_tokens == 60_000
 
 
+
+
 def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
     """The framework is now the sole owner of cross-turn compaction, so the
     turn provider is wired as the summarizer: compaction makes a genuine model
     call (the desktop rolling summary's quality bar), not the deterministic
     excerpt fallback. STEERABLE_SIDECAR_SUMMARIZER=0 opts out."""
-    from steerable_agent_runtime import ChainHooks, CompactionHooks
+    from steerable_agent_runtime import CompactionHooks
     from steerable_sidecar.sidecar import _default_loop_hooks, _summarizer_for
 
     provider = _ScriptedProvider([_text_round("summary")])
@@ -602,6 +666,14 @@ def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
     assert _summarizer_for(provider) is None
 
 
+
+
+
+
+
+
+
+
 @pytest.mark.asyncio
 async def test_chat_fork_seeds_from_trace_projection() -> None:
     """fork = project the source trace, append the re-asked user turn, run a
@@ -618,7 +690,7 @@ async def test_chat_fork_seeds_from_trace_projection() -> None:
             "useCoreLoop": True,
         },
     )
-    done = [p for m, p in events if m == "stream.done"][0]
+    done = next(p for m, p in events if m == "stream.done")
     trace_id = done["traceId"]
 
     resp = await sidecar.server.handle_frame(
@@ -670,132 +742,7 @@ async def test_chat_fork_until_sequence_truncates() -> None:
             "useCoreLoop": True,
         },
     )
-    trace_id = [p for m, p in events if m == "stream.done"][0]["traceId"]
-    stored = await sidecar.storage.list_events(trace_id)
-    result_event = next(e for e in stored if e.kind == "tool_call_result")
-
-    resp = await sidecar.server.handle_frame(
-        _frame(
-            "agent.chat.fork",
-            {
-                "provider": "openai_compat",
-                "model": "fake",
-                "traceId": trace_id,
-                "untilSequence": result_event.sequence,
-                "messages": [{"role": "user", "content": "try again"}],
-            },
-        )
-    )
-    assert "error" not in resp, resp
-    # assistant(tool_call) + tool(result) survive; round 1's text is cut.
-    assert resp["result"]["seedMessages"] == 3
-    task = sidecar._streams.get(resp["result"]["streamId"])
-    if task is not None:
-        await task
-    fork_call = provider.seen_messages[-1]
-    assert [m.role for m in fork_call] == ["assistant", "tool", "user"]
-
-
-@pytest.mark.asyncio
-async def test_chat_fork_unknown_trace_errors() -> None:
-    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
-    resp = await sidecar.server.handle_frame(
-        _frame(
-            "agent.chat.fork",
-            {"provider": "openai_compat", "model": "fake", "traceId": "nope"},
-        )
-    )
-    assert "error" in resp
-
-
-def test_build_loop_config_default_budget_scales_with_window() -> None:
-    """No explicit budgetTokens → 2× the model's context window (production-
-    calibrated: mean trace ≈ 1.1× window; the old fixed 120k api cap cut 6%
-    of real tasks). Explicit budgetTokens still wins."""
-    from steerable_sidecar.sidecar import _build_loop_config
-
-    cfg = _build_loop_config({"model": "deepseek-v4"})
-    assert cfg.budget is not None
-    assert cfg.budget.max_tokens == 2 * 131_072
-
-    cfg_unknown = _build_loop_config({})
-    assert cfg_unknown.budget is not None
-    assert cfg_unknown.budget.max_tokens == 2 * 60_000
-
-    cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
-    assert cfg_explicit.budget is not None
-    assert cfg_explicit.budget.max_tokens == 50_000
-
-
-@pytest.mark.asyncio
-async def test_chat_fork_seeds_from_trace_projection() -> None:
-    """fork = project the source trace, append the re-asked user turn, run a
-    new CoreLoop stream that records its own trace (variant semantics)."""
-    provider = _ScriptedProvider([_text_round("first answer"), _text_round("second answer")])
-    sidecar = _make_sidecar(provider)
-
-    _sid, events = await _run_stream(
-        sidecar,
-        {
-            "provider": "openai_compat",
-            "model": "fake",
-            "messages": [{"role": "user", "content": "q1"}],
-            "useCoreLoop": True,
-        },
-    )
-    done = [p for m, p in events if m == "stream.done"][0]
-    trace_id = done["traceId"]
-
-    resp = await sidecar.server.handle_frame(
-        _frame(
-            "agent.chat.fork",
-            {
-                "provider": "openai_compat",
-                "model": "fake",
-                "traceId": trace_id,
-                "messages": [{"role": "user", "content": "q2"}],
-            },
-        )
-    )
-    assert "error" not in resp, resp
-    # The seed is the projected assistant reply (the user turn was loop
-    # input, not an event); the re-asked user message is appended.
-    assert resp["result"]["seedMessages"] == 2
-    task = sidecar._streams.get(resp["result"]["streamId"])
-    if task is not None:
-        await task
-
-    fork_call = provider.seen_messages[-1]
-    assert [m.role for m in fork_call] == ["assistant", "user"]
-    assert fork_call[0].content_text == "first answer"
-    assert fork_call[1].content_text == "q2"
-
-
-@pytest.mark.asyncio
-async def test_chat_fork_until_sequence_truncates() -> None:
-    provider = _ScriptedProvider(
-        [
-            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
-            _text_round("sum is 3"),
-            _text_round("forked"),
-        ]
-    )
-    sidecar = _make_sidecar(provider)
-
-    async def add(a: int, b: int) -> int:
-        return a + b
-
-    sidecar.tools.register(add)
-    _sid, events = await _run_stream(
-        sidecar,
-        {
-            "provider": "openai_compat",
-            "model": "fake",
-            "messages": [{"role": "user", "content": "add"}],
-            "useCoreLoop": True,
-        },
-    )
-    trace_id = [p for m, p in events if m == "stream.done"][0]["traceId"]
+    trace_id = next(p for m, p in events if m == "stream.done")["traceId"]
     stored = await sidecar.storage.list_events(trace_id)
     result_event = next(e for e in stored if e.kind == "tool_call_result")
 
@@ -912,6 +859,8 @@ async def test_subagent_off_by_default() -> None:
     )
     first_tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
+
+
 
 
 @pytest.mark.asyncio
@@ -1107,3 +1056,91 @@ async def test_session_branches_reports_lineage_and_children() -> None:
     assert [p["recordId"] for p in chain] == ["chat_1", "chat_1:r2"]
     assert [p["depth"] for p in chain] == [0, 1]
     assert resp["result"]["children"] == []
+
+
+class _ContentRoutedProvider:
+    """Routes by the transcript's first user message — parent and child
+    scripts stay deterministic no matter how their requests interleave."""
+
+    name = "routed"
+    model = "routed-model"
+
+    def __init__(self, routes: dict[str, list[list[LLMStreamChunk]]]):
+        self._routes = routes
+        self._counters = {key: 0 for key in routes}
+        self.stream_kwargs: list[dict] = []
+
+    async def complete(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def stream(self, messages, **kwargs):
+        self.stream_kwargs.append(dict(kwargs))
+        first_user = next((m for m in messages if m.role == "user"), None)
+        key = next(
+            (k for k in self._routes if first_user is not None and k in first_user.content_text),
+            None,
+        )
+        assert key is not None, f"no route for {first_user!r}"
+        idx = self._counters[key]
+        self._counters[key] += 1
+        script = self._routes[key]
+        chunks = script[min(idx, len(script) - 1)]
+
+        async def _gen():
+            for chunk in chunks:
+                yield chunk
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
+    """P3.1 sidecar exposure: params.orchestration advertises the four
+    tools; the parent drives a child to completion; lifecycle events land
+    as agent.child notifications."""
+    provider = _ContentRoutedProvider(
+        {
+            "parent-turn": [
+                _tool_round(
+                    ToolCall(id="s1", name="agent_spawn", arguments={"task": "child-turn"})
+                ),
+                _tool_round(
+                    ToolCall(id="w1", name="agent_wait", arguments={"childId": "0.1"})
+                ),
+                _text_round("all done"),
+            ],
+            "child-turn": [_text_round("child answer")],
+        }
+    )
+    sidecar = _make_sidecar(provider)
+
+    stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "parent-turn"}],
+            "useCoreLoop": True,
+            "orchestration": {"maxDepth": 1, "maxParallel": 2},
+        },
+    )
+    # agent.child notifications are scheduled fire-and-forget; let them land.
+    await asyncio.sleep(0.05)
+
+    done = [p for m, p in events if m == "stream.done"]
+    assert len(done) == 1
+    assert done[0]["ok"] is True
+    assert done[0]["status"] == "completed"
+
+    # The parent's first request advertised the orchestration tool family.
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    names = {t["function"]["name"] for t in first_tools}
+    assert {"agent_spawn", "agent_send", "agent_wait", "agent_close"} <= names
+
+    child_events = [p for m, p in events if m == "agent.child"]
+    kinds = [p["kind"] for p in child_events]
+    assert "child_spawned" in kinds
+    assert "child_completed" in kinds
+    spawned = next(p for p in child_events if p["kind"] == "child_spawned")
+    assert spawned["childId"] == "0.1"
+    assert spawned["streamId"] == stream_id

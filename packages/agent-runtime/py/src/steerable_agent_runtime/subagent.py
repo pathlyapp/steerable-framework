@@ -97,12 +97,13 @@ class _NoTools:
         )
 
 
-class _FilteredTools:
+class FilteredToolsExecutor:
     """Child executor for ``tool_filter``: only the named tools delegate.
 
     Filtered-out calls fail closed with ``tool_not_delegated`` and the
     delegated set named, so the child can re-issue with a tool it actually
-    has instead of concluding the tool is broken.
+    has instead of concluding the tool is broken. Shared by the depth-1
+    delegation seam and the orchestration pool.
     """
 
     def __init__(self, inner: ToolExecutor, allowed: frozenset[str]) -> None:
@@ -179,7 +180,7 @@ class SubagentExecutor:
         if not self._config.allow_tools:
             return _NoTools()
         if self._config.tool_filter is not None:
-            return _FilteredTools(self._inner, self._config.tool_filter)
+            return FilteredToolsExecutor(self._inner, self._config.tool_filter)
         return self._inner
 
     def concurrency_safe(self, call: ToolCall) -> bool:

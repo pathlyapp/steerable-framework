@@ -29,6 +29,7 @@ from steerable_agent_harness.safety import CommandSafetyConfig, classify_shell_c
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .errors import PolicyDeniedError, ToolDispatchError
+from .tool_schema import derive_schema
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,9 @@ class ToolRouter:
             handler=handler,
             mode=resolved_mode,
             description=description or (inspect.getdoc(handler) or "").strip(),
-            schema=schema or {"type": "object", "properties": {}},
+            # No explicit schema → derive one from the handler's type hints
+            # (a **kwargs-only handler, e.g. a remote proxy, derives empty).
+            schema=schema if schema is not None else derive_schema(handler),
             require_consent=resolved_consent,
             concurrency_safe=(
                 concurrency_safe if concurrency_safe is not None else resolved_mode == "read"

@@ -33,15 +33,18 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, Sequence, TypeVar, runtime_checkable
+from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
+from .history import ContextFragment
 from .hooks import NoopHooks, PreStepAction, TranscriptAppend
 from .llm import LLMMessage
 from .loop import LoopContext, ToolExecutor
+from .tokens import estimate_text_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -217,10 +220,12 @@ def render_skill_catalog(
     lines = [
         "# Available skills (load on demand)",
         "",
-        "The skills below may be relevant to this turn; their full instructions "
-        f"are not loaded yet. When the task matches one, call the `{tool_name}` "
-        "tool with its `name` to load the instructions, then follow them. If "
-        "none match, ignore this list — do not guess unlisted skill names.",
+        (
+            "The skills below may be relevant to this turn; their full instructions "
+            f"are not loaded yet. When the task matches one, call the `{tool_name}` "
+            "tool with its `name` to load the instructions, then follow them. If "
+            "none match, ignore this list — do not guess unlisted skill names."
+        ),
         "",
     ]
     ranked = sorted(skills, key=lambda s: s.priority, reverse=True)
@@ -235,6 +240,46 @@ def render_skill_catalog(
             f"{max_skills}); ask if none of these fit."
         )
     return "\n".join(lines)
+
+
+class SkillCatalogFragment(ContextFragment):
+    """The catalog-layer injection as a typed, bounded fragment (P2.2).
+
+    Count-bounded by ``render_skill_catalog`` (``max_skills``) and
+    token-bounded here as the aggregate backstop: 50 verbose descriptions
+    can still cross the no-review line. Degradation drops trailing skill
+    lines — the catalog is priority-sorted, so the lowest-priority entries
+    go first — instead of cutting mid-line.
+    """
+
+    role = "system"
+    content_kind = "skills.catalog"
+    max_tokens = 4096
+    review_note = (
+        "Aggregate cap over DEFAULT_MAX_CATALOG_SKILLS one-line entries; "
+        "backstops verbose descriptions. Reviewed 2026-08-30 (P2.2)."
+    )
+
+    def __init__(self, catalog_text: str) -> None:
+        self._text = catalog_text
+
+    def body(self) -> str:
+        return self._text
+
+    def degrade(self, rendered: str, *, max_tokens: int) -> str:
+        marker = "…[skill lines dropped: catalog token cap]"
+        lines = rendered.splitlines()
+        # Keep the preamble (everything before the first "- " entry) intact.
+        first_entry = next(
+            (i for i, ln in enumerate(lines) if ln.startswith("- ")), len(lines)
+        )
+        budget = max_tokens - estimate_text_tokens(marker)
+        while (
+            len(lines) > first_entry + 1
+            and estimate_text_tokens("\n".join(lines)) > budget
+        ):
+            lines.pop()
+        return "\n".join(lines) + f"\n{marker}"
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +658,14 @@ class SkillHooks(NoopHooks):
             tool_name=self._config.tool_name,
             max_skills=self._max_catalog_skills,
         )
+        fragment = SkillCatalogFragment(section)
         return PreStepAction(
             kind="proceed",
             appends=[
                 TranscriptAppend(
-                    LLMMessage.text_of("system", section), kind="skills.catalog"
+                    fragment.to_message(),
+                    kind=fragment.content_kind,
+                    fragment=fragment,
                 )
             ],
             reason=f"skill catalog injected ({len(catalog)} skills)",

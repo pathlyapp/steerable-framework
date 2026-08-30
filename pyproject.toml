@@ -12,6 +12,7 @@ members = [
   "packages/agent-harness/py",
   "packages/agent-runtime/py",
   "packages/sidecar/py",
+  "packages/egress-proxy/py",
   "examples/py-minimal",
   "examples/sidecar-roundtrip",
 ]
@@ -32,6 +33,7 @@ dev = [
   "steerable-agent-harness",
   "steerable-agent-runtime",
   "steerable-sidecar",
+  "steerable-egress-proxy",
 ]
 
 [tool.uv.sources]
@@ -39,6 +41,7 @@ steerable-agent-protocol = { workspace = true }
 steerable-agent-harness = { workspace = true }
 steerable-agent-runtime = { workspace = true }
 steerable-sidecar = { workspace = true }
+steerable-egress-proxy = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -49,6 +52,7 @@ testpaths = [
   "packages/agent-harness/py/tests",
   "packages/agent-runtime/py/tests",
   "packages/sidecar/py/tests",
+  "packages/egress-proxy/py/tests",
   "tests/conformance/py",
   "evals/tests",
 ]

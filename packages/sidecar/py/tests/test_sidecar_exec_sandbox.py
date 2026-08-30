@@ -17,7 +17,7 @@ import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime import ToolRouter
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
-
+from steerable_sidecar.landlock import landlock_abi, landlock_available
 from steerable_sidecar.sandbox import bwrap_available, seatbelt_available
 from steerable_sidecar.sidecar import Sidecar
 
@@ -145,6 +145,15 @@ async def test_exec_sandbox_rewrites_shell_command() -> None:
         assert "ls -la" in received[0]
         marker = (await _tool_payloads(sidecar))[0]["data"]["_sandbox"]
         assert marker == {"enforcement": "full", "backend": "bwrap"}
+    elif landlock_available():
+        # The no-bwrap Linux fallback: confined through our own launcher.
+        assert "landlock_run" in received[0]
+        assert "ls -la" in received[0]
+        marker = (await _tool_payloads(sidecar))[0]["data"]["_sandbox"]
+        assert marker["backend"] == "landlock"
+        # full on ABI >= 4 (egress denied), partial below — the marker must
+        # match what the backend honestly reports for this kernel.
+        assert marker["enforcement"] == ("full" if landlock_abi() >= 4 else "partial")
     else:
         # No backend on this platform: command passes through, marked none.
         assert received[0] == "ls -la"
@@ -209,6 +218,37 @@ async def test_require_full_denies_when_no_backend(monkeypatch: pytest.MonkeyPat
     assert payload["success"] is False
     assert payload["error"] == "sandbox_unavailable"
     assert payload["data"]["_sandbox"]["enforcement"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_require_full_denies_when_landlock_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ABI < 4 Landlock cannot deny egress — it reports partial, and
+    require_full must refuse the call rather than run it half-confined."""
+    from steerable_sidecar.landlock import LandlockExecBackend
+
+    monkeypatch.setattr(
+        "steerable_sidecar.sidecar.select_exec_backend",
+        lambda **_: LandlockExecBackend(abi=3),
+    )
+    received: list[str] = []
+    provider = _ScriptedProvider(
+        [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
+         _text_round("denied, stopping")]
+    )
+    sidecar = _sidecar_with_bash(received, provider)
+
+    await _run_stream(
+        sidecar, _base_params(execSandbox={"enabled": True, "requireFull": True})
+    )
+
+    assert received == []  # denied before execution
+    payload = (await _tool_payloads(sidecar))[0]
+    assert payload["success"] is False
+    assert payload["error"] == "sandbox_unavailable"
+    marker = payload["data"]["_sandbox"]
+    assert marker == {"enforcement": "partial", "backend": "landlock"}
 
 
 @pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")

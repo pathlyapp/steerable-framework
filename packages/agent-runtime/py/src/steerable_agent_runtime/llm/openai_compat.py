@@ -24,10 +24,11 @@ from typing import Any
 
 from steerable_agent_protocol.generated import ToolCall
 
+from ..model_info import clamp_reasoning_effort
 from . import LLMMessage, LLMStreamChunk, LLMUsage
+from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status
 from .parts import ImagePart, TextPart
-from ..model_info import clamp_reasoning_effort
 
 logger = logging.getLogger(__name__)
 
@@ -62,17 +63,24 @@ def _stream_timeout():
 
 @dataclass(slots=True)
 class OpenAICompatProvider:
-    """OpenAI-compatible chat-completions provider."""
+    """OpenAI-compatible chat-completions provider.
+
+    ``compat`` carries the vendor's divergences from the reference API as
+    data (see ``llm.compat``); ``None`` selects the reference defaults.
+    """
 
     name: str
     model: str
     base_url: str
     api_key: str | None = None
     default_temperature: float | None = None
+    compat: OpenAICompatFlags | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url:
             raise ValueError("OpenAICompatProvider requires base_url")
+        if self.compat is None:
+            self.compat = OpenAICompatFlags()
 
     # ------------------------------------------------------------------
     # Public API
@@ -123,7 +131,7 @@ class OpenAICompatProvider:
             message.get("content") or "",
             tool_calls=_decode_tool_calls(message.get("tool_calls")),
         )
-        return out, _parse_usage(payload.get("usage") or {})
+        return out, _parse_usage(payload.get("usage") or {}, compat=self.compat)
 
     async def stream(  # type: ignore[override]
         self,
@@ -145,56 +153,58 @@ class OpenAICompatProvider:
             extra=kwargs,
         )
         try:
-            async with httpx.AsyncClient(timeout=_stream_timeout()) as client:
-                async with client.stream(
+            async with (
+                httpx.AsyncClient(timeout=_stream_timeout()) as client,
+                client.stream(
                     "POST",
                     f"{self.base_url.rstrip('/')}/chat/completions",
                     headers=self._headers(),
                     json=body,
-                ) as response:
+                ) as response,
+            ):
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    await response.aread()
+                    raise self._http_error(exc, body_text=response.text) from exc
+                assembler = _OpenAIToolCallAssembler()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith(":"):  # comment/keepalive
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if line == "[DONE]":
+                        for call in assembler.flush():
+                            yield LLMStreamChunk(tool_call_delta=call)
+                        return
                     try:
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as exc:
-                        await response.aread()
-                        raise self._http_error(exc, body_text=response.text) from exc
-                    assembler = _OpenAIToolCallAssembler()
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
-                        if line.startswith(":"):  # comment/keepalive
-                            continue
-                        if line.startswith("data:"):
-                            line = line[5:].strip()
-                        if line == "[DONE]":
-                            for call in assembler.flush():
-                                yield LLMStreamChunk(tool_call_delta=call)
-                            return
-                        try:
-                            chunk = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        assembler.observe(chunk)
-                        parsed = _parse_stream_chunk(chunk)
-                        if parsed is None:
-                            continue
-                        # Fragments are assembled below; do not dispatch per chunk.
-                        if parsed.tool_call_delta is not None:
-                            parsed = LLMStreamChunk(
-                                content_delta=parsed.content_delta,
-                                reasoning_delta=parsed.reasoning_delta,
-                                finish_reason=parsed.finish_reason,
-                                usage=parsed.usage,
-                                raw=parsed.raw,
-                            )
-                        if (
-                            parsed.content_delta
-                            or parsed.reasoning_delta
-                            or parsed.finish_reason
-                            or parsed.usage is not None
-                        ):
-                            yield parsed
-                    for call in assembler.flush():
-                        yield LLMStreamChunk(tool_call_delta=call)
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    assembler.observe(chunk)
+                    parsed = _parse_stream_chunk(chunk, compat=self.compat)
+                    if parsed is None:
+                        continue
+                    # Fragments are assembled below; do not dispatch per chunk.
+                    if parsed.tool_call_delta is not None:
+                        parsed = LLMStreamChunk(
+                            content_delta=parsed.content_delta,
+                            reasoning_delta=parsed.reasoning_delta,
+                            finish_reason=parsed.finish_reason,
+                            usage=parsed.usage,
+                            raw=parsed.raw,
+                        )
+                    if (
+                        parsed.content_delta
+                        or parsed.reasoning_delta
+                        or parsed.finish_reason
+                        or parsed.usage is not None
+                    ):
+                        yield parsed
+                for call in assembler.flush():
+                    yield LLMStreamChunk(tool_call_delta=call)
         except httpx.TransportError as exc:
             raise LLMError(
                 f"{self.name}: transport error: {exc}",
@@ -235,22 +245,23 @@ class OpenAICompatProvider:
         stream: bool,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
+        compat = self.compat or OpenAICompatFlags()
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [_encode_message(m) for m in messages],
             "stream": stream,
         }
-        if stream:
+        if stream and compat.supports_usage_in_streaming:
             # OpenAI-streaming sends no usage by default; without the final
             # usage chunk both budget accounting (loop consumes chunk.usage)
             # and usage calibration are blind. Supported by OpenAI, Ollama,
-            # vLLM, DeepSeek.
+            # vLLM, DeepSeek; strict vendors flag out via compat.
             body["stream_options"] = {"include_usage": True}
         eff_temperature = temperature if temperature is not None else self.default_temperature
-        if eff_temperature is not None:
+        if eff_temperature is not None and compat.supports_temperature:
             body["temperature"] = eff_temperature
         if max_tokens is not None:
-            body["max_tokens"] = max_tokens
+            body[compat.max_tokens_field] = max_tokens
         if tools is not None:
             tools_list = list(tools)
             if tools_list:
@@ -263,7 +274,12 @@ class OpenAICompatProvider:
         effort = clamp_reasoning_effort(
             self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
         )
-        if effort and "reasoning_effort" not in body and "reasoning" not in body:
+        if (
+            effort
+            and compat.supports_reasoning_effort
+            and "reasoning_effort" not in body
+            and "reasoning" not in body
+        ):
             # GLM-5.3-Flash defaults to max thinking; Harbor sets `low`.
             body["reasoning_effort"] = effort
         return body
@@ -347,8 +363,7 @@ def _sanitize_tool_name(name: str) -> str:
         return name
     cleaned = name.split("<|", 1)[0]
     for prefix in _HARMONY_NAME_PREFIXES:
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):]
+        cleaned = cleaned.removeprefix(prefix)
     cleaned = cleaned.strip()
     if cleaned != name:
         logger.warning("sanitized harmony-leaked tool name %r -> %r", name, cleaned)
@@ -420,17 +435,33 @@ def _decode_tool_calls(value: Any) -> list[ToolCall] | None:
     return out or None
 
 
-def _parse_usage(usage: dict[str, Any]) -> LLMUsage:
+def _resolve_path(obj: dict[str, Any], path: str) -> Any:
+    """Resolve a dotted compat path (``a.b.c``) against a decoded JSON object."""
+    cur: Any = obj
+    for part in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _parse_usage(
+    usage: dict[str, Any], *, compat: OpenAICompatFlags | None = None
+) -> LLMUsage:
     """Build LLMUsage from an OpenAI-compatible usage object.
 
     Cache hits come from OpenAI's ``prompt_tokens_details.cached_tokens``;
     DeepSeek reports them at the top level as ``prompt_cache_hit_tokens``
-    instead. Providers without cache accounting yield zero.
+    instead. The lookup order is compat data (``cached_tokens_fields``), not
+    hardcoded here. Providers without cache accounting yield zero.
     """
-    details = usage.get("prompt_tokens_details") or {}
-    cached = int(details.get("cached_tokens", 0) or 0)
-    if not cached:
-        cached = int(usage.get("prompt_cache_hit_tokens", 0) or 0)
+    flags = compat or OpenAICompatFlags()
+    cached = 0
+    for path in flags.cached_tokens_fields:
+        value = _resolve_path(usage, path)
+        if value:
+            cached = int(value)
+            break
     return LLMUsage(
         prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
         completion_tokens=int(usage.get("completion_tokens", 0) or 0),
@@ -439,13 +470,16 @@ def _parse_usage(usage: dict[str, Any]) -> LLMUsage:
     )
 
 
-def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
+def _parse_stream_chunk(
+    chunk: dict[str, Any], *, compat: OpenAICompatFlags | None = None
+) -> LLMStreamChunk | None:
+    flags = compat or OpenAICompatFlags()
     choices = chunk.get("choices") or []
     if not choices:
         usage = chunk.get("usage")
         if usage:
             return LLMStreamChunk(
-                usage=_parse_usage(usage),
+                usage=_parse_usage(usage, compat=flags),
                 raw=chunk,
             )
         return None
@@ -454,7 +488,7 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     delta = choice.get("delta") or {}
     finish_reason = choice.get("finish_reason")
     content = delta.get("content")
-    reasoning = _reasoning_text(delta)
+    reasoning = _reasoning_text(delta, flags.reasoning_delta_fields)
     tool_call_delta: ToolCall | None = None
     raw_tool_calls = delta.get("tool_calls")
     if raw_tool_calls:
@@ -485,11 +519,17 @@ def _parse_stream_chunk(chunk: dict[str, Any]) -> LLMStreamChunk | None:
     )
 
 
-def _reasoning_text(delta: dict[str, Any]) -> str | None:
-    """DeepSeek uses ``reasoning_content``; OpenRouter GLM uses ``reasoning``."""
-    raw = delta.get("reasoning_content")
-    if raw is None:
-        raw = delta.get("reasoning")
+def _reasoning_text(delta: dict[str, Any], fields: tuple[str, ...]) -> str | None:
+    """Read the reasoning delta from the first of ``fields`` present.
+
+    Field names are compat data: DeepSeek uses ``reasoning_content``,
+    OpenRouter GLM uses ``reasoning`` (see ``OpenAICompatFlags``).
+    """
+    raw: Any = None
+    for field in fields:
+        if delta.get(field) is not None:
+            raw = delta[field]
+            break
     if isinstance(raw, str) and raw:
         return raw
     if isinstance(raw, list):

@@ -15,6 +15,7 @@ import threading
 from collections.abc import Iterator
 
 import pytest
+from steerable_sidecar.landlock import landlock_available
 from steerable_sidecar.sandbox import (
     MACOS_SEATBELT_EXECUTABLE,
     BwrapExecBackend,
@@ -498,6 +499,10 @@ class TestSelectExecBackend:
             "steerable_sidecar.sandbox.seatbelt_available", lambda: False
         )
         monkeypatch.setattr("steerable_sidecar.sandbox.bwrap_path", lambda: None)
+        # The Linux ladder's last rung must also fail before we report none.
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.landlock_available", lambda: False
+        )
         assert select_exec_backend() is None
 
     def test_bwrap_path_rejects_non_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -507,6 +512,18 @@ class TestSelectExecBackend:
         from steerable_sidecar.sandbox import bwrap_path
 
         assert bwrap_path() is None
+
+    def test_windows_constructs_no_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Recorded stance (safety.md): Windows has no command-rewriting
+        primitive, so every availability gate must say no on its own —
+        no special-casing in the selector."""
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.platform.system", lambda: "Windows"
+        )
+        assert seatbelt_available() is False
+        assert bwrap_available() is False
+        assert landlock_available() is False
+        assert select_exec_backend() is None
 
     def test_bwrap_probe_failure_means_unavailable(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path

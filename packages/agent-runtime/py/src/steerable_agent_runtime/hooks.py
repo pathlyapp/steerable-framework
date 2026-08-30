@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 if TYPE_CHECKING:
+    from .history import ContextFragment
     from .llm import LLMMessage
     from .loop import LoopContext
 
@@ -52,10 +53,17 @@ class TranscriptAppend:
     ``kind`` is the record's ``<feature>.<name>`` classification (defaults
     to the role-derived kind when None) so injected content is attributable
     in the record — e.g. the skill catalog lands as ``skills.catalog``.
+
+    ``fragment`` carries the typed ``ContextFragment`` the message was
+    rendered from; when present the loop appends via
+    ``ContextManager.append_fragment`` so the fragment's token cap is
+    enforced (P2.2). Raw messages without a fragment append unbounded —
+    new injection surfaces should prefer carrying the fragment.
     """
 
     message: LLMMessage
     kind: str | None = None
+    fragment: ContextFragment | None = None
 
 
 @dataclass(frozen=True, slots=True)

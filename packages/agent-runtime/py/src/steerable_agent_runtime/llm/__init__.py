@@ -12,7 +12,7 @@ prompts.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall
@@ -131,7 +131,13 @@ class LLMProvider(Protocol):
         ...
 
 
-from .errors import (  # noqa: E402
+from .anthropic_native import AnthropicProvider
+from .compat import (
+    PROVIDER_COMPAT_HOSTS,
+    OpenAICompatFlags,
+    compat_for_base_url,
+)
+from .errors import (
     RETRYABLE_KINDS,
     LLMError,
     LLMErrorKind,
@@ -139,26 +145,28 @@ from .errors import (  # noqa: E402
     classify_http_status,
     is_retryable,
 )
-from .openai_compat import OpenAICompatProvider  # noqa: E402
-from .anthropic_native import AnthropicProvider  # noqa: E402
+from .openai_compat import OpenAICompatProvider
 
 __all__ = [
+    "PROVIDER_COMPAT_HOSTS",
+    "RETRYABLE_KINDS",
+    "AnthropicProvider",
     "ContentPart",
     "ImagePart",
+    "LLMError",
+    "LLMErrorKind",
     "LLMMessage",
     "LLMProvider",
     "LLMRole",
     "LLMStreamChunk",
     "LLMUsage",
-    "TextPart",
-    "content_text",
-    "text_parts",
+    "OpenAICompatFlags",
     "OpenAICompatProvider",
-    "AnthropicProvider",
-    "LLMError",
-    "LLMErrorKind",
-    "RETRYABLE_KINDS",
+    "TextPart",
     "classify_error",
     "classify_http_status",
+    "compat_for_base_url",
+    "content_text",
     "is_retryable",
+    "text_parts",
 ]

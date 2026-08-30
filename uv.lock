@@ -11,6 +11,7 @@ members = [
     "steerable-agent-harness",
     "steerable-agent-protocol",
     "steerable-agent-runtime",
+    "steerable-egress-proxy",
     "steerable-example-py-minimal",
     "steerable-example-sidecar-roundtrip",
     "steerable-framework-monorepo",
@@ -1078,6 +1079,11 @@ requires-dist = [
 provides-extras = ["sqlalchemy", "fastapi", "openai", "anthropic", "all"]
 
 [[package]]
+name = "steerable-egress-proxy"
+version = "0.2.5"
+source = { editable = "packages/egress-proxy/py" }
+
+[[package]]
 name = "steerable-example-py-minimal"
 version = "0.0.0"
 source = { editable = "examples/py-minimal" }
@@ -1120,6 +1126,7 @@ dev = [
     { name = "steerable-agent-harness" },
     { name = "steerable-agent-protocol" },
     { name = "steerable-agent-runtime" },
+    { name = "steerable-egress-proxy" },
     { name = "steerable-sidecar" },
 ]
 
@@ -1135,6 +1142,7 @@ dev = [
     { name = "steerable-agent-harness", editable = "packages/agent-harness/py" },
     { name = "steerable-agent-protocol", editable = "packages/agent-protocol/py" },
     { name = "steerable-agent-runtime", editable = "packages/agent-runtime/py" },
+    { name = "steerable-egress-proxy", editable = "packages/egress-proxy/py" },
     { name = "steerable-sidecar", editable = "packages/sidecar/py" },
 ]
 
