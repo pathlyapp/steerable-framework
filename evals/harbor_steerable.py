@@ -361,6 +361,16 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
         env.setdefault("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
         env.setdefault("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
+        # OpenRouter cheapest route is Relace, not Z.ai. GLM's 83+ TB score
+        # is the official endpoint; pin so catalog quality matches.
+        env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
+        env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+        env.setdefault("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "1")
+        env.setdefault(
+            "STEERABLE_HTTP_REFERER",
+            "https://github.com/pathlyapp/steerable-framework",
+        )
+        env.setdefault("STEERABLE_HTTP_TITLE", "Steerable Harbor TB")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
         await self.exec_as_agent(
             environment,

@@ -37,7 +37,8 @@ _BASH_SCHEMA = {
         "command": {
             "type": "string",
             "description": (
-                "Shell command to run in the workspace. Do not wait with "
+                "Shell command to run in the workspace. Timeout is 3600s; do "
+                "not poll with `sleep 290`. Do not wait with "
                 "`while pgrep -f ...` (pgrep matches the wait loop). "
                 "Background long jobs and `wait $!`, or poll a pidfile."
             ),

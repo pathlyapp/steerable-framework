@@ -56,6 +56,33 @@ def _openrouter_host(base_url: str | None) -> bool:
     return "openrouter.ai" in (base_url or "").lower()
 
 
+def _env_flag(name: str) -> bool | None:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _openrouter_provider_prefs() -> dict[str, Any] | None:
+    """Pin OpenRouter to named upstreams (Harbor TB: Z.ai, not Relace)."""
+    raw = os.environ.get("STEERABLE_OPENROUTER_PROVIDER", "").strip()
+    if not raw:
+        return None
+    order = [part.strip() for part in raw.split(",") if part.strip()]
+    if not order:
+        return None
+    prefs: dict[str, Any] = {"order": order}
+    fallbacks = _env_flag("STEERABLE_OPENROUTER_ALLOW_FALLBACKS")
+    if fallbacks is not None:
+        prefs["allow_fallbacks"] = fallbacks
+    require = _env_flag("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS")
+    if require is not None:
+        prefs["require_parameters"] = require
+    return prefs
+
+
 def _stream_timeout():
     """Idle gap between SSE lines; ``Timeout(None)`` left hung thinks uncapped."""
     import httpx
@@ -246,6 +273,12 @@ class OpenAICompatProvider:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        referer = os.environ.get("STEERABLE_HTTP_REFERER", "").strip()
+        if referer:
+            headers["HTTP-Referer"] = referer
+        title = os.environ.get("STEERABLE_HTTP_TITLE", "").strip()
+        if title:
+            headers["X-Title"] = title
         return headers
 
     def _build_body(
@@ -297,6 +330,10 @@ class OpenAICompatProvider:
                 # ``exclude: false`` keeps thinking tokens in the response so
                 # we can round-trip ``reasoning_details`` after tool turns.
                 body["reasoning"] = {"effort": effort, "exclude": False}
+        if _openrouter_host(self.base_url) and "provider" not in body:
+            prefs = _openrouter_provider_prefs()
+            if prefs:
+                body["provider"] = prefs
         if _glm_z_ai_host(self.base_url) and "thinking" not in body:
             # Forced-on for GLM-5.3; omitting is fine, disabling 400s.
             body["thinking"] = {"type": "enabled"}

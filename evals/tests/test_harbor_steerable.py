@@ -147,6 +147,8 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_RETRY_MAX_ATTEMPTS", "12"' in text
     assert 'STEERABLE_RETRY_BASE_DELAY_MS", "2000"' in text
     assert 'STEERABLE_RETRY_MAX_DELAY_MS", "120000"' in text
+    assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in text
+    assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
     assert "--max-rounds 250" in text
     assert text.index("_ensure_python_310") < text.index("_python_tag")
     assert text.index("_merge_trial_path") < text.index("_python_tag")

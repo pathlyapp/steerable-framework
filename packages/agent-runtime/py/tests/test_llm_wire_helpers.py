@@ -223,6 +223,7 @@ def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:
     from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
 
     monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "max")
+    monkeypatch.delenv("STEERABLE_OPENROUTER_PROVIDER", raising=False)
     zai = OpenAICompatProvider(
         name="t",
         model="z-ai/glm-5.3-flash",
@@ -254,6 +255,39 @@ def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:
     assert openrouter["reasoning"] == {"effort": "max", "exclude": False}
     assert "thinking" not in openrouter
     assert "tool_stream" not in openrouter
+    assert "provider" not in openrouter
+
+
+def test_openai_build_body_openrouter_pins_z_ai(monkeypatch) -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
+    monkeypatch.setenv("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+    monkeypatch.setenv("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "1")
+    monkeypatch.setenv("STEERABLE_HTTP_REFERER", "https://example.test")
+    monkeypatch.setenv("STEERABLE_HTTP_TITLE", "TB")
+    provider = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={},
+    )
+    assert body["provider"] == {
+        "order": ["z-ai"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
+    headers = provider._headers()
+    assert headers["HTTP-Referer"] == "https://example.test"
+    assert headers["X-Title"] == "TB"
 
 
 def test_stream_timeout_is_idle_read_not_infinite(monkeypatch) -> None:
