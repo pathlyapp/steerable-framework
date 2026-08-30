@@ -69,15 +69,37 @@ apt-get update && apt-get install -y python3 python3-pip python3-venv
 """.strip()
 # Packages require Python >=3.10. qemu-alpine-ssh (and Debian 11 images)
 # ship 3.9.2; pip then fails with NonZeroAgentExitCodeError before the
-# agent runs. Distro python3.11/3.12 first; uv's standalone 3.12 last.
+# agent runs. Prefer an injected /usr/local/bin/uv (GHA host copy) so
+# 3.9 need not pip-install uv. Distro python3.11/3.12 next; curl uv last.
 _ENSURE_PYTHON_310 = r"""
 ok() {
   p=/usr/local/bin/python3
   [ -x "$p" ] || p=python3
   "$p" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
 }
+uv_py() {
+  command -v uv >/dev/null 2>&1 || return 1
+  export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+  i=0
+  while [ "$i" -lt 3 ]; do
+    uv python install 3.12 && break
+    i=$((i+1))
+    sleep 5
+  done
+  py=$(uv python find 3.12 2>/dev/null || true)
+  if [ -z "$py" ] || [ ! -x "$py" ]; then
+    uv python install 3.11 || true
+    py=$(uv python find 3.11 2>/dev/null || true)
+  fi
+  if [ -n "$py" ] && [ -x "$py" ]; then
+    ln -sf "$py" /usr/local/bin/python3
+  fi
+  hash -r
+  ok
+}
 ok && exit 0
 export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+uv_py && exit 0
 if command -v apk >/dev/null 2>&1; then
   apk add --no-cache python3 py3-pip py3-virtualenv curl ca-certificates || true
 fi
@@ -103,22 +125,7 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="/usr/local/bin:/root/.local/bin:$PATH"
   hash -r
 fi
-export UV_PYTHON_INSTALL_DIR=/opt/uv-python
-i=0
-while [ "$i" -lt 3 ]; do
-  uv python install 3.12 && break
-  i=$((i+1))
-  sleep 5
-done
-py=$(uv python find 3.12 2>/dev/null || true)
-if [ -z "$py" ] || [ ! -x "$py" ]; then
-  uv python install 3.11 || true
-  py=$(uv python find 3.11 2>/dev/null || true)
-fi
-if [ -n "$py" ] && [ -x "$py" ]; then
-  ln -sf "$py" /usr/local/bin/python3
-fi
-hash -r
+uv_py
 python3 -V >&2
 ok
 """.strip()

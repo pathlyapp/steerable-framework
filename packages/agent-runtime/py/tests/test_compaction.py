@@ -15,7 +15,16 @@ from steerable_agent_runtime import (
     ToolRouter,
     estimate_tokens,
 )
+from steerable_agent_runtime.compaction import _fold_content
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
+
+
+def test_fold_content_keeps_head_and_tail() -> None:
+    text = "HEAD-START" + ("x" * 400) + "TAIL-METRIC-0.549"
+    folded = _fold_content(text, excerpt_chars=80)
+    assert "HEAD-START" in folded
+    assert "TAIL-METRIC-0.549" in folded
+    assert "truncated" in folded
 
 
 def make_provider(script: list[dict[str, Any]]):

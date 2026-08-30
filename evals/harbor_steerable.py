@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -107,6 +108,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         if pip_check.return_code != 0:
             apt_env = {"DEBIAN_FRONTEND": "noninteractive", **proxy_env}
             await self._ensure_python_apt(environment, apt_env)
+        await self._inject_host_uv(environment)
         await self._ensure_python_310(environment, proxy_env)
         # The 3.10+ interpreter is /usr/local/bin/python3. Apply that PATH
         # before `python3 -m venv`, not only after install().
@@ -185,6 +187,31 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await self.ensure_system_dependencies(
                 environment, ("python3", "python_pip")
             )
+
+    async def _inject_host_uv(self, environment: BaseEnvironment) -> None:
+        """Copy GHA/host ``uv`` into the trial before Python upgrade.
+
+        Debian 11 / Alpine 3.9 cannot pip-install a recent uv. setup-uv on
+        the runner already has a musl-static binary that can ``uv python
+        install 3.12`` inside those images. A macOS host binary fails
+        ``--version`` and is ignored.
+        """
+        host = shutil.which("uv")
+        if not host:
+            return
+        try:
+            await environment.upload_file(Path(host), "/tmp/steerable-host-uv")
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "cp /tmp/steerable-host-uv /usr/local/bin/uv && "
+                    "chmod 0755 /usr/local/bin/uv && "
+                    "/usr/local/bin/uv --version"
+                ),
+                timeout_sec=30,
+            )
+        except Exception:
+            return
 
     async def _ensure_python_310(
         self, environment: BaseEnvironment, proxy_env: dict[str, str]

@@ -1635,6 +1635,7 @@ def _default_loop_hooks(
             summarizer=summarizer,
             keep_last_tool_results=16 if large else 2,
             keep_last_messages=16 if large else 6,
+            fold_excerpt_chars=4_000 if large else 160,
         ),
         # Spill oversized tool results to disk instead of inlining them into
         # the transcript (W4-7: this hook existed since Wave 0 but was never

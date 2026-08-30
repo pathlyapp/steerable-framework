@@ -651,6 +651,7 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
     assert compaction._max_tokens == 1_048_576
     assert compaction._keep_last_tools == 16
     assert compaction._keep_last == 16
+    assert compaction._fold_excerpt_chars == 4_000
     spill = next(h for h in glm._hooks if isinstance(h, SpillHooks))
     assert spill._max_inline == 100_000
     assert spill._preview == 8_000

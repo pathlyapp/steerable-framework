@@ -95,6 +95,10 @@ def test_ensure_python_310_upgrades_before_venv() -> None:
     assert "/usr/bin/python3.9" not in _ENSURE_PYTHON_310
     assert "ln -sf /usr/local/bin/python3 /usr/bin/python3" not in _ENSURE_PYTHON_310
     assert "/usr/local/bin/python3" in _ENSURE_PYTHON_310
+    assert "uv_py()" in _ENSURE_PYTHON_310
+    assert _ENSURE_PYTHON_310.index("uv_py && exit 0") < _ENSURE_PYTHON_310.index(
+        "pip install"
+    )
     assert 'while [ "$i" -lt 3 ]' in _ENSURE_PYTHON_310
     assert "uv python find 3.12" in _ENSURE_PYTHON_310
     assert "uv python install 3.11" in _ENSURE_PYTHON_310
@@ -159,6 +163,9 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
     assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
     assert "--max-rounds 250" in text
+    assert text.index("await self._inject_host_uv") < text.index(
+        "await self._ensure_python_310"
+    )
     assert text.index("await self._ensure_python_310") < text.index(
         "py_tag = await self._python_tag"
     )
