@@ -15,3 +15,17 @@ runs:
       run: |
         uv tool install "harbor==${{ inputs.version }}"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Prefetch musl uv for qemu trials
+      shell: bash
+      run: |
+        dest="${GITHUB_WORKSPACE}/evals/.cache/uv-x86_64-unknown-linux-musl"
+        mkdir -p "$(dirname "$dest")"
+        if [ -s "$dest" ]; then
+          exit 0
+        fi
+        curl -fsSL -o /tmp/uv-musl.tgz \
+          https://github.com/astral-sh/uv/releases/download/0.9.5/uv-x86_64-unknown-linux-musl.tar.gz
+        tar -xzf /tmp/uv-musl.tgz -C /tmp
+        bin=$(find /tmp -name uv -type f | head -1)
+        cp "$bin" "$dest"
+        chmod 0755 "$dest"

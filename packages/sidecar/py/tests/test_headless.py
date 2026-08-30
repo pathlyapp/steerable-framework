@@ -65,6 +65,8 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "Hidden tests score files" in headless_mod._SYSTEM
     assert "wait for background jobs" in headless_mod._SYSTEM
     assert "truncated write_file" in headless_mod._SYSTEM
+    assert "PIL" in headless_mod._SYSTEM
+    assert "drafted required file contents" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:

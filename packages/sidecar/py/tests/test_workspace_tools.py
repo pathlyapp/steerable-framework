@@ -86,6 +86,12 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert len(content) <= _MAX_OUTPUT + 80
     binary = await _call(router, "bash", {"command": r"printf '\x99\xff'"})
     assert binary.success is True
+    png = tmp_path / "board.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    as_text = await _call(router, "read_file", {"path": "board.png"})
+    assert as_text.success is False
+    assert "PNG" in (as_text.error or "")
+    assert "PIL" in (as_text.error or "")
 
 
 @pytest.mark.asyncio

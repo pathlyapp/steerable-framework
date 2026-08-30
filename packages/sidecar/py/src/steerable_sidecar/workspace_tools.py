@@ -230,9 +230,28 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
     def read_file(path: str) -> ToolResult:
         try:
             target = _resolve_under(root, path, jailed=jailed)
-            text = target.read_text(encoding="utf-8")
+            raw = target.read_bytes()
         except (OSError, ValueError) as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            kind = (
+                "PNG"
+                if raw.startswith(b"\x89PNG")
+                else "JPEG"
+                if raw[:2] == b"\xff\xd8"
+                else "binary"
+            )
+            return ToolResult(
+                success=False,
+                error=(
+                    f"{target} is {kind} ({len(raw)} bytes), not UTF-8 text. "
+                    "Decode it with Python (PIL/numpy) or `file`; do not guess "
+                    "contents from the filename."
+                ),
+                needsFollowup=True,
+            )
         clipped = _clip(text)
         return ToolResult(
             success=True,
