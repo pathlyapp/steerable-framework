@@ -77,7 +77,7 @@ _SYSTEM = (
     "output with a truncated write_file. "
     "PNG/JPEG/BMP files are pixels, not UTF-8: read_file returns an ASCII "
     "preview for 8-bit PNG, baseline JPEG, and uncompressed BMP (square "
-    "images also get a rank/file 8x8 brightness grid); decode exact pixels "
+    "images also get a rank/file 8x8 brightness and occupancy grid); decode exact pixels "
     "with Python (PIL/numpy) or ffmpeg. "
     "If a long video is the input, sample unique frames instead of OCRing "
     "every one, and write the scored file before wrap-up. If the program "

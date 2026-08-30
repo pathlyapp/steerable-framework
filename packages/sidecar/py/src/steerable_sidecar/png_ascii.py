@@ -174,7 +174,7 @@ def ascii_png_preview(raw: bytes, *, max_w: int = 80, max_h: int = 80) -> str | 
 def _board_tile_grid(
     width: int, height: int, rows: list[list[int]]
 ) -> str | None:
-    """Labeled 8x8 mean-brightness grid for square diagrams (chess boards)."""
+    """Labeled 8x8 brightness and occupancy grids for square diagrams."""
     if abs(width - height) > max(8, min(width, height) // 16):
         return None
     side = min(width, height)
@@ -183,13 +183,11 @@ def _board_tile_grid(
     tile = side // 8
     if tile < 8:
         return None
-    lines = [
-        "8x8 mean-brightness (0 dark .. 9 light). Rank 8 at top, file a at left."
-    ]
+    stats: list[list[tuple[int, int]]] = []
     for rank in range(8):
         y0 = rank * tile
         y1 = side if rank == 7 else (rank + 1) * tile
-        cells: list[str] = []
+        row_stats: list[tuple[int, int]] = []
         for file in range(8):
             x0 = file * tile
             x1 = side if file == 7 else (file + 1) * tile
@@ -199,8 +197,28 @@ def _board_tile_grid(
                 for x in range(x0, x1):
                     total += row[x]
                     n += 1
-            v = (total // n) if n else 0
-            cells.append(str(min(9, v * 10 // 256)))
+            mean = (total // n) if n else 0
+            mad_sum = 0
+            for y in range(y0, y1):
+                row = rows[y]
+                for x in range(x0, x1):
+                    mad_sum += abs(row[x] - mean)
+            row_stats.append((mean, (mad_sum // n) if n else 0))
+        stats.append(row_stats)
+    mads = sorted(mad for row in stats for _mean, mad in row)
+    occupied_cut = max(16, mads[len(mads) // 2] + 12)
+    lines = [
+        "8x8 mean-brightness (0 dark .. 9 light). Rank 8 at top, file a at left."
+    ]
+    for rank, row in enumerate(stats):
+        cells = [str(min(9, mean * 10 // 256)) for mean, _mad in row]
+        lines.append(f"{8 - rank} | {' '.join(cells)}")
+    lines.append("    a b c d e f g h")
+    lines.append(
+        "occupancy (#=internal contrast / piece-like, .=flat square)."
+    )
+    for rank, row in enumerate(stats):
+        cells = ["#" if mad >= occupied_cut else "." for _mean, mad in row]
         lines.append(f"{8 - rank} | {' '.join(cells)}")
     lines.append("    a b c d e f g h")
     return "\n".join(lines)

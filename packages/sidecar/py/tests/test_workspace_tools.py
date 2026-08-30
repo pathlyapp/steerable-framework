@@ -133,9 +133,10 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert preview.data["kind"] == "png_ascii"
     assert "PNG 4x2" in preview.data["content"]
     assert "mean-brightness" not in preview.data["content"]
-    square = [[0] * 80 for _ in range(80)]
-    for i in range(80):
-        square[i][i] = 255
+    square = [[40 if (y // 10 + x // 10) % 2 == 0 else 90 for x in range(80)] for y in range(80)]
+    for y in range(70, 80):
+        for x in range(0, 10):
+            square[y][x] = 0 if (x + y) % 2 == 0 else 255
     board = tmp_path / "board80.png"
     board.write_bytes(_gray_png(80, 80, square))
     board_preview = await _call(router, "read_file", {"path": "board80.png"})
@@ -144,6 +145,8 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert "Rank 8 at top" in board_preview.data["content"]
     assert "a b c d e f g h" in board_preview.data["content"]
     assert "8 |" in board_preview.data["content"]
+    assert "occupancy" in board_preview.data["content"]
+    assert "#" in board_preview.data["content"]
     bmp = tmp_path / "frame.bmp"
     bmp.write_bytes(
         _bgr_bmp(4, 2, [[(0, 0, 0), (0, 0, 0), (255, 255, 255), (255, 255, 255)]] * 2)

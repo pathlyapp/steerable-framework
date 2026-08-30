@@ -71,6 +71,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "PIL" in headless_mod._SYSTEM
     assert "ASCII" in headless_mod._SYSTEM
     assert "8x8" in headless_mod._SYSTEM
+    assert "occupancy" in headless_mod._SYSTEM
     assert "uncompressed BMP" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
     assert "or in reasoning" in headless_mod._SYSTEM
