@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import CompletionDraft
+from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.loop import LoopContext
 
 from steerable_sidecar.delivery import DeliveryHooks, named_output_paths
@@ -24,6 +25,10 @@ def _draft(*, tools: int, content: str = "done", had_tool_calls: bool | None = N
     )
 
 
+def test_default_explore_before_nudge() -> None:
+    assert DeliveryHooks()._explore_before_nudge == 8
+
+
 @pytest.mark.asyncio
 async def test_nudge_after_explore_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=2)
@@ -38,9 +43,28 @@ async def test_nudge_after_explore_without_write() -> None:
     assert "write_file" in action.appends[0].message.content_text
     assert "placeholders" in action.appends[0].message.content_text
     assert "prose description" in action.appends[0].message.content_text
+    assert "reasoning" in action.appends[0].message.content_text
     assert hooks.nudges == 1
     # Counter reset so the next step is not nudged immediately.
     again = await hooks.pre_step([], ctx)
+    assert again.appends is None
+
+
+@pytest.mark.asyncio
+async def test_nudge_after_compact_without_write() -> None:
+    hooks = DeliveryHooks(explore_before_nudge=20)
+    ctx = LoopContext()
+    transcript = [
+        LLMMessage.text_of(
+            "user",
+            "[context compacted: earlier conversation summarized]\nexplored ELF",
+        )
+    ]
+    action = await hooks.pre_step(transcript, ctx)
+    assert action.appends
+    assert action.append_action == "delivery_nudge"
+    assert hooks.nudges == 1
+    again = await hooks.pre_step(transcript, ctx)
     assert again.appends is None
 
 

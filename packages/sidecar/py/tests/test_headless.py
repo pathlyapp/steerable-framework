@@ -73,6 +73,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "8x8" in headless_mod._SYSTEM
     assert "uncompressed BMP" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
+    assert "or in reasoning" in headless_mod._SYSTEM
     assert "timeout N" in headless_mod._SYSTEM
     assert "wget -c" in headless_mod._SYSTEM
     assert "sleep 290" in headless_mod._SYSTEM
@@ -86,6 +87,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "OCR" in headless_mod._SYSTEM
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
+    assert "runtime or speedup" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
@@ -160,6 +162,9 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=12" in src
     assert "DeliveryHooks(instruction=instruction)" in src
+    assert src.index("_default_loop_hooks") < src.index(
+        "DeliveryHooks(instruction=instruction)"
+    )
 
 
 @pytest.mark.asyncio

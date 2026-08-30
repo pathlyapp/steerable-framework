@@ -55,6 +55,8 @@ _SYSTEM = (
     "path, do not write a candidate that violates it (quantize or shrink an "
     "oversized model). A local numeric check "
     "must use the same metric and split the hidden tests will use. "
+    "If hidden tests compare runtime or speedup against a golden or "
+    "baseline, time both on the same input before stopping. "
     "If the instruction names a scoring CLI, run that CLI for the local "
     "check, not a rewritten metric. If it names a program hidden tests will "
     "execute, run that program on the provided examples, not a rewritten "
@@ -76,8 +78,8 @@ _SYSTEM = (
     "If a long video is the input, sample unique frames instead of OCRing "
     "every one, and write the scored file before wrap-up. If the program "
     "hidden tests will execute raises NameError, fix that file and rerun it. "
-    "If you drafted required file contents in this chat, write_file them "
-    "to the named path before stopping. "
+    "If you drafted required file contents in this chat or in reasoning, "
+    "write_file them to the named path before more inspect steps. "
     "When extracting one scored string from a concatenated dump, match the "
     "benchmark or dataset the instruction names — not an adjacent title. "
     "If you rank dump lines with a named embedding package, keep that "
@@ -171,8 +173,10 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             wrap_up_max_tool_rounds=12,
         ),
         hooks=ChainHooks(
-            DeliveryHooks(instruction=instruction),
+            # Compact first so a same-round write nudge is folded onto the
+            # rewritten tail instead of sitting in the summarized middle.
             _default_loop_hooks(params, summarizer=_summarizer_for(provider)),
+            DeliveryHooks(instruction=instruction),
         ),
         history_store=InMemoryStorage(),
         record_id="headless",

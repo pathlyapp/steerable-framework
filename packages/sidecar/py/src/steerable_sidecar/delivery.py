@@ -41,12 +41,14 @@ _BASH_WRITES = re.compile(
     r"|\b(?:make|cmake|ffmpeg|qemu-img|qemu-system)\b"
 )
 
+_COMPACT_MARKER = "[context compacted: earlier conversation summarized]"
 _EXPLORE_NUDGE = (
     "You have inspected the workspace for many steps without creating the "
     "required output files. If you already know contents that satisfy every "
     "constraint the instruction states (path, length, format, metric), write "
-    "those files now with write_file, edit_file, or bash. Do not write "
-    "placeholders, decoys, guesses, or a prose description of a rendering."
+    "those files now with write_file, edit_file, or bash. Do not paste the "
+    "whole program only in reasoning or chat. Do not write placeholders, "
+    "decoys, guesses, or a prose description of a rendering."
 )
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "
@@ -85,7 +87,7 @@ class DeliveryHooks(NoopHooks):
     def __init__(
         self,
         *,
-        explore_before_nudge: int = 20,
+        explore_before_nudge: int = 8,
         max_nudges: int = 3,
         min_tools_for_completion_retry: int = 2,
         max_empty_round_retries: int = 6,
@@ -108,6 +110,7 @@ class DeliveryHooks(NoopHooks):
         self.nudges = 0
         self.completion_retries = 0
         self.empty_round_retries = 0
+        self._compact_nudges = 0
         self._force_tool = False
 
     async def pre_step(
@@ -116,13 +119,22 @@ class DeliveryHooks(NoopHooks):
         appends = None
         append_action = None
         reason = None
+        n_compacts = sum(
+            1 for m in transcript if _COMPACT_MARKER in (m.content_text or "")
+        )
+        new_compact = n_compacts > self._compact_nudges
         if (
             self.writes == 0
-            and self.consecutive_explore >= self._explore_before_nudge
             and self.nudges < self._max_nudges
+            and (
+                self.consecutive_explore >= self._explore_before_nudge
+                or new_compact
+            )
         ):
             self.nudges += 1
             self.consecutive_explore = 0
+            if new_compact:
+                self._compact_nudges = n_compacts
             appends = [
                 TranscriptAppend(
                     message=LLMMessage.text_of("user", _EXPLORE_NUDGE),
