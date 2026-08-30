@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from evals.suite import (
+    EXCLUSIVE_PACK_TASKS,
     LIVE_AGENTS,
     PINNED_HARBOR_VERSION,
     PRODUCT_AGENT,
@@ -325,6 +326,10 @@ def test_pack_floor_keeps_24_catalog_shards_inside_gha_wall() -> None:
     ]
     assert sum(len(shard) for shard in failed) == 41
     assert max(len(shard) for shard in failed) <= 2
+    for packed in (catalog, failed):
+        for bucket in packed:
+            if EXCLUSIVE_PACK_TASKS.intersection(bucket):
+                assert len(bucket) == 1, bucket
 
 
 def test_shard_tasks_round_robin_without_minutes() -> None:

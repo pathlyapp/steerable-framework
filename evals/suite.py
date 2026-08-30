@@ -17,6 +17,15 @@ REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
+# QEMU/VNC tasks need the whole 4-vCPU runner. n-concurrent=2 otherwise
+# shares the box with a compile/train job; install-windows keyboard
+# screenshots never move 10%, and qemu-startup boot stalls.
+EXCLUSIVE_PACK_TASKS = frozenset(
+    {
+        "install-windows-3.11",
+        "qemu-startup",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -140,9 +149,33 @@ def _pack_by_minutes(
 
     loads = [0] * shards
     bins: list[list[str]] = [[] for _ in range(shards)]
-    ordered = sorted(tasks, key=lambda task: (-weight(task), task))
-    for task in ordered:
-        index = min(range(shards), key=lambda item: (loads[item], len(bins[item]), item))
+    exclusive_ids = [task for task in tasks if task in EXCLUSIVE_PACK_TASKS]
+    rest_ids = [task for task in tasks if task not in EXCLUSIVE_PACK_TASKS]
+    remaining_shards = shards - len(exclusive_ids)
+    isolate = bool(
+        floor
+        and exclusive_ids
+        and remaining_shards >= 1
+        and (len(rest_ids) + remaining_shards - 1) // remaining_shards <= 4
+    )
+    exclusive = exclusive_ids if isolate else []
+    rest = rest_ids if isolate else list(tasks)
+    exclusive.sort(key=lambda task: (-weight(task), task))
+    rest.sort(key=lambda task: (-weight(task), task))
+
+    def lightest(candidates: Sequence[int]) -> int:
+        return min(candidates, key=lambda item: (loads[item], len(bins[item]), item))
+
+    exclusive_bins: set[int] = set()
+    for task in exclusive:
+        empty = [i for i in range(shards) if not bins[i]]
+        index = lightest(empty) if empty else lightest(range(shards))
+        bins[index].append(task)
+        loads[index] += weight(task)
+        exclusive_bins.add(index)
+    for task in rest:
+        open_bins = [i for i in range(shards) if i not in exclusive_bins]
+        index = lightest(open_bins if open_bins else range(shards))
         bins[index].append(task)
         loads[index] += weight(task)
     catalog_order = {task: position for position, task in enumerate(tasks)}
