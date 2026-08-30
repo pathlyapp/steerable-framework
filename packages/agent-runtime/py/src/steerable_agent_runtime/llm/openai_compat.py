@@ -73,7 +73,7 @@ def _openrouter_provider_prefs() -> dict[str, Any] | None:
     order = [part.strip() for part in raw.split(",") if part.strip()]
     if not order:
         return None
-    prefs: dict[str, Any] = {"order": order}
+    prefs: dict[str, Any] = {"order": order, "only": order}
     fallbacks = _env_flag("STEERABLE_OPENROUTER_ALLOW_FALLBACKS")
     if fallbacks is not None:
         prefs["allow_fallbacks"] = fallbacks

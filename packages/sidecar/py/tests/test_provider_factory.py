@@ -86,6 +86,30 @@ def test_compat_auto_detected_from_base_url_host() -> None:
     assert "prompt_cache_hit_tokens" in provider.compat.cached_tokens_fields
 
 
+def test_openrouter_compat_omits_stream_options() -> None:
+    """GLM endpoints do not advertise stream_options; Harbor streams."""
+    from steerable_agent_runtime.llm import LLMMessage
+
+    provider = default_llm_provider_factory(
+        {
+            "provider": "openai_compat",
+            "model": "z-ai/glm-5.3-flash",
+            "baseUrl": "https://openrouter.ai/api/v1",
+        }
+    )
+    assert provider.compat is not None
+    assert provider.compat.supports_usage_in_streaming is False
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert "stream_options" not in body
+
+
 def test_compat_explicit_param_wins_over_auto_detection() -> None:
     provider = default_llm_provider_factory(
         {

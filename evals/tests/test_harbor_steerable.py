@@ -156,6 +156,7 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_RETRY_MAX_DELAY_MS", "120000"' in text
     assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in text
     assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
+    assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
     assert "--max-rounds 250" in text
     assert text.index("await self._ensure_python_310") < text.index(
         "py_tag = await self._python_tag"

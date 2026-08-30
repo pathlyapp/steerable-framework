@@ -117,6 +117,15 @@ PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
             ),
         ),
     ),
+    # OpenRouter: no GLM endpoint advertises ``stream_options``. Sending
+    # include_usage with require_parameters 404s the Z.ai pin.
+    (
+        "openrouter.ai",
+        OpenAICompatFlags(
+            supports_usage_in_streaming=False,
+            reasoning_delta_fields=("reasoning", "reasoning_content"),
+        ),
+    ),
 ]
 
 

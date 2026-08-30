@@ -358,9 +358,12 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
         # OpenRouter cheapest route is Relace, not Z.ai. GLM's 83+ TB score
         # is the official endpoint; pin so catalog quality matches.
+        # Do not set require_parameters: Harbor streams with
+        # stream_options.include_usage, which no GLM endpoint advertises —
+        # require_parameters then 404s "No endpoints found".
         env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
         env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
-        env.setdefault("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "1")
+        env.setdefault("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0")
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",

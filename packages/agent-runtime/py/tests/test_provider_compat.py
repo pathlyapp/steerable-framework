@@ -151,6 +151,10 @@ def test_registry_covers_documented_vendors() -> None:
     assert "prompt_cache_hit_tokens" in entry.cached_tokens_fields
     # The reference API itself needs no entry.
     assert compat_for_base_url("https://api.openai.com/v1") is None
+    openrouter = compat_for_base_url("https://openrouter.ai/api/v1")
+    assert openrouter is not None
+    assert openrouter.supports_usage_in_streaming is False
+    assert "reasoning" in openrouter.reasoning_delta_fields
 
 
 def test_from_dict_roundtrip_and_unknown_key_fails_loud() -> None:

@@ -282,6 +282,7 @@ def test_openai_build_body_openrouter_pins_z_ai(monkeypatch) -> None:
     )
     assert body["provider"] == {
         "order": ["z-ai"],
+        "only": ["z-ai"],
         "allow_fallbacks": False,
         "require_parameters": True,
     }
