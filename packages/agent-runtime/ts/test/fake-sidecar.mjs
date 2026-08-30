@@ -91,6 +91,26 @@ function runStream(id, params) {
     return;
   }
 
+  // W2.2.1: issue a reverse `host.process.spawn` and stream the reply back —
+  // the host either answers with a HostSpawnResult or rejects (no handler).
+  if (process.env.FAKE_SPAWN) {
+    const rid = `srv_${nextReverseId++}`;
+    reverseIds.set(rid, (result) => {
+      chunk({ delta: `spawn:${JSON.stringify(result)}` });
+      finish();
+    });
+    send({
+      jsonrpc: '2.0',
+      id: rid,
+      method: 'host.process.spawn',
+      params: {
+        command: 'echo hi',
+        policy: { writableRoots: [], network: false, allowedHosts: [] },
+      },
+    });
+    return;
+  }
+
   chunk({ delta: `echo:${userText(params)}` });
   if (userText(params) === 'fail') {
     send({

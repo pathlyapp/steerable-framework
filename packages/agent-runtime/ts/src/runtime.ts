@@ -246,12 +246,43 @@ class StreamSink {
   }
 }
 
+/**
+ * Host confined-spawn capability (W2.2.1): the sidecar sends
+ * `host.process.spawn` when the platform has no command-rewriting sandbox
+ * backend (Windows) and the request opted into host spawn. The host spawns
+ * the command confined (restricted token + JobObject on Windows) and reports
+ * the enforcement it actually applied. Contract: docs/spec/safety.md
+ * "Host capability surface".
+ */
+export interface HostSpawnRequest {
+  command: string;
+  cwd?: string;
+  policy: {
+    writableRoots: string[];
+    network: boolean;
+    allowedHosts: string[];
+  };
+  context?: { chatId?: string };
+}
+
+export interface HostSpawnResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  truncated?: boolean;
+  /** Enforcement the host actually applied; omitting it reports `none`. */
+  sandbox?: { backend: string; enforcement: 'full' | 'partial' | 'none' };
+}
+
 export class AgentRuntime {
   readonly process: SidecarProcess;
   private readonly toolHandlers = new Map<
     string,
     (args: Record<string, unknown>) => Promise<Partial<ToolResult> | string>
   >();
+  private spawnHandler:
+    | ((request: HostSpawnRequest) => Promise<HostSpawnResult>)
+    | null = null;
   private readonly streams = new Map<string, StreamSink>();
 
   constructor(options: AgentRuntimeOptions = {}) {
@@ -288,6 +319,17 @@ export class AgentRuntime {
     handler: (args: Record<string, unknown>) => Promise<Partial<ToolResult> | string>,
   ): void {
     this.toolHandlers.set(name, handler);
+  }
+
+  /**
+   * Register the host confined-spawn capability. Without a handler,
+   * `host.process.spawn` reverse calls are rejected and the sidecar fails
+   * closed (the command never runs unsandboxed on no-backend platforms).
+   */
+  onProcessSpawn(
+    handler: (request: HostSpawnRequest) => Promise<HostSpawnResult>,
+  ): void {
+    this.spawnHandler = handler;
   }
 
   // ---- system ----------------------------------------------------------
@@ -445,6 +487,14 @@ export class AgentRuntime {
         );
       }
       return handler((call.arguments ?? {}) as Record<string, unknown>);
+    }
+    if (method === 'host.process.spawn') {
+      if (!this.spawnHandler) {
+        return Promise.reject(
+          new Error('host.process.spawn: capability not implemented by this host'),
+        );
+      }
+      return this.spawnHandler(params as HostSpawnRequest);
     }
     return Promise.reject(new Error(`unsupported reverse method ${method}`));
   }

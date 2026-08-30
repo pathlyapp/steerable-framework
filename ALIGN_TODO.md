@@ -97,13 +97,27 @@ MCP 已是 2026 事实工具集成标准；codex 客户端+服务端齐备，DSH
 
 ### 2.2 Windows 沙箱 + 出网凭证层（R9 最大差距 ②，共用前置：宿主侧 spawn）
 
-- [ ] **2.2.1** Windows 改为 host 侧 spawn 路线（参照 codex 受限令牌 + JobObject + WFP、
-      DSH 受限令牌 + kill-on-close Job）：sidecar 不改写命令，改为向宿主请求受约束 spawn。
-      前置：定义"宿主 spawn 能力面"的 RPC 契约。
-- [ ] **2.2.2** 出网管控从主机允许列表升级到**凭证代理**（credential broker）：
-      agent 侧永远拿不到真实 token（codex network-proxy 的路线）。egress-proxy
-      增加凭证注入模式，密钥只存在于代理进程。
-- [ ] **2.2.3** 两条共用同一个"宿主能力面"契约文档（docs/spec/safety.md 扩展）。
+- [x] **2.2.1**（2026-08-30 契约+路由层完成：`host.process.spawn` 反向 RPC 契约落地
+      ——sidecar `HostSpawnExecutor`（无本地改写后端且 `execSandbox.hostSpawn` 时接管
+      shell 调用，策略随请求下发，宿主自报 enforcement，缺能力 fail-closed 绝不回退
+      裸跑）；TS runtime `onProcessSpawn` 注册位 + 反向分发；sidecar 单测 6 例 +
+      TS 测试 2 例。**剩余**：Windows 原生 spawn 助手本体（受限令牌 + JobObject）
+      需 Windows 环境实现与验证，契约已就位） Windows 改为 host 侧 spawn 路线
+      （参照 codex 受限令牌 + JobObject + WFP、DSH 受限令牌 + kill-on-close Job）：
+      sidecar 不改写命令，改为向宿主请求受约束 spawn。
+- [x] **2.2.2**（2026-08-30 完成：egress-proxy 凭证注入模式——`--inject-host`/
+      `--inject-secret-env` 把代理变成凭证持有者，plain-HTTP 绝对 URI 命中即剥客户端
+      凭证、注入真实密钥、TLS 转发；密钥只经 env 进代理进程。框架测试 13 例
+      （改写/剥离/403/405/501/SSE 增量流/CLI）。桌面接线：broker 活跃时 router 把
+      baseUrl 改写 http 且不下发 apiKey，sidecar 只经 HTTP_PROXY 走代理。
+      **实盘验证**：curl 经桌面代理拿到 DeepSeek 真实 401 点名注入密钥尾号 e5d8
+      （curl 未带任何凭证）；UI 聊天全链路同样 401 回 surfacing；禁主机 403）
+      出网管控从主机允许列表升级到**凭证代理**（credential broker）：agent 侧永远
+      拿不到真实 token（codex network-proxy 的路线）。
+- [x] **2.2.3**（2026-08-30 完成：docs/spec/safety.md 新增"Host capability surface"
+      章——`host.process.spawn` 请求/应答/规则 + 凭证代理模式契约，两条共用；
+      egress-proxy README 同步） 两条共用同一个"宿主能力面"契约文档
+      （docs/spec/safety.md 扩展）。
 
 ### 2.3 Provider 注册表兑现（R9 最大差距 ③：机制已建成，注册表只有 1 条）
 
