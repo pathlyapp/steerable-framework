@@ -8,8 +8,11 @@ bespoke 15-method surface. It implements the stable core of ``acp.Agent``:
 ``close_session``. Session loading, forking, and mode/config RPCs are
 deliberately unimplemented (the SDK's default ``None`` answers advertise
 that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
-``write_file`` scoped to the session cwd (see ``workspace_tools``). Editor
-fs/terminal client bridges remain a follow-up for IDE embeddings.
+``write_file`` scoped to the session cwd (see ``workspace_tools``). When
+the client advertises the fs/terminal capabilities, the same tools are
+served through editor bridges instead (3.4.3): file content flows through
+``fs/read_text_file`` / ``fs/write_text_file`` (unsaved buffers stay the
+source of truth) and one-shot ``bash`` runs on the client's terminal.
 
 Multi-turn is the loop's own record-aware seeding: each session is a
 ``chat_id`` whose durable record lives in the storage adapter, so a
@@ -284,6 +287,11 @@ class SteerableAcpAgent(acp.Agent):
         self._storage = storage or InMemoryStorage()
         self._conn: acp.Client | None = None
         self._sessions: dict[str, _Session] = {}
+        # Client capabilities captured at initialize (3.4.3): which editor
+        # bridges the workspace tools should route through.
+        self._client_fs_read = False
+        self._client_fs_write = False
+        self._client_terminal = False
 
     # -- lifecycle ------------------------------------------------------
 
@@ -303,6 +311,12 @@ class SteerableAcpAgent(acp.Agent):
             pkg_version = version("steerable-sidecar")
         except PackageNotFoundError:
             pkg_version = "0.0.0"
+        # 3.4.3: remember which editor bridges the client can serve; prompt
+        # builds the session's tool surface around them.
+        fs_caps = getattr(client_capabilities, "fs", None)
+        self._client_fs_read = bool(getattr(fs_caps, "read_text_file", False))
+        self._client_fs_write = bool(getattr(fs_caps, "write_text_file", False))
+        self._client_terminal = bool(getattr(client_capabilities, "terminal", False))
         return InitializeResponse(
             protocol_version=protocol_version,
             agent_capabilities=AgentCapabilities(
@@ -569,11 +583,36 @@ class SteerableAcpAgent(acp.Agent):
         provider = self._provider_factory(
             {**self._provider_params, **session.config_overrides}
         )
-        router = (
-            self._tools
-            if self._tools is not None
-            else workspace_tools_for_cwd(session.cwd)
-        )
+        # 3.4.3: editor bridges. File content flows through the client when
+        # it advertised fs caps (unsaved buffers stay authoritative); the
+        # one-shot bash runs on the client's terminal when advertised.
+        # Interactive bash_session stays on the local PTY layer — ACP
+        # terminals have no stdin channel (honest protocol gap).
+        terminal_runner = None
+        if self._tools is not None:
+            router = self._tools
+        else:
+            fs = None
+            if self._conn is not None and (self._client_fs_read or self._client_fs_write):
+                from .acp_fs import AcpWorkspaceFs
+
+                fs = AcpWorkspaceFs(
+                    self._conn,
+                    session_id,
+                    bridge_read=self._client_fs_read,
+                    bridge_write=self._client_fs_write,
+                )
+            run_command = None
+            if self._conn is not None and self._client_terminal:
+                from .acp_terminal import AcpTerminalRunner
+
+                terminal_runner = AcpTerminalRunner(self._conn, session_id)
+                run_command = terminal_runner.run
+            router = workspace_tools_for_cwd(
+                session.cwd,
+                **({"fs": fs} if fs is not None else {}),
+                **({"run_command": run_command} if run_command is not None else {}),
+            )
         mcp_clients = await self._mount_mcp(router, session)
         from .sidecar import _default_loop_hooks
 
@@ -633,6 +672,9 @@ class SteerableAcpAgent(acp.Agent):
             sessions = getattr(router, "shell_sessions", None)
             if sessions is not None:
                 sessions.close_all()
+            # Same ownership discipline for client-backed terminals (3.4.3.2).
+            if terminal_runner is not None:
+                await terminal_runner.release_all()
             for client in mcp_clients:
                 await client.aclose()
         text_out = "".join(assistant_text)

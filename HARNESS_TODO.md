@@ -587,13 +587,24 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
       default.harness.yaml 声明 80/16/false；headless 与 ACP 都从 spec 取，
       CLI `--max-rounds` 显式给定时仍赢（explicit > implicit）。
 
-#### 3.4.3 编辑器桥（IDE 嵌入才需要，可延后）
+#### 3.4.3 编辑器桥（IDE 嵌入才需要，可延后）——已落地（2026-08-31）
 
-- [ ] **3.4.3.1** `read_text_file` / `write_text_file` 客户端桥。当前用进程内
-      workspace tools，意味着在编辑器里我们读的是磁盘而非未保存缓冲区——
-      `acp_adapter.py` 自己的 docstring 已把这条标为 follow-up。
-- [ ] **3.4.3.2** `terminal/*` 五个回调。与 W1.5 的交互式会话同源，
-      两者应共用一套会话生命周期，不要各做一遍。
+- [x] **3.4.3.1** `read_text_file` / `write_text_file` 客户端桥。workspace 工具
+      的文件内容统一走 `WorkspaceFs` 通道（`workspace_fs.py`）：默认 `LocalFs`
+      落盘；客户端广告 `fs.readTextFile`/`fs.writeTextFile` 时，适配器换装
+      `AcpWorkspaceFs`（`acp_fs.py`），read/write/edit/apply_patch 全部经
+      客户端往返，未保存缓冲区成为权威源。单向能力按方向回退落盘（写方向
+      未桥接时与桥前行为一致，冲突由编辑器自有界面呈现）。版本令牌冲突
+      检测经同一通道重读，桥上语义不变。`apply_patch` 随之异步化并接受
+      `fs` 参数。
+- [x] **3.4.3.2** `terminal/*` 五个回调。`AcpTerminalRunner`
+      （`acp_terminal.py`）把一次性 `bash` 跑在客户端终端上：
+      create → wait（超时 → kill）→ output → release，live id 跟踪 +
+      上限 fail loud + `release_all()` 在 prompt 拆卸时释放——与 W1.5
+      `ShellSessionManager` 同一份所有权纪律，拆卸点同在适配器 finally。
+      ACP 终端无 stdin 通道，`bash_session`/`write_stdin` 留在本地 PTY
+      层（协议缺口，诚实标注，不做静默降级）。交互式会话层因此仍只有
+      W1.5 一套，未各做一遍。
 
 ---
 

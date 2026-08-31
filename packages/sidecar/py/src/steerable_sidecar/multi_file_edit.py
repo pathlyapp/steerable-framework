@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .file_edit import EditOp, apply_edits
+from .workspace_fs import LOCAL_FS, WorkspaceFs, WorkspaceFsError
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,17 +38,20 @@ class PatchSummary:
     diffs: tuple[str, ...]
 
 
-def apply_patch(
+async def apply_patch(
     root: Path,
     patches: list[FilePatch],
     *,
     resolve: "callable[[str], Path] | None" = None,
+    fs: WorkspaceFs = LOCAL_FS,
 ) -> PatchSummary:
     """Plan all files, then write all files; roll back on write failure.
 
     ``resolve`` maps a repo-relative path to an absolute one — the caller's
     workspace-jurisdiction check (``_resolve_under``) so the patch tool
     cannot escape the workspace even if this module is reused elsewhere.
+    ``fs`` is the file-content channel (3.4.3.1): disk by default, the ACP
+    client bridge inside an editor.
     """
     if not patches:
         raise ValueError("patches is empty — at least one file entry is required")
@@ -66,8 +70,8 @@ def apply_patch(
     for patch in patches:
         target = resolve(patch.path)
         try:
-            original = target.read_text(encoding="utf-8")
-        except OSError as exc:
+            original = await fs.read_text(target)
+        except (OSError, WorkspaceFsError) as exc:
             raise ValueError(f"{patch.path}: cannot read ({exc}); patch aborted") from exc
         result = apply_edits(
             original,
@@ -80,13 +84,13 @@ def apply_patch(
     written: list[tuple[Path, str]] = []
     try:
         for target, original, new_content, _ in planned:
-            target.write_text(new_content, encoding="utf-8")
+            await fs.write_text(target, new_content)
             written.append((target, original))
-    except OSError as exc:
+    except (OSError, WorkspaceFsError) as exc:
         for target, original in written:
             try:
-                target.write_text(original, encoding="utf-8")
-            except OSError:
+                await fs.write_text(target, original)
+            except (OSError, WorkspaceFsError):
                 pass  # rollback is best-effort; the raise names the failure
         raise ValueError(
             f"write failed mid-patch ({exc}); restored {len(written)} file(s)"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from acp.schema import AgentMessageChunk, AgentThoughtChunk, TextContentBlock
@@ -61,11 +62,23 @@ class _FakeClient:
 
     Answers ``session/request_permission`` with allow-once, like an
     editor whose user approves everything; permission tests override this.
+    Also fakes the 3.4.3 bridge surface: an in-memory fs (unsaved buffers)
+    and a scripted terminal, both recording every call.
     """
 
     def __init__(self):
         self.updates: list[tuple[str, object]] = []
         self.permission_requests: list[tuple[str, object, list]] = []
+        # fs bridge state: path → content the "editor" serves.
+        self.fs_files: dict[str, str] = {}
+        self.fs_reads: list[str] = []
+        # terminal bridge state.
+        self.terminal_commands: list[tuple[str, str | None]] = []
+        self.terminal_output_text = ""
+        self.terminal_exit_code = 0
+        self.terminal_released: list[str] = []
+        self.terminal_killed: list[str] = []
+        self._terminal_seq = 0
 
     async def session_update(self, session_id: str, update, **kwargs) -> None:
         self.updates.append((session_id, update))
@@ -77,6 +90,45 @@ class _FakeClient:
         return RequestPermissionResponse(
             outcome=AllowedOutcome(outcome="selected", option_id="allow-once")
         )
+
+    async def read_text_file(self, session_id: str, path: str, **kwargs):
+        from types import SimpleNamespace
+
+        self.fs_reads.append(path)
+        if path not in self.fs_files:
+            raise FileNotFoundError(path)
+        return SimpleNamespace(content=self.fs_files[path])
+
+    async def write_text_file(self, session_id: str, path: str, content: str, **kwargs):
+        self.fs_files[path] = content
+
+    async def create_terminal(
+        self, session_id: str, command: str, args=None, cwd=None, **kwargs
+    ):
+        from types import SimpleNamespace
+
+        self._terminal_seq += 1
+        full = " ".join([command, *(args or [])])
+        self.terminal_commands.append((full, cwd))
+        return SimpleNamespace(terminal_id=f"term-{self._terminal_seq}")
+
+    async def wait_for_terminal_exit(self, session_id: str, terminal_id: str, **kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(exit_code=self.terminal_exit_code, signal=None)
+
+    async def terminal_output(self, session_id: str, terminal_id: str, **kwargs):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            output=self.terminal_output_text, truncated=False, exit_status=None
+        )
+
+    async def kill_terminal(self, session_id: str, terminal_id: str, **kwargs):
+        self.terminal_killed.append(terminal_id)
+
+    async def release_terminal(self, session_id: str, terminal_id: str, **kwargs):
+        self.terminal_released.append(terminal_id)
 
 
 def _agent(provider, tools: ToolRouter | None = None):
@@ -644,3 +696,251 @@ async def test_failed_completion_surfaces_reason_and_ends() -> None:
         if isinstance(u, AgentMessageChunk)
     )
     assert "provider exploded" in text
+
+
+# -- 3.4.3: editor bridges (fs + terminal) -----------------------------------
+
+
+def _tool_round(name: str, arguments: dict, call_id: str = "c1"):
+    return [
+        LLMStreamChunk(tool_call_delta=ToolCall(id=call_id, name=name, arguments=arguments)),
+        LLMStreamChunk(
+            finish_reason="tool_calls",
+            usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+    ]
+
+
+def _caps(**overrides):
+    from acp.schema import ClientCapabilities
+
+    wire = {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}
+    wire.update(overrides)
+    return ClientCapabilities.model_validate(wire)
+
+
+@pytest.mark.asyncio
+async def test_fs_bridge_reads_unsaved_buffer_not_disk(tmp_path) -> None:
+    """3.4.3.1: with fs caps advertised, read_file is served by the client —
+    the editor's buffer wins over stale disk contents."""
+    (tmp_path / "note.txt").write_text("disk version")
+    provider = _ScriptedProvider(
+        [_tool_round("read_file", {"path": "note.txt"}), _text_round("read it")]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps(
+        fs={"readTextFile": True, "writeTextFile": True}
+    ))
+    client.fs_files[str(tmp_path / "note.txt")] = "unsaved buffer version"
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    resp = await agent.prompt(session.session_id, _prompt("read note"))
+
+    assert resp.stop_reason == "end_turn"
+    assert client.fs_reads == [str(tmp_path / "note.txt")]
+    # The tool result preview reaching the editor carries the buffer text.
+    from acp.schema import ToolCallProgress
+
+    progresses = [u for _, u in client.updates if isinstance(u, ToolCallProgress)]
+    assert progresses and "unsaved buffer version" in str(progresses[0].raw_output)
+
+
+@pytest.mark.asyncio
+async def test_fs_bridge_writes_through_client_not_disk(tmp_path) -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round("write_file", {"path": "out.txt", "content": "bridged"}),
+            _text_round("wrote it"),
+        ]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps(
+        fs={"readTextFile": True, "writeTextFile": True}
+    ))
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    resp = await agent.prompt(session.session_id, _prompt("write out.txt"))
+
+    assert resp.stop_reason == "end_turn"
+    assert client.fs_files[str(tmp_path / "out.txt")] == "bridged"
+    assert not (tmp_path / "out.txt").exists()  # nothing hit disk
+
+
+@pytest.mark.asyncio
+async def test_fs_bridge_version_conflict_rejects_write(tmp_path) -> None:
+    """The expectedVersion check re-reads through the client channel, so a
+    stale token is rejected before the editor's buffer is touched."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                "write_file",
+                {"path": "note.txt", "content": "clobber", "expectedVersion": "stale"},
+            ),
+            _text_round("tried"),
+        ]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps(
+        fs={"readTextFile": True, "writeTextFile": True}
+    ))
+    client.fs_files[str(tmp_path / "note.txt")] = "current buffer"
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    await agent.prompt(session.session_id, _prompt("overwrite"))
+
+    assert client.fs_files[str(tmp_path / "note.txt")] == "current buffer"
+    from acp.schema import ToolCallProgress
+
+    progresses = [u for _, u in client.updates if isinstance(u, ToolCallProgress)]
+    assert progresses[0].status == "failed"
+    assert "冲突" in str(progresses[0].raw_output)
+
+
+@pytest.mark.asyncio
+async def test_fs_bridge_partial_caps_fall_back_to_disk(tmp_path) -> None:
+    """A client advertising only readTextFile gets bridged reads; writes
+    stay on disk (the pre-bridge behavior, no regression)."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round("write_file", {"path": "out.txt", "content": "local"}),
+            _text_round("done"),
+        ]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps(
+        fs={"readTextFile": True, "writeTextFile": False}
+    ))
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    await agent.prompt(session.session_id, _prompt("write"))
+
+    assert (tmp_path / "out.txt").read_text() == "local"
+    assert str(tmp_path / "out.txt") not in client.fs_files
+
+
+@pytest.mark.asyncio
+async def test_no_fs_caps_stays_on_disk(tmp_path) -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round("write_file", {"path": "out.txt", "content": "local"}),
+            _text_round("done"),
+        ]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps())
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    await agent.prompt(session.session_id, _prompt("write"))
+
+    assert (tmp_path / "out.txt").read_text() == "local"
+    assert client.fs_files == {}
+
+
+@pytest.mark.asyncio
+async def test_terminal_bridge_runs_bash_on_client(tmp_path) -> None:
+    """3.4.3.2: with the terminal cap, bash runs through the client's
+    create/wait/output/release lifecycle — nothing executes locally."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round("bash", {"command": "echo bridged > local.txt"}),
+            _text_round("ran it"),
+        ]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps(terminal=True))
+    client.terminal_output_text = "bridged\n"
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    resp = await agent.prompt(session.session_id, _prompt("run it"))
+
+    assert resp.stop_reason == "end_turn"
+    assert client.terminal_commands == [("bash -c echo bridged > local.txt", str(tmp_path))]
+    assert client.terminal_released == ["term-1"]  # lifecycle completed
+    assert not (tmp_path / "local.txt").exists()  # no local execution
+    from acp.schema import ToolCallProgress
+
+    progresses = [u for _, u in client.updates if isinstance(u, ToolCallProgress)]
+    assert progresses[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_no_terminal_cap_runs_locally(tmp_path) -> None:
+    provider = _ScriptedProvider(
+        [_tool_round("bash", {"command": "echo local > local.txt"}), _text_round("ran")]
+    )
+    agent, client = _agent(provider)
+    await agent.initialize(protocol_version=1, client_capabilities=_caps())
+    session = await agent.new_session(cwd=str(tmp_path))
+
+    await agent.prompt(session.session_id, _prompt("run"))
+
+    assert (tmp_path / "local.txt").read_text().strip() == "local"
+    assert client.terminal_commands == []
+
+
+# -- 3.4.3.2: AcpTerminalRunner unit surface ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_terminal_runner_timeout_kills_and_reports() -> None:
+    from steerable_sidecar.acp_terminal import AcpTerminalRunner
+
+    client = _FakeClient()
+
+    async def _hanging_wait(session_id, terminal_id, **kwargs):
+        await asyncio.Event().wait()
+
+    client.wait_for_terminal_exit = _hanging_wait
+    runner = AcpTerminalRunner(client, "s1", timeout_sec=0.05)
+
+    result = await runner.run("sleep 999", Path("/tmp"))
+
+    assert result.success is False
+    assert "timed out" in result.error
+    assert client.terminal_killed == ["term-1"]
+    assert client.terminal_released == ["term-1"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_runner_create_failure_fails_loud() -> None:
+    from steerable_sidecar.acp_terminal import AcpTerminalRunner
+
+    client = _FakeClient()
+
+    async def _refusing_create(*args, **kwargs):
+        raise RuntimeError("client gone")
+
+    client.create_terminal = _refusing_create
+    runner = AcpTerminalRunner(client, "s1")
+
+    result = await runner.run("echo hi", Path("/tmp"))
+
+    assert result.success is False
+    assert "client gone" in result.error
+
+
+@pytest.mark.asyncio
+async def test_terminal_runner_cap_fails_loud() -> None:
+    from steerable_sidecar.acp_terminal import AcpTerminalRunner
+
+    client = _FakeClient()
+    gate = asyncio.Event()
+
+    async def _blocked_wait(session_id, terminal_id, **kwargs):
+        await gate.wait()
+        from types import SimpleNamespace
+
+        return SimpleNamespace(exit_code=0, signal=None)
+
+    client.wait_for_terminal_exit = _blocked_wait
+    runner = AcpTerminalRunner(client, "s1", max_terminals=1)
+
+    first = asyncio.ensure_future(runner.run("cmd1", Path("/tmp")))
+    await asyncio.sleep(0.05)  # let cmd1 occupy the single slot
+    second = await runner.run("cmd2", Path("/tmp"))
+
+    assert second.success is False
+    assert "terminal limit reached" in second.error
+    gate.set()
+    assert (await first).success is True
+    await runner.release_all()

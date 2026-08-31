@@ -21,8 +21,8 @@ def _patch(path: str, old: str, new: str) -> FilePatch:
     return FilePatch(path=path, edits=(EditOp(old_text=old, new_text=new),))
 
 
-def test_multi_file_patch_applies_atomically(repo: Path) -> None:
-    summary = apply_patch(
+async def test_multi_file_patch_applies_atomically(repo: Path) -> None:
+    summary = await apply_patch(
         repo,
         [
             _patch("a.py", "return 1", "return 10"),
@@ -38,10 +38,10 @@ def test_multi_file_patch_applies_atomically(repo: Path) -> None:
     assert "+return 10" in summary.diffs[0]
 
 
-def test_locate_failure_aborts_with_nothing_written(repo: Path) -> None:
+async def test_locate_failure_aborts_with_nothing_written(repo: Path) -> None:
     """The second file's bad edit must not leave the first file changed."""
     with pytest.raises(EditError):
-        apply_patch(
+        await apply_patch(
             repo,
             [
                 _patch("a.py", "return 1", "return 10"),
@@ -52,9 +52,9 @@ def test_locate_failure_aborts_with_nothing_written(repo: Path) -> None:
     assert (repo / "b.py").read_text() == "def b():\n    return 2\n"
 
 
-def test_missing_file_aborts_with_nothing_written(repo: Path) -> None:
+async def test_missing_file_aborts_with_nothing_written(repo: Path) -> None:
     with pytest.raises(ValueError, match="cannot read"):
-        apply_patch(
+        await apply_patch(
             repo,
             [
                 _patch("a.py", "return 1", "return 10"),
@@ -64,20 +64,20 @@ def test_missing_file_aborts_with_nothing_written(repo: Path) -> None:
     assert (repo / "a.py").read_text() == "def a():\n    return 1\n"
 
 
-def test_duplicate_file_entries_rejected(repo: Path) -> None:
+async def test_duplicate_file_entries_rejected(repo: Path) -> None:
     with pytest.raises(ValueError, match="duplicate patch"):
-        apply_patch(
+        await apply_patch(
             repo,
             [_patch("a.py", "return 1", "return 10"), _patch("a.py", "def a", "def aa")],
         )
 
 
-def test_empty_patch_rejected(repo: Path) -> None:
+async def test_empty_patch_rejected(repo: Path) -> None:
     with pytest.raises(ValueError, match="patches is empty"):
-        apply_patch(repo, [])
+        await apply_patch(repo, [])
 
 
-def test_write_phase_failure_rolls_back(repo: Path, monkeypatch) -> None:
+async def test_write_phase_failure_rolls_back(repo: Path, monkeypatch) -> None:
     """A mid-write failure (disk, permissions) restores what was written."""
     original_write = Path.write_text
     calls = {"n": 0}
@@ -90,7 +90,7 @@ def test_write_phase_failure_rolls_back(repo: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(Path, "write_text", fail_second)
     with pytest.raises(ValueError, match="write failed mid-patch"):
-        apply_patch(
+        await apply_patch(
             repo,
             [_patch("a.py", "return 1", "return 10"), _patch("b.py", "return 2", "return 20")],
         )
@@ -98,7 +98,7 @@ def test_write_phase_failure_rolls_back(repo: Path, monkeypatch) -> None:
     assert (repo / "a.py").read_text() == "def a():\n    return 1\n"
 
 
-def test_workspace_escape_rejected_by_resolver(repo: Path) -> None:
+async def test_workspace_escape_rejected_by_resolver(repo: Path) -> None:
     """The resolver is the workspace-jurisdiction hook (1.4.1.4)."""
 
     def jail(path: str) -> Path:
@@ -108,11 +108,37 @@ def test_workspace_escape_rejected_by_resolver(repo: Path) -> None:
         return target
 
     with pytest.raises(ValueError, match="escapes workspace"):
-        apply_patch(repo, [_patch("../outside.py", "x", "y")], resolve=jail)
+        await apply_patch(repo, [_patch("../outside.py", "x", "y")], resolve=jail)
 
 
-def test_whitespace_tolerant_matching_carries_over(repo: Path) -> None:
+async def test_whitespace_tolerant_matching_carries_over(repo: Path) -> None:
     """The three-tier matcher is the same one edit_file uses."""
     (repo / "c.py").write_text("def c():\n        return 3\n")  # deep indent
-    apply_patch(repo, [_patch("c.py", "return 3", "return 30")])
+    await apply_patch(repo, [_patch("c.py", "return 3", "return 30")])
     assert "return 30" in (repo / "c.py").read_text()
+
+
+async def test_patch_flows_through_a_workspace_fs_channel(repo: Path) -> None:
+    """3.4.3.1: apply_patch reads and writes through the injected channel,
+    so the ACP editor bridge serves buffers instead of disk."""
+    from steerable_sidecar.workspace_fs import LOCAL_FS
+
+    class _RecordingFs:
+        def __init__(self) -> None:
+            self.reads: list[Path] = []
+            self.writes: list[tuple[Path, str]] = []
+
+        async def read_text(self, target: Path) -> str:
+            self.reads.append(target)
+            return await LOCAL_FS.read_text(target)
+
+        async def write_text(self, target: Path, content: str) -> None:
+            self.writes.append((target, content))
+            await LOCAL_FS.write_text(target, content)
+
+    channel = _RecordingFs()
+    summary = await apply_patch(repo, [_patch("a.py", "return 1", "return 10")], fs=channel)
+    assert summary.files_changed == ("a.py",)
+    assert channel.reads == [repo / "a.py"]
+    assert [str(w[0]) for w in channel.writes] == [str(repo / "a.py")]
+    assert (repo / "a.py").read_text() == "def a():\n    return 10\n"

@@ -1,30 +1,36 @@
 """In-process bash / file tools scoped to a workspace directory.
 
 Harbor Terminal-Bench (and the ACP adapter's default surface) run the
-CoreLoop *inside* the trial container. The editor-backed ACP fs/terminal
-bridges are a separate follow-up; these tools are the product coding
-surface for headless evals.
+CoreLoop *inside* the trial container. File content flows through a
+``WorkspaceFs`` channel and bash through a ``BashRunner`` — both default
+to local disk/subprocess; the ACP adapter substitutes the editor-backed
+bridges (3.4.3) when the client advertises the capabilities.
 """
 
 from __future__ import annotations
 
 import asyncio
-import itertools
 import os
 import re
 import signal
 import subprocess
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from steerable_agent_harness.safety import CommandSafetyConfig
 from steerable_agent_protocol.generated import ToolResult
 from steerable_agent_runtime import ToolRouter
 
 from .file_edit import EditError, EditOp, apply_edits, content_version
+from .workspace_fs import LOCAL_FS, WorkspaceFs, WorkspaceFsError
 
 _MAX_OUTPUT = 32_768
 _BASH_TIMEOUT_SEC = 300
-_tmp_counter = itertools.count()
+
+#: One-shot bash execution behind the tool: (command, cwd) → result.
+#: The local default spawns a subprocess; the ACP terminal bridge runs the
+#: command on the editor's terminal instead (3.4.3.2).
+BashRunner = Callable[[str, Path], Awaitable[ToolResult]]
 
 _BASH_SCHEMA = {
     "type": "object",
@@ -205,12 +211,22 @@ _WRITE_STDIN_SCHEMA = {
 }
 
 
-def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRouter:
+def workspace_tools_for_cwd(
+    cwd: str | Path,
+    *,
+    jailed: bool = False,
+    fs: WorkspaceFs = LOCAL_FS,
+    run_command: BashRunner | None = None,
+) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
     ``jailed=True`` is for Harbor/headless: the process already runs inside
     the trial container, so ``sudo`` is a normal TB agent step, not a host
     privilege escalation. ``rm -rf /`` stays critical.
+
+    ``fs`` is the file-content channel (3.4.3.1) and ``run_command`` the
+    one-shot bash execution (3.4.3.2); both default to local disk and a
+    local subprocess.
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
@@ -230,24 +246,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             file_locks[key] = lock
         return lock
 
-    def _atomic_write(target: Path, content: str) -> None:
-        tmp = target.with_name(
-            f"{target.name}.tmp-{os.getpid()}-{next(_tmp_counter)}"
-        )
+    async def _check_version(target: Path, expected: str) -> str | None:
         try:
-            tmp.write_text(content, encoding="utf-8")
-            os.replace(tmp, target)
-        finally:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
-
-    def _check_version(target: Path, expected: str) -> str | None:
-        try:
-            current = target.read_text(encoding="utf-8")
-        except OSError:
+            current = await fs.read_text(target)
+        except (OSError, WorkspaceFsError):
             return (
                 f"无法冲突检测：读取 {target} 失败（文件可能不存在）。"
                 "若确认要新建，请去掉 expectedVersion。"
@@ -260,18 +262,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             )
         return None
 
-    def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
-        command = command or cmd or script
-        if not command or not command.strip():
-            return ToolResult(success=False, error="command is empty", needsFollowup=True)
-        if pgrep_self_wait(command):
-            return ToolResult(
-                success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
-            )
+    async def _run_local(command: str, cwd: Path) -> ToolResult:
         proc = subprocess.Popen(
             command,
             shell=True,
-            cwd=root,
+            cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -303,11 +298,23 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             needsFollowup=proc.returncode != 0,
         )
 
-    def read_file(path: str) -> ToolResult:
+    run = run_command or _run_local
+
+    async def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
+        command = command or cmd or script
+        if not command or not command.strip():
+            return ToolResult(success=False, error="command is empty", needsFollowup=True)
+        if pgrep_self_wait(command):
+            return ToolResult(
+                success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
+            )
+        return await run(command, root)
+
+    async def read_file(path: str) -> ToolResult:
         try:
             target = _resolve_under(root, path)
-            text = target.read_text(encoding="utf-8")
-        except (OSError, ValueError) as exc:
+            text = await fs.read_text(target)
+        except (OSError, ValueError, WorkspaceFsError) as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         clipped = _clip(text)
         return ToolResult(
@@ -331,14 +338,13 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         async with _lock_for(target):
             try:
                 if expectedVersion is not None:
-                    conflict = _check_version(target, expectedVersion)
+                    conflict = await _check_version(target, expectedVersion)
                     if conflict:
                         return ToolResult(
                             success=False, error=conflict, needsFollowup=True
                         )
-                target.parent.mkdir(parents=True, exist_ok=True)
-                _atomic_write(target, content)
-            except (OSError, ValueError) as exc:
+                await fs.write_text(target, content)
+            except (OSError, ValueError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
             return ToolResult(
                 success=True,
@@ -363,11 +369,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         ]
         async with _lock_for(target):
             try:
-                current = target.read_text(encoding="utf-8")
-            except OSError as exc:
+                current = await fs.read_text(target)
+            except (OSError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
             if expectedVersion is not None:
-                conflict = _check_version(target, expectedVersion)
+                conflict = await _check_version(target, expectedVersion)
                 if conflict:
                     return ToolResult(success=False, error=conflict, needsFollowup=True)
             try:
@@ -375,8 +381,8 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             except EditError as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
             try:
-                _atomic_write(target, result.content)
-            except OSError as exc:
+                await fs.write_text(target, result.content)
+            except (OSError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
             return ToolResult(
                 success=True,
@@ -500,10 +506,11 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         for lock in locks:
             await lock.acquire()
         try:
-            summary = apply_patch(
+            summary = await apply_patch(
                 root,
                 entries,
                 resolve=lambda p: _resolve_under(root, p),
+                fs=fs,
             )
         except (ValueError, EditError) as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
