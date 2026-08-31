@@ -889,9 +889,28 @@ async def test_named_json_skips_blank_check_without_split(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_named_checker_retries_once_when_check_py_exists(tmp_path) -> None:
+async def test_named_checker_accepts_when_script_exits_zero(tmp_path) -> None:
     dest = tmp_path / "re.json"
     (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Write {dest}. You can look at the provided check.py "
+            "to verify if your solution is correct."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text('[["a", "b"]]', encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_checker_retries_when_script_exits_nonzero(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    (tmp_path / "check.py").write_text(
+        "import sys\nprint('Our move:  ')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
     hooks = DeliveryHooks(
         instruction=(
             f"Write {dest}. You can look at the provided check.py "
@@ -904,14 +923,19 @@ async def test_named_checker_retries_once_when_check_py_exists(tmp_path) -> None
     assert action.kind == "retry"
     assert action.reason == "named_checker"
     assert "check.py" in (action.message or "")
-    again = await hooks.before_completion(_draft(tools=5), LoopContext())
-    assert again.kind == "accept"
+    assert "Our move:" in (action.message or "")
+    (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
 
 
 @pytest.mark.asyncio
-async def test_named_checker_retries_once_when_eval_py_exists(tmp_path) -> None:
+async def test_named_checker_retries_when_eval_py_fails(tmp_path) -> None:
     dest = tmp_path / "eigen.py"
-    (tmp_path / "eval.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "eval.py").write_text(
+        "import sys\nsys.exit(2)\n",
+        encoding="utf-8",
+    )
     hooks = DeliveryHooks(
         instruction=(
             f"Complete {dest}. `/app/eval.py` can help you iterate."
@@ -923,6 +947,27 @@ async def test_named_checker_retries_once_when_eval_py_exists(tmp_path) -> None:
     assert action.kind == "retry"
     assert action.reason == "named_checker"
     assert "eval.py" in (action.message or "")
+    assert "exited 2" in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_named_checker_stops_after_two_failures(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    (tmp_path / "check.py").write_text(
+        "import sys\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}. Use check.py.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("[]\n", encoding="utf-8")
+    first = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert first.kind == "retry"
+    second = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert second.kind == "retry"
+    third = await hooks.before_completion(_draft(tools=6), LoopContext())
+    assert third.kind == "accept"
 
 
 @pytest.mark.asyncio

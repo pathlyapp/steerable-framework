@@ -10,6 +10,8 @@ from __future__ import annotations
 import gzip
 import json
 import re
+import shutil
+import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -197,6 +199,16 @@ _JSON_BLANK_RETRY = (
     "Strip trailing newlines and empty replacements."
 )
 _CHECKER_NAME = re.compile(r"\b((?:check|eval)\.py)\b", re.IGNORECASE)
+_MAX_CHECKER_RUNS = 2
+_CHECKER_TIMEOUT_SEC = 60
+_CHECKER_FAIL = (
+    "{name} exited {code}. Fix the named outputs until python3 {name} "
+    "succeeds.\n{output}"
+)
+_CHECKER_TIMEOUT = (
+    "{name} did not finish in {sec}s. Fix the hang or run a smaller "
+    "local check before stopping."
+)
 _CHECKER_RETRY = (
     "A helper script named in the instruction ({name}) exists on disk. "
     "Run it now (python3 {name}) against the named outputs and fix "
@@ -561,8 +573,8 @@ class DeliveryHooks(NoopHooks):
         return None
 
     def _named_checker_retry(self) -> CompletionAction | None:
-        """Veto stopping before running an instruction-named check.py/eval.py."""
-        if self._check_retries >= 1 or not self._required:
+        """Run an instruction-named check.py/eval.py; veto a non-zero exit."""
+        if self._check_retries >= _MAX_CHECKER_RUNS or not self._required:
             return None
         match = _CHECKER_NAME.search(self._instruction or "")
         if not match:
@@ -575,11 +587,27 @@ class DeliveryHooks(NoopHooks):
         checker = next((path for path in candidates if path.is_file()), None)
         if checker is None:
             return None
+        python = shutil.which("python3") or shutil.which("python")
+        if python is None:
+            self._check_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_CHECKER_RETRY.format(name=name),
+                reason="named_checker",
+            )
+        code, output = _run_instruction_checker(python, checker)
         self._check_retries += 1
+        if code == 0:
+            return None
         self._force_tool = True
+        if code is None:
+            message = _CHECKER_TIMEOUT.format(name=name, sec=_CHECKER_TIMEOUT_SEC)
+        else:
+            message = _CHECKER_FAIL.format(name=name, code=code, output=output)
         return CompletionAction(
             kind="retry",
-            message=_CHECKER_RETRY.format(name=name),
+            message=message,
             reason="named_checker",
         )
 
@@ -742,6 +770,26 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             if path not in seen:
                 seen.append(path)
     return tuple(seen)
+
+
+def _run_instruction_checker(python: str, checker: Path) -> tuple[int | None, str]:
+    """Return ``(exit_code, tail)``; ``exit_code is None`` on timeout."""
+    try:
+        completed = subprocess.run(
+            [python, str(checker)],
+            cwd=str(checker.parent),
+            capture_output=True,
+            text=True,
+            timeout=_CHECKER_TIMEOUT_SEC,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, ""
+    except OSError as exc:
+        return 1, str(exc)
+    blob = (completed.stderr or "") + (completed.stdout or "")
+    tail = blob[-1500:] if blob else "(no output)"
+    return completed.returncode, tail
 
 
 def _json_has_blank_split_row(value: object) -> bool:
