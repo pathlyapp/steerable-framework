@@ -22,7 +22,7 @@ from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
 from .acp_adapter import _env_provider_params
-from .delivery import DeliveryHooks
+from .delivery import DeliveryGatedExecutor, DeliveryHooks
 from .sidecar import (
     _default_loop_hooks,
     _summarizer_for,
@@ -146,7 +146,13 @@ _SYSTEM = (
     "and fix failures. If a local check prints a number below the named "
     "bar, that is a failure — keep iterating; do not mark it passed. "
     "After shrinking or quantizing a scored model, re-run that eval CLI; "
-    "the pre-shrink score does not count. "
+    "the pre-shrink score does not count. Your local split is not the "
+    "hidden test set: if the named bar is a lower bound, beat it by a "
+    "clear margin on your split before shrinking; after quantize, if you "
+    "are within 0.02 of the bar, shrink less or keep the unquantized model. "
+    "If a posterior mean sits just outside a named interval, increase "
+    "warmup and sampling draws and rerun with the same seed; do not stop "
+    "a few thousandths under the bound. "
     "Do not replace or uninstall the system interpreter or pytest the "
     "hidden tests will use; do not retarget /usr/local/bin/python or "
     "python3 to a different binary. Install compiled extensions into "
@@ -222,9 +228,13 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
     tools = workspace_tools_for_cwd(cwd, jailed=True)
     provider = default_llm_provider_factory(params)
+    delivery = DeliveryHooks(instruction=instruction)
     loop = CoreLoop(
         provider,
-        RouterToolExecutor(tools, consent_granted=True),
+        DeliveryGatedExecutor(
+            RouterToolExecutor(tools, consent_granted=True),
+            delivery,
+        ),
         config=LoopConfig(
             max_rounds=max_rounds,
             max_tool_errors=32,
@@ -240,7 +250,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # Compact first so a same-round write nudge is folded onto the
             # rewritten tail instead of sitting in the summarized middle.
             _default_loop_hooks(params, summarizer=_summarizer_for(provider)),
-            DeliveryHooks(instruction=instruction),
+            delivery,
         ),
         history_store=InMemoryStorage(),
         record_id="headless",

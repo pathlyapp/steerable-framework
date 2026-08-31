@@ -122,6 +122,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "x-axis units" in headless_mod._SYSTEM
     assert "handwritten accuracy" in headless_mod._SYSTEM
     assert "below the named" in headless_mod._SYSTEM
+    assert "hidden test set" in headless_mod._SYSTEM
+    assert "within 0.02" in headless_mod._SYSTEM
+    assert "thousandths under" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:
@@ -195,10 +198,9 @@ def test_headless_wrap_up_keeps_tools() -> None:
     src = inspect.getsource(headless_mod._run)
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=16" in src
-    assert "DeliveryHooks(instruction=instruction)" in src
-    assert src.index("_default_loop_hooks") < src.index(
-        "DeliveryHooks(instruction=instruction)"
-    )
+    assert "DeliveryGatedExecutor" in src
+    hooks_src = src[src.index("ChainHooks") :]
+    assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")
 
 
 @pytest.mark.asyncio

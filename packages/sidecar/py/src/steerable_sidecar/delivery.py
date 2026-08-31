@@ -96,6 +96,17 @@ _EMPTY_ROUND_RETRY = (
 # Match CoreLoop ``_MAX_COMPLETION_REDOS`` (16). Eight retries still let
 # dna-assembly / steal.py / regex-chess stop after a text-only summary.
 _MAX_MISSING_NAMED_RETRIES = 16
+# Z.AI coerces tool_choice=required to auto, so nudges are user text only.
+# After this many ignored explore nudges, refuse inspect-only tools so
+# Harbor's 180 min wait_for cannot be spent on bash/read_file while
+# steal.py / primers.fasta / out.txt are still missing.
+_BLOCK_EXPLORE_AFTER_NUDGES = 4
+_INSPECT_BLOCKED = (
+    "Stop inspecting. These instruction-named output files still do not "
+    "exist: {paths}. Write them now with write_file, edit_file, or bash "
+    "(cat/tee/python to that path). Further read_file or inspect-only bash "
+    "is blocked until they exist."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -129,6 +140,35 @@ class DeliveryHooks(NoopHooks):
         self.empty_round_retries = 0
         self._compact_nudges = 0
         self._force_tool = False
+
+    def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
+        """Refuse inspect-only tools after named-output nudges are ignored.
+
+        Runs *before* the tool so a 3-hour OCR/ffmpeg loop cannot eat the
+        Harbor window. Bash that already looks like a write still runs.
+        Extensionless paths (sockets, qemu monitor) do not trigger the gate.
+        """
+        scored = self._scored_missing()
+        if not scored or self.nudges < _BLOCK_EXPLORE_AFTER_NUDGES:
+            return None
+        name = call.name
+        if name not in _EXPLORE:
+            return None
+        if name == "bash" and _bash_writes(call):
+            return None
+        listed = ", ".join(scored[:8])
+        return ToolResult(
+            success=False,
+            error=_INSPECT_BLOCKED.format(paths=listed),
+            needsFollowup=True,
+        )
+
+    def _scored_missing(self) -> tuple[str, ...]:
+        return tuple(
+            p
+            for p in self._required
+            if "." in Path(p).name and not Path(p).exists()
+        )
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: LoopContext
@@ -277,6 +317,24 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             if path not in seen:
                 seen.append(path)
     return tuple(seen)
+
+
+class DeliveryGatedExecutor:
+    """Run inspect-only tools only while named outputs can still wait."""
+
+    def __init__(self, inner: object, hooks: DeliveryHooks) -> None:
+        self._inner = inner
+        self._hooks = hooks
+
+    async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        blocked = self._hooks.inspect_block_result(call)
+        if blocked is not None:
+            return blocked
+        return await self._inner.execute(call, ctx)  # type: ignore[union-attr]
+
+    def concurrency_safe(self, call: ToolCall) -> bool:
+        check = getattr(self._inner, "concurrency_safe", None)
+        return bool(check(call)) if check is not None else False
 
 
 def _bash_writes(call: ToolCall) -> bool:

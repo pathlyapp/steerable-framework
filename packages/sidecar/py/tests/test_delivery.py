@@ -6,7 +6,11 @@ from steerable_agent_runtime.hooks import CompletionDraft
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.loop import LoopContext
 
-from steerable_sidecar.delivery import DeliveryHooks, named_output_paths
+from steerable_sidecar.delivery import (
+    DeliveryGatedExecutor,
+    DeliveryHooks,
+    named_output_paths,
+)
 
 
 def _call(name: str) -> ToolCall:
@@ -430,3 +434,57 @@ async def test_helper_write_does_not_count_as_named_delivery(tmp_path) -> None:
     assert hooks.writes == 1
     done = await hooks.pre_step([], ctx)
     assert done.tool_choice is None
+
+
+@pytest.mark.asyncio
+async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
+    target = tmp_path / "steal.py"
+    hooks = DeliveryHooks(
+        named_outputs=(str(target),),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    inspect = ToolCall(id="t", name="bash", arguments={"command": "ls /app"})
+    assert hooks.inspect_block_result(inspect) is None
+    for _ in range(4):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+        action = await hooks.pre_step([], ctx)
+        assert action.appends
+    blocked = hooks.inspect_block_result(inspect)
+    assert blocked is not None
+    assert blocked.success is False
+    assert str(target) in (blocked.error or "")
+    write = ToolCall(id="t", name="bash", arguments={"command": f"cat > {target}"})
+    assert hooks.inspect_block_result(write) is None
+    assert hooks.inspect_block_result(_call("write_file")) is None
+    sock = tmp_path / "qemu-monitor"
+    other = DeliveryHooks(named_outputs=(str(sock),), explore_before_nudge=1)
+    other.nudges = 4
+    assert other.inspect_block_result(inspect) is None
+    target.write_text("x", encoding="utf-8")
+    assert hooks.inspect_block_result(inspect) is None
+
+
+@pytest.mark.asyncio
+async def test_gated_executor_does_not_run_blocked_inspect(tmp_path) -> None:
+    target = tmp_path / "out.txt"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    hooks.nudges = 4
+    ran: list[str] = []
+
+    class _Inner:
+        async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+            ran.append(call.name)
+            return ToolResult(success=True, data={"ran": True})
+
+    gated = DeliveryGatedExecutor(_Inner(), hooks)
+    ctx = LoopContext()
+    inspect = ToolCall(id="t", name="read_file", arguments={"path": "/app/x"})
+    result = await gated.execute(inspect, ctx)
+    assert result.success is False
+    assert ran == []
+    ok = await gated.execute(_call("write_file"), ctx)
+    assert ok.success is True
+    assert ran == ["write_file"]
