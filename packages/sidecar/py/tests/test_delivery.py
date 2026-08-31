@@ -232,6 +232,16 @@ async def test_inspect_blocked_after_wrap_up_named(tmp_path) -> None:
         id="t", name="bash", arguments={"command": f"cat > {dest}"}
     )
     assert hooks.inspect_block_result(write) is None
+    source = tmp_path / "doomgeneric_img.c"
+    source.write_text("void DG_DrawFrame(void) {}\n", encoding="utf-8")
+    read_ok = ToolCall(
+        id="t", name="read_file", arguments={"path": str(source)}
+    )
+    assert hooks.inspect_block_result(read_ok) is None
+    read_missing = ToolCall(
+        id="t", name="read_file", arguments={"path": str(tmp_path / "absent.c")}
+    )
+    assert hooks.inspect_block_result(read_missing) is not None
 
 
 @pytest.mark.asyncio

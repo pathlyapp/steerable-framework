@@ -170,8 +170,8 @@ _EXPLORE_BEFORE_NUDGE_NAMED = 4
 _INSPECT_BLOCKED = (
     "Stop inspecting. These instruction-named output files still do not "
     "exist: {paths}. Write them now with write_file, edit_file, or bash "
-    "(cat/tee/python to that path). Further read_file or inspect-only bash "
-    "is blocked until they exist."
+    "(cat/tee/python to that path). Further inspect-only bash is blocked "
+    "until they exist. read_file of a file already on disk is still allowed."
 )
 # Instruction-named graphics source: RESX/RESY in a .c / header vs the
 # named BMP/PNG on disk.
@@ -414,7 +414,7 @@ class DeliveryHooks(NoopHooks):
         runs a helper ``.py`` whose source mutates a still-missing named
         path, or mutates a still-missing named path still runs.
         ``python3 gen.py`` that only inspects, and ``cat > explore.py``,
-        do not.
+        do not. ``read_file`` of a path that already exists still runs.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -426,6 +426,8 @@ class DeliveryHooks(NoopHooks):
             return None
         name = call.name
         if name not in _EXPLORE:
+            return None
+        if name == "read_file" and _read_file_on_disk(call):
             return None
         if name == "bash" and _bash_delivers_required(
             call, scored, self._named
@@ -1695,6 +1697,22 @@ def _cpu_only_meta_files() -> tuple[list[Path], list[Path]]:
     for root in roots:
         rec(root, 0)
     return makes, caches
+
+
+def _read_file_on_disk(call: ToolCall) -> bool:
+    """True when read_file targets a path that already exists.
+
+    Wrap-up named used to block every read_file, so make-mips could not
+    open doomgeneric_img.c after the first idle cut.
+    """
+    args = call.arguments or {}
+    raw = str(args.get("path") or args.get("file") or "")
+    if not raw:
+        return False
+    try:
+        return Path(raw).is_file()
+    except OSError:
+        return False
 
 
 def _bash_command(call: ToolCall) -> str:
