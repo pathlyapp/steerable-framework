@@ -71,10 +71,13 @@ _SLEEP_POLL_ERROR = (
     "3600s. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`."
 )
 # Catalog-89 make-doom-for-mips: `timeout 120 node vm.js` killed the VM
-# before /tmp/frame.bmp existed. Bash already caps at 3600s.
+# before /tmp/frame.bmp existed. qemu-startup: `timeout 10 qemu-system`
+# dies before the verifier can telnet the login prompt. Bash already
+# caps at 3600s.
 _SHORT_TIMEOUT = re.compile(
     r"\btimeout\s+(?:--signal=\S+\s+|-[A-Za-z]\s+\S+\s+)*(\d+)\s+"
-    r"(?=[^;\n]{0,80}\b(?:node|make|gcc|g\+\+|rustc|clang\+\+|clang)\b)",
+    r"(?=[^;\n]{0,80}\b(?:node|make|gcc|g\+\+|rustc|clang\+\+|clang|"
+    r"qemu-system)\b)",
     re.IGNORECASE,
 )
 _SHORT_TIMEOUT_MAX_SEC = 299
@@ -226,8 +229,10 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
         return await asyncio.to_thread(_run_bash, command)
 
     def _run_bash(command: str) -> ToolResult:
+        # Shells reset SIGHUP on exec; trap so background qemu-system
+        # survives this tool returning (session-leader HUP).
         proc = subprocess.Popen(
-            command,
+            "trap '' HUP; " + command,
             shell=True,
             cwd=root,
             stdout=subprocess.PIPE,

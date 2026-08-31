@@ -190,6 +190,20 @@ async def test_bash_timeout_kills_pipeline(
     assert elapsed < 10
 
 
+@pytest.mark.asyncio
+async def test_bash_background_job_survives_return(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    marker = tmp_path / "later.txt"
+    started = await _call(
+        router,
+        "bash",
+        {"command": f"(sleep 1; echo ok > {marker}) &"},
+    )
+    assert started.success is True
+    time.sleep(1.4)
+    assert marker.read_text() == "ok\n"
+
+
 def test_jailed_workspace_disables_sudo_gate(tmp_path: Path) -> None:
     open_router = workspace_tools_for_cwd(tmp_path)
     jailed = workspace_tools_for_cwd(tmp_path, jailed=True)
@@ -248,7 +262,8 @@ def test_short_timeout_wrap_detects_vm_compile() -> None:
     assert short_timeout_wrap("timeout 60 make -C /app all")
     assert not short_timeout_wrap("timeout 10 curl -I http://localhost")
     assert not short_timeout_wrap("timeout 3600 node vm.js")
-    assert not short_timeout_wrap("timeout 10 qemu-system-x86_64 -nographic")
+    assert short_timeout_wrap("timeout 10 qemu-system-x86_64 -nographic")
+    assert not short_timeout_wrap("timeout 3600 qemu-system-x86_64 -nographic")
 
 
 def test_bash_schema_warns_against_short_timeout() -> None:
