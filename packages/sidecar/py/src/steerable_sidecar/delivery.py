@@ -152,6 +152,33 @@ _BYTES_CAP_RETRY = (
     "{path} is {got} bytes; the instruction requires < {cap} bytes. "
     "Shrink it (wc -c) before stopping."
 )
+# train-fasttext: "less than 150MB"
+_MB_CAP = re.compile(
+    r"(?:less than|under|<)\s*(\d+)\s*(?:MB|megabytes)\b",
+    re.IGNORECASE,
+)
+_MB_CAP_RETRY = (
+    "{path} is {got} bytes; the instruction requires < {cap} MB. "
+    "Shrink it before stopping."
+)
+# filter-js-from-html: BeautifulSoup prettify re-serialized clean files.
+_HTML_TASK = re.compile(r"\b(?:html|xss|javascript)\b", re.IGNORECASE)
+_PRETTIFY_CALL = re.compile(r"\.prettify\s*\(")
+_PRETTIFY_RETRY = (
+    "{path} calls prettify(); the instruction forbids altering HTML "
+    "formatting. Remove pretty-print/re-serialize and leave files with "
+    "no scripts byte-identical."
+)
+# gcode-to-text: "what will the text show?" — a raster dump is not the flag.
+_ASKS_SHOWN_TEXT = re.compile(
+    r"what will the text show|what text a print",
+    re.IGNORECASE,
+)
+_MAX_SHOWN_TEXT_BYTES = 4096
+_SHOWN_TEXT_RETRY = (
+    "{path} is {got} bytes; the instruction asks for the text a print "
+    "shows, not a raster of the rendering. Write the short string."
+)
 # path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
 _GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
 _GZIP_CAP_RETRY = (
@@ -397,6 +424,84 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_mb_cap_retry(self) -> CompletionAction | None:
+        """Veto a named file over an instruction `less than N MB` cap."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        match = _MB_CAP.search(self._instruction or "")
+        if not match:
+            return None
+        cap_mb = int(match.group(1))
+        cap = cap_mb * 1024 * 1024
+        if cap < 1:
+            return None
+        for path in self._required:
+            if not Path(path).is_file():
+                continue
+            try:
+                got = Path(path).stat().st_size
+            except OSError:
+                continue
+            if got < cap:
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_MB_CAP_RETRY.format(path=path, got=got, cap=cap_mb),
+                reason="named_mb_cap",
+            )
+        return None
+
+    def _named_prettify_retry(self) -> CompletionAction | None:
+        """Veto an HTML sanitizer that pretty-prints instead of byte-identical edits."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        text = self._instruction or ""
+        if not _HTML_TASK.search(text):
+            return None
+        for path in self._required:
+            if Path(path).suffix.lower() != ".py" or not Path(path).is_file():
+                continue
+            try:
+                src = Path(path).read_text(encoding="utf-8", errors="replace")[:64_000]
+            except OSError:
+                continue
+            if not _PRETTIFY_CALL.search(src):
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_PRETTIFY_RETRY.format(path=path),
+                reason="named_prettify",
+            )
+        return None
+
+    def _named_shown_text_retry(self) -> CompletionAction | None:
+        """Veto a huge named .txt when the instruction asks for shown print text."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        if not _ASKS_SHOWN_TEXT.search(self._instruction or ""):
+            return None
+        for path in self._required:
+            if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
+                continue
+            try:
+                got = Path(path).stat().st_size
+            except OSError:
+                continue
+            if got <= _MAX_SHOWN_TEXT_BYTES:
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_SHOWN_TEXT_RETRY.format(path=path, got=got),
+                reason="named_shown_text",
+            )
+        return None
+
     def _named_gzip_cap_retry(self) -> CompletionAction | None:
         """Veto a named source over an instruction `<Nk gzip` compressed cap."""
         if self._bytes_retries >= _MAX_BYTES_RETRIES:
@@ -497,12 +602,21 @@ class DeliveryHooks(NoopHooks):
         bytes_retry = self._named_bytes_cap_retry()
         if bytes_retry is not None:
             return bytes_retry
+        mb_retry = self._named_mb_cap_retry()
+        if mb_retry is not None:
+            return mb_retry
         gzip_retry = self._named_gzip_cap_retry()
         if gzip_retry is not None:
             return gzip_retry
         json_retry = self._named_json_blank_retry()
         if json_retry is not None:
             return json_retry
+        pretty_retry = self._named_prettify_retry()
+        if pretty_retry is not None:
+            return pretty_retry
+        shown_retry = self._named_shown_text_retry()
+        if shown_retry is not None:
+            return shown_retry
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry

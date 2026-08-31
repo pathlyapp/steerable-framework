@@ -679,6 +679,91 @@ async def test_named_source_skips_gzip_cap_without_gzip_pipeline(
 
 
 @pytest.mark.asyncio
+async def test_named_file_retries_when_over_instruction_mb_cap(tmp_path) -> None:
+    model = tmp_path / "model.bin"
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Train a fasttext model saved as {model}. "
+            "The final model size needs to be less than 1MB "
+            "but get at least 0.62 accuracy."
+        ),
+        named_outputs=(str(model),),
+    )
+    model.write_bytes(b"x" * (1024 * 1024))
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_mb_cap"
+    assert "1048576" in (action.message or "")
+    model.write_bytes(b"x" * (1024 * 1024 - 1))
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_file_skips_mb_cap_without_instruction_limit(tmp_path) -> None:
+    model = tmp_path / "model.bin"
+    hooks = DeliveryHooks(
+        instruction=f"Save the model as {model}.",
+        named_outputs=(str(model),),
+    )
+    model.write_bytes(b"x" * (2 * 1024 * 1024))
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_html_filter_retries_when_source_calls_prettify(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "filter.py"
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Create {dest} that removes JavaScript from HTML files "
+            "to prevent XSS. Do not alter formatting."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("print(soup.prettify())\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_prettify"
+    dest.write_text("open(sys.argv[1]).read().replace('<script>','')\n")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_py_skips_prettify_check_without_html_task(tmp_path) -> None:
+    dest = tmp_path / "report.py"
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest} that prints a table.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("print(soup.prettify())\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_bytes(b"#" * 5000)
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_shown_text"
+    dest.write_text("HELLO\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
 async def test_named_json_retries_when_string_has_newline(tmp_path) -> None:
     dest = tmp_path / "re.json"
     hooks = DeliveryHooks(
