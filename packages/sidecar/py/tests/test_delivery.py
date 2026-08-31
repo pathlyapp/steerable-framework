@@ -1352,3 +1352,23 @@ async def test_named_make_skips_when_only_side_effect_missing(tmp_path) -> None:
     assert action.reason == "missing_named_output"
     assert hooks._make_runs == 0
 
+
+@pytest.mark.asyncio
+async def test_named_make_finds_makefile_two_levels_down(tmp_path) -> None:
+    elf = tmp_path / "doomgeneric_mips"
+    nested = tmp_path / "doomgeneric" / "doomgeneric"
+    nested.mkdir(parents=True)
+    (nested / "Makefile").write_text(
+        f"all:\n\tprintf x > {elf}\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction="producing an ELF called doomgeneric_mips",
+        named_outputs=(str(elf),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert elf.is_file()
+    assert elf.read_text(encoding="utf-8") == "x"
+    assert action.kind == "accept"
+    assert hooks._make_runs == 1
+

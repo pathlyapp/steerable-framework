@@ -1235,10 +1235,53 @@ class DeliveryGatedExecutor:
         return bool(check(call)) if check is not None else False
 
 
+_MAKEFILE_WALK_DEPTH = 2
+_MAKEFILE_SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__"})
+
+
+def _child_dirs(path: Path) -> list[Path]:
+    if not path.is_dir():
+        return []
+    try:
+        children = list(path.iterdir())
+    except OSError:
+        return []
+    out: list[Path] = []
+    for child in children:
+        if not child.is_dir():
+            continue
+        name = child.name
+        if name.startswith(".") or name in _MAKEFILE_SKIP_DIRS:
+            continue
+        out.append(child)
+    return out
+
+
+def _makefiles_at_depth(root: Path, depth: int) -> list[Path]:
+    dirs = [root]
+    for _ in range(depth):
+        nxt: list[Path] = []
+        for directory in dirs:
+            nxt.extend(_child_dirs(directory))
+        dirs = nxt
+    found: list[Path] = []
+    for directory in dirs:
+        found.append(directory / "Makefile")
+        found.append(directory / "makefile")
+    return found
+
+
 def _find_makefile(named: tuple[str, ...]) -> Path | None:
-    """Makefile next to a named output, or under ``/app`` when outputs live there."""
+    """Makefile next to a named output, or two levels under that parent.
+
+    make-doom / make-mips ship ``/app/doomgeneric/doomgeneric/Makefile``.
+    A one-level ``/app/*/Makefile`` walk misses it. Closer Makefiles win.
+    Do not walk ``/app`` unless a named path lives there.
+    """
     candidates: list[Path] = []
     seen: set[Path] = set()
+    roots: list[Path] = []
+    seen_roots: set[Path] = set()
 
     def add(path: Path) -> None:
         try:
@@ -1250,25 +1293,26 @@ def _find_makefile(named: tuple[str, ...]) -> Path | None:
         seen.add(resolved)
         candidates.append(path)
 
-    under_app = False
+    def add_root(path: Path) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen_roots:
+            return
+        seen_roots.add(resolved)
+        roots.append(path)
+
     for raw in named:
         parent = Path(raw).parent
-        add(parent / "Makefile")
-        add(parent / "makefile")
+        add_root(parent)
         posix = parent.as_posix()
         if posix == "/app" or posix.startswith("/app/"):
-            under_app = True
-    if under_app:
-        add(Path("/app/Makefile"))
-        app = Path("/app")
-        if app.is_dir():
-            try:
-                children = list(app.iterdir())
-            except OSError:
-                children = []
-            for child in children:
-                if child.is_dir():
-                    add(child / "Makefile")
+            add_root(Path("/app"))
+    for depth in range(_MAKEFILE_WALK_DEPTH + 1):
+        for root in roots:
+            for makefile in _makefiles_at_depth(root, depth):
+                add(makefile)
     for path in candidates:
         if path.is_file():
             return path
