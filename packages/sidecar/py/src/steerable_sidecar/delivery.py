@@ -116,6 +116,9 @@ _RUN_ENTRY = re.compile(
     r"`(?:node|python3?|pypy3?)\s+"
     r"([A-Za-z0-9./_-]+\.[A-Za-z][A-Za-z0-9]*)`"
 )
+_RUN_COMMAND = re.compile(
+    r"`((?:node|python3?|pypy3?)\s+[A-Za-z0-9./_-]+\.[A-Za-z][A-Za-z0-9]*)`"
+)
 _TITLED_FILE = re.compile(
     r"\btitled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
 )
@@ -228,6 +231,25 @@ _UTF8_RETRY = (
 _SYNTAX_RETRY = (
     "{path} does not parse:\n{output}"
 )
+# Instruction backtick: `node vm.js` / `python3 steal.py`. One shot when
+# named outputs are still missing and the script is already on disk.
+_MAX_ENTRY_RUNS = 1
+_ENTRY_TIMEOUT_SEC = 60
+_SIDE_EFFECT_SUFFIXES = frozenset(
+    {".bmp", ".png", ".txt", ".npy", ".csv", ".json", ".fasta", ".fa"}
+)
+_ENTRY_FAIL = (
+    "Ran `{cmd}` because named outputs were still missing. It exited "
+    "{code}:\n{output}\nStill missing: {paths}."
+)
+_ENTRY_TIMEOUT = (
+    "Ran `{cmd}` for {sec}s; named outputs still missing: {paths}. "
+    "Drop short `timeout` wrappers so the process can finish."
+)
+_ENTRY_STILL_MISSING = (
+    "Ran `{cmd}`; these named outputs are still missing: {paths}. "
+    "The command must write them."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -266,6 +288,7 @@ class DeliveryHooks(NoopHooks):
         self._json_retries = 0
         self._check_retries = 0
         self._validate_retries = 0
+        self._entry_runs = 0
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
@@ -731,6 +754,64 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _run_named_entrypoint(self, missing: tuple[str, ...]) -> CompletionAction | None:
+        """Run an instruction-backticked node/python command once if it can write missing outputs."""
+        if self._entry_runs >= _MAX_ENTRY_RUNS or not missing:
+            return None
+        commands = tuple(
+            match.group(1)
+            for match in _RUN_COMMAND.finditer(self._instruction or "")
+        )
+        for command in commands:
+            script = _resolve_run_script(command, (*self._named, *self._required))
+            if script is None:
+                continue
+            if script.name.lower() in _CHECKER_FILENAMES:
+                continue
+            if _entrypoint_needs_missing_input(missing, script):
+                continue
+            argv = _run_command_argv(command, script)
+            if argv is None:
+                continue
+            self._entry_runs += 1
+            code, output = _run_cmd(
+                argv,
+                cwd=str(script.parent),
+                timeout=_ENTRY_TIMEOUT_SEC,
+            )
+            still = tuple(p for p in self._required if not Path(p).exists())
+            listed = ", ".join((still or missing)[:8])
+            if still and code == 0:
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_ENTRY_STILL_MISSING.format(cmd=command, paths=listed),
+                    reason="named_entrypoint",
+                )
+            if still and code is None:
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_ENTRY_TIMEOUT.format(
+                        cmd=command, sec=_ENTRY_TIMEOUT_SEC, paths=listed
+                    ),
+                    reason="named_entrypoint",
+                )
+            if still:
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_ENTRY_FAIL.format(
+                        cmd=command,
+                        code=code,
+                        output=output,
+                        paths=listed,
+                    ),
+                    reason="named_entrypoint",
+                )
+            return None
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -738,6 +819,11 @@ class DeliveryHooks(NoopHooks):
         # reasoning-only completions while /app/out.txt was still missing,
         # and empty_round consumed the retries that should have named it.
         missing = tuple(p for p in self._required if not Path(p).exists())
+        if missing:
+            ran = self._run_named_entrypoint(missing)
+            if ran is not None:
+                return ran
+            missing = tuple(p for p in self._required if not Path(p).exists())
         if missing and self.completion_retries < _MAX_MISSING_NAMED_RETRIES:
             self.completion_retries += 1
             self._force_tool = True
@@ -947,6 +1033,59 @@ def _syntax_check_js(path: Path) -> str:
     if code is None:
         return f"node --check timed out after {_SYNTAX_TIMEOUT_SEC}s"
     return output or f"node --check exited {code}"
+
+
+def _resolve_run_script(
+    command: str, named: tuple[str, ...] = ()
+) -> Path | None:
+    parts = command.split()
+    if len(parts) < 2:
+        return None
+    raw = parts[1]
+    name = Path(raw).name
+    candidates = [Path(raw)]
+    if not raw.startswith("/"):
+        candidates.append(Path("/app") / raw)
+        candidates.append(Path(raw.lstrip("./")))
+    for path in named:
+        candidates.append(Path(path).parent / name)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _run_command_argv(command: str, script: Path) -> list[str] | None:
+    interpreter = command.split()[0]
+    if interpreter.startswith("python") or interpreter.startswith("pypy"):
+        binary = shutil.which("python3") or shutil.which("python")
+    else:
+        binary = shutil.which(interpreter)
+    if binary is None:
+        return None
+    return [binary, str(script)]
+
+
+def _entrypoint_needs_missing_input(
+    missing: tuple[str, ...], script: Path
+) -> bool:
+    """True when a named sibling the command needs (ELF, other source) is gone."""
+    try:
+        script_resolved = script.resolve()
+    except OSError:
+        script_resolved = script
+    for path in missing:
+        candidate = Path(path)
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved == script_resolved:
+            continue
+        if candidate.suffix.lower() in _SIDE_EFFECT_SUFFIXES:
+            continue
+        return True
+    return False
 
 
 def _json_has_blank_split_row(value: object) -> bool:

@@ -1086,3 +1086,80 @@ async def test_does_not_run_required_check_py_as_checker(tmp_path) -> None:
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
 
+
+@pytest.mark.asyncio
+async def test_named_entrypoint_writes_missing_output(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    script = tmp_path / "helper.py"
+    script.write_text(
+        f"from pathlib import Path\nPath({str(dest)!r}).write_text('ok\\n')\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest} by running `python3 helper.py`.",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert dest.read_text(encoding="utf-8") == "ok\n"
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_entrypoint_retries_when_command_fails(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    script = tmp_path / "helper.py"
+    script.write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest} by running `python3 helper.py`.",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_entrypoint"
+    assert "exited 3" in (action.message or "")
+    assert not dest.exists()
+
+
+@pytest.mark.asyncio
+async def test_named_entrypoint_skips_when_named_input_missing(tmp_path) -> None:
+    frame = tmp_path / "frame.bmp"
+    elf = tmp_path / "doomgeneric_mips"
+    script = tmp_path / "vm.js"
+    script.write_text("throw new Error('should not run')\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"ELF called doomgeneric_mips, run `node vm.js`, "
+            f"frames written to {frame}"
+        ),
+        named_outputs=(str(elf), str(frame)),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "missing_named_output"
+    assert hooks._entry_runs == 0
+
+
+@pytest.mark.asyncio
+async def test_named_entrypoint_runs_when_only_side_effect_missing(
+    tmp_path,
+) -> None:
+    frame = tmp_path / "out.txt"
+    elf = tmp_path / "doomgeneric_mips"
+    elf.write_bytes(b"\x7fELF")
+    script = tmp_path / "helper.py"
+    script.write_text(
+        f"from pathlib import Path\nPath({str(frame)!r}).write_text('ok\\n')\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            f"ELF called doomgeneric_mips, run `python3 helper.py`, "
+            f"write {frame}"
+        ),
+        named_outputs=(str(elf), str(frame)),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert frame.read_text(encoding="utf-8") == "ok\n"
+    assert action.kind == "accept"
+    assert hooks._entry_runs == 1
+
