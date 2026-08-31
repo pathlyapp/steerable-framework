@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
 from steerable_sidecar import headless as headless_mod
 from steerable_sidecar.headless import (
+    _hard_run_timeout_sec,
     _load_instruction,
     _max_tokens,
     _run,
@@ -210,6 +212,8 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wrap_up_tool_timeout_ms=120_000" in src
     assert "wrap_up_hard_cap_ms=10_500_000" in src
     assert "idle_stream_timeout_ms=600_000" in src
+    assert "_hard_run_timeout_sec" in src
+    assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
     hooks_src = src[src.index("ChainHooks") :]
     assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")
@@ -275,3 +279,41 @@ async def test_run_retries_transient_stream_error(
     await _run("hello", cwd=str(tmp_path), max_rounds=4)
     assert provider.attempts == 2
     assert "recovered" in capsys.readouterr().out
+
+
+def test_hard_run_timeout_defaults_under_harbor_wrap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("STEERABLE_HARD_TIMEOUT_SEC", raising=False)
+    assert _hard_run_timeout_sec() == 10_200.0
+    monkeypatch.setenv("STEERABLE_HARD_TIMEOUT_SEC", "0")
+    assert _hard_run_timeout_sec() is None
+
+
+@pytest.mark.asyncio
+async def test_run_exits_on_hard_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    class _Hang:
+        name = "hang"
+        model = "hang-model"
+
+        async def complete(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def stream(self, messages, **kwargs):
+            async def _gen():
+                await asyncio.sleep(30)
+                yield LLMStreamChunk(content_delta="never")
+
+            return _gen()
+
+    monkeypatch.setattr(headless_mod, "_hard_run_timeout_sec", lambda: 0.05)
+    monkeypatch.setattr(
+        headless_mod, "_env_provider_params", lambda: {"model": "fake"}
+    )
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: _Hang()
+    )
+    await _run("hang", cwd=str(tmp_path), max_rounds=4)
+    assert "[hard_timeout]" in capsys.readouterr().out

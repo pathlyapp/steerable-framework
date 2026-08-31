@@ -218,6 +218,21 @@ def _soft_timeout_ms() -> int | None:
     return None if value <= 0 else value
 
 
+def _hard_run_timeout_sec() -> float | None:
+    """Exit before Harbor's 180 min wait_for so docker exec gets EOF.
+
+    A reasoning-only stream that ignores idle-cut keeps stdout open;
+    Harbor ``communicate()`` then blocks the whole n-concurrent shard
+    until GHA 360. Default 170 min. ``STEERABLE_HARD_TIMEOUT_SEC=0``
+    disables.
+    """
+    raw = os.environ.get("STEERABLE_HARD_TIMEOUT_SEC")
+    if raw is None or not str(raw).strip():
+        return 10_200.0
+    value = float(raw)
+    return None if value <= 0 else value
+
+
 def _temperature() -> float | None:
     raw = os.environ.get("STEERABLE_TEMPERATURE")
     if raw is None or not str(raw).strip():
@@ -282,31 +297,46 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         LLMMessage.text_of("user", instruction),
     ]
     thinking = False
-    async for event in loop.run(seed, tools=tools.describe_model(), chat_id="headless"):
-        if event.kind == "content_delta":
-            thinking = False
-            sys.stdout.write(str(event.data.get("delta", "")))
-            sys.stdout.flush()
-        elif event.kind == "reasoning_delta":
-            if not thinking:
-                sys.stdout.write("[thinking]\n")
-                thinking = True
-            # Log reasoning text too: a long generation must keep the log
-            # growing so external stall watchdogs see liveness.
-            sys.stdout.write(str(event.data.get("delta", "")))
-            sys.stdout.flush()
-        elif event.kind == "tool_call_start":
-            thinking = False
-            sys.stdout.write(
-                f"\n[tool {event.data.get('name')} {event.data.get('arguments')}]\n"
-            )
-            sys.stdout.flush()
-        elif event.kind in ("tool_error", "error", "hook_action", "soft_timeout"):
-            sys.stdout.write(f"\n[{event.kind} {event.data}]\n")
-            sys.stdout.flush()
-        elif event.kind == "completion":
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+
+    async def _consume() -> None:
+        nonlocal thinking
+        async for event in loop.run(seed, tools=tools.describe_model(), chat_id="headless"):
+            if event.kind == "content_delta":
+                thinking = False
+                sys.stdout.write(str(event.data.get("delta", "")))
+                sys.stdout.flush()
+            elif event.kind == "reasoning_delta":
+                if not thinking:
+                    sys.stdout.write("[thinking]\n")
+                    thinking = True
+                # Log reasoning text too: a long generation must keep the log
+                # growing so external stall watchdogs see liveness.
+                sys.stdout.write(str(event.data.get("delta", "")))
+                sys.stdout.flush()
+            elif event.kind == "tool_call_start":
+                thinking = False
+                sys.stdout.write(
+                    f"\n[tool {event.data.get('name')} {event.data.get('arguments')}]\n"
+                )
+                sys.stdout.flush()
+            elif event.kind in ("tool_error", "error", "hook_action", "soft_timeout"):
+                sys.stdout.write(f"\n[{event.kind} {event.data}]\n")
+                sys.stdout.flush()
+            elif event.kind == "completion":
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+
+    timeout = _hard_run_timeout_sec()
+    try:
+        if timeout is None:
+            await _consume()
+        else:
+            await asyncio.wait_for(_consume(), timeout=timeout)
+    except TimeoutError:
+        # Harbor ×12 is 180 min. Exit first so docker exec communicate()
+        # sees EOF instead of hanging the whole n-concurrent shard.
+        sys.stdout.write("\n[hard_timeout]\n")
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":  # pragma: no cover
