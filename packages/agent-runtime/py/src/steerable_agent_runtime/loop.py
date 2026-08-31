@@ -870,6 +870,16 @@ class CoreLoop:
                 reasoning_details=list(reasoning_details_acc) or None,
             )
 
+        def _cut_draft(content: str) -> LLMMessage:
+            """The draft of a round whose stream was cut, without its trace.
+
+            A cut interrupts reasoning mid-thought, so the fragment carries no
+            conclusion, and openai_compat replays `reasoning` on every later
+            request — re-priming the spiral the cut just stopped, at up to
+            idle_stream_max_chars per round.
+            """
+            return LLMMessage.text_of("assistant", content, tool_calls=[])
+
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
         decision = CompletionDecision(status="failed", reason="loop did not run")
@@ -1345,8 +1355,8 @@ class CoreLoop:
                     # for the stream to finish. A first idle cut still retries
                     # a write; the second cut takes this path so 32 missing-
                     # named retries cannot each Hmm for another idle cap.
-                    if content.strip() or reasoning_parts:
-                        manager.append(_assistant_message(content, []))
+                    if content.strip():
+                        manager.append(_cut_draft(content))
                     if was_wrap:
                         wrap_up_tool_rounds_used += 1
                     continue
@@ -1400,7 +1410,11 @@ class CoreLoop:
                         # what it said, then the discipline notice corrects it.
                         completion_redos += 1
                         if content.strip():
-                            manager.append(_assistant_message(content))
+                            manager.append(
+                                _cut_draft(content)
+                                if stream_idle_cut or stream_budget_cut
+                                else _assistant_message(content)
+                            )
                         manager.append_fragment(DisciplineRetryNotice(action.message))
                         yield LoopEvent(
                             "hook_action",

@@ -62,6 +62,12 @@ async def collect(loop_run: AsyncIterator[LoopEvent]) -> list[LoopEvent]:
     return [e async for e in loop_run]
 
 
+def _text_of(message: LLMMessage) -> str:
+    if isinstance(message.content, str):
+        return message.content
+    return "".join(getattr(part, "text", "") for part in message.content or ())
+
+
 @pytest.mark.asyncio
 async def test_no_soft_timeout_runs_normally() -> None:
     provider = make_provider([{"content": "answer"}])
@@ -824,6 +830,132 @@ async def test_idle_stream_volume_ignores_tool_call_arguments() -> None:
         if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
     ]
     assert executed == ["write"]
+
+
+@pytest.mark.asyncio
+async def test_idle_cut_keeps_draft_and_drops_the_cut_reasoning() -> None:
+    """openai_compat replays `reasoning` on every later request, so a kept cut
+    trace re-primes the spiral the cut just stopped."""
+
+    class _SpiralThenWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.seen: list[list[LLMMessage]] = []
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = len(self.seen)
+            self.seen.append(list(messages))
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx < 2:
+                    yield LLMStreamChunk(content_delta="partial draft")
+                    for i in range(8):
+                        yield LLMStreamChunk(reasoning_delta=f"hmm {idx}-{i}")
+                        await asyncio.sleep(0.02)
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+
+    async def write() -> str:
+        return "wrote"
+
+    router.register(write)
+    provider = _SpiralThenWrite()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            idle_stream_timeout_ms=50,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=4,
+        ),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert len(cuts) == 2
+    drafts = [
+        m
+        for m in provider.seen[-1]
+        if m.role == "assistant" and _text_of(m) == "partial draft"
+    ]
+    assert len(drafts) == 2
+    assert all(m.reasoning is None for m in drafts)
+    assert all(m.reasoning_details is None for m in drafts)
+
+
+@pytest.mark.asyncio
+async def test_idle_cut_appends_nothing_when_the_spiral_wrote_no_draft() -> None:
+    """A reasoning-only cut has no draft, so appending would leave an empty
+    assistant turn on the record once the trace is dropped."""
+
+    class _PureSpiral:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.seen: list[list[LLMMessage]] = []
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = len(self.seen)
+            self.seen.append(list(messages))
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx < 2:
+                    for i in range(8):
+                        yield LLMStreamChunk(reasoning_delta=f"hmm {idx}-{i}")
+                        await asyncio.sleep(0.02)
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+
+    async def write() -> str:
+        return "wrote"
+
+    router.register(write)
+    provider = _PureSpiral()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            idle_stream_timeout_ms=50,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=4,
+        ),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    await collect(loop.run([LLMMessage.text_of("user", "go")], tools=schemas))
+    replayed = [m for m in provider.seen[-1] if m.role == "assistant"]
+    assert not [m for m in replayed if not _text_of(m) and not m.tool_calls]
+    assert all(m.reasoning is None for m in replayed)
 
 
 @pytest.mark.asyncio
