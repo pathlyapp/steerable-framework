@@ -328,6 +328,15 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       **两规格实盘冒烟均已通过**（2026-08-31）：arm D minimal 四工具面
       正常解题；arm E 默认面模型自发开会话 sh-* → 会话内跑 python3 →
       write_stdin 轮询 → 关闭 → 回报 42，会话工具全链路 41 秒。
+      **环境预检**：三题 Dockerfile 均多架构（arm64 可建）；注意
+      qemu-alpine-ssh 环境预装 expect/tmux——一次性 bash 理论可英雄式
+      解题，「必然 0 分」的硬度由 arm D 实盘回答；arm64 无 KVM 走 TCG
+      纯模拟，开机分钟级，运行命令用 `--agent-timeout-multiplier 5`
+      （高于 cheap-12 的 3，给模拟器留余量，跑前登记在此）。
+      运行命令（登记后不得改题集）：
+      `run.py --agent steerable --harness minimal --tasks qemu-alpine-ssh
+      install-windows-3.11 headless-terminal --jobs-dir evals/jobs/steerable-arm-d`
+      与同参 `--harness default …/steerable-arm-e`。
 
 ---
 
