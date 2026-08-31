@@ -17,11 +17,12 @@ REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
-# QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, and wall-clock SQL
-# speed tests need the whole 4-vCPU runner. n-concurrent=2 otherwise
-# shares the box; keyboard screenshots stall, qemu boot stalls, the
-# ELF never appears, extract-moves OCR takes minutes per frame, and
-# query-optimize's median SQL time misses the 1.05× golden bound.
+# QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
+# speed tests, and FastText training need the whole 4-vCPU runner.
+# n-concurrent=2 otherwise shares the box; keyboard screenshots stall,
+# qemu boot stalls, the ELF never appears, extract-moves OCR takes
+# minutes per frame, query-optimize's median SQL time misses the
+# 1.05× golden bound, and train-fasttext P@1 drops (0.556 vs ≥0.62).
 EXCLUSIVE_PACK_TASKS = frozenset(
     {
         "install-windows-3.11",
@@ -31,6 +32,7 @@ EXCLUSIVE_PACK_TASKS = frozenset(
         "make-mips-interpreter",
         "extract-moves-from-video",
         "query-optimize",
+        "train-fasttext",
     }
 )
 

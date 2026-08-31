@@ -126,14 +126,14 @@ jobs:
           if-no-files-found: ignore
 
   catalog:
-    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/48
+    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/49
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -146,7 +146,7 @@ jobs:
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 48 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt
@@ -192,7 +192,7 @@ jobs:
           split = os.environ.get("EVAL_SPLIT") or "cheap-12"
           if split == "catalog":
               title = "开始 · GHA catalog 89"
-              body = "产品 steerable × 全量 89 题，48 分片并行。"
+              body = "产品 steerable × 全量 89 题，49 分片并行。"
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（约 15），24 分片。用来迭代 harness，不是正式分。"
