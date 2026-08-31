@@ -126,6 +126,15 @@ def _assemble_harness(
     )
     descriptors = assembled.tool_selection.select(tools.describe_model())
     wrapped = assembled.orchestration.wrap(executor, provider=provider, tools=descriptors)
+    if spec.orchestration.impl != "single":
+        # The delegation family is the orchestration dimension's own surface:
+        # advertised past tool selection (orthogonal dimension), mirroring the
+        # sidecar chat path. Without this the subagent arm would run with no
+        # agent_* tools visible — a sham comparison. (Caught by smoke test:
+        # the model answered "no subagent tool exists".)
+        from steerable_agent_runtime.orchestration import orchestration_tool_descriptors
+
+        descriptors = [*descriptors, *orchestration_tool_descriptors()]
     return (
         ChainHooks(DeliveryHooks(), assembled.hooks),
         assembled.storage,

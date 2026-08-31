@@ -187,6 +187,44 @@ def test_assemble_harness_loop_limits(tmp_path: Path) -> None:
     assert limits.max_tool_errors is None
 
 
+def test_assemble_harness_subagent_advertises_delegation_tools(tmp_path: Path) -> None:
+    """W1.4.2.1 fix: the subagent arm must advertise the agent_* family —
+    a live smoke test caught the model answering "no subagent tool exists"
+    when only the executor was wrapped but no descriptor was added."""
+    spec_path = tmp_path / "sub.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: full\nmemory: stateless\norchestration: subagent\n",
+        encoding="utf-8",
+    )
+    *_, descriptors, _limits = headless_mod._assemble_harness(
+        spec_path, {"model": "fake"}, provider=None, executor=object(), tools=_FakeTools()
+    )
+    names = {d.get("function", {}).get("name") or d.get("name") for d in descriptors}
+    assert {"agent_spawn", "agent_send", "agent_wait", "agent_close"} <= names
+
+
+def test_assemble_harness_single_adds_no_delegation_tools(tmp_path: Path) -> None:
+    """The default arm's surface must stay exactly the workspace set —
+    the factorial protocol forbids smuggling orchestration tools into a
+    single-agent arm."""
+    spec_path = tmp_path / "single.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: full\nmemory: stateless\norchestration: single\n",
+        encoding="utf-8",
+    )
+    *_, descriptors, _limits = headless_mod._assemble_harness(
+        spec_path, {"model": "fake"}, provider=None, executor=object(), tools=_FakeTools()
+    )
+    names = {d.get("function", {}).get("name") or d.get("name") for d in descriptors}
+    assert not {"agent_spawn", "agent_send", "agent_wait", "agent_close"} & names
+
+
 class _FakeTools:
     def describe_model(self) -> list[dict]:
         return [{"name": "bash"}]
