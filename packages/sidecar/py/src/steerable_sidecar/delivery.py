@@ -140,6 +140,14 @@ _UNREADABLE_IMAGE_RETRY = (
     "{path} exists but is not a readable BMP/PNG header. Rewrite it from "
     "the instruction-named graphics source."
 )
+# gpt2-codegolf: "Your c program must be <5000 bytes."
+_BYTES_CAP = re.compile(r"<\s*(\d+)\s*bytes", re.IGNORECASE)
+_SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".h", ".py", ".js", ".rs"})
+_MAX_BYTES_RETRIES = 4
+_BYTES_CAP_RETRY = (
+    "{path} is {got} bytes; the instruction requires < {cap} bytes. "
+    "Shrink it (wc -c) before stopping."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -173,6 +181,7 @@ class DeliveryHooks(NoopHooks):
         self.completion_retries = 0
         self.empty_round_retries = 0
         self._size_retries = 0
+        self._bytes_retries = 0
         self._compact_nudges = 0
         self._force_tool = False
 
@@ -330,6 +339,35 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_bytes_cap_retry(self) -> CompletionAction | None:
+        """Veto a turn whose named source is over an instruction `<N bytes` cap."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        match = _BYTES_CAP.search(self._instruction or "")
+        if not match:
+            return None
+        cap = int(match.group(1))
+        if cap < 1:
+            return None
+        for path in self._required:
+            suffix = Path(path).suffix.lower()
+            if suffix not in _SOURCE_SUFFIXES or not Path(path).is_file():
+                continue
+            try:
+                got = Path(path).stat().st_size
+            except OSError:
+                continue
+            if got < cap:
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_BYTES_CAP_RETRY.format(path=path, got=got, cap=cap),
+                reason="named_bytes_cap",
+            )
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -349,6 +387,9 @@ class DeliveryHooks(NoopHooks):
         size_retry = self._named_image_size_retry()
         if size_retry is not None:
             return size_retry
+        bytes_retry = self._named_bytes_cap_retry()
+        if bytes_retry is not None:
+            return bytes_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1

@@ -604,3 +604,38 @@ async def test_named_bmp_skips_size_check_without_source_defines(tmp_path) -> No
     frame.write_bytes(_bmp_header(1024, 768))
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_source_retries_when_over_instruction_bytes_cap(tmp_path) -> None:
+    src = tmp_path / "gpt2.c"
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Write me a dependency-free C file. Call your program {src}. "
+            "Your c program must be <5000 bytes."
+        ),
+        named_outputs=(str(src),),
+    )
+    src.write_bytes(b"x" * 6000)
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_bytes_cap"
+    assert "6000" in (action.message or "")
+    assert "5000" in (action.message or "")
+    src.write_bytes(b"x" * 4999)
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_source_skips_bytes_cap_without_instruction_limit(
+    tmp_path,
+) -> None:
+    src = tmp_path / "mystery.c"
+    hooks = DeliveryHooks(
+        instruction=f"Write {src} so it compiles with gcc.",
+        named_outputs=(str(src),),
+    )
+    src.write_bytes(b"x" * 8000)
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
