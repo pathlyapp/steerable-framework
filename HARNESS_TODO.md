@@ -364,9 +364,9 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       `evals-arms.yml` 的 `arm_set=de`（矩阵 d=minimal / e=default，
       jobs-dir 即登记的 arm-d/arm-e，5× 超时上限保留作安全余量；
       GHA x86 有 KVM，实际应远快于本地 arm64 TCG）。
-      **环境预构建（2026-08-31）**：两个 QEMU 题环境已在后台预建
-      （`steerable-qemu-alpine-ssh-probe` / `steerable-win311-probe`），
-      消除跑分时构建超时风险；三题名均已在 Harbor 任务缓存核验存在。
+      **环境预备（2026-08-31）**：三题名均已在 Harbor 任务缓存核验存在；
+      本地预构建随跑分迁移 GHA 而止（GHA runner 自建环境，x86+KVM），
+      本地留下的 `steerable-*-probe` 镜像仅为缓存，非依赖。
 
 ---
 
