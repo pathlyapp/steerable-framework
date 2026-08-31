@@ -720,3 +720,36 @@ async def test_named_json_skips_blank_check_without_split(tmp_path) -> None:
     dest.write_text('[["a", "b\\n"]]', encoding="utf-8")
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_checker_retries_once_when_check_py_exists(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Write {dest}. You can look at the provided check.py "
+            "to verify if your solution is correct."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text('[["a", "b"]]', encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_checker"
+    assert "check.py" in (action.message or "")
+    again = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert again.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_checker_skips_when_outputs_still_missing(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}. Use check.py.",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "missing_named_output"

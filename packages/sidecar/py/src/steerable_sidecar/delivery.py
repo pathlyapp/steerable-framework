@@ -167,6 +167,14 @@ _JSON_BLANK_RETRY = (
     "checker that splits on newlines treats that as an empty illegal row. "
     "Strip trailing newlines and empty replacements."
 )
+# regex-chess: they wrote re.json then stopped; check.py would have printed
+# `Our move:  ` (empty) and 44 vs 45. Instruction names the checker.
+_CHECKER_NAME = re.compile(r"\bcheck\.py\b", re.IGNORECASE)
+_CHECKER_RETRY = (
+    "A checker script named in the instruction exists on disk. Run it "
+    "now (python3 check.py) against the named outputs and fix failures "
+    "before stopping."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -202,6 +210,7 @@ class DeliveryHooks(NoopHooks):
         self._size_retries = 0
         self._bytes_retries = 0
         self._json_retries = 0
+        self._check_retries = 0
         self._compact_nudges = 0
         self._force_tool = False
 
@@ -445,6 +454,27 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_checker_retry(self) -> CompletionAction | None:
+        """Veto stopping before running an instruction-named check.py."""
+        if self._check_retries >= 1 or not self._required:
+            return None
+        if not _CHECKER_NAME.search(self._instruction or ""):
+            return None
+        if any(not Path(path).exists() for path in self._required):
+            return None
+        candidates = [Path("/app/check.py"), Path("check.py")]
+        candidates.extend(Path(path).parent / "check.py" for path in self._required)
+        checker = next((path for path in candidates if path.is_file()), None)
+        if checker is None:
+            return None
+        self._check_retries += 1
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=_CHECKER_RETRY,
+            reason="named_checker",
+        )
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -473,6 +503,9 @@ class DeliveryHooks(NoopHooks):
         json_retry = self._named_json_blank_retry()
         if json_retry is not None:
             return json_retry
+        check_retry = self._named_checker_retry()
+        if check_retry is not None:
+            return check_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
