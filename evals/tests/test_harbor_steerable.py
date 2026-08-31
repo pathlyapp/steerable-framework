@@ -196,6 +196,13 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
     assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
     assert "--max-rounds 250" in text
+    run_fn = text[
+        text.index("@with_prompt_template") : text.index("def _forwarded_env")
+    ]
+    assert run_fn.index("await self.exec_as_agent") < run_fn.index(
+        "await self._align_verifier_python"
+    )
+    assert "finally:" in run_fn
     assert text.index("await self._inject_host_uv") < text.index(
         "await self._inject_host_python"
     )

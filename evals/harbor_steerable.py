@@ -477,16 +477,22 @@ class SteerableHarborAgent(BaseInstalledAgent):
         )
         env.setdefault("STEERABLE_HTTP_TITLE", "Steerable Harbor TB")
         log = f"{self.environment_logs_dir.as_posix()}/headless.log"
-        await self.exec_as_agent(
-            environment,
-            command=(
-                f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
-                f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
-                f"--max-rounds 250 "
-                f"> {shlex.quote(log)} 2>&1"
-            ),
-            env=env,
-        )
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
+                    f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
+                    f"--max-rounds 250 "
+                    f"> {shlex.quote(log)} 2>&1"
+                ),
+                env=env,
+            )
+        finally:
+            # Harbor pip-installs pytest then runs /usr/local/bin/python -m
+            # pytest. Re-point python at python3 after the agent in case a
+            # trial retargeted the symlink.
+            await self._align_verifier_python(environment)
 
     def _forwarded_env(self, keys: tuple[str, ...]) -> dict[str, str]:
         env: dict[str, str] = {}
