@@ -1550,6 +1550,24 @@ def test_wrap_up_may_drop_tools_while_telnet_closed() -> None:
     assert hooks.wrap_up_may_drop_tools() is True
 
 
+def test_wrap_up_may_drop_tools_when_telnet_listens() -> None:
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    host, port = srv.getsockname()[:2]
+    try:
+        hooks = DeliveryHooks(
+            instruction=(
+                f"Connect with `telnet {host} {port}` and wait for a login prompt."
+            ),
+            named_outputs=(),
+        )
+        assert hooks.wrap_up_may_drop_tools() is True
+    finally:
+        srv.close()
+
+
 def test_wrap_up_may_drop_tools_while_cpu_only_off(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1611,32 +1629,24 @@ async def test_telnet_retries_when_nothing_listens() -> None:
 
 
 @pytest.mark.asyncio
-async def test_telnet_accepts_when_banner_has_login() -> None:
-    host, port = _serve_once(b"localhost login: ")
-    hooks = DeliveryHooks(
-        instruction=(
-            f"Connect with `telnet {host} {port}` and wait for a login prompt."
-        ),
-        named_outputs=(),
-        min_tools_for_completion_retry=99,
-    )
-    action = await hooks.before_completion(_draft(tools=2), LoopContext())
-    assert action.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_telnet_retries_when_banner_is_empty() -> None:
-    host, port = _serve_once(b"")
-    hooks = DeliveryHooks(
-        instruction=(
-            f"Connect with `telnet {host} {port}` and wait for a login prompt."
-        ),
-        named_outputs=(),
-        min_tools_for_completion_retry=99,
-    )
-    action = await hooks.before_completion(_draft(tools=2), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "instruction_listen"
+async def test_telnet_accepts_when_port_listens() -> None:
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    host, port = srv.getsockname()[:2]
+    try:
+        hooks = DeliveryHooks(
+            instruction=(
+                f"Connect with `telnet {host} {port}` and wait for a login prompt."
+            ),
+            named_outputs=(),
+            min_tools_for_completion_retry=99,
+        )
+        action = await hooks.before_completion(_draft(tools=2), LoopContext())
+        assert action.kind == "accept"
+    finally:
+        srv.close()
 
 
 @pytest.mark.asyncio

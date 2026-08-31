@@ -336,12 +336,16 @@ _LISTENING_PORT = re.compile(
     re.IGNORECASE,
 )
 _MAX_LISTEN_RETRIES = 4
-_TELNET_LOGIN = re.compile(br"login\s*:", re.IGNORECASE)
+# QEMU ``-serial telnet:...,server,nowait`` is a single client. Connecting
+# to peek ``login:`` drains boot output; the hidden test then reads empty.
+_PROC_TCP = Path("/proc/net/tcp")
+_PROC_TCP6 = Path("/proc/net/tcp6")
+_LISTEN_ST = "0A"
 _TELNET_RETRY = (
-    "The instruction names `telnet {host} {port}`. That connection did "
-    "not show a login prompt. Keep the VM running in the background "
-    "(-daemonize / nohup) and poll until the prompt is actually there; "
-    "do not stop on a proxy that accepts TCP but sends no console."
+    "The instruction names `telnet {host} {port}`. Nothing is listening "
+    "on that port. Keep the VM running in the background "
+    "(-daemonize / nohup) until the port is open; do not stop on a "
+    "helper that exits after qemu starts."
 )
 _LISTEN_RETRY = (
     "The instruction names a service on port {port}. Nothing accepted a "
@@ -1035,8 +1039,7 @@ class DeliveryHooks(NoopHooks):
     def _listen_unsatisfied(self) -> bool:
         for host, port, kind in _instruction_listen_targets(self._instruction):
             if kind == "telnet":
-                banner = _tcp_banner(host, port, prompt=True)
-                if banner is None or not _TELNET_LOGIN.search(banner):
+                if not _telnet_port_ready(host, port):
                     return True
             elif not _tcp_accepts(host, port):
                 return True
@@ -1072,8 +1075,7 @@ class DeliveryHooks(NoopHooks):
             return None
         for host, port, kind in _instruction_listen_targets(self._instruction):
             if kind == "telnet":
-                banner = _tcp_banner(host, port, prompt=True)
-                if banner is not None and _TELNET_LOGIN.search(banner):
+                if _telnet_port_ready(host, port):
                     continue
                 self._listen_retries += 1
                 self._force_tool = True
@@ -1623,34 +1625,29 @@ def _tcp_accepts(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
-def _tcp_banner(
-    host: str, port: int, *, prompt: bool, timeout: float = 3.0
-) -> bytes | None:
-    """None if connect failed, else up to 1024 bytes (possibly empty)."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            sock.settimeout(timeout)
-            if prompt:
-                try:
-                    sock.sendall(b"\r\n")
-                except OSError:
-                    pass
-            chunks = b""
-            try:
-                while len(chunks) < 1024:
-                    data = sock.recv(256)
-                    if not data:
-                        break
-                    chunks += data
-                    if prompt and _TELNET_LOGIN.search(chunks):
-                        break
-            except TimeoutError:
-                pass
-            except socket.timeout:
-                pass
-            return chunks
-    except OSError:
-        return None
+def _proc_tcp_listening(port: int) -> bool:
+    needle = f"{port:04X}"
+    for path in (_PROC_TCP, _PROC_TCP6):
+        try:
+            text = path.read_text(encoding="ascii", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 4 or parts[3] != _LISTEN_ST:
+                continue
+            local = parts[1]
+            if local.rsplit(":", 1)[-1].upper() == needle:
+                return True
+    return False
+
+
+def _telnet_port_ready(host: str, port: int) -> bool:
+    """True if the port is in LISTEN. Never connect on Linux: QEMU serial
+    telnet is one client, and a probe steals boot output from the verifier."""
+    if _PROC_TCP.is_file() or _PROC_TCP6.is_file():
+        return _proc_tcp_listening(port)
+    return _tcp_accepts(host, port)
 
 
 def _cpu_only_meta_files() -> tuple[list[Path], list[Path]]:
