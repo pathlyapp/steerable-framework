@@ -460,6 +460,12 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "Output the primers in a fasta file titled primers.fasta."
     )
     assert "/app/primers.fasta" in titled
+    named = named_output_paths(
+        "You must write a python script in /app named convert_masks.py that "
+        "takes argparse args. Demo files: /app/demo_rgb.png and "
+        "/app/demo_metadata.csv"
+    )
+    assert "/app/convert_masks.py" in named
     gcode = named_output_paths(
         "When I run the print, what will the text show? Write the output "
         "to /app/out.txt"

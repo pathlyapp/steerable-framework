@@ -120,7 +120,8 @@ _RUN_COMMAND = re.compile(
     r"`((?:node|python3?|pypy3?)\s+[A-Za-z0-9./_-]+\.[A-Za-z][A-Za-z0-9]*)`"
 )
 _TITLED_FILE = re.compile(
-    r"\btitled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
+    r"\b(?:titled|named)\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]?",
+    re.IGNORECASE,
 )
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
