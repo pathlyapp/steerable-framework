@@ -207,6 +207,32 @@ async def test_wrap_up_skips_named_nudge_when_outputs_exist(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_inspect_blocked_after_wrap_up_named(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=f"write {dest}",
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    inspect = ToolCall(id="t", name="bash", arguments={"command": "ls /app"})
+    assert hooks.inspect_block_result(inspect) is None
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_named_output"
+    blocked = hooks.inspect_block_result(inspect)
+    assert blocked is not None
+    assert str(dest) in (blocked.error or "")
+    write = ToolCall(
+        id="t", name="bash", arguments={"command": f"cat > {dest}"}
+    )
+    assert hooks.inspect_block_result(write) is None
+
+
+@pytest.mark.asyncio
 async def test_nudge_after_compact_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=20)
     ctx = LoopContext()

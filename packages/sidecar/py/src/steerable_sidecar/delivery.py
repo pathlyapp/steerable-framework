@@ -307,7 +307,9 @@ class DeliveryHooks(NoopHooks):
         """Refuse inspect-only tools after named-output nudges are ignored.
 
         Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
-        cannot eat the Harbor window. Bash that compiles (make/gcc), runs
+        cannot eat the Harbor window. Also gates after the wrap-up named
+        nudge so a render/OCR loop cannot continue after the time-budget
+        notice when explore nudges were still 0. Bash that compiles (make/gcc), runs
         ``node …`` (side-effect frames), runs an on-disk named ``.py``,
         runs a helper ``.py`` whose source mutates a still-missing named
         path, or mutates a still-missing named path still runs.
@@ -316,7 +318,11 @@ class DeliveryHooks(NoopHooks):
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
-        if not scored or self.nudges < _BLOCK_EXPLORE_AFTER_NUDGES:
+        gated = (
+            self.nudges >= _BLOCK_EXPLORE_AFTER_NUDGES
+            or self._wrap_up_named_nudges >= 1
+        )
+        if not scored or not gated:
             return None
         name = call.name
         if name not in _EXPLORE:
