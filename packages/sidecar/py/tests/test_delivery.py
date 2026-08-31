@@ -355,6 +355,12 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
     )
     assert "/app/doomgeneric_mips" in doom
     assert "/app/vm.js" in doom
+    quoted_elf = named_output_paths(
+        "producing an ELF called `doomgeneric_mips`, run `node vm.js`, "
+        "frames written to /tmp/frame.bmp"
+    )
+    assert "/app/doomgeneric_mips" in quoted_elf
+    assert "/tmp/frame.bmp" in quoted_elf
     titled = named_output_paths(
         "Output the primers in a fasta file titled primers.fasta."
     )

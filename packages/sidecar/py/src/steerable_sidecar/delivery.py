@@ -105,11 +105,11 @@ _NAMED_OUTPUT_PATH = re.compile(
 )
 # TB often says "called vm.js" / "run `node vm.js`" without `/app/`.
 _CALLED_WITH_EXT = re.compile(
-    r"\bcalled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
+    r"\bcalled\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]?"
 )
 _FILE_CALLED = re.compile(
     r"\b(?:file|program|script|binary|elf)\s+called\s+"
-    r"([A-Za-z][A-Za-z0-9._-]*)\b",
+    r"[`'\"]?([A-Za-z][A-Za-z0-9._-]*)[`'\"]?",
     re.IGNORECASE,
 )
 _RUN_ENTRY = re.compile(
