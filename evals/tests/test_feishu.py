@@ -9,6 +9,7 @@ from evals.feishu import (
     card_payload,
     collect_rows,
     merge_summaries,
+    outcome_from_trial_dir,
     overall_ok,
     summarize_result,
     trial_task_id,
@@ -263,3 +264,73 @@ def test_merge_summaries_retry_overwrites_env_start_error() -> None:
     assert merged["n_errored"] == 0
     assert merged["n_completed"] == 3
     assert merged["mean"] == 2 / 3
+
+
+def test_outcome_from_trial_dir_reads_pytest_summary(tmp_path: Path) -> None:
+    trial = tmp_path / "2026-08-31__01-44-00" / "build-cython-ext__abc"
+    (trial / "verifier").mkdir(parents=True)
+    (trial / "verifier" / "test-stdout.txt").write_text(
+        "PASSED ../tests/test_outputs.py::test_ok\n"
+        "========================= 1 passed in 0.1s =========================\n"
+    )
+    assert outcome_from_trial_dir(trial) == "pass"
+    (trial / "verifier" / "test-stdout.txt").write_text(
+        "FAILED ../tests/test_outputs.py::test_ok\n"
+        "========================= 1 failed in 0.1s =========================\n"
+    )
+    assert outcome_from_trial_dir(trial) == "fail"
+    empty = tmp_path / "2026-08-31__01-44-00" / "protein-assembly__xyz"
+    empty.mkdir(parents=True)
+    (empty / "exception.txt").write_text("TLS handshake timeout\n")
+    assert outcome_from_trial_dir(empty) == "error"
+
+
+def test_collect_rows_fills_timeout_trials_from_logs(tmp_path: Path) -> None:
+    """GHA kill before job result.json: still score finished trial pytest logs."""
+    shard = tmp_path / "eval-steerable-5"
+    job = shard / "2026-08-31__01-44-01"
+    trial = job / "build-cython-ext__abc"
+    (trial / "verifier").mkdir(parents=True)
+    (shard / "eval-status-steerable.txt").write_text("failed\n")
+    (trial / "verifier" / "test-stdout.txt").write_text(
+        "PASSED ../tests/test_outputs.py::test_ok\n"
+        "========================= 1 passed in 0.1s =========================\n"
+    )
+    rows = collect_rows(tmp_path)
+    assert rows[0][0] == "steerable"
+    assert rows[0][2] is not None
+    assert rows[0][2]["passed"] == ["build-cython-ext"]
+    assert rows[0][2]["n_completed"] == 1
+    assert rows[0][2]["mean"] == 1.0
+
+
+def test_collect_rows_job_json_wins_over_trial_logs(tmp_path: Path) -> None:
+    shard = tmp_path / "eval-steerable-0"
+    job = shard / "2026-08-31__01-44-00"
+    trial = job / "fix-git__x"
+    (trial / "verifier").mkdir(parents=True)
+    (shard / "eval-status-steerable.txt").write_text("ran\n")
+    (trial / "verifier" / "test-stdout.txt").write_text(
+        "FAILED ../tests/test_outputs.py::test_ok\n"
+        "========================= 1 failed in 0.1s =========================\n"
+    )
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 1,
+                    "n_errored_trials": 0,
+                    "evals": {
+                        "steerable": {
+                            "metrics": [{"mean": 1.0}],
+                            "reward_stats": {"reward": {"1.0": ["fix-git__x"]}},
+                        }
+                    },
+                }
+            }
+        )
+    )
+    rows = collect_rows(tmp_path)
+    assert rows[0][2] is not None
+    assert rows[0][2]["passed"] == ["fix-git"]
+    assert rows[0][2]["failed"] == []

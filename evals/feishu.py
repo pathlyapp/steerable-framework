@@ -29,6 +29,59 @@ def trial_task_id(trial_name: str) -> str:
     return trial_name.rsplit("__", 1)[0]
 
 
+def outcome_from_trial_dir(trial: Path) -> str | None:
+    """``pass`` / ``fail`` / ``error`` from logs when job ``result.json`` is missing.
+
+    GHA may kill Harbor at 360 min before the job-level ``result.json`` is
+    written. Finished trials still have ``verifier/test-stdout.txt``.
+    """
+    stdout = trial / "verifier" / "test-stdout.txt"
+    if stdout.is_file():
+        try:
+            text = stdout.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if re.search(r"\d+ failed", text) or re.search(r"(?m)^FAILED ", text):
+            return "fail"
+        if re.search(r"\d+ passed", text) or re.search(r"(?m)^PASSED ", text):
+            return "pass"
+    if (trial / "exception.txt").is_file():
+        return "error"
+    return None
+
+
+def trial_log_summaries(root: Path) -> dict[str, dict[str, Any]]:
+    """Per-agent pass/fail from trial dirs (timeout shards without job json)."""
+    by_agent: dict[str, dict[str, str]] = {}
+    if not root.is_dir():
+        return {}
+    for trial in root.rglob("*"):
+        if not trial.is_dir() or "__" not in trial.name:
+            continue
+        if not _JOB_DIR.match(trial.parent.name):
+            continue
+        kind = outcome_from_trial_dir(trial)
+        if kind is None:
+            continue
+        agent = agent_from_path(trial) or "steerable"
+        by_agent.setdefault(agent, {})[trial_task_id(trial.name)] = kind
+    out: dict[str, dict[str, Any]] = {}
+    for agent, outcome in by_agent.items():
+        passed = [task for task, kind in outcome.items() if kind == "pass"]
+        failed = [task for task, kind in outcome.items() if kind == "fail"]
+        errored = [task for task, kind in outcome.items() if kind == "error"]
+        n_completed = len(outcome)
+        out[agent] = {
+            "mean": (len(passed) / n_completed) if n_completed else None,
+            "passed": passed,
+            "failed": failed,
+            "errored": errored,
+            "n_errored": len(errored),
+            "n_completed": n_completed,
+        }
+    return out
+
+
 def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Pull Mean, pass/fail ids, and error count from a Harbor ``result.json``."""
     stats = payload.get("stats") if isinstance(payload, dict) else None
@@ -284,6 +337,13 @@ def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
         agent: merge_summaries([summarize_result(payload) for payload in payloads])
         for agent, payloads in grouped.items()
     }
+    # Job-level json wins; trial logs fill tasks Harbor did not record
+    # (GHA 360-minute kill before the shard result.json is written).
+    for agent, logs in trial_log_summaries(root).items():
+        existing = summaries.get(agent)
+        summaries[agent] = (
+            merge_summaries([logs, existing]) if existing else logs
+        )
     rows: list[tuple[str, str, dict[str, Any] | None]] = []
     for agent, status in sorted(_status_by_agent(root).items()):
         rows.append((agent, status, summaries.get(agent)))

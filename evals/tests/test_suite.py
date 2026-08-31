@@ -157,6 +157,8 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "merge-multiple: true" not in weekly
     assert "--n-concurrent 2" in weekly
     assert "**/eval-status-*.txt" in weekly
+    assert "evals/jobs/steerable/*/*/result.json" in weekly
+    assert weekly.count("evals/jobs/steerable/*/*/result.json") == 2
     assert "pull_request:" not in weekly
     assert "--split catalog" in weekly
     assert "--split failed-prev" in weekly

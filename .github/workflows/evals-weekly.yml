@@ -72,6 +72,7 @@ jobs:
           path: |
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/*/result.json
+            evals/jobs/${{ matrix.agent }}/*/*/result.json
             evals/jobs/${{ matrix.agent }}/*/*/agent/headless.log
             evals/jobs/${{ matrix.agent }}/*/*/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/*/*/exception.txt
@@ -120,6 +121,7 @@ jobs:
           path: |
             eval-status-steerable.txt
             evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/result.json
             evals/jobs/steerable/*/*/agent/headless.log
             evals/jobs/steerable/*/*/verifier/test-stdout.txt
             evals/jobs/steerable/*/*/exception.txt
@@ -168,6 +170,7 @@ jobs:
           path: |
             eval-status-steerable.txt
             evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/result.json
             evals/jobs/steerable/*/*/agent/headless.log
             evals/jobs/steerable/*/*/verifier/test-stdout.txt
             evals/jobs/steerable/*/*/exception.txt
