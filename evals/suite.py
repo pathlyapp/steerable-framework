@@ -25,6 +25,7 @@ EXCLUSIVE_PACK_TASKS = frozenset(
     {
         "install-windows-3.11",
         "qemu-startup",
+        "qemu-alpine-ssh",
         "make-doom-for-mips",
         "make-mips-interpreter",
         "extract-moves-from-video",

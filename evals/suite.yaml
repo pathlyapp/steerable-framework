@@ -27,9 +27,9 @@ run:
   # Used to pack shards; not a score. pack_floor_minutes is 180 so a 170-minute
   # wrap cannot stack six "short" recorded tasks onto one 360-minute GHA job.
   # Catalog GHA uses 36 shards (≤3 tasks/shard); failed-prev stays 24.
-  # install-windows-3.11, qemu-startup, the MIPS ELF compiles, and
-  # extract-moves-from-video pack onto exclusive shards so n-concurrent=2
-  # does not share the 4-vCPU runner.
+  # install-windows-3.11, qemu-startup, qemu-alpine-ssh, the MIPS ELF
+  # compiles, and extract-moves-from-video pack onto exclusive shards so
+  # n-concurrent=2 does not share the 4-vCPU runner.
   pack_floor_minutes: 180
   catalog_minutes:
     adaptive-rejection-sampler: 8
