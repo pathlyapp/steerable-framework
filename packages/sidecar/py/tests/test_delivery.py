@@ -471,6 +471,34 @@ async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
         arguments={"command": f"ffmpeg -i /app/v.mp4 -f rawvideo - > {target}"},
     )
     assert hooks.inspect_block_result(ffmpeg_write) is None
+    helper = ToolCall(id="t", name="bash", arguments={"command": "python3 gen.py"})
+    assert hooks.inspect_block_result(helper) is not None
+    scratch = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": "cat > /tmp/explore.py << 'EOF'\nprint(1)\nEOF"},
+    )
+    assert hooks.inspect_block_result(scratch) is not None
+    run_missing = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {target}"},
+    )
+    assert hooks.inspect_block_result(run_missing) is not None
+    compile_elf = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": "make -C /app all"},
+    )
+    assert hooks.inspect_block_result(compile_elf) is None
+    python_write = ToolCall(
+        id="t",
+        name="bash",
+        arguments={
+            "command": f"python3 -c \"open('{target}','w').write('x')\""
+        },
+    )
+    assert hooks.inspect_block_result(python_write) is None
     sock = tmp_path / "qemu-monitor"
     other = DeliveryHooks(named_outputs=(str(sock),), explore_before_nudge=1)
     other.nudges = 4

@@ -41,6 +41,18 @@ _BASH_WRITES = re.compile(
     r"|\b(?:g?cc|g\+\+|clang\+\+|rustc)\s+[^\n]*\s-o\s"
     r"|\b(?:make|cmake|qemu-img)\b"
 )
+_BASH_BUILDS = re.compile(
+    r"\b(?:g?cc|g\+\+|clang\+\+|rustc)\s+[^\n]*\s-o\s"
+    r"|\b(?:make|cmake|qemu-img)\b"
+)
+_BASH_MUTATE_FILE = re.compile(
+    r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
+    r"|\btee\b"
+    r"|\b(?:cp|mv|touch)\s+\S+"
+    r"|open\([^)]*['\"][wa]"
+    r"|Path\([^)]*\)\.write"
+    r"|\.write_text\("
+)
 
 _COMPACT_MARKER = "[context compacted: earlier conversation summarized]"
 _EXPLORE_NUDGE = (
@@ -164,8 +176,10 @@ class DeliveryHooks(NoopHooks):
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
         """Refuse inspect-only tools after named-output nudges are ignored.
 
-        Runs *before* the tool so a 3-hour OCR/ffmpeg loop cannot eat the
-        Harbor window. Bash that already looks like a write still runs.
+        Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
+        cannot eat the Harbor window. Bash that compiles (make/gcc) or
+        mutates a still-missing named path still runs. ``python3 gen.py``
+        and ``cat > explore.py`` do not.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -174,7 +188,7 @@ class DeliveryHooks(NoopHooks):
         name = call.name
         if name not in _EXPLORE:
             return None
-        if name == "bash" and _bash_writes(call):
+        if name == "bash" and _bash_delivers_required(call, scored):
             return None
         listed = ", ".join(scored[:8])
         return ToolResult(
@@ -474,7 +488,20 @@ class DeliveryGatedExecutor:
         return bool(check(call)) if check is not None else False
 
 
-def _bash_writes(call: ToolCall) -> bool:
+def _bash_command(call: ToolCall) -> str:
     args = call.arguments or {}
-    command = str(args.get("command") or args.get("cmd") or args.get("script") or "")
-    return bool(_BASH_WRITES.search(command))
+    return str(args.get("command") or args.get("cmd") or args.get("script") or "")
+
+
+def _bash_writes(call: ToolCall) -> bool:
+    return bool(_BASH_WRITES.search(_bash_command(call)))
+
+
+def _bash_delivers_required(call: ToolCall, required: tuple[str, ...]) -> bool:
+    """True when bash compiles or mutates a still-missing named output."""
+    command = _bash_command(call)
+    if _BASH_BUILDS.search(command):
+        return True
+    if required and any(path in command for path in required):
+        return bool(_BASH_MUTATE_FILE.search(command))
+    return False
