@@ -475,6 +475,22 @@ class DeliveryHooks(NoopHooks):
             needsFollowup=True,
         )
 
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Only a successful write resets the loop's no-progress budget.
+
+        Inspection is how a spiral looks from the outside: the failing
+        catalog trials ran bash and read_file the whole way, so counting
+        every successful call would reset the budget continuously and the
+        guard would never fire. ``_BASH_WRITES`` already draws this line for
+        the artifact retries — a compile, a `make`, or running a generator
+        script delivers as much as a redirect.
+        """
+        if not result.success:
+            return False
+        if call.name in _MUTATING:
+            return True
+        return call.name == "bash" and _bash_writes(call)
+
     def wrap_up_may_drop_tools(self) -> bool:
         if self._delivery_missing():
             return False

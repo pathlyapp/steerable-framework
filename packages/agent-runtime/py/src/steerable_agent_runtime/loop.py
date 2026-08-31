@@ -206,6 +206,11 @@ class LoopContext:
     #: Successful tool results this turn — the anti-hallucination layer keys
     #: off "zero usable tool returns" to detect fabricated data reports.
     tool_successes: int = 0
+    #: Reasoning chars streamed since the last tool call the hooks counted as
+    #: progress (see ``LoopHooks.tool_made_progress``). Unlike the per-round
+    #: stream counters this survives across rounds, so it measures reasoning
+    #: that produced nothing rather than reasoning that was merely long.
+    reasoning_since_progress: int = 0
     #: Provider-reported prompt tokens of the last completed request, and the
     #: transcript length at that moment. Ground truth for compaction pressure
     #: (the heuristic estimate drifts per model; this does not). Hooks that
@@ -286,6 +291,17 @@ class LoopConfig:
     #: round over 75 min with zero tool calls. Volume is what the model
     #: actually spends. ``None`` disables.
     idle_stream_max_chars: int | None = None
+    #: Cut a tool-less stream once this many reasoning chars have accumulated
+    #: since the last tool call the hooks counted as progress. The per-round
+    #: caps above measure one stream, which barely separates a spiral from a
+    #: long but productive run — a passing catalog trial reasoned 1.79 M chars
+    #: across the run and still delivered, because it kept writing. Reasoning
+    #: that produced nothing is the discriminator. The cut spends the budget,
+    #: so this bounds interruptions to one per cap rather than cutting every
+    #: later round at its first chunk. ``LoopHooks.tool_made_progress`` owns
+    #: what counts as progress, keeping the loop free of tool semantics.
+    #: ``None`` disables.
+    reasoning_without_progress_chars: int | None = None
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
     #: repeat only burns tokens and can push the model into a retry loop
@@ -351,6 +367,14 @@ class LoopConfig:
         ):
             raise ValueError(
                 "idle_stream_max_chars must be positive (or None to disable)"
+            )
+        if (
+            self.reasoning_without_progress_chars is not None
+            and self.reasoning_without_progress_chars <= 0
+        ):
+            raise ValueError(
+                "reasoning_without_progress_chars must be positive "
+                "(or None to disable)"
             )
 
 
@@ -1163,11 +1187,18 @@ class CoreLoop:
                             last_reason_chunk_at = arrived
                         idle_cap = self._config.idle_stream_timeout_ms
                         char_cap = self._config.idle_stream_max_chars
+                        stale_cap = self._config.reasoning_without_progress_chars
                         if not tool_calls:
                             if idle_cap is not None and reasoning_active_ms >= idle_cap:
                                 idle_cut_trigger = "active_ms"
                             elif char_cap is not None and stream_chars >= char_cap:
                                 idle_cut_trigger = "chars"
+                            elif (
+                                stale_cap is not None
+                                and ctx.reasoning_since_progress + stream_chars
+                                >= stale_cap
+                            ):
+                                idle_cut_trigger = "no_progress"
                         if idle_cut_trigger is not None:
                             stream_idle_cut = True
                             idle_cut_count += 1
@@ -1331,6 +1362,11 @@ class CoreLoop:
             # streaming filter before the content enters the transcript.
             content = strip_pseudo_fn_final(content)
 
+            # Reasoning this round produced no tool call, so it counts against
+            # the progress budget; a call resets it in the tool-result path.
+            if not tool_calls:
+                ctx.reasoning_since_progress += stream_chars
+
             if stream_idle_cut:
                 yield LoopEvent(
                     "hook_action",
@@ -1339,10 +1375,17 @@ class CoreLoop:
                         "action": "idle_stream_cut",
                         "elapsedMs": int(reasoning_active_ms),
                         "chars": stream_chars,
+                        "staleChars": ctx.reasoning_since_progress,
                         "trigger": idle_cut_trigger,
                         "round": round_index,
                     },
                 )
+                # Spend the budget on the cut. Left standing it would be over
+                # cap for every later round too, cutting each one at its first
+                # chunk — and the model cannot decide what to write with no
+                # reasoning at all, so it would never reach a tool call. One
+                # interruption per cap of unproductive reasoning is the point.
+                ctx.reasoning_since_progress = 0
 
             idle_wrap = stream_idle_cut and idle_cut_count >= 2
             if stream_budget_cut or idle_wrap:
@@ -1357,6 +1400,8 @@ class CoreLoop:
                     # named retries cannot each Hmm for another idle cap.
                     if content.strip():
                         manager.append(_cut_draft(content))
+                    if stream_idle_cut:
+                        manager.append_fragment(StreamCutNotice())
                     if was_wrap:
                         wrap_up_tool_rounds_used += 1
                     continue
@@ -1642,6 +1687,11 @@ class CoreLoop:
                     # ── hook: post_tool_result (spill / truncation) ──────
                     result = await self._hooks.post_tool_result(result, call, ctx)
 
+                    if self._config.reasoning_without_progress_chars is not None:
+                        judge = getattr(self._hooks, "tool_made_progress", None)
+                        if judge is None or judge(result, call):
+                            ctx.reasoning_since_progress = 0
+
                     ctx.tool_calls_used += 1
                     tool_started = started_by_idx.get(call_idx, time.monotonic())
                     duration_ms = int((time.monotonic() - tool_started) * 1000)
@@ -1891,6 +1941,13 @@ _DISCIPLINE_RETRY_NOTICE = (
     "open-ended phrasing."
 )
 
+_STREAM_CUT_NOTICE = (
+    "[system notice] The previous reply was cut off mid-reasoning because it "
+    "ran on without issuing a tool call. Do not resume that train of thought "
+    "and do not re-derive it. Issue the next concrete tool call now — write "
+    "the file, run the command, or check the result."
+)
+
 _NARRATION_REQUEST = (
     "[system notice] The task ended without a natural-language summary. Do "
     "NOT call any tools. Summarize what was done and what the tool results "
@@ -1928,6 +1985,24 @@ class DisciplineRetryNotice(ContextFragment):
     @classmethod
     def type_markers(cls) -> tuple[str, str]:
         return ("[system notice] The previous reply", "")
+
+
+class StreamCutNotice(ContextFragment):
+    """Tells the model its stream was cut, so it does not resume the spiral.
+
+    Without it the transcript just ends on the model's own truncated draft
+    and the next request reads as "keep going". Codex marks an interrupted
+    turn the same way; pi drops the aborted message outright.
+    """
+
+    content_kind = "loop.stream_cut_notice"
+
+    def body(self) -> str:
+        return _STREAM_CUT_NOTICE
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] The previous reply was cut off", "")
 
 
 class NarrationRequest(ContextFragment):

@@ -294,6 +294,17 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # every chunk inside the wrap-up per-chunk wait, so volume is the
             # only trigger that fires. Well above a normal reasoning burst.
             idle_stream_max_chars=200_000,
+            # The per-round caps above barely separate spirals from long but
+            # productive trials — fix-ocaml-gc reasoned 1.79 M chars across
+            # the run and still scored, because it kept writing. Reasoning
+            # that delivered nothing is the discriminator. Replaying this rule
+            # over catalog-89 with DeliveryHooks.tool_made_progress deciding
+            # the resets: 150 K fires on 14 of 31 failures against 6 of 58
+            # passes, 200 K on 10 against 1, 250 K on 6 against none. 150 K
+            # takes the widest reach because a false positive costs one
+            # interruption (no passing trial crossed the cap twice) on a
+            # trial that is already writing files.
+            reasoning_without_progress_chars=150_000,
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the

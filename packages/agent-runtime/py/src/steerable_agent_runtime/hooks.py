@@ -193,6 +193,16 @@ class LoopHooks(Protocol):
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction: ...
 
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Whether this call advanced the task, resetting the loop's
+        ``reasoning_without_progress_chars`` budget.
+
+        The loop knows nothing about tool semantics, so the product decides.
+        DeliveryHooks counts only calls that wrote a file, which is what
+        separates catalog spirals from long-but-productive trials.
+        """
+        ...
+
 
 class NoopHooks:
     """Default hooks: pass everything through unchanged."""
@@ -225,6 +235,15 @@ class NoopHooks:
         fail, so wrap-up cannot accept a text-only stop.
         """
         return True
+
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Any call that returned without error counts as progress.
+
+        The conservative default: it resets the budget often, so the loop
+        cuts less. Products that can tell delivery from inspection should
+        narrow it.
+        """
+        return result.success
 
 
 class ChainHooks:
@@ -329,5 +348,18 @@ class ChainHooks:
         for hook in self._hooks:
             drop = getattr(hook, "wrap_up_may_drop_tools", None)
             if callable(drop) and not drop():
+                return False
+        return True
+
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Progress only when every hook that judges it agrees.
+
+        Any hook may withhold, matching ``wrap_up_may_drop_tools``: a narrow
+        judge (DeliveryHooks counts writes only) would otherwise be
+        overridden by a broad one and the budget would never accumulate.
+        """
+        for hook in self._hooks:
+            judge = getattr(hook, "tool_made_progress", None)
+            if callable(judge) and not judge(result, call):
                 return False
         return True

@@ -1563,6 +1563,26 @@ def test_wrap_up_keeps_tools_when_seeded_named_path_vanishes(tmp_path) -> None:
     assert hooks.wrap_up_may_drop_tools() is False
 
 
+def test_only_writes_count_as_progress() -> None:
+    """Inspection is what a spiral does; resetting the loop's no-progress
+    budget on it would keep the budget from ever accumulating."""
+    hooks = DeliveryHooks(named_outputs=())
+    ok = ToolResult(success=True, message="fine")
+
+    def bash(command: str) -> ToolCall:
+        return ToolCall(id="t", name="bash", arguments={"command": command})
+
+    assert hooks.tool_made_progress(ok, _call("write_file")) is True
+    assert hooks.tool_made_progress(ok, bash("cat > /app/out.py")) is True
+    assert hooks.tool_made_progress(ok, bash("make solver")) is True
+    assert hooks.tool_made_progress(ok, _call("read_file")) is False
+    assert hooks.tool_made_progress(ok, bash("ls -la /app")) is False
+    assert hooks.tool_made_progress(ok, bash("grep -rn foo .")) is False
+    # A write that failed delivered nothing.
+    failed = ToolResult(success=False, error="permission denied")
+    assert hooks.tool_made_progress(failed, _call("write_file")) is False
+
+
 @pytest.mark.asyncio
 async def test_missing_named_retries_when_seeded_file_vanishes(tmp_path) -> None:
     seeded = tmp_path / "seed.dat"

@@ -959,6 +959,181 @@ async def test_idle_cut_appends_nothing_when_the_spiral_wrote_no_draft() -> None
 
 
 @pytest.mark.asyncio
+async def test_cut_tells_the_model_it_was_cut() -> None:
+    """Dropping the trace leaves the transcript ending on the model's own
+    truncated draft, which reads as "keep going"; say the stream was cut."""
+
+    class _SpiralThenWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.seen: list[list[LLMMessage]] = []
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = len(self.seen)
+            self.seen.append(list(messages))
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx < 2:
+                    yield LLMStreamChunk(content_delta="I will now consider")
+                    for i in range(8):
+                        yield LLMStreamChunk(reasoning_delta=f"hmm {idx}-{i}")
+                        await asyncio.sleep(0.02)
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+
+    async def write() -> str:
+        return "wrote"
+
+    router.register(write)
+    provider = _SpiralThenWrite()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            idle_stream_timeout_ms=50,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=4,
+        ),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    await collect(loop.run([LLMMessage.text_of("user", "go")], tools=schemas))
+    told = [
+        m
+        for m in provider.seen[-1]
+        if "was cut off mid-reasoning" in _text_of(m)
+    ]
+    assert len(told) == 1
+
+
+@pytest.mark.asyncio
+async def test_reasoning_without_progress_cuts_across_rounds() -> None:
+    """Each round stays under the per-round caps, but nothing was delivered,
+    so the volume that produced nothing is what has to add up."""
+
+    class _SmallSpiralRounds:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.rounds = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            self.rounds += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                yield LLMStreamChunk(reasoning_delta="x" * 400)
+
+            return _gen()
+
+    class _AlwaysRetry(NoopHooks):
+        async def before_completion(self, draft, ctx):
+            return CompletionAction(
+                kind="retry",
+                message="write the named output files now",
+                reason="missing_named_output",
+            )
+
+    provider = _SmallSpiralRounds()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(
+            idle_stream_max_chars=100_000,
+            reasoning_without_progress_chars=1_000,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=3,
+        ),
+        hooks=_AlwaysRetry(),
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert cuts, "cumulative reasoning never triggered a cut"
+    assert all(c.data["trigger"] == "no_progress" for c in cuts)
+    # 400 chars a round under a 1 K budget: the third round crosses it.
+    assert cuts[0].data["staleChars"] >= 1_000
+    # The cut spends the budget, so every cut reports one cap's worth of
+    # reasoning. Left standing it would keep growing (1.2 K, 1.6 K, 2 K …)
+    # and cut every later round at its first chunk, and the model cannot
+    # pick a file to write on no reasoning at all.
+    assert {c.data["staleChars"] for c in cuts} == {1_200}
+
+
+@pytest.mark.asyncio
+async def test_progress_resets_the_no_progress_budget() -> None:
+    """A delivering call means the reasoning bought something, so the budget
+    starts over rather than dragging a productive run toward a cut."""
+
+    class _ThinkWriteThinkWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.rounds = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            self.rounds += 1
+            mine = self.rounds
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                yield LLMStreamChunk(reasoning_delta="x" * 800)
+                if mine >= 6:
+                    yield LLMStreamChunk(content_delta="done")
+                    yield LLMStreamChunk(finish_reason="stop")
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+
+    async def write() -> str:
+        return "wrote"
+
+    router.register(write)
+    loop = CoreLoop(
+        _ThinkWriteThinkWrite(),
+        RouterToolExecutor(router),
+        LoopConfig(reasoning_without_progress_chars=1_000),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert cuts == []
+
+
+@pytest.mark.asyncio
 async def test_idle_stream_ignores_long_sse_gaps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
