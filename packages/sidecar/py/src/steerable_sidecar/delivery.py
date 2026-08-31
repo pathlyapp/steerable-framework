@@ -111,11 +111,6 @@ _RUN_ENTRY = re.compile(
 _TITLED_FILE = re.compile(
     r"\btitled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
 )
-# make-mips-interpreter: `node vm.js` writes /tmp/frame.bmp but the
-# instruction never names that path; tests still look for it.
-_NODE_VM_JS = re.compile(r"`node\s+(?:/app/)?vm\.js`")
-_SAVES_FRAMES = re.compile(r"\bframes?\b", re.IGNORECASE)
-_DOOM_FRAME = "/tmp/frame.bmp"
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
     "Continue the task now with bash, read_file, write_file, or edit_file. "
@@ -137,13 +132,12 @@ _INSPECT_BLOCKED = (
     "(cat/tee/python to that path). Further read_file or inspect-only bash "
     "is blocked until they exist."
 )
-# make-doom-for-mips wrote /tmp/frame.bmp at 1024×768 (stock display /
-# screenshot) while doomgeneric.h names 640×400. Instruction text does
-# not mention those numbers; they live in the named graphics source.
+# Instruction-named graphics source: RESX/RESY in a .c / header vs the
+# named BMP/PNG on disk.
 _MAX_SIZE_RETRIES = 4
 _NAMED_C_FILE = re.compile(r"\b([A-Za-z][A-Za-z0-9._-]*\.c)\b")
-_RESX = re.compile(r"DOOMGENERIC_RESX\s+(\d+)")
-_RESY = re.compile(r"DOOMGENERIC_RESY\s+(\d+)")
+_RESX = re.compile(r"RESX\s+(\d+)")
+_RESY = re.compile(r"RESY\s+(\d+)")
 _IMAGE_SUFFIXES = frozenset({".bmp", ".png"})
 _SIZE_MISMATCH_RETRY = (
     "{path} is {got}; the instruction-named graphics source defines "
@@ -171,40 +165,15 @@ _MB_CAP_RETRY = (
     "{path} is {got} bytes; the instruction requires < {cap} MB. "
     "Shrink it before stopping."
 )
-# filter-js-from-html: BeautifulSoup prettify re-serialized clean files.
-_HTML_TASK = re.compile(r"\b(?:html|xss|javascript)\b", re.IGNORECASE)
-_PRETTIFY_CALL = re.compile(r"\.prettify\s*\(")
-_PRETTIFY_RETRY = (
-    "{path} calls prettify(); the instruction forbids altering HTML "
-    "formatting. Remove pretty-print/re-serialize and leave files with "
-    "no scripts byte-identical."
-)
-# gcode-to-text / extract-moves: a raster or full-frame OCR dump is not
-# the scored string ("Hello", `n` / `get bag`).
+# Instruction asks what a print shows — a huge raster dump is not that string.
 _ASKS_SHOWN_TEXT = re.compile(
-    r"what will the text show|what text a print|moves they input",
+    r"what will the text show|what text a print",
     re.IGNORECASE,
 )
 _MAX_SHOWN_TEXT_BYTES = 4096
 _SHOWN_TEXT_RETRY = (
-    "{path} is {got} bytes; the instruction asks for the short text or "
-    "player moves, not a raster or OCR dump of the rendering. Write the "
-    "short string."
-)
-# mteb-retrieve: 5th cosine of "terminal-bench" became HumanEval after
-# they stripped bge/mteb query prefixes.
-_EMBED_RANK = re.compile(
-    r"\b(?:mteb|embedding|cosine similarity)\b",
-    re.IGNORECASE,
-)
-_CODE_BENCH_HIT = re.compile(
-    r"\b(?:HumanEval|MBPP|SWE-bench|LiveCodeBench|CodeContests)\b",
-    re.IGNORECASE,
-)
-_EMBED_HIT_RETRY = (
-    "{path} looks like a coding-benchmark title. The instruction ranks "
-    "embedding-corpus lines; keep the named package's default query "
-    "prompts and write the Nth highest cosine line, not a code-eval paper."
+    "{path} is {got} bytes; the instruction asks for the text a print "
+    "shows, not a raster of the rendering. Write the short string."
 )
 # path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
 _GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
@@ -221,26 +190,11 @@ _JSON_BLANK_RETRY = (
     "checker that splits on newlines treats that as an empty illegal row. "
     "Strip trailing newlines and empty replacements."
 )
-# regex-chess check.py; largest-eigenval eval.py ("can help you iterate").
 _CHECKER_NAME = re.compile(r"\b((?:check|eval)\.py)\b", re.IGNORECASE)
 _CHECKER_RETRY = (
     "A helper script named in the instruction ({name}) exists on disk. "
     "Run it now (python3 {name}) against the named outputs and fix "
     "failures before stopping."
-)
-# protein-assembly: gblock.txt must be one DNA line; FLAG without a His-tag
-# means they recalled a fluorescent protein instead of the pdb/fpbase fasta.
-_GBLOCK_TASK = re.compile(r"\bgblock\b", re.IGNORECASE)
-_DNA_ONLY = re.compile(r"^[ATCGatcg]+$")
-_CODON_BASES = "TCAG"
-_CODON_AA = "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG"
-_GBLOCK_DNA_RETRY = (
-    "{path} must be a single DNA line (A/T/C/G only), not an amino-acid "
-    "sequence or a multi-line dump."
-)
-_GBLOCK_TAG_RETRY = (
-    "{path} encodes FLAG but no His-tag. Query pdb/fpbase and paste the "
-    "donor fasta verbatim, including expression tags."
 )
 
 
@@ -499,31 +453,6 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
-    def _named_prettify_retry(self) -> CompletionAction | None:
-        """Veto an HTML sanitizer that pretty-prints instead of byte-identical edits."""
-        if self._bytes_retries >= _MAX_BYTES_RETRIES:
-            return None
-        text = self._instruction or ""
-        if not _HTML_TASK.search(text):
-            return None
-        for path in self._required:
-            if Path(path).suffix.lower() != ".py" or not Path(path).is_file():
-                continue
-            try:
-                src = Path(path).read_text(encoding="utf-8", errors="replace")[:64_000]
-            except OSError:
-                continue
-            if not _PRETTIFY_CALL.search(src):
-                continue
-            self._bytes_retries += 1
-            self._force_tool = True
-            return CompletionAction(
-                kind="retry",
-                message=_PRETTIFY_RETRY.format(path=path),
-                reason="named_prettify",
-            )
-        return None
-
     def _named_shown_text_retry(self) -> CompletionAction | None:
         """Veto a huge named .txt when the instruction asks for shown print text."""
         if self._bytes_retries >= _MAX_BYTES_RETRIES:
@@ -545,33 +474,6 @@ class DeliveryHooks(NoopHooks):
                 kind="retry",
                 message=_SHOWN_TEXT_RETRY.format(path=path, got=got),
                 reason="named_shown_text",
-            )
-        return None
-
-    def _named_embed_hit_retry(self) -> CompletionAction | None:
-        """Veto a coding-benchmark title on an embedding-rank retrieval task."""
-        if self._bytes_retries >= _MAX_BYTES_RETRIES:
-            return None
-        text = self._instruction or ""
-        if not _EMBED_RANK.search(text):
-            return None
-        for path in self._required:
-            if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
-                continue
-            try:
-                body = Path(path).read_text(encoding="utf-8", errors="replace")[
-                    :4000
-                ]
-            except OSError:
-                continue
-            if not _CODE_BENCH_HIT.search(body):
-                continue
-            self._bytes_retries += 1
-            self._force_tool = True
-            return CompletionAction(
-                kind="retry",
-                message=_EMBED_HIT_RETRY.format(path=path),
-                reason="named_embed_hit",
             )
         return None
 
@@ -632,39 +534,6 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
-    def _named_gblock_retry(self) -> CompletionAction | None:
-        """Veto a fusion gBlock that is not DNA or drops the donor His-tag."""
-        if self._bytes_retries >= _MAX_BYTES_RETRIES:
-            return None
-        if not _GBLOCK_TASK.search(self._instruction or ""):
-            return None
-        for path in self._required:
-            if "gblock" not in Path(path).name.lower() or not Path(path).is_file():
-                continue
-            try:
-                body = Path(path).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            lines = [line.strip() for line in body.splitlines() if line.strip()]
-            if len(lines) != 1 or not _DNA_ONLY.fullmatch(lines[0]):
-                self._bytes_retries += 1
-                self._force_tool = True
-                return CompletionAction(
-                    kind="retry",
-                    message=_GBLOCK_DNA_RETRY.format(path=path),
-                    reason="named_gblock_dna",
-                )
-            aa = _translate_dna(lines[0])
-            if "DYKDDDDK" in aa and "HHHHHH" not in aa:
-                self._bytes_retries += 1
-                self._force_tool = True
-                return CompletionAction(
-                    kind="retry",
-                    message=_GBLOCK_TAG_RETRY.format(path=path),
-                    reason="named_gblock_tag",
-                )
-        return None
-
     def _named_checker_retry(self) -> CompletionAction | None:
         """Veto stopping before running an instruction-named check.py/eval.py."""
         if self._check_retries >= 1 or not self._required:
@@ -719,18 +588,9 @@ class DeliveryHooks(NoopHooks):
         json_retry = self._named_json_blank_retry()
         if json_retry is not None:
             return json_retry
-        pretty_retry = self._named_prettify_retry()
-        if pretty_retry is not None:
-            return pretty_retry
         shown_retry = self._named_shown_text_retry()
         if shown_retry is not None:
             return shown_retry
-        embed_retry = self._named_embed_hit_retry()
-        if embed_retry is not None:
-            return embed_retry
-        gblock_retry = self._named_gblock_retry()
-        if gblock_retry is not None:
-            return gblock_retry
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry
@@ -855,31 +715,7 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
                 path = f"/app/{name.lstrip('./')}"
             if path not in seen:
                 seen.append(path)
-    if (
-        _NODE_VM_JS.search(text)
-        and _SAVES_FRAMES.search(text)
-        and _DOOM_FRAME not in seen
-    ):
-        seen.append(_DOOM_FRAME)
     return tuple(seen)
-
-
-def _translate_dna(dna: str) -> str:
-    seq = dna.upper().replace("U", "T")
-    out: list[str] = []
-    for i in range(0, len(seq) - 2, 3):
-        codon = seq[i : i + 3]
-        try:
-            index = (
-                _CODON_BASES.index(codon[0]) * 16
-                + _CODON_BASES.index(codon[1]) * 4
-                + _CODON_BASES.index(codon[2])
-            )
-        except ValueError:
-            out.append("X")
-            continue
-        out.append(_CODON_AA[index])
-    return "".join(out)
 
 
 def _json_has_blank_split_row(value: object) -> bool:

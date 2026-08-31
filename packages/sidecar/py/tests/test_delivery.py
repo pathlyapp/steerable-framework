@@ -310,15 +310,6 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "`node vm.js` and this should run the MIPS file"
     )
     assert "/app/vm.js" in mips
-    assert "/tmp/frame.bmp" not in mips
-    mips_frames = named_output_paths(
-        "implement a MIPS interpreter called vm.js so that I can run "
-        "`node vm.js`. Running this file should result in saving the "
-        "frames as they are rendered. I will check that the first frame "
-        "is correctly created and saved."
-    )
-    assert "/app/vm.js" in mips_frames
-    assert "/tmp/frame.bmp" in mips_frames
     doom = named_output_paths(
         "vm.js will expect a file called doomgeneric_mips and will run it, "
         "so that I can run `node vm.js`."
@@ -796,39 +787,6 @@ async def test_named_file_skips_mb_cap_without_instruction_limit(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_named_html_filter_retries_when_source_calls_prettify(
-    tmp_path,
-) -> None:
-    dest = tmp_path / "filter.py"
-    hooks = DeliveryHooks(
-        instruction=(
-            f"Create {dest} that removes JavaScript from HTML files "
-            "to prevent XSS. Do not alter formatting."
-        ),
-        named_outputs=(str(dest),),
-    )
-    dest.write_text("print(soup.prettify())\n", encoding="utf-8")
-    action = await hooks.before_completion(_draft(tools=4), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "named_prettify"
-    dest.write_text("open(sys.argv[1]).read().replace('<script>','')\n")
-    done = await hooks.before_completion(_draft(tools=5), LoopContext())
-    assert done.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_named_py_skips_prettify_check_without_html_task(tmp_path) -> None:
-    dest = tmp_path / "report.py"
-    hooks = DeliveryHooks(
-        instruction=f"Write {dest} that prints a table.",
-        named_outputs=(str(dest),),
-    )
-    dest.write_text("print(soup.prettify())\n", encoding="utf-8")
-    action = await hooks.before_completion(_draft(tools=2), LoopContext())
-    assert action.kind == "accept"
-
-
-@pytest.mark.asyncio
 async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
     dest = tmp_path / "out.txt"
     hooks = DeliveryHooks(
@@ -845,69 +803,6 @@ async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
     dest.write_text("HELLO\n", encoding="utf-8")
     done = await hooks.before_completion(_draft(tools=5), LoopContext())
     assert done.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_named_txt_retries_when_player_moves_file_is_an_ocr_dump(
-    tmp_path,
-) -> None:
-    dest = tmp_path / "solution.txt"
-    hooks = DeliveryHooks(
-        instruction=(
-            "Transcribe the video and create a file that has all the "
-            f"moves they input, one per line, at {dest}."
-        ),
-        named_outputs=(str(dest),),
-    )
-    dest.write_bytes(b"You are standing in an open field.\n" * 200)
-    action = await hooks.before_completion(_draft(tools=4), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "named_shown_text"
-    dest.write_text("n\nget bag\n", encoding="utf-8")
-    done = await hooks.before_completion(_draft(tools=5), LoopContext())
-    assert done.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_named_txt_retries_when_embed_rank_is_a_code_benchmark(
-    tmp_path,
-) -> None:
-    dest = tmp_path / "result.txt"
-    hooks = DeliveryHooks(
-        instruction=(
-            'Given the query "terminal-bench" retrieve the document with '
-            "the 5th highest cosine similarity among the texts at "
-            f"/app/data.txt using mteb. Write the resulting line to {dest}."
-        ),
-        named_outputs=(str(dest),),
-    )
-    dest.write_text(
-        "HumanEval: Benchmarking Python code generation via functional examples\n",
-        encoding="utf-8",
-    )
-    action = await hooks.before_completion(_draft(tools=4), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "named_embed_hit"
-    dest.write_text(
-        "MTEB: Massive Text Embedding Benchmark\n",
-        encoding="utf-8",
-    )
-    done = await hooks.before_completion(_draft(tools=5), LoopContext())
-    assert done.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_named_txt_skips_embed_hit_without_rank_instruction(
-    tmp_path,
-) -> None:
-    dest = tmp_path / "notes.txt"
-    hooks = DeliveryHooks(
-        instruction=f"Write a summary of HumanEval to {dest}.",
-        named_outputs=(str(dest),),
-    )
-    dest.write_text("HumanEval is a code generation benchmark.\n")
-    action = await hooks.before_completion(_draft(tools=2), LoopContext())
-    assert action.kind == "accept"
 
 
 @pytest.mark.asyncio
@@ -989,35 +884,6 @@ async def test_named_checker_retries_once_when_eval_py_exists(tmp_path) -> None:
     assert action.kind == "retry"
     assert action.reason == "named_checker"
     assert "eval.py" in (action.message or "")
-
-
-@pytest.mark.asyncio
-async def test_named_gblock_retries_when_not_dna(tmp_path) -> None:
-    dest = tmp_path / "gblock.txt"
-    hooks = DeliveryHooks(
-        instruction=f"The gBlock should be stored in {dest}.",
-        named_outputs=(str(dest),),
-    )
-    dest.write_text("DYKDDDDKMVSKGEE\n", encoding="utf-8")
-    action = await hooks.before_completion(_draft(tools=4), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "named_gblock_dna"
-    dest.write_text("GATTATAAAGATGATGATGATAAACATCATCATCATCATCAT\n")
-    done = await hooks.before_completion(_draft(tools=5), LoopContext())
-    assert done.kind == "accept"
-
-
-@pytest.mark.asyncio
-async def test_named_gblock_retries_when_flag_lacks_his_tag(tmp_path) -> None:
-    dest = tmp_path / "gblock.txt"
-    hooks = DeliveryHooks(
-        instruction=f"Design a gBlock fusion protein in {dest}.",
-        named_outputs=(str(dest),),
-    )
-    dest.write_text("GATTATAAAGATGATGATGATAAATTTTTTTTTTTTTT\n")
-    action = await hooks.before_completion(_draft(tools=4), LoopContext())
-    assert action.kind == "retry"
-    assert action.reason == "named_gblock_tag"
 
 
 @pytest.mark.asyncio
