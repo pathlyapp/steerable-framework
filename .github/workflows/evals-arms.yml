@@ -4,6 +4,9 @@ name: Evals harness arms
 # scoring costs money, so nothing here runs on a schedule.
 #
 #   bc: cheap-12 × {b: default, c: subagent}  — orchestration dimension
+#   a:  cheap-12 × {a: minimal} — arm A's official GHA baseline (the local
+#       0.833 was pre-registration code; with bc this completes the
+#       locked-model three-harness control of HARNESS_TODO 1.3.2)
 #   de: interactive-3 × {d: minimal, e: default} — session-tools dimension
 #       (qemu-alpine-ssh / install-windows-3.11 / headless-terminal,
 #        task set pre-registered and frozen 2026-08-31 in HARNESS_TODO 1.5.3)
@@ -18,10 +21,10 @@ on:
   workflow_dispatch:
     inputs:
       arm_set:
-        description: "bc = cheap-12 orchestration arms; de = interactive-3 session-tool arms"
+        description: "bc = cheap-12 orchestration arms; a = cheap-12 minimal baseline; de = interactive-3 session-tool arms"
         required: true
         type: choice
-        options: [bc, de]
+        options: [bc, a, de]
 
 permissions:
   contents: read
@@ -40,8 +43,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arm: ${{ fromJSON(inputs.arm_set == 'bc'
-          && '[{"letter":"b","harness":"default"},{"letter":"c","harness":"subagent"}]'
+        arm: ${{ fromJSON(
+          inputs.arm_set == 'bc'
+            && '[{"letter":"b","harness":"default"},{"letter":"c","harness":"subagent"}]'
+          || inputs.arm_set == 'a'
+            && '[{"letter":"a","harness":"minimal"}]'
           || '[{"letter":"d","harness":"minimal"},{"letter":"e","harness":"default"}]') }}
     steps:
       - uses: actions/checkout@v5
@@ -61,7 +67,7 @@ jobs:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
         run: |
           set +e
-          if [ "${{ inputs.arm_set }}" = "bc" ]; then
+          if [ "${{ inputs.arm_set }}" = "bc" ] || [ "${{ inputs.arm_set }}" = "a" ]; then
             uv run python -m evals.run --agent steerable \
               --harness "${{ matrix.arm.harness }}" --split cheap-12 \
               --jobs-dir "evals/jobs/steerable-arm-${{ matrix.arm.letter }}" \
