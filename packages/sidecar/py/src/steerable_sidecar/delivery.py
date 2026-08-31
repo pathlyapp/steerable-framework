@@ -86,6 +86,12 @@ _MISSING_NAMED_RETRY = (
     "now with write_file, edit_file, or bash — helper scripts alone are "
     "not enough."
 )
+_WRAP_UP_MARKER = "The time budget for this task is"
+_WRAP_UP_NAMED = (
+    "Time is almost up. These instruction-named output files still do "
+    "not exist: {paths}. Write them now with write_file, edit_file, or "
+    "bash; do not keep exploring or only reason in chat."
+)
 # Absolute paths TB instructions name as outputs (`/app/re.json`,
 # `/tmp/frame.bmp`, `/app/polyglot/cmain`). Existing paths at start are
 # inputs. Extensionless names must be nested so `/app/caffe` is not an
@@ -234,6 +240,7 @@ class DeliveryHooks(NoopHooks):
         self._json_retries = 0
         self._check_retries = 0
         self._compact_nudges = 0
+        self._wrap_up_named_nudges = 0
         self._force_tool = False
 
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
@@ -284,8 +291,27 @@ class DeliveryHooks(NoopHooks):
         new_compact = n_compacts > self._compact_nudges
         missing = tuple(p for p in self._required if not Path(p).exists())
         named_missing = bool(missing)
-        # dna-assembly planned primers.fasta for the whole soft timeout after
-        # three nudges; keep asking while named outputs are still absent.
+        wrapping = any(
+            _WRAP_UP_MARKER in (m.content_text or "") for m in transcript
+        )
+        if wrapping and missing and self._wrap_up_named_nudges < 1:
+            self._wrap_up_named_nudges += 1
+            self._force_tool = True
+            return PreStepAction(
+                kind="proceed",
+                appends=[
+                    TranscriptAppend(
+                        message=LLMMessage.text_of(
+                            "user",
+                            _WRAP_UP_NAMED.format(paths=", ".join(missing[:8])),
+                        ),
+                        kind="delivery.wrap_up_named",
+                    )
+                ],
+                reason="wrap_up_named_output",
+                tool_choice="required",
+                append_action="delivery_nudge",
+            )
         nudge_limit = (
             _MAX_MISSING_NAMED_RETRIES if named_missing else self._max_nudges
         )

@@ -99,6 +99,45 @@ async def test_named_missing_explore_nudges_are_capped(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wrap_up_lists_missing_named_paths_once(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=f"write {dest}",
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_named_output"
+    assert first.tool_choice == "required"
+    assert str(dest) in (first.appends[0].message.content_text or "")
+    second = await hooks.pre_step(notice, LoopContext())
+    assert second.reason != "wrap_up_named_output"
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_skips_named_nudge_when_outputs_exist(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_text("ok\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=f"write {dest}",
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    action = await hooks.pre_step(notice, LoopContext())
+    assert action.reason != "wrap_up_named_output"
+
+
+@pytest.mark.asyncio
 async def test_nudge_after_compact_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=20)
     ctx = LoopContext()
