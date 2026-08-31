@@ -179,6 +179,21 @@ _SHOWN_TEXT_RETRY = (
     "{path} is {got} bytes; the instruction asks for the text a print "
     "shows, not a raster of the rendering. Write the short string."
 )
+# mteb-retrieve: 5th cosine of "terminal-bench" became HumanEval after
+# they stripped bge/mteb query prefixes.
+_EMBED_RANK = re.compile(
+    r"\b(?:mteb|embedding|cosine similarity)\b",
+    re.IGNORECASE,
+)
+_CODE_BENCH_HIT = re.compile(
+    r"\b(?:HumanEval|MBPP|SWE-bench|LiveCodeBench|CodeContests)\b",
+    re.IGNORECASE,
+)
+_EMBED_HIT_RETRY = (
+    "{path} looks like a coding-benchmark title. The instruction ranks "
+    "embedding-corpus lines; keep the named package's default query "
+    "prompts and write the Nth highest cosine line, not a code-eval paper."
+)
 # path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
 _GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
 _GZIP_CAP_RETRY = (
@@ -502,6 +517,33 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_embed_hit_retry(self) -> CompletionAction | None:
+        """Veto a coding-benchmark title on an embedding-rank retrieval task."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        text = self._instruction or ""
+        if not _EMBED_RANK.search(text):
+            return None
+        for path in self._required:
+            if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
+                continue
+            try:
+                body = Path(path).read_text(encoding="utf-8", errors="replace")[
+                    :4000
+                ]
+            except OSError:
+                continue
+            if not _CODE_BENCH_HIT.search(body):
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_EMBED_HIT_RETRY.format(path=path),
+                reason="named_embed_hit",
+            )
+        return None
+
     def _named_gzip_cap_retry(self) -> CompletionAction | None:
         """Veto a named source over an instruction `<Nk gzip` compressed cap."""
         if self._bytes_retries >= _MAX_BYTES_RETRIES:
@@ -617,6 +659,9 @@ class DeliveryHooks(NoopHooks):
         shown_retry = self._named_shown_text_retry()
         if shown_retry is not None:
             return shown_retry
+        embed_retry = self._named_embed_hit_retry()
+        if embed_retry is not None:
+            return embed_retry
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry

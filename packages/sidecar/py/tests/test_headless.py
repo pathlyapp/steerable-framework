@@ -133,6 +133,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "empty illegal row" in headless_mod._SYSTEM
     assert "Our move:" in headless_mod._SYSTEM
     assert "0.994 is not > 0.995" in headless_mod._SYSTEM
+    assert "-zh-" in headless_mod._SYSTEM
+    assert "Nth highest cosine" in headless_mod._SYSTEM
+    assert "HumanEval" in headless_mod._SYSTEM
 
 
 def test_missing_instruction_errors() -> None:

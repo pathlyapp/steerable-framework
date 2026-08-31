@@ -764,6 +764,48 @@ async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_txt_retries_when_embed_rank_is_a_code_benchmark(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "result.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            'Given the query "terminal-bench" retrieve the document with '
+            "the 5th highest cosine similarity among the texts at "
+            f"/app/data.txt using mteb. Write the resulting line to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text(
+        "HumanEval: Benchmarking Python code generation via functional examples\n",
+        encoding="utf-8",
+    )
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_embed_hit"
+    dest.write_text(
+        "MTEB: Massive Text Embedding Benchmark\n",
+        encoding="utf-8",
+    )
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_skips_embed_hit_without_rank_instruction(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "notes.txt"
+    hooks = DeliveryHooks(
+        instruction=f"Write a summary of HumanEval to {dest}.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("HumanEval is a code generation benchmark.\n")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
 async def test_named_json_retries_when_string_has_newline(tmp_path) -> None:
     dest = tmp_path / "re.json"
     hooks = DeliveryHooks(
