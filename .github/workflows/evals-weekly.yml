@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke, failed-prev iteration (~23 ids), or full catalog (89 ids)
+        description: cheap-12 smoke, failed-prev iteration (~31 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12

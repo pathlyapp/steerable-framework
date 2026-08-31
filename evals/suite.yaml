@@ -4,10 +4,9 @@
 #
 # cheap-12 avoids QEMU, GPU, video, and long compiles. It must stay a
 # subset of catalog. failed-prev is remaining catalog-89 zeros after
-# catalog 33348473492 (23 ids: 21 reward=0, protein-assembly exception,
-# regex-chess never started on GHA-killed shard 5). Harness iteration
-# does not rerun all 89. The catalog lists the 89 task ids published at
-# git_rev; do not invent extra ids.
+# catalog 33369888461 (31 ids: 30 reward=0, video-processing exception).
+# Harness iteration does not rerun all 89. The catalog lists the 89 task
+# ids published at git_rev; do not invent extra ids.
 
 dataset:
   name: terminal-bench/terminal-bench-2-1
@@ -215,26 +214,34 @@ splits:
     - winning-avg-corewars
     - write-compressor
   failed-prev:
-    - chess-best-move
+    - adaptive-rejection-sampler
+    - build-pov-ray
+    - caffe-cifar-10
+    - circuit-fibsqrt
+    - cobol-modernization
+    - db-wal-recovery
     - dna-assembly
-    - dna-insert
     - extract-moves-from-video
     - filter-js-from-html
     - gcode-to-text
+    - gpt2-codegolf
     - headless-terminal
     - install-windows-3.11
+    - largest-eigenval
     - make-doom-for-mips
     - make-mips-interpreter
-    - model-extraction-relu-logits
     - mteb-retrieve
+    - path-tracing
     - path-tracing-reverse
     - protein-assembly
-    - pytorch-model-cli
-    - query-optimize
+    - qemu-startup
     - raman-fitting
     - regex-chess
+    - rstan-to-pystan
+    - sam-cell-seg
     - sanitize-git-repo
     - schemelike-metacircular-eval
+    - torch-pipeline-parallelism
     - train-fasttext
     - video-processing
     - winning-avg-corewars
