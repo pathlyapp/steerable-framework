@@ -291,7 +291,13 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       补定价需改 `scripts/generate_model_catalog.py` 并重新生成目录数据，
       目录在评测上传路径上，与 headless 发射端一起待 arm B/C 后落地。
       归因端已就绪：`STEERABLE_RUN_SUMMARY {json}` 末行契约 + 部分数据
-      渲染 n/a 不填零（0bc669c）。
+      渲染 n/a 不填零（0bc669c）。**发射端已落地（2026-08-31）**：
+      headless 在事件流上累计 rounds（max round+1）、input/output tokens
+      （终局 completion 的累计 usage）、峰值上下文（单请求 promptTokens
+      最大值）、工具错误/恢复（只数 tool_call_result，避免与 tool_error
+      双计），finally 块保证末行发射（崩溃也有部分遥测）；测试顺带锁死
+      一个语义点——DeliveryHooks 完成否决的重流是第四次计费请求，
+      累计口径如实计入。
 - [x] **1.4.3.4** arm A 必须在动任何代码之前先跑，否则没有基线。
       **已跑完**（2026-08-31，`evals/jobs/steerable-arm-a/2026-08-31__11-14-23`）：
       12/12 完成、0 错误、**mean 0.833**。满分 10 题；零分两题：

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -195,9 +196,36 @@ async def _run(
         LLMMessage.text_of("user", instruction),
     ]
     thinking = False
+    # Run-summary telemetry (W1.4.3.3): the attribution report parses the
+    # final STEERABLE_RUN_SUMMARY line. Everything is derived from the loop
+    # event stream — never from provider internals — so the contract holds
+    # for any harness spec. cost_usd stays absent: the catalog deliberately
+    # carries no pricing fields, and a missing measurement is not zero.
+    summary_rounds = 0
+    summary_peak_context = 0
+    summary_tool_errors = 0
+    summary_pending_recovery = 0
+    summary_tool_recoveries = 0
+    summary_usage: dict[str, Any] = {}
     try:
         async for event in loop.run(seed, tools=tool_descriptors, chat_id="headless"):
-            if event.kind == "content_delta":
+            if event.kind == "llm_request":
+                summary_rounds = max(summary_rounds, int(event.data.get("round", -1)) + 1)
+            elif event.kind == "llm_response":
+                summary_peak_context = max(
+                    summary_peak_context, int(event.data.get("promptTokens") or 0)
+                )
+            elif event.kind == "tool_call_result":
+                # Raised calls emit tool_error AND land here as success=False —
+                # counting only this event avoids double-counting.
+                if event.data.get("success"):
+                    if summary_pending_recovery:
+                        summary_pending_recovery -= 1
+                        summary_tool_recoveries += 1
+                else:
+                    summary_tool_errors += 1
+                    summary_pending_recovery += 1
+            elif event.kind == "content_delta":
                 thinking = False
                 sys.stdout.write(str(event.data.get("delta", "")))
                 sys.stdout.flush()
@@ -219,6 +247,9 @@ async def _run(
                 sys.stdout.write(f"\n[{event.kind} {event.data}]\n")
                 sys.stdout.flush()
             elif event.kind == "completion":
+                usage = event.data.get("usage")
+                if isinstance(usage, dict):
+                    summary_usage = usage
                 sys.stdout.write("\n")
                 sys.stdout.flush()
     finally:
@@ -227,6 +258,23 @@ async def _run(
         sessions = getattr(tools, "shell_sessions", None)
         if sessions is not None:
             sessions.close_all()
+        # Terminal line, after all model output: the parser keys on the
+        # prefix and ignores everything earlier in the log.
+        sys.stdout.write(
+            "\nSTEERABLE_RUN_SUMMARY "
+            + json.dumps(
+                {
+                    "rounds": summary_rounds or None,
+                    "input_tokens": summary_usage.get("promptTokens"),
+                    "output_tokens": summary_usage.get("completionTokens"),
+                    "peak_context_tokens": summary_peak_context or None,
+                    "tool_errors": summary_tool_errors,
+                    "tool_recoveries": summary_tool_recoveries,
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":  # pragma: no cover

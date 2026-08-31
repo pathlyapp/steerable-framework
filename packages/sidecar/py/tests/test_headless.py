@@ -290,3 +290,74 @@ async def test_run_retries_transient_stream_error(
     await _run("hello", cwd=str(tmp_path), max_rounds=4)
     assert provider.attempts == 2
     assert "recovered" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_emits_run_summary_terminal_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """W1.4.3.3 emission side: the final stdout line is a parseable
+    STEERABLE_RUN_SUMMARY carrying rounds/usage/peak-context/error metrics
+    derived from the loop event stream (attribution.py's contract)."""
+    import json
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(
+                        id="c1", name="bash", arguments={"command": "exit 3"}
+                    )
+                ),
+                LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    usage=LLMUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                ),
+            ],
+            [
+                # A write, not another probe: DeliveryHooks vetoes completion
+                # for turns that never mutate files, and the veto's re-stream
+                # would (correctly) add a fourth request to the billable totals.
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(
+                        id="c2",
+                        name="write_file",
+                        arguments={"path": "out.txt", "content": "x"},
+                    )
+                ),
+                LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    usage=LLMUsage(prompt_tokens=20, completion_tokens=5, total_tokens=25),
+                ),
+            ],
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=30, completion_tokens=5, total_tokens=35),
+                ),
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        headless_mod, "_env_provider_params", lambda: {"model": "fake"}
+    )
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    await _run("fail then recover", cwd=str(tmp_path), max_rounds=8)
+
+    lines = capsys.readouterr().out.splitlines()
+    summary_lines = [ln for ln in lines if ln.startswith("STEERABLE_RUN_SUMMARY ")]
+    assert len(summary_lines) == 1
+    assert lines[-1] == summary_lines[0]  # terminal line, never mid-stream
+    summary = json.loads(summary_lines[0][len("STEERABLE_RUN_SUMMARY "):])
+    assert summary["rounds"] == 3
+    # Completion usage is the run's accumulated totals.
+    assert summary["input_tokens"] == 60
+    assert summary["output_tokens"] == 15
+    # Peak context is the largest single-request prompt, not the sum.
+    assert summary["peak_context_tokens"] == 30
+    assert summary["tool_errors"] == 1
+    assert summary["tool_recoveries"] == 1
+    assert "cost_usd" not in summary  # absent, never zero-filled
