@@ -459,6 +459,18 @@ async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
     write = ToolCall(id="t", name="bash", arguments={"command": f"cat > {target}"})
     assert hooks.inspect_block_result(write) is None
     assert hooks.inspect_block_result(_call("write_file")) is None
+    ffmpeg = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": "ffmpeg -i /app/video.mp4 /tmp/frame_%04d.png"},
+    )
+    assert hooks.inspect_block_result(ffmpeg) is not None
+    ffmpeg_write = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"ffmpeg -i /app/v.mp4 -f rawvideo - > {target}"},
+    )
+    assert hooks.inspect_block_result(ffmpeg_write) is None
     sock = tmp_path / "qemu-monitor"
     other = DeliveryHooks(named_outputs=(str(sock),), explore_before_nudge=1)
     other.nudges = 4

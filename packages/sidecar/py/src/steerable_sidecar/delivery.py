@@ -39,7 +39,7 @@ _BASH_WRITES = re.compile(
     r"|\.write_text\("
     r"|\b(?:python3?|pypy3?)\s+\S+\.py\b"
     r"|\b(?:g?cc|g\+\+|clang\+\+|rustc)\s+[^\n]*\s-o\s"
-    r"|\b(?:make|cmake|ffmpeg|qemu-img)\b"
+    r"|\b(?:make|cmake|qemu-img)\b"
 )
 
 _COMPACT_MARKER = "[context compacted: earlier conversation summarized]"
