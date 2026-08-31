@@ -1232,3 +1232,75 @@ async def test_named_entrypoint_runs_when_only_side_effect_missing(
     assert action.kind == "accept"
     assert hooks._entry_runs == 1
 
+
+@pytest.mark.asyncio
+async def test_named_make_builds_missing_elf(tmp_path) -> None:
+    elf = tmp_path / "doomgeneric_mips"
+    (tmp_path / "Makefile").write_text(
+        f"all:\n\tprintf x > {elf.name}\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction="producing an ELF called doomgeneric_mips",
+        named_outputs=(str(elf),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert elf.is_file()
+    assert elf.read_text(encoding="utf-8") == "x"
+    assert action.kind == "accept"
+    assert hooks._make_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_named_make_then_entrypoint_fills_side_effect(tmp_path) -> None:
+    elf = tmp_path / "doomgeneric_mips"
+    frame = tmp_path / "frame.bmp"
+    (tmp_path / "Makefile").write_text(
+        f"all:\n\tprintf x > {elf.name}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "helper.py").write_text(
+        f"from pathlib import Path\nPath({str(frame)!r}).write_text('ok\\n')\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            f"ELF called doomgeneric_mips, run `python3 helper.py`, "
+            f"write {frame}"
+        ),
+        named_outputs=(str(elf), str(frame)),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert elf.is_file()
+    assert frame.read_text(encoding="utf-8") == "ok\n"
+    assert action.kind == "accept"
+    assert hooks._make_runs == 1
+    assert hooks._entry_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_named_make_retries_when_make_fails(tmp_path) -> None:
+    elf = tmp_path / "doomgeneric_mips"
+    (tmp_path / "Makefile").write_text("all:\n\tfalse\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="producing an ELF called doomgeneric_mips",
+        named_outputs=(str(elf),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_make"
+    assert not elf.exists()
+
+
+@pytest.mark.asyncio
+async def test_named_make_skips_when_only_side_effect_missing(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    (tmp_path / "Makefile").write_text("all:\n\tfalse\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.reason == "missing_named_output"
+    assert hooks._make_runs == 0
+

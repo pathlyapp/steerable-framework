@@ -256,6 +256,9 @@ _ENTRY_STILL_MISSING = (
     "Ran `{cmd}`; these named outputs are still missing: {paths}. "
     "The command must write them."
 )
+# Named ELF still missing and a Makefile is on disk (doomgeneric / MIPS).
+_MAX_MAKE_RUNS = 1
+_MAKE_TIMEOUT_SEC = 180
 
 
 class DeliveryHooks(NoopHooks):
@@ -295,6 +298,7 @@ class DeliveryHooks(NoopHooks):
         self._check_retries = 0
         self._validate_retries = 0
         self._entry_runs = 0
+        self._make_runs = 0
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
@@ -763,6 +767,66 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _run_named_make(self, missing: tuple[str, ...]) -> CompletionAction | None:
+        """Run ``make`` once when a named ELF/binary is missing and a Makefile exists."""
+        if self._make_runs >= _MAX_MAKE_RUNS or not missing:
+            return None
+        targets = tuple(
+            path
+            for path in missing
+            if Path(path).suffix.lower() not in _SIDE_EFFECT_SUFFIXES
+        )
+        if not targets:
+            return None
+        makefile = _find_makefile((*self._named, *self._required))
+        if makefile is None:
+            return None
+        binary = shutil.which("make")
+        if binary is None:
+            return None
+        self._make_runs += 1
+        code, output = _run_cmd(
+            [binary, "-C", str(makefile.parent)],
+            cwd=str(makefile.parent),
+            timeout=_MAKE_TIMEOUT_SEC,
+        )
+        still = tuple(p for p in self._required if not _file_ready(p))
+        still_targets = tuple(
+            path
+            for path in still
+            if Path(path).suffix.lower() not in _SIDE_EFFECT_SUFFIXES
+        )
+        if not still_targets:
+            return None
+        listed = ", ".join(still_targets[:8])
+        cmd = f"make -C {makefile.parent}"
+        if still_targets and code == 0:
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_ENTRY_STILL_MISSING.format(cmd=cmd, paths=listed),
+                reason="named_make",
+            )
+        if still and code is None:
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_ENTRY_TIMEOUT.format(
+                    cmd=cmd, sec=_MAKE_TIMEOUT_SEC, paths=listed
+                ),
+                reason="named_make",
+            )
+        if still:
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_ENTRY_FAIL.format(
+                    cmd=cmd, code=code, output=output, paths=listed
+                ),
+                reason="named_make",
+            )
+        return None
+
     def _run_named_entrypoint(self, missing: tuple[str, ...]) -> CompletionAction | None:
         """Run an instruction-backticked node/python command once if it can write missing outputs."""
         if self._entry_runs >= _MAX_ENTRY_RUNS or not missing:
@@ -828,6 +892,11 @@ class DeliveryHooks(NoopHooks):
         # reasoning-only completions while /app/out.txt was still missing,
         # and empty_round consumed the retries that should have named it.
         unready = tuple(p for p in self._required if not _file_ready(p))
+        if unready:
+            ran = self._run_named_make(unready)
+            if ran is not None:
+                return ran
+            unready = tuple(p for p in self._required if not _file_ready(p))
         if unready:
             ran = self._run_named_entrypoint(unready)
             if ran is not None:
@@ -1126,6 +1195,46 @@ class DeliveryGatedExecutor:
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
         return bool(check(call)) if check is not None else False
+
+
+def _find_makefile(named: tuple[str, ...]) -> Path | None:
+    """Makefile next to a named output, or under ``/app`` when outputs live there."""
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(path: Path) -> None:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        candidates.append(path)
+
+    under_app = False
+    for raw in named:
+        parent = Path(raw).parent
+        add(parent / "Makefile")
+        add(parent / "makefile")
+        posix = parent.as_posix()
+        if posix == "/app" or posix.startswith("/app/"):
+            under_app = True
+    if under_app:
+        add(Path("/app/Makefile"))
+        app = Path("/app")
+        if app.is_dir():
+            try:
+                children = list(app.iterdir())
+            except OSError:
+                children = []
+            for child in children:
+                if child.is_dir():
+                    add(child / "Makefile")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
 
 
 def _file_ready(path: str) -> bool:
