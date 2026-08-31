@@ -17,15 +17,17 @@ REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
-# QEMU/VNC and MIPS ELF compiles need the whole 4-vCPU runner.
-# n-concurrent=2 otherwise shares the box; keyboard screenshots stall,
-# qemu boot stalls, and the ELF never appears before Harbor's wait_for.
+# QEMU/VNC, MIPS ELF compiles, and long ffmpeg/OCR need the whole
+# 4-vCPU runner. n-concurrent=2 otherwise shares the box; keyboard
+# screenshots stall, qemu boot stalls, the ELF never appears, and
+# extract-moves never writes solution.txt before Harbor's wait_for.
 EXCLUSIVE_PACK_TASKS = frozenset(
     {
         "install-windows-3.11",
         "qemu-startup",
         "make-doom-for-mips",
         "make-mips-interpreter",
+        "extract-moves-from-video",
     }
 )
 

@@ -283,7 +283,7 @@ def test_pack_floor_keeps_catalog_shards_inside_gha_wall() -> None:
     """Harbor ×12 wrap is 180 min. n-concurrent=2, 360-minute GHA cap.
 
     24 catalog shards still pack 4 tasks (2×180 min waves = 360 min exact).
-    36 shards pack ≤3 after four exclusive MIPS/QEMU/Windows tasks.
+    36 shards pack ≤3 after five exclusive MIPS/QEMU/Windows/video tasks.
     """
     suite = load_suite()
     catalog = [

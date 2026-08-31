@@ -134,9 +134,15 @@ _MAX_MISSING_NAMED_RETRIES = 16
 # After this many ignored explore nudges, refuse inspect-only tools so
 # Harbor's 180 min wait_for cannot be spent on bash/read_file while
 # steal.py / primers.fasta / out.txt are still missing. Two ignored
-# nudges is 16 inspect steps at explore_before_nudge=8; four let
-# extract-moves OCR every frame and gcode reason until Harbor 10800s.
+# nudges is 8 inspect steps when named outputs are missing (gate 4);
+# the default 8 would let extract-moves OCR every frame until Harbor
+# 10800s.
 _BLOCK_EXPLORE_AFTER_NUDGES = 2
+# Default explore_before_nudge is 8. Named outputs still missing after 4
+# inspects: nudge sooner so two ignored nudges gate ffmpeg/OCR/read loops
+# before Harbor's 180 min wait_for. Tests that pass a smaller constructor
+# value keep that value.
+_EXPLORE_BEFORE_NUDGE_NAMED = 4
 _INSPECT_BLOCKED = (
     "Stop inspecting. These instruction-named output files still do not "
     "exist: {paths}. Write them now with write_file, edit_file, or bash "
@@ -377,11 +383,14 @@ class DeliveryHooks(NoopHooks):
         nudge_limit = (
             _MAX_MISSING_NAMED_RETRIES if named_missing else self._max_nudges
         )
+        explore_gate = self._explore_before_nudge
+        if named_missing and explore_gate > _EXPLORE_BEFORE_NUDGE_NAMED:
+            explore_gate = _EXPLORE_BEFORE_NUDGE_NAMED
         if (
             self.writes == 0
             and self.nudges < nudge_limit
             and (
-                self.consecutive_explore >= self._explore_before_nudge
+                self.consecutive_explore >= explore_gate
                 or new_compact
             )
         ):

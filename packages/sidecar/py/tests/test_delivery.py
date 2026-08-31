@@ -36,6 +36,39 @@ def test_default_explore_before_nudge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_missing_nudges_after_four_inspects(tmp_path) -> None:
+    target = tmp_path / "solution.txt"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(3):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+    early = await hooks.pre_step([], ctx)
+    assert early.appends is None
+    await hooks.post_tool_result(ok, _call("read_file"), ctx)
+    action = await hooks.pre_step([], ctx)
+    assert action.appends
+    assert action.append_action == "delivery_nudge"
+    assert hooks.nudges == 1
+    assert str(target) in action.appends[0].message.content_text
+
+
+@pytest.mark.asyncio
+async def test_unnamed_still_waits_eight_inspects() -> None:
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(7):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+    early = await hooks.pre_step([], ctx)
+    assert early.appends is None
+    await hooks.post_tool_result(ok, _call("read_file"), ctx)
+    action = await hooks.pre_step([], ctx)
+    assert action.appends
+    assert hooks.nudges == 1
+
+
+@pytest.mark.asyncio
 async def test_nudge_after_explore_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=2)
     ctx = LoopContext()
