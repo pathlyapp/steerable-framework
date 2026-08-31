@@ -242,6 +242,16 @@ async def test_inspect_blocked_after_wrap_up_named(tmp_path) -> None:
         id="t", name="read_file", arguments={"path": str(tmp_path / "absent.c")}
     )
     assert hooks.inspect_block_result(read_missing) is not None
+    cat_ok = ToolCall(
+        id="t", name="bash", arguments={"command": f"cat {source}"}
+    )
+    assert hooks.inspect_block_result(cat_ok) is None
+    cat_missing = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"cat {tmp_path / 'absent.c'}"},
+    )
+    assert hooks.inspect_block_result(cat_missing) is not None
 
 
 @pytest.mark.asyncio

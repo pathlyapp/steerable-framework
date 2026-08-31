@@ -50,8 +50,10 @@ _BASH_BUILDS = re.compile(
     r"\b(?:g?cc|g\+\+|clang\+\+|rustc)\s+[^\n]*\s-o\s"
     r"|\b(?:make|cmake|qemu-img)\b"
 )
-# node vm.js writes /tmp/frame.bmp as a side effect; blocking it after
-# named-output nudges would freeze make-mips-interpreter.
+# ``cat doomgeneric_img.c`` after wrap-up named (same as read_file).
+_BASH_VIEW_FILE = re.compile(
+    r"^\s*(?:cat|head|tail|nl)(?:\s+-\S+)*\s+(\S+)\s*$"
+)
 _BASH_RUN_ENTRYPOINT = re.compile(r"\bnode\s+\S+")
 # steal.py / pystan_analysis.py: the named script exists; running it
 # writes a still-missing sibling (.npy, csv).
@@ -414,7 +416,8 @@ class DeliveryHooks(NoopHooks):
         runs a helper ``.py`` whose source mutates a still-missing named
         path, or mutates a still-missing named path still runs.
         ``python3 gen.py`` that only inspects, and ``cat > explore.py``,
-        do not. ``read_file`` of a path that already exists still runs.
+        do not. ``read_file`` of a path that already exists still runs,
+        as does ``cat``/``head`` of that same on-disk file.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -429,8 +432,9 @@ class DeliveryHooks(NoopHooks):
             return None
         if name == "read_file" and _read_file_on_disk(call):
             return None
-        if name == "bash" and _bash_delivers_required(
-            call, scored, self._named
+        if name == "bash" and (
+            _bash_delivers_required(call, scored, self._named)
+            or _bash_reads_existing(_bash_command(call))
         ):
             return None
         listed = ", ".join(scored[:8])
@@ -1708,6 +1712,20 @@ def _read_file_on_disk(call: ToolCall) -> bool:
     args = call.arguments or {}
     raw = str(args.get("path") or args.get("file") or "")
     if not raw:
+        return False
+    try:
+        return Path(raw).is_file()
+    except OSError:
+        return False
+
+
+def _bash_reads_existing(command: str) -> bool:
+    """True for ``cat``/``head`` of a single path that already exists."""
+    match = _BASH_VIEW_FILE.match(command.strip())
+    if not match:
+        return False
+    raw = match.group(1).strip("'\"")
+    if not raw or raw.startswith("-"):
         return False
     try:
         return Path(raw).is_file()
