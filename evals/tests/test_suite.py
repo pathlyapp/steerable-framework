@@ -38,21 +38,29 @@ CHEAP_12 = (
 )
 
 FAILED_PREV = (
+    "chess-best-move",
     "dna-assembly",
+    "dna-insert",
     "extract-moves-from-video",
     "filter-js-from-html",
     "gcode-to-text",
-    "gpt2-codegolf",
-    "largest-eigenval",
+    "headless-terminal",
+    "install-windows-3.11",
     "make-doom-for-mips",
     "make-mips-interpreter",
     "model-extraction-relu-logits",
     "mteb-retrieve",
     "path-tracing-reverse",
     "protein-assembly",
+    "pytorch-model-cli",
+    "query-optimize",
+    "raman-fitting",
     "regex-chess",
-    "rstan-to-pystan",
+    "sanitize-git-repo",
+    "schemelike-metacircular-eval",
     "train-fasttext",
+    "video-processing",
+    "winning-avg-corewars",
 )
 
 
@@ -82,7 +90,7 @@ def test_cheap_12_is_pinned_subset() -> None:
 def test_failed_prev_is_pinned_catalog_subset() -> None:
     suite = load_suite()
     assert suite.splits["failed-prev"] == FAILED_PREV
-    assert len(FAILED_PREV) == 15
+    assert len(FAILED_PREV) == 23
     assert set(FAILED_PREV) <= suite.catalog_set
     assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
@@ -316,7 +324,7 @@ def test_pack_floor_keeps_catalog_shards_inside_gha_wall() -> None:
         )
         for i in range(24)
     ]
-    assert sum(len(shard) for shard in failed) == 15
+    assert sum(len(shard) for shard in failed) == 23
     assert max(len(shard) for shard in failed) <= 2
     for packed in (catalog, failed):
         for bucket in packed:
