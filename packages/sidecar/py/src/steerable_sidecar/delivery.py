@@ -221,13 +221,26 @@ _JSON_BLANK_RETRY = (
     "checker that splits on newlines treats that as an empty illegal row. "
     "Strip trailing newlines and empty replacements."
 )
-# regex-chess: they wrote re.json then stopped; check.py would have printed
-# `Our move:  ` (empty) and 44 vs 45. Instruction names the checker.
-_CHECKER_NAME = re.compile(r"\bcheck\.py\b", re.IGNORECASE)
+# regex-chess check.py; largest-eigenval eval.py ("can help you iterate").
+_CHECKER_NAME = re.compile(r"\b((?:check|eval)\.py)\b", re.IGNORECASE)
 _CHECKER_RETRY = (
-    "A checker script named in the instruction exists on disk. Run it "
-    "now (python3 check.py) against the named outputs and fix failures "
-    "before stopping."
+    "A helper script named in the instruction ({name}) exists on disk. "
+    "Run it now (python3 {name}) against the named outputs and fix "
+    "failures before stopping."
+)
+# protein-assembly: gblock.txt must be one DNA line; FLAG without a His-tag
+# means they recalled a fluorescent protein instead of the pdb/fpbase fasta.
+_GBLOCK_TASK = re.compile(r"\bgblock\b", re.IGNORECASE)
+_DNA_ONLY = re.compile(r"^[ATCGatcg]+$")
+_CODON_BASES = "TCAG"
+_CODON_AA = "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG"
+_GBLOCK_DNA_RETRY = (
+    "{path} must be a single DNA line (A/T/C/G only), not an amino-acid "
+    "sequence or a multi-line dump."
+)
+_GBLOCK_TAG_RETRY = (
+    "{path} encodes FLAG but no His-tag. Query pdb/fpbase and paste the "
+    "donor fasta verbatim, including expression tags."
 )
 
 
@@ -619,16 +632,51 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_gblock_retry(self) -> CompletionAction | None:
+        """Veto a fusion gBlock that is not DNA or drops the donor His-tag."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        if not _GBLOCK_TASK.search(self._instruction or ""):
+            return None
+        for path in self._required:
+            if "gblock" not in Path(path).name.lower() or not Path(path).is_file():
+                continue
+            try:
+                body = Path(path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            lines = [line.strip() for line in body.splitlines() if line.strip()]
+            if len(lines) != 1 or not _DNA_ONLY.fullmatch(lines[0]):
+                self._bytes_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_GBLOCK_DNA_RETRY.format(path=path),
+                    reason="named_gblock_dna",
+                )
+            aa = _translate_dna(lines[0])
+            if "DYKDDDDK" in aa and "HHHHHH" not in aa:
+                self._bytes_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_GBLOCK_TAG_RETRY.format(path=path),
+                    reason="named_gblock_tag",
+                )
+        return None
+
     def _named_checker_retry(self) -> CompletionAction | None:
-        """Veto stopping before running an instruction-named check.py."""
+        """Veto stopping before running an instruction-named check.py/eval.py."""
         if self._check_retries >= 1 or not self._required:
             return None
-        if not _CHECKER_NAME.search(self._instruction or ""):
+        match = _CHECKER_NAME.search(self._instruction or "")
+        if not match:
             return None
         if any(not Path(path).exists() for path in self._required):
             return None
-        candidates = [Path("/app/check.py"), Path("check.py")]
-        candidates.extend(Path(path).parent / "check.py" for path in self._required)
+        name = match.group(1)
+        candidates = [Path("/app") / name, Path(name)]
+        candidates.extend(Path(path).parent / name for path in self._required)
         checker = next((path for path in candidates if path.is_file()), None)
         if checker is None:
             return None
@@ -636,7 +684,7 @@ class DeliveryHooks(NoopHooks):
         self._force_tool = True
         return CompletionAction(
             kind="retry",
-            message=_CHECKER_RETRY,
+            message=_CHECKER_RETRY.format(name=name),
             reason="named_checker",
         )
 
@@ -680,6 +728,9 @@ class DeliveryHooks(NoopHooks):
         embed_retry = self._named_embed_hit_retry()
         if embed_retry is not None:
             return embed_retry
+        gblock_retry = self._named_gblock_retry()
+        if gblock_retry is not None:
+            return gblock_retry
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry
@@ -811,6 +862,24 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
     ):
         seen.append(_DOOM_FRAME)
     return tuple(seen)
+
+
+def _translate_dna(dna: str) -> str:
+    seq = dna.upper().replace("U", "T")
+    out: list[str] = []
+    for i in range(0, len(seq) - 2, 3):
+        codon = seq[i : i + 3]
+        try:
+            index = (
+                _CODON_BASES.index(codon[0]) * 16
+                + _CODON_BASES.index(codon[1]) * 4
+                + _CODON_BASES.index(codon[2])
+            )
+        except ValueError:
+            out.append("X")
+            continue
+        out.append(_CODON_AA[index])
+    return "".join(out)
 
 
 def _json_has_blank_split_row(value: object) -> bool:

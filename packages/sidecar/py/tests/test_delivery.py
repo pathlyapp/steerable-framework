@@ -975,6 +975,52 @@ async def test_named_checker_retries_once_when_check_py_exists(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_named_checker_retries_once_when_eval_py_exists(tmp_path) -> None:
+    dest = tmp_path / "eigen.py"
+    (tmp_path / "eval.py").write_text("print('ok')\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Complete {dest}. `/app/eval.py` can help you iterate."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("def find():\n    return 1\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_checker"
+    assert "eval.py" in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_named_gblock_retries_when_not_dna(tmp_path) -> None:
+    dest = tmp_path / "gblock.txt"
+    hooks = DeliveryHooks(
+        instruction=f"The gBlock should be stored in {dest}.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("DYKDDDDKMVSKGEE\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_gblock_dna"
+    dest.write_text("GATTATAAAGATGATGATGATAAACATCATCATCATCATCAT\n")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_gblock_retries_when_flag_lacks_his_tag(tmp_path) -> None:
+    dest = tmp_path / "gblock.txt"
+    hooks = DeliveryHooks(
+        instruction=f"Design a gBlock fusion protein in {dest}.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("GATTATAAAGATGATGATGATAAATTTTTTTTTTTTTT\n")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_gblock_tag"
+
+
+@pytest.mark.asyncio
 async def test_named_checker_skips_when_outputs_still_missing(tmp_path) -> None:
     dest = tmp_path / "re.json"
     (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
