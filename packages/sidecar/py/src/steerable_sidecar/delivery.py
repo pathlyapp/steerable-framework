@@ -205,15 +205,9 @@ class DeliveryHooks(NoopHooks):
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
-        empty = not (draft.content or "").strip() and not draft.had_tool_calls
-        if empty and self.empty_round_retries < self._max_empty_round_retries:
-            self.empty_round_retries += 1
-            self._force_tool = True
-            return CompletionAction(
-                kind="retry",
-                message=_EMPTY_ROUND_RETRY,
-                reason="empty_round",
-            )
+        # Named paths beat empty-round: gcode-to-text wrap-up sent
+        # reasoning-only completions while /app/out.txt was still missing,
+        # and empty_round consumed the retries that should have named it.
         missing = tuple(p for p in self._required if not Path(p).exists())
         if missing and self.completion_retries < _MAX_MISSING_NAMED_RETRIES:
             self.completion_retries += 1
@@ -223,6 +217,15 @@ class DeliveryHooks(NoopHooks):
                 kind="retry",
                 message=_MISSING_NAMED_RETRY.format(paths=listed),
                 reason="missing_named_output",
+            )
+        empty = not (draft.content or "").strip() and not draft.had_tool_calls
+        if empty and self.empty_round_retries < self._max_empty_round_retries:
+            self.empty_round_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_EMPTY_ROUND_RETRY,
+                reason="empty_round",
             )
         if (
             not self._required

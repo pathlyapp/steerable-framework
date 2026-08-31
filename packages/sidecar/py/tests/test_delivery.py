@@ -181,6 +181,18 @@ async def test_single_tool_turn_does_not_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_missing_named_output_beats_empty_round(tmp_path) -> None:
+    target = tmp_path / "out.txt"
+    hooks = DeliveryHooks(named_outputs=(str(target),), max_empty_round_retries=6)
+    action = await hooks.before_completion(
+        _draft(tools=2, content="", had_tool_calls=False), LoopContext()
+    )
+    assert action.kind == "retry"
+    assert action.reason == "missing_named_output"
+    assert str(target) in (action.message or "")
+
+
+@pytest.mark.asyncio
 async def test_empty_round_retries_before_accept() -> None:
     hooks = DeliveryHooks(max_empty_round_retries=2)
     ctx = LoopContext()
@@ -260,6 +272,15 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "Output the primers in a fasta file titled primers.fasta."
     )
     assert "/app/primers.fasta" in titled
+    gcode = named_output_paths(
+        "When I run the print, what will the text show? Write the output "
+        "to /app/out.txt"
+    )
+    assert "/app/out.txt" in gcode
+    extract = named_output_paths(
+        "create a file /app/solution.txt that has all the moves they input"
+    )
+    assert "/app/solution.txt" in extract
 
 
 @pytest.mark.asyncio

@@ -134,6 +134,8 @@ _SYSTEM = (
     "named thresholds (cosine, KL, Levenshtein, runtime, P@1), run it, "
     "and fix failures. If a local check prints a number below the named "
     "bar, that is a failure — keep iterating; do not mark it passed. "
+    "After shrinking or quantizing a scored model, re-run that eval CLI; "
+    "the pre-shrink score does not count. "
     "Hidden tests still run after you stop."
 )
 
