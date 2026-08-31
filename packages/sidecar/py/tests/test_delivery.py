@@ -69,6 +69,42 @@ async def test_unnamed_still_waits_eight_inspects() -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_named_file_still_nudges(tmp_path) -> None:
+    target = tmp_path / "solution.txt"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    target.write_text("", encoding="utf-8")
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(4):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+    action = await hooks.pre_step([], ctx)
+    assert action.appends
+    assert hooks.writes == 0
+    assert hooks.nudges == 1
+    assert str(target) in action.appends[0].message.content_text
+
+
+@pytest.mark.asyncio
+async def test_empty_named_file_still_blocks_inspect(tmp_path) -> None:
+    target = tmp_path / "solution.txt"
+    hooks = DeliveryHooks(
+        named_outputs=(str(target),),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    target.write_text("", encoding="utf-8")
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(2):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+        nudged = await hooks.pre_step([], ctx)
+        assert nudged.appends
+    blocked = hooks.inspect_block_result(_call("read_file"))
+    assert blocked is not None
+    assert str(target) in (blocked.error or "")
+
+
+@pytest.mark.asyncio
 async def test_nudge_after_explore_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=2)
     ctx = LoopContext()

@@ -332,7 +332,7 @@ class DeliveryHooks(NoopHooks):
         return tuple(
             p
             for p in self._required
-            if "." in Path(p).name and not Path(p).exists()
+            if "." in Path(p).name and not _file_ready(p)
         )
 
     def _output_files(self) -> tuple[str, ...]:
@@ -357,7 +357,7 @@ class DeliveryHooks(NoopHooks):
             1 for m in transcript if _COMPACT_MARKER in (m.content_text or "")
         )
         new_compact = n_compacts > self._compact_nudges
-        missing = tuple(p for p in self._required if not Path(p).exists())
+        missing = tuple(p for p in self._required if not _file_ready(p))
         named_missing = bool(missing)
         wrapping = any(
             _WRAP_UP_MARKER in (m.content_text or "") for m in transcript
@@ -438,7 +438,7 @@ class DeliveryHooks(NoopHooks):
         self._force_tool = False
         name = call.name
         if self._required:
-            delivered = sum(1 for p in self._required if Path(p).exists())
+            delivered = sum(1 for p in self._required if _file_ready(p))
             if delivered > self._delivered:
                 self.writes += delivered - self._delivered
                 self.consecutive_explore = 0
@@ -788,7 +788,7 @@ class DeliveryHooks(NoopHooks):
                 cwd=str(script.parent),
                 timeout=_ENTRY_TIMEOUT_SEC,
             )
-            still = tuple(p for p in self._required if not Path(p).exists())
+            still = tuple(p for p in self._required if not _file_ready(p))
             listed = ", ".join((still or missing)[:8])
             if still and code == 0:
                 self._force_tool = True
@@ -827,12 +827,14 @@ class DeliveryHooks(NoopHooks):
         # Named paths beat empty-round: gcode-to-text wrap-up sent
         # reasoning-only completions while /app/out.txt was still missing,
         # and empty_round consumed the retries that should have named it.
-        missing = tuple(p for p in self._required if not Path(p).exists())
-        if missing:
-            ran = self._run_named_entrypoint(missing)
+        unready = tuple(p for p in self._required if not _file_ready(p))
+        if unready:
+            ran = self._run_named_entrypoint(unready)
             if ran is not None:
                 return ran
             missing = tuple(p for p in self._required if not Path(p).exists())
+        else:
+            missing = ()
         if missing and self.completion_retries < _MAX_MISSING_NAMED_RETRIES:
             self.completion_retries += 1
             self._force_tool = True
@@ -1124,6 +1126,15 @@ class DeliveryGatedExecutor:
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
         return bool(check(call)) if check is not None else False
+
+
+def _file_ready(path: str) -> bool:
+    """True when a named output exists and has at least one byte."""
+    file = Path(path)
+    try:
+        return file.is_file() and file.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def _bash_command(call: ToolCall) -> str:
