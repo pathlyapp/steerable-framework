@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -362,6 +363,16 @@ _LISTEN_RETRY = (
     "The instruction names a service on port {port}. Nothing accepted a "
     "TCP connection there. Start it in the background and leave it running."
 )
+# `/tmp/qemu-monitor.sock` is a UNIX socket, not a scored file. Treating it
+# as named output made write_file create a regular file and blocked QEMU.
+_SOCKET_SUFFIXES = frozenset({".sock", ".socket"})
+_MAX_SOCKET_RETRIES = 4
+_SOCKET_RETRY = (
+    "The instruction names `{path}` as a monitor socket. That path is not "
+    "a UNIX socket. Start the VM with `-monitor unix:{path},server,nowait` "
+    "(or equivalent) and leave it running; do not write a regular file "
+    "there."
+)
 # "build for only CPU execution": CMakeCache / Makefile.config must enable
 # CPU_ONLY. Not a hidden-test dump — the instruction names the constraint.
 _CPU_ONLY_INSTRUCTION = re.compile(
@@ -418,6 +429,8 @@ class DeliveryHooks(NoopHooks):
         self._wrap_up_named_nudges = 0
         self._force_tool = False
         self._listen_retries = 0
+        self._socket_retries = 0
+        self._sockets = named_socket_paths(instruction)
         self._cpu_only_retries = 0
 
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
@@ -462,12 +475,18 @@ class DeliveryHooks(NoopHooks):
     def wrap_up_may_drop_tools(self) -> bool:
         if any(not _file_ready(p) for p in self._required):
             return False
-        # qemu-startup / install-windows name no output files. If wrap-up
-        # withholds tools, before_completion (telnet/listen, CPU_ONLY) never
-        # runs. Keep tools until those instruction checks pass or retry out.
+        # qemu-startup / install-windows name no scored files. If wrap-up
+        # withholds tools, before_completion (telnet/listen, monitor
+        # socket, CPU_ONLY) never runs. Keep tools until those instruction
+        # checks pass or retry out.
         if (
             self._listen_retries < _MAX_LISTEN_RETRIES
             and self._listen_unsatisfied()
+        ):
+            return False
+        if (
+            self._socket_retries < _MAX_SOCKET_RETRIES
+            and self._socket_unsatisfied()
         ):
             return False
         if (
@@ -1056,6 +1075,24 @@ class DeliveryHooks(NoopHooks):
                 return True
         return False
 
+    def _socket_unsatisfied(self) -> bool:
+        return any(not _socket_ready(path) for path in self._sockets)
+
+    def _instruction_socket_retry(self) -> CompletionAction | None:
+        if self._socket_retries >= _MAX_SOCKET_RETRIES:
+            return None
+        for path in self._sockets:
+            if _socket_ready(path):
+                continue
+            self._socket_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_SOCKET_RETRY.format(path=path),
+                reason="instruction_socket",
+            )
+        return None
+
     def _cpu_only_failing_path(self) -> Path | None:
         if not _CPU_ONLY_INSTRUCTION.search(self._instruction or ""):
             return None
@@ -1182,6 +1219,9 @@ class DeliveryHooks(NoopHooks):
         listen_retry = self._instruction_listen_retry()
         if listen_retry is not None:
             return listen_retry
+        socket_retry = self._instruction_socket_retry()
+        if socket_retry is not None:
+            return socket_retry
         cpu_retry = self._instruction_cpu_only_retry()
         if cpu_retry is not None:
             return cpu_retry
@@ -1295,6 +1335,8 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
         name = path.rsplit("/", 1)[-1]
         if "." not in name and path.count("/") < 3:
             continue
+        if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
+            continue
         if path not in seen:
             seen.append(path)
     for pattern in (
@@ -1312,8 +1354,22 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
                 path = name
             else:
                 path = f"/app/{name.lstrip('./')}"
+            if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
+                continue
             if path not in seen:
                 seen.append(path)
+    return tuple(seen)
+
+
+def named_socket_paths(instruction: str) -> tuple[str, ...]:
+    """Absolute UNIX-socket paths named in a TB instruction."""
+    seen: list[str] = []
+    for match in _NAMED_OUTPUT_PATH.finditer(instruction or ""):
+        path = match.group(1).rstrip(".,;:)")
+        if Path(path).suffix.lower() not in _SOCKET_SUFFIXES:
+            continue
+        if path not in seen:
+            seen.append(path)
     return tuple(seen)
 
 
@@ -1611,6 +1667,14 @@ def _file_ready(path: str) -> bool:
         return file.is_file() and file.stat().st_size > 0
     except OSError:
         return False
+
+
+def _socket_ready(path: str) -> bool:
+    try:
+        mode = Path(path).lstat().st_mode
+    except OSError:
+        return False
+    return stat.S_ISSOCK(mode)
 
 
 def _instruction_listen_targets(

@@ -84,6 +84,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "login prompt" in headless_mod._SYSTEM
     assert "replay proxy" in headless_mod._SYSTEM
     assert "framebuffer" in headless_mod._SYSTEM
+    assert "UNIX socket" in headless_mod._SYSTEM
     assert "daemonize" in headless_mod._SYSTEM
     assert "wget -c" in headless_mod._SYSTEM
     assert "sleep 290" in headless_mod._SYSTEM

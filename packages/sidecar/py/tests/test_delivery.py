@@ -16,6 +16,7 @@ from steerable_sidecar.delivery import (
     DeliveryHooks,
     _is_script_listener,
     named_output_paths,
+    named_socket_paths,
 )
 
 
@@ -450,6 +451,16 @@ def test_named_output_paths_skips_usr_bin() -> None:
         "and the existing /app/check.py"
     )
     assert paths == ("/app/re.json", "/tmp/frame.bmp", "/app/check.py")
+
+
+def test_named_output_paths_skips_unix_sockets() -> None:
+    text = (
+        "Write /app/re.json. Configure a QEMU monitor socket at "
+        "`/tmp/qemu-monitor.sock` for programmatic keyboard input."
+    )
+    assert "/tmp/qemu-monitor.sock" not in named_output_paths(text)
+    assert "/app/re.json" in named_output_paths(text)
+    assert named_socket_paths(text) == ("/tmp/qemu-monitor.sock",)
 
 
 def test_named_output_paths_keeps_nested_extensionless_binary() -> None:
@@ -1550,6 +1561,88 @@ def test_wrap_up_may_drop_tools_while_telnet_closed() -> None:
     assert hooks.wrap_up_may_drop_tools() is False
     hooks._listen_retries = 4
     assert hooks.wrap_up_may_drop_tools() is True
+
+
+def test_wrap_up_may_drop_tools_while_monitor_socket_missing() -> None:
+    sock = Path(f"/tmp/steerable-test-monitor-{os.getpid()}.sock")
+    sock.unlink(missing_ok=True)
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Configure a QEMU monitor socket at `{sock}` for "
+            "programmatic keyboard input."
+        ),
+        named_outputs=(),
+    )
+    assert hooks.wrap_up_may_drop_tools() is False
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(str(sock))
+        srv.listen(1)
+        assert hooks.wrap_up_may_drop_tools() is True
+    finally:
+        srv.close()
+        sock.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_monitor_socket_retries_when_missing() -> None:
+    sock = Path(f"/tmp/steerable-test-monitor-missing-{os.getpid()}.sock")
+    sock.unlink(missing_ok=True)
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Configure a QEMU monitor socket at `{sock}` for "
+            "programmatic keyboard input."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_socket"
+    assert str(sock) in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_monitor_socket_retries_when_regular_file() -> None:
+    sock = Path(f"/tmp/steerable-test-monitor-file-{os.getpid()}.sock")
+    sock.write_text("not a socket\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Configure a QEMU monitor socket at `{sock}` for "
+            "programmatic keyboard input."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    try:
+        action = await hooks.before_completion(_draft(tools=2), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "instruction_socket"
+    finally:
+        sock.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_monitor_socket_accepts_when_unix_socket() -> None:
+    sock = Path(f"/tmp/steerable-test-monitor-ok-{os.getpid()}.sock")
+    sock.unlink(missing_ok=True)
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(str(sock))
+        srv.listen(1)
+        hooks = DeliveryHooks(
+            instruction=(
+                f"Configure a QEMU monitor socket at `{sock}` for "
+                "programmatic keyboard input."
+            ),
+            named_outputs=(),
+            min_tools_for_completion_retry=99,
+        )
+        action = await hooks.before_completion(_draft(tools=2), LoopContext())
+        assert action.kind == "accept"
+    finally:
+        srv.close()
+        sock.unlink(missing_ok=True)
 
 
 def test_wrap_up_may_drop_tools_when_telnet_listens() -> None:
