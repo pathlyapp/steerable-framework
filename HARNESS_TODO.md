@@ -337,6 +337,9 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       `run.py --agent steerable --harness minimal --tasks qemu-alpine-ssh
       install-windows-3.11 headless-terminal --jobs-dir evals/jobs/steerable-arm-d`
       与同参 `--harness default …/steerable-arm-e`。
+      **环境预构建（2026-08-31）**：两个 QEMU 题环境已在后台预建
+      （`steerable-qemu-alpine-ssh-probe` / `steerable-win311-probe`），
+      消除跑分时构建超时风险；三题名均已在 Harbor 任务缓存核验存在。
 
 ---
 
