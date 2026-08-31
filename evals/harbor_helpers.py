@@ -16,6 +16,35 @@ def python_tag_supported(tag: str) -> bool:
         return True  # unparsable tag: let pip report the real requirement
     return (major, minor) >= (3, 10)
 
+
+# The agent packages require Python >= 3.10; task images stuck on older
+# interpreters (qemu-alpine-ssh's Debian bullseye ships 3.9) get a pinned
+# python-build-standalone instead of a cryptic pip failure. The desktop app
+# bundles its own runtime for the same reason. Pinned for reproducibility;
+# no CN mirror carries astral-sh/python-build-standalone, so proxied local
+# runs may stall — GHA (the eval home) reaches GitHub directly.
+_STANDALONE_PY_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/"
+    "20250818/cpython-3.11.13%2B20250818-x86_64-unknown-linux-gnu-install_only.tar.gz"
+)
+_STANDALONE_PY_HOME = "/opt/steerable-py311"
+_STANDALONE_PY = f"{_STANDALONE_PY_HOME}/bin/python3.11"
+# Minimal-image portability: the download goes through the environment's own
+# python3 (urllib honours *_proxy), because neither curl nor wget is
+# guaranteed (qemu-alpine-ssh has neither — exit 127). Extraction avoids
+# `tar --strip-components` (busybox tar lacks it): unpack, then `cp -a` the
+# single top-level python/ tree into place.
+_STANDALONE_PY_INSTALL = (
+    "python3 -c \"import urllib.request, sys; "
+    "urllib.request.urlretrieve(sys.argv[1], sys.argv[2])\" "
+    f"{shlex.quote(_STANDALONE_PY_URL)} /tmp/steerable-py.tgz"
+    f" && mkdir -p {shlex.quote(_STANDALONE_PY_HOME)} /tmp/steerable-py-x"
+    " && tar -xzf /tmp/steerable-py.tgz -C /tmp/steerable-py-x"
+    f" && cp -a /tmp/steerable-py-x/python/. {shlex.quote(_STANDALONE_PY_HOME)}/"
+    " && rm -rf /tmp/steerable-py.tgz /tmp/steerable-py-x"
+    f" && {shlex.quote(_STANDALONE_PY)} --version"
+)
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REMOTE_SRC = "/installed-agent/steerable"
 _VENV_CACHE_DIR = _REPO_ROOT / "evals" / ".cache"

@@ -27,6 +27,8 @@ from evals.harbor_helpers import (
     _NO_PROXY_ENV,
     _REMOTE_SRC,
     _REPO_ROOT,
+    _STANDALONE_PY,
+    _STANDALONE_PY_INSTALL,
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
@@ -52,18 +54,6 @@ _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
 # as JSON (a YAML subset the runtime loader parses with stdlib json).
 _HARNESS_REMOTE = "/tmp/steerable-harness.json"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
-# The agent packages require Python >= 3.10; task images stuck on older
-# interpreters (qemu-alpine-ssh's Debian bullseye ships 3.9) get a pinned
-# python-build-standalone instead of a cryptic pip failure. The desktop app
-# bundles its own runtime for the same reason. Pinned for reproducibility;
-# no CN mirror carries astral-sh/python-build-standalone, so proxied local
-# runs may stall — GHA (the eval home) reaches GitHub directly.
-_STANDALONE_PY_URL = (
-    "https://github.com/astral-sh/python-build-standalone/releases/download/"
-    "20250818/cpython-3.11.13%2B20250818-x86_64-unknown-linux-gnu-install_only.tar.gz"
-)
-_STANDALONE_PY_HOME = "/opt/steerable-py311"
-_STANDALONE_PY = f"{_STANDALONE_PY_HOME}/bin/python3.11"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
     "STEERABLE_BASE_URL",
@@ -183,15 +173,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         """
         result = await self.exec_as_root(
             environment,
-            command=(
-                f"curl -fsSL --retry 3 --max-time 600 "
-                f"{shlex.quote(_STANDALONE_PY_URL)} -o /tmp/steerable-py.tgz "
-                f"&& mkdir -p {shlex.quote(_STANDALONE_PY_HOME)} "
-                f"&& tar -xzf /tmp/steerable-py.tgz --strip-components=1 "
-                f"-C {shlex.quote(_STANDALONE_PY_HOME)} "
-                f"&& rm /tmp/steerable-py.tgz "
-                f"&& {shlex.quote(_STANDALONE_PY)} --version"
-            ),
+            command=_STANDALONE_PY_INSTALL,
             env=proxy_env or None,
             timeout_sec=900,
         )

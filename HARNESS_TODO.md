@@ -374,6 +374,27 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       **环境预备（2026-08-31）**：三题名均已在 Harbor 任务缓存核验存在；
       本地预构建随跑分迁移 GHA 而止（GHA runner 自建环境，x86+KVM），
       本地留下的 `steerable-*-probe` 镜像仅为缓存，非依赖。
+      **首跑结果（2026-08-31，GHA run 33376420260）**：D/E 均 1/2  scored
+      题通过（共享计分题 mean 各 0.500，harness 主效应 0%）——
+      `headless-terminal` **两臂同过（reward 1.0）**，会话工具面的
+      头条收益被实盘观测到；`install-windows-3.11` 两臂均 0；
+      `qemu-alpine-ssh` 两臂均 **errored（非 0 分）**——环境装不上
+      agent：bullseye 容器 Python 3.9.2 < 包要求的 >=3.10
+      （NonZeroAgentExitCodeError at pip install）。两个结构性问题
+      已当场修复并需重跑：(1) 上述 Python 地板 → 新增
+      python-build-standalone 3.11 回退（`harbor_steerable.py`，
+      钉版本，GHA 直连 GitHub）；(2) 效率表 token 列全 0 →
+      OpenRouter 把 usage 挂在**带 choices 的重复 finish 块**上，
+      解析器只认 choices:[] 的 usage 块而丢弃（已修 + 回归测试）。
+      **结论暂记：会话工具面在软交互题上有效；qemu 题的「必然 0 分」
+      硬度仍未被回答（装不上 ≠ 解不出），待修复后重跑 de。**
+      **二跑结果（2026-08-31，GHA run 33379793964，含 Python 地板 +
+      usage 解析修复）**：`qemu-alpine-ssh` 两臂仍 errored——standalone
+      回退脚本本身 exit 127：该最小镜像**连 curl/wget 都没有**，
+      busybox tar 也不认 `--strip-components`。已二次修复：
+      下载改走环境自带 `python3` urllib（自动承代理），解包改
+      「先解后 `cp -a` 就位」（`harbor_helpers._STANDALONE_PY_INSTALL`，
+      回归测试锁定无 curl/wget/--strip-components）。**待三跑。**
 
 ---
 
@@ -619,9 +640,11 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
 但 `select_exec_backend()` 在 Windows 上直接返回 `None`（`sandbox.py:505`），
 宿主侧没有真实现。**当前 Windows 是不可用，而不是「委派」**——四家里只有我们如此。
 
-- [~] **4.1.1** deeppath-agent 侧实现 `host.process.spawn`（受限令牌 + JobObject），
+- [x] **4.1.1** deeppath-agent 侧实现 `host.process.spawn`（受限令牌 + JobObject），
       参照 codex `windows-sandbox-rs` 与 dsh 的受限令牌 + ACL runner。
-      **已实现（2026-08-31），待 Windows CI 实盘验证后勾掉。** 载体决策
+      **已实现并经 Windows CI 实盘验证（2026-08-31，GHA run 33379741075：
+      windows-2022 上 2 单元 + 5 集成测试全绿，含写拒、树杀、
+      notEnforced 如实上报）。** 载体决策
       （用户拍板）：**(b) Rust 辅助二进制**——`native/windows-spawn-helper/`，
       按 codex windows-sandbox-rs legacy 路径提取的最小正确配方：
       `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE|LUA_TOKEN|WRITE_RESTRICTED)`
@@ -637,7 +660,10 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
       `router.ts` 在 win32 下传 `hostSpawn: true` 接线。网络策略字段
       （network/allowedHosts）helper 不执行（无 WFP），经退出帧
       `sandbox.notEnforced` 如实上报 → 宿主报 `partial`。
-- [~] **4.1.2** Windows 环境实盘验证，写入 `docs/spec/safety.md` 宿主能力面章。
+- [x] **4.1.2** Windows 环境实盘验证，写入 `docs/spec/safety.md` 宿主能力面章。
+      **已验证（2026-08-31，GHA run 33379741075 全绿）**：写可写根内成功、
+      写 `%USERPROFILE%` 被拒、`{"kill":true}` 树杀（ping 哨兵）、
+      notEnforced 列出 network/allowedHosts、只读约束可用。
       **验证机 = GHA windows-2022 runner**（用户决策：无需本机 Windows）。
       新增 `.github/workflows/test-windows-spawn.yml`：helper 路径变更即触发，
       `cargo test` 跑验收断言——写可写根内成功、写 `%USERPROFILE%` 被拒
@@ -646,8 +672,7 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
       只读约束（零可写根）可用。`build-windows.yml` 增加 helper 构建步骤
       （release 二进制进 `resources/windows-spawn-helper/` 随包分发，
       electron-builder 条件收录）。safety.md 已写入实现章节（含
-      Everyone-writable 残余逃逸面的诚实说明）。**待 CI 首跑绿色后
-      本条勾掉。**
+      Everyone-writable 残余逃逸面的诚实说明）。
 
 ### 4.2 运行时指标
 

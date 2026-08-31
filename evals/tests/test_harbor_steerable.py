@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
+    _STANDALONE_PY_INSTALL,
     _UV_MIN_BYTES,
     _UV_PIP_INSTALL,
     _UV_SEED,
@@ -29,6 +30,17 @@ def test_python_tag_supported_gates_standalone_fallback() -> None:
 def test_venv_tarball_is_abi_specific() -> None:
     path = venv_tarball("313")
     assert path.name == "steerable-venv-cp313-linux-amd64.tgz"
+
+
+def test_standalone_python_install_runs_on_minimal_images() -> None:
+    # qemu-alpine-ssh has neither curl nor wget (exit 127 on the first
+    # fallback version) and its busybox tar lacks --strip-components.
+    assert "curl" not in _STANDALONE_PY_INSTALL
+    assert "wget" not in _STANDALONE_PY_INSTALL
+    assert "--strip-components" not in _STANDALONE_PY_INSTALL
+    assert "urllib.request.urlretrieve" in _STANDALONE_PY_INSTALL
+    assert "cp -a /tmp/steerable-py-x/python/." in _STANDALONE_PY_INSTALL
+    assert "/opt/steerable-py311/bin/python3.11 --version" in _STANDALONE_PY_INSTALL
 
 
 def test_overlay_pip_install_is_no_deps() -> None:
