@@ -7,6 +7,7 @@ pytest `FileNotFoundError` on the named output (`eval.scm`, `program.py`,
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from collections.abc import Iterable, Sequence
@@ -116,8 +117,10 @@ _MAX_MISSING_NAMED_RETRIES = 16
 # Z.AI coerces tool_choice=required to auto, so nudges are user text only.
 # After this many ignored explore nudges, refuse inspect-only tools so
 # Harbor's 180 min wait_for cannot be spent on bash/read_file while
-# steal.py / primers.fasta / out.txt are still missing.
-_BLOCK_EXPLORE_AFTER_NUDGES = 4
+# steal.py / primers.fasta / out.txt are still missing. Two ignored
+# nudges is 16 inspect steps at explore_before_nudge=8; four let
+# extract-moves OCR every frame and gcode reason until Harbor 10800s.
+_BLOCK_EXPLORE_AFTER_NUDGES = 2
 _INSPECT_BLOCKED = (
     "Stop inspecting. These instruction-named output files still do not "
     "exist: {paths}. Write them now with write_file, edit_file, or bash "
@@ -148,6 +151,12 @@ _MAX_BYTES_RETRIES = 4
 _BYTES_CAP_RETRY = (
     "{path} is {got} bytes; the instruction requires < {cap} bytes. "
     "Shrink it (wc -c) before stopping."
+)
+# path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
+_GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
+_GZIP_CAP_RETRY = (
+    "{path} gzip-compresses to {got} bytes; the instruction requires "
+    "< {cap} when compressed. Shrink it (gzip|wc) before stopping."
 )
 # regex-chess: all_legal_next_positions uses fen.split("\n"); a trailing
 # newline in a JSON replacement became `Our move:  ` (empty illegal row).
@@ -379,6 +388,39 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_gzip_cap_retry(self) -> CompletionAction | None:
+        """Veto a named source over an instruction `<Nk gzip` compressed cap."""
+        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+            return None
+        text = self._instruction or ""
+        if "gzip" not in text.lower():
+            return None
+        match = _GZIP_K_CAP.search(text)
+        if not match:
+            return None
+        cap = int(match.group(1)) * 1000
+        if cap < 1:
+            return None
+        for path in self._required:
+            suffix = Path(path).suffix.lower()
+            if suffix not in _SOURCE_SUFFIXES or not Path(path).is_file():
+                continue
+            try:
+                raw = Path(path).read_bytes()
+            except OSError:
+                continue
+            got = len(gzip.compress(raw))
+            if got < cap:
+                continue
+            self._bytes_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_GZIP_CAP_RETRY.format(path=path, got=got, cap=cap),
+                reason="named_gzip_cap",
+            )
+        return None
+
     def _named_json_blank_retry(self) -> CompletionAction | None:
         """Veto JSON whose strings would become empty rows under split('\\n')."""
         if self._json_retries >= _MAX_JSON_RETRIES:
@@ -425,6 +467,9 @@ class DeliveryHooks(NoopHooks):
         bytes_retry = self._named_bytes_cap_retry()
         if bytes_retry is not None:
             return bytes_retry
+        gzip_retry = self._named_gzip_cap_retry()
+        if gzip_retry is not None:
+            return gzip_retry
         json_retry = self._named_json_blank_retry()
         if json_retry is not None:
             return json_retry

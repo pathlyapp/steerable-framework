@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime.hooks import CompletionDraft
@@ -437,7 +439,7 @@ async def test_helper_write_does_not_count_as_named_delivery(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
+async def test_inspect_blocked_after_named_nudges(tmp_path) -> None:
     target = tmp_path / "steal.py"
     hooks = DeliveryHooks(
         named_outputs=(str(target),),
@@ -448,7 +450,7 @@ async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
     ok = ToolResult(success=True, data={})
     inspect = ToolCall(id="t", name="bash", arguments={"command": "ls /app"})
     assert hooks.inspect_block_result(inspect) is None
-    for _ in range(4):
+    for _ in range(2):
         await hooks.post_tool_result(ok, _call("bash"), ctx)
         action = await hooks.pre_step([], ctx)
         assert action.appends
@@ -637,6 +639,41 @@ async def test_named_source_skips_bytes_cap_without_instruction_limit(
         named_outputs=(str(src),),
     )
     src.write_bytes(b"x" * 8000)
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_source_retries_when_over_gzip_k_cap(tmp_path) -> None:
+    src = tmp_path / "mystery.c"
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Write a C program {src} that performs an identical operation. "
+            "Your c program must be <2k when compressed "
+            "(`cat mystery.c | gzip | wc`)."
+        ),
+        named_outputs=(str(src),),
+    )
+    src.write_bytes(os.urandom(8000))
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_gzip_cap"
+    assert "2000" in (action.message or "")
+    src.write_text("int main(){return 0;}\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_source_skips_gzip_cap_without_gzip_pipeline(
+    tmp_path,
+) -> None:
+    src = tmp_path / "mystery.c"
+    hooks = DeliveryHooks(
+        instruction=f"Write {src}. Keep it <2k.",
+        named_outputs=(str(src),),
+    )
+    src.write_bytes(bytes(range(256)) * 40)
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
 
