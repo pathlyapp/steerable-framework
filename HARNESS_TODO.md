@@ -231,13 +231,17 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
 
 - [x] **1.4.2.1** 在 `headless.py` 注册 AgentPool 工具。经 `_assemble_harness`
       落地：spec 的 `orchestration: subagent` 触发 `SubAgentDelegation.wrap` →
-      `OrchestrationExecutor` 包执行器，六工具委派面随 spec 进 headless。
-      默认 arm（无 --harness）保持 single，arm A 基线不受污染。
+      `OrchestrationExecutor` 包执行器，委派工具族描述符追加进模型可见面
+      （编排维度的自有表面，在 tools 维度选择之后，维度正交）。
+      **实盘冒烟抓到过真 bug**：初版只包执行器没加描述符，模型回答
+      "no subagent tool exists"——arm C 差点空跑成 arm B 的复制；
+      修复后 agent_spawn → agent_wait(0.1) → 子代理回 391 全链路验证
+      （525344c）。默认 arm 保持 single 不追加，arm A/B 表面零变化。
 - [~] **1.4.2.2** 单独成 arm 跑对照，不与 1.4.1 合并计分——否则无法区分是工具面
       还是编排带来的差异，就又回到了「凭感觉说变好了」。**arm C spec 已就位**：
       `evals/harnesses/subagent.harness.yaml`（与 default 仅 orchestration
       一维之差，契约测试锁定）+ suite.yaml 注册 `subagent` harness 标签。
-      跑对照待 arm A 完成与 1.4.2.1 接线。
+      装配与委派两路实盘冒烟均已通过，跑对照随 arm B 完成后自动接续。
 
 #### 1.4.3 对照协议（先注册后跑，本节的硬约束）
 
@@ -321,6 +325,9 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       用 `tools: minimal` 规格挡住会话工具），arm E = 默认 + 会话工具。
       预期：D 在 qemu-alpine-ssh 上 0 分，E 非零即收益被观测；
       若 E 也 0 分，结论是「会话工具面对 QEMU 级交互不足」，同样写回。
+      **两规格实盘冒烟均已通过**（2026-08-31）：arm D minimal 四工具面
+      正常解题；arm E 默认面模型自发开会话 sh-* → 会话内跑 python3 →
+      write_stdin 轮询 → 关闭 → 回报 42，会话工具全链路 41 秒。
 
 ---
 
