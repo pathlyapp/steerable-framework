@@ -260,10 +260,12 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # after the 150 min soft timeout ate Harbor's remaining 30 min.
             wrap_up_tool_timeout_ms=120_000,
             wrap_up_hard_cap_ms=10_500_000,
-            # dna-assembly / steal.py: hours of reasoning after the first
-            # inspect, zero writes. 10 min of *active* tokens (GLM 48 min
-            # SSE gaps do not count) cuts the stream so delivery can name
-            # the missing file. Does not wrap-up.
+            # dna-assembly / steal.py / gcode: hours of reasoning after the
+            # first inspect, zero writes. 10 min of *active* tokens (GLM 48
+            # min SSE gaps do not count) cuts the stream so delivery can
+            # name the missing file. First cut retries a write; a second
+            # cut starts wrap-up (Z.AI ignores tool_choice=required, so
+            # retries otherwise Hmm for another 10 min each).
             idle_stream_timeout_ms=600_000,
         ),
         hooks=ChainHooks(

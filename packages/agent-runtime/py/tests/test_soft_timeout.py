@@ -539,6 +539,72 @@ async def test_idle_stream_cuts_dense_reasoning_without_wrap_up() -> None:
 
 
 @pytest.mark.asyncio
+async def test_second_idle_stream_cut_starts_wrap_up() -> None:
+    """Z.AI ignores tool_choice=required; a second Hmm stream must wrap-up."""
+
+    class _HmmTwiceThenWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self._idx = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = self._idx
+            self._idx += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx < 2:
+                    for i in range(8):
+                        yield LLMStreamChunk(reasoning_delta=f"hmm {idx}-{i}")
+                        await asyncio.sleep(0.02)
+                    yield LLMStreamChunk(content_delta="never reached")
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(write)
+    loop = CoreLoop(
+        _HmmTwiceThenWrite(),
+        RouterToolExecutor(router),
+        LoopConfig(
+            idle_stream_timeout_ms=50,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=4,
+        ),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert len(cuts) == 2
+    assert [e for e in events if e.kind == "soft_timeout"]
+    deltas = [e.data.get("delta", "") for e in events if e.kind == "content_delta"]
+    assert "never reached" not in "".join(deltas)
+    assert executed == ["write"]
+
+
+@pytest.mark.asyncio
 async def test_idle_stream_ignores_long_sse_gaps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

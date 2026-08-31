@@ -270,8 +270,11 @@ class LoopConfig:
     wrap_up_hard_cap_ms: int | None = None
     #: Cut a reasoning-only stream after this much *active* token wall.
     #: Gaps longer than ``_IDLE_REASONING_GAP_SEC`` are GLM silent-think
-    #: (regex-chess ~48 min with no SSE) and do not count. Does not start
-    #: wrap-up — delivery can still force a named write. ``None`` disables.
+    #: (regex-chess ~48 min with no SSE) and do not count. The first cut
+    #: does not wrap-up — delivery can still force a named write. A second
+    #: cut in the same run starts wrap-up: Z.AI coerces
+    #: ``tool_choice=required`` to auto, so retries can Hmm for another
+    #: cap each and eat Harbor ``wait_for``. ``None`` disables.
     idle_stream_timeout_ms: int | None = None
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
@@ -746,6 +749,7 @@ class CoreLoop:
         )
         wrap_up = False
         wrap_up_tool_rounds_used = 0
+        idle_cut_count = 0
 
         def mark_wrap_up() -> None:
             nonlocal wrap_up
@@ -1128,6 +1132,7 @@ class CoreLoop:
                             and reasoning_active_ms >= idle_cap
                         ):
                             stream_idle_cut = True
+                            idle_cut_count += 1
                             break
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
@@ -1243,7 +1248,7 @@ class CoreLoop:
                 )
                 return
 
-            if stream_budget_cut:
+            if stream_budget_cut or stream_idle_cut:
                 aclose = getattr(stream, "aclose", None)
                 if aclose is not None:
                     await aclose()
@@ -1301,14 +1306,17 @@ class CoreLoop:
                     },
                 )
 
-            if stream_budget_cut:
+            idle_wrap = stream_idle_cut and idle_cut_count >= 2
+            if stream_budget_cut or idle_wrap:
                 was_wrap = wrap_up
                 if not wrap_up:
                     yield begin_soft_timeout()
                 if not tool_calls and not withholding_tools():
-                    # steal.py: 166 min of reasoning, zero writes. Keep the
+                    # steal.py / gcode: dense Hmm with zero writes. Keep the
                     # draft on the record and start wrap-up instead of waiting
-                    # for the stream to finish.
+                    # for the stream to finish. A first idle cut still retries
+                    # a write; the second cut takes this path so 32 missing-
+                    # named retries cannot each Hmm for another idle cap.
                     if content.strip() or reasoning_parts:
                         manager.append(_assistant_message(content, []))
                     if was_wrap:
@@ -1824,7 +1832,7 @@ _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
 
 #: Hard cap on before_completion-granted redos (discipline retries +
 #: narration rounds) per run. Must cover DeliveryHooks empty-round retries
-#: (6) plus missing-named-output retries (16), plus idle-stream cuts that
+#: (6) plus missing-named-output retries (32), plus idle-stream cuts that
 #: also go through before_completion. Hooks still bound themselves; this is
 #: the defense-in-depth backstop so a faulty hook cannot spin forever.
 _MAX_COMPLETION_REDOS = 32
