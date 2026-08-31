@@ -286,7 +286,7 @@ def test_pack_floor_keeps_catalog_shards_inside_gha_wall() -> None:
 
     24 catalog shards still pack 4 tasks (2×180 min waves = 360 min exact).
     36 shards still pack 3 (one leftover 180-min wave = 360 min exact).
-    48 shards pack ≤2 after six exclusive MIPS/QEMU/Windows/video tasks.
+    48 shards pack ≤2 after seven exclusive MIPS/QEMU/Windows/video/SQL tasks.
     """
     suite = load_suite()
     catalog = [
