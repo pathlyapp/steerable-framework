@@ -260,8 +260,17 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       工具错误率、恢复率（工具失败后成功恢复的比例）、单题成本。
       **不只报 pass@1**——精简 harness 在成本归一化口径上有结构性优势，
       而 Harness-Bench 的口径本就包含 token 成本。
-      已登记（上文七项）；归因报告由 `evals/attribution.py` 实现（1.3.3），
-      轮次/token/峰值上下文从 trial 的 trace 与 result.json 取。
+      已登记（上文七项）；归因报告由 `evals/attribution.py` 实现（1.3.3）。
+      **可观测性审计（2026-08-31，为 headless 发射端落地做准备）**：
+      事件流可得 6/7——rounds（`llm_request` 计数）、input/output tokens
+      （终局 `completion.usage`）、峰值上下文（max `llm_response.promptTokens`）、
+      工具错误（`tool_call_result.success=false` + `tool_error`）、恢复率
+      （错误后同 run 内后续 success）。`cost_usd` 不可得：目录刻意只收
+      上下文窗/模态/工具格式/推理档（`model_catalog.py:35`），无定价字段——
+      补定价需改 `scripts/generate_model_catalog.py` 并重新生成目录数据，
+      目录在评测上传路径上，与 headless 发射端一起待 arm B/C 后落地。
+      归因端已就绪：`STEERABLE_RUN_SUMMARY {json}` 末行契约 + 部分数据
+      渲染 n/a 不填零（0bc669c）。
 - [x] **1.4.3.4** arm A 必须在动任何代码之前先跑，否则没有基线。
       **已跑完**（2026-08-31，`evals/jobs/steerable-arm-a/2026-08-31__11-14-23`）：
       12/12 完成、0 错误、**mean 0.833**。满分 10 题；零分两题：
