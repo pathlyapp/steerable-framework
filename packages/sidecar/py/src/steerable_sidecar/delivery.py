@@ -45,6 +45,9 @@ _BASH_BUILDS = re.compile(
     r"\b(?:g?cc|g\+\+|clang\+\+|rustc)\s+[^\n]*\s-o\s"
     r"|\b(?:make|cmake|qemu-img)\b"
 )
+# node vm.js writes /tmp/frame.bmp as a side effect; blocking it after
+# named-output nudges would freeze make-mips-interpreter.
+_BASH_RUN_ENTRYPOINT = re.compile(r"\bnode\s+\S+")
 _BASH_MUTATE_FILE = re.compile(
     r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
     r"|\btee\b"
@@ -177,9 +180,9 @@ class DeliveryHooks(NoopHooks):
         """Refuse inspect-only tools after named-output nudges are ignored.
 
         Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
-        cannot eat the Harbor window. Bash that compiles (make/gcc) or
-        mutates a still-missing named path still runs. ``python3 gen.py``
-        and ``cat > explore.py`` do not.
+        cannot eat the Harbor window. Bash that compiles (make/gcc), runs
+        ``node …`` (side-effect frames), or mutates a still-missing named
+        path still runs. ``python3 gen.py`` and ``cat > explore.py`` do not.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -498,9 +501,9 @@ def _bash_writes(call: ToolCall) -> bool:
 
 
 def _bash_delivers_required(call: ToolCall, required: tuple[str, ...]) -> bool:
-    """True when bash compiles or mutates a still-missing named output."""
+    """True when bash compiles, runs node, or mutates a still-missing named output."""
     command = _bash_command(call)
-    if _BASH_BUILDS.search(command):
+    if _BASH_BUILDS.search(command) or _BASH_RUN_ENTRYPOINT.search(command):
         return True
     if required and any(path in command for path in required):
         return bool(_BASH_MUTATE_FILE.search(command))

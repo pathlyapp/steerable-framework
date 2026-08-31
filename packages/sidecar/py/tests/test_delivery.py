@@ -491,6 +491,12 @@ async def test_inspect_blocked_after_four_named_nudges(tmp_path) -> None:
         arguments={"command": "make -C /app all"},
     )
     assert hooks.inspect_block_result(compile_elf) is None
+    run_node = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": "timeout 60 node /app/vm.js"},
+    )
+    assert hooks.inspect_block_result(run_node) is None
     python_write = ToolCall(
         id="t",
         name="bash",
