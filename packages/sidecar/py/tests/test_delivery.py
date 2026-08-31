@@ -516,6 +516,44 @@ async def test_inspect_blocked_after_named_nudges(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_inspect_allows_running_existing_named_script(tmp_path) -> None:
+    script = tmp_path / "steal.py"
+    npy = tmp_path / "stolen_A1.npy"
+    hooks = DeliveryHooks(
+        named_outputs=(str(script), str(npy)),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(2):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+        action = await hooks.pre_step([], ctx)
+        assert action.appends
+    run_missing = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {script}"},
+    )
+    assert hooks.inspect_block_result(run_missing) is not None
+    script.write_text("print(1)\n", encoding="utf-8")
+    run_existing = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {script}"},
+    )
+    assert hooks.inspect_block_result(run_existing) is None
+    helper = tmp_path / "explore.py"
+    helper.write_text("print(1)\n", encoding="utf-8")
+    run_helper = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {helper}"},
+    )
+    assert hooks.inspect_block_result(run_helper) is not None
+
+
+@pytest.mark.asyncio
 async def test_gated_executor_does_not_run_blocked_inspect(tmp_path) -> None:
     target = tmp_path / "out.txt"
     hooks = DeliveryHooks(named_outputs=(str(target),))

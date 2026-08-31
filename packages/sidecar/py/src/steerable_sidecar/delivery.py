@@ -50,6 +50,11 @@ _BASH_BUILDS = re.compile(
 # node vm.js writes /tmp/frame.bmp as a side effect; blocking it after
 # named-output nudges would freeze make-mips-interpreter.
 _BASH_RUN_ENTRYPOINT = re.compile(r"\bnode\s+\S+")
+# steal.py / pystan_analysis.py: the named script exists; running it
+# writes a still-missing sibling (.npy, csv).
+_BASH_RUN_PYTHON = re.compile(
+    r"\b(?:python3?|pypy3?)\s+(['\"]?)([^'\"\s]+\.py)\1"
+)
 _BASH_MUTATE_FILE = re.compile(
     r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
     r"|\btee\b"
@@ -242,6 +247,7 @@ class DeliveryHooks(NoopHooks):
             else named_output_paths(instruction)
         )
         self._instruction = instruction
+        self._named = tuple(raw)
         self._required = tuple(p for p in raw if not Path(p).exists())
         self._delivered = 0
         self.writes = 0
@@ -261,8 +267,9 @@ class DeliveryHooks(NoopHooks):
 
         Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
         cannot eat the Harbor window. Bash that compiles (make/gcc), runs
-        ``node …`` (side-effect frames), or mutates a still-missing named
-        path still runs. ``python3 gen.py`` and ``cat > explore.py`` do not.
+        ``node …`` (side-effect frames), runs an on-disk named ``.py``, or
+        mutates a still-missing named path still runs. ``python3 gen.py``
+        and ``cat > explore.py`` do not.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -271,7 +278,9 @@ class DeliveryHooks(NoopHooks):
         name = call.name
         if name not in _EXPLORE:
             return None
-        if name == "bash" and _bash_delivers_required(call, scored):
+        if name == "bash" and _bash_delivers_required(
+            call, scored, self._named
+        ):
             return None
         listed = ", ".join(scored[:8])
         return ToolResult(
@@ -827,11 +836,33 @@ def _bash_writes(call: ToolCall) -> bool:
     return bool(_BASH_WRITES.search(_bash_command(call)))
 
 
-def _bash_delivers_required(call: ToolCall, required: tuple[str, ...]) -> bool:
-    """True when bash compiles, runs node, or mutates a still-missing named output."""
+def _bash_delivers_required(
+    call: ToolCall,
+    missing: tuple[str, ...],
+    named: tuple[str, ...] | None = None,
+) -> bool:
+    """True when bash compiles, runs node/named .py, or mutates a missing output."""
     command = _bash_command(call)
     if _BASH_BUILDS.search(command) or _BASH_RUN_ENTRYPOINT.search(command):
         return True
-    if required and any(path in command for path in required):
+    if named and _bash_runs_existing_named_script(command, named):
+        return True
+    if missing and any(path in command for path in missing):
         return bool(_BASH_MUTATE_FILE.search(command))
+    return False
+
+
+def _bash_runs_existing_named_script(command: str, named: tuple[str, ...]) -> bool:
+    match = _BASH_RUN_PYTHON.search(command)
+    if not match:
+        return False
+    raw = match.group(2)
+    candidates = [raw]
+    if not raw.startswith("/"):
+        candidates.append(f"/app/{raw.lstrip('./')}")
+    names = {Path(path).name: path for path in named}
+    for cand in candidates:
+        path = cand if cand in named else names.get(Path(cand).name)
+        if path is not None and Path(path).is_file():
+            return True
     return False
