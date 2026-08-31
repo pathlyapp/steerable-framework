@@ -332,3 +332,129 @@ async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
 def test_max_completion_redos_covers_delivery_empty_rounds() -> None:
     # DeliveryHooks retries empty_round 6 times then missing_named_output.
     assert _MAX_COMPLETION_REDOS >= 16
+
+
+@pytest.mark.asyncio
+async def test_soft_timeout_cuts_in_flight_reasoning_stream() -> None:
+    """steal.py: a 166 min reasoning stream skipped wrap-up; Harbor killed."""
+
+    class _SlowThinkThenWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.calls: list[list[LLMMessage]] = []
+            self.tools_seen: list[Any] = []
+            self._idx = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            self.calls.append(list(messages))
+            self.tools_seen.append(tools)
+            idx = self._idx
+            self._idx += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx == 0:
+                    yield LLMStreamChunk(reasoning_delta="draft steal.py here")
+                    await asyncio.sleep(0.2)
+                    yield LLMStreamChunk(content_delta="never reached")
+                    return
+                if tools is None:
+                    yield LLMStreamChunk(content_delta="files are on disk")
+                    yield LLMStreamChunk(finish_reason="stop")
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(write)
+    provider = _SlowThinkThenWrite()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=2,
+        ),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    assert [e for e in events if e.kind == "soft_timeout"]
+    assert executed == ["write"]
+    assert events[-1].data["status"] == "completed"
+    assert any(
+        "time budget" in m.content_text for m in provider.calls[1]
+    )
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_stream_timeout_stops_second_think() -> None:
+    """After wrap-up, another long reasoning stream must not eat Harbor."""
+
+    class _ThinkForeverOnWrap:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self._idx = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = self._idx
+            self._idx += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx == 0:
+                    yield LLMStreamChunk(tool_call_delta=tc("slow"))
+                    yield LLMStreamChunk(finish_reason="tool_calls")
+                    return
+                yield LLMStreamChunk(reasoning_delta="still planning")
+                await asyncio.sleep(0.2)
+                yield LLMStreamChunk(content_delta="never")
+
+            return _gen()
+
+    router = ToolRouter()
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        return "slept"
+
+    router.register(slow)
+    loop = CoreLoop(
+        _ThinkForeverOnWrap(),
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=2,
+            wrap_up_tool_timeout_ms=20,
+        ),
+        hooks=_RetryTextOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    assert [e for e in events if e.kind == "soft_timeout"]
+    assert events[-1].data["status"] in {"completed", "failed", "budget_exhausted"}

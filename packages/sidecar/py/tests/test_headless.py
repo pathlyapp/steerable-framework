@@ -69,6 +69,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "carving" in headless_mod._SYSTEM
     assert "Hidden tests score files" in headless_mod._SYSTEM
     assert "wait for background jobs" in headless_mod._SYSTEM
+    assert "stop reasoning" in headless_mod._SYSTEM
     assert "truncated write_file" in headless_mod._SYSTEM
     assert "PIL" in headless_mod._SYSTEM
     assert "ASCII" in headless_mod._SYSTEM
@@ -200,6 +201,8 @@ def test_headless_wrap_up_keeps_tools() -> None:
     src = inspect.getsource(headless_mod._run)
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=16" in src
+    assert "wrap_up_tool_timeout_ms=120_000" in src
+    assert "wrap_up_hard_cap_ms=10_500_000" in src
     assert "DeliveryGatedExecutor" in src
     hooks_src = src[src.index("ChainHooks") :]
     assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")

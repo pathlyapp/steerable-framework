@@ -100,9 +100,9 @@ _SYSTEM = (
     "with the forward primer) and keep each annealing arm within the stated "
     "length bounds. "
     "Hidden tests score files on disk, not this chat: if a time-budget "
-    "notice appears, wait for background jobs (`wait`), then write or "
-    "verify the required files. Do not overwrite an existing complete "
-    "output with a truncated write_file. "
+    "notice appears, stop reasoning, wait for background jobs (`wait`), "
+    "then write or verify the required files. Do not overwrite an existing "
+    "complete output with a truncated write_file. "
     "PNG/JPEG/BMP files are pixels, not UTF-8: read_file returns an ASCII "
     "preview for 8-bit PNG, baseline JPEG, and uncompressed BMP (square "
     "images also get a rank/file 8x8 brightness and occupancy grid); decode exact pixels "
@@ -248,6 +248,10 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             tool_timeout_ms=3_600_000,
             wrap_up_keeps_tools=True,
             wrap_up_max_tool_rounds=16,
+            # steal.py / gcode: a 1-hour bash or another reasoning stream
+            # after the 150 min soft timeout ate Harbor's remaining 30 min.
+            wrap_up_tool_timeout_ms=120_000,
+            wrap_up_hard_cap_ms=10_500_000,
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the
