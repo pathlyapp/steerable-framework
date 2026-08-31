@@ -43,6 +43,21 @@ def _drain(mgr: ShellSessionManager, session_id: str, needle: str, timeout: floa
     return seen, read
 
 
+def _write_and_drain(
+    mgr: ShellSessionManager, session_id: str, chars: str, needle: str, timeout: float = 10.0
+):
+    """Write input, then poll for ``needle`` — seeding the accumulation with
+    the write call's own read window. Writing already reads (yield_ms), so on
+    a fast or loaded host the response can land inside the write's window;
+    discarding it races the needle away (CI flake: assert '42' in '>>> ')."""
+    write_read = mgr.write_stdin(session_id, chars)
+    seen = write_read.output
+    if needle and needle in seen:
+        return seen, write_read
+    out, read = _drain(mgr, session_id, needle, timeout)
+    return seen + out, read
+
+
 def test_open_runs_command_and_returns_output(manager, tmp_path: Path) -> None:
     read = manager.open(cwd=tmp_path, command="echo hello-session")
     out, _ = _drain(manager, read.session_id, "hello-session")
@@ -52,8 +67,7 @@ def test_open_runs_command_and_returns_output(manager, tmp_path: Path) -> None:
 def test_state_persists_across_reads(manager, tmp_path: Path) -> None:
     read = manager.open(cwd=tmp_path, command="X=41")
     out, _ = _drain(manager, read.session_id, "$", timeout=5)
-    manager.write_stdin(read.session_id, "echo $((X+1))\n")
-    out, _ = _drain(manager, read.session_id, "42")
+    out, _ = _write_and_drain(manager, read.session_id, "echo $((X+1))\n", "42")
     assert "42" in out
 
 
@@ -62,8 +76,7 @@ def test_interactive_read_prompt_roundtrip(manager, tmp_path: Path) -> None:
         cwd=tmp_path, command="read -r -p 'name: ' name; echo \"hi $name\""
     )
     _drain(manager, read.session_id, "name:", timeout=5)
-    manager.write_stdin(read.session_id, "steerable\n")
-    out, _ = _drain(manager, read.session_id, "hi steerable")
+    out, _ = _write_and_drain(manager, read.session_id, "steerable\n", "hi steerable")
     assert "hi steerable" in out
 
 
@@ -71,8 +84,7 @@ def test_python_repl_the_newly_possible_task(manager, tmp_path: Path) -> None:
     """The W1.5 headline: a REPL session — impossible for one-shot bash."""
     read = manager.open(cwd=tmp_path, command="python3 -q -i")
     _drain(manager, read.session_id, ">>>", timeout=10)
-    manager.write_stdin(read.session_id, "21*2\n")
-    out, _ = _drain(manager, read.session_id, "42")
+    out, _ = _write_and_drain(manager, read.session_id, "21*2\n", "42")
     assert "42" in out
     manager.write_stdin(read.session_id, "exit()\n")
 
@@ -95,8 +107,7 @@ def test_ctrl_c_interrupts_but_session_survives(manager, tmp_path: Path) -> None
     # The needle is printf OUTPUT, not input: the tty echoes typed lines, so
     # an "echo still-alive" needle could false-positive off its own echo
     # while sleep is still running. "alive-OK" only exists if bash executed.
-    manager.write_stdin(read.session_id, "printf 'alive-%s\\n' OK\n")
-    out, _ = _drain(manager, read.session_id, "alive-OK")
+    out, _ = _write_and_drain(manager, read.session_id, "printf 'alive-%s\\n' OK\n", "alive-OK")
     assert "alive-OK" in out
 
 
