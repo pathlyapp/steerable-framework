@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke, failed-prev iteration (~41 ids), or full catalog (89 ids)
+        description: cheap-12 smoke, failed-prev iteration (~15 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12
@@ -195,7 +195,7 @@ jobs:
               body = "产品 steerable × 全量 89 题，16 分片并行。"
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
-              body = "产品 steerable × 上次 catalog 失败题（约 41），24 分片。用来迭代 harness，不是正式分。"
+              body = "产品 steerable × 上次 catalog 失败题（约 15），24 分片。用来迭代 harness，不是正式分。"
           else:
               title = "开始 · GHA cheap-12"
               body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"

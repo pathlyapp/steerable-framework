@@ -35,7 +35,7 @@ python -m evals.run --agent claude-code --split cheap-12
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
-`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns the previous catalog's failures (~41 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (24 shards).
+`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (~15 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (24 shards).
 
 ## Layers
 

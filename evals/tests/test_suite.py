@@ -38,47 +38,21 @@ CHEAP_12 = (
 )
 
 FAILED_PREV = (
-    "bn-fit-modify",
-    "caffe-cifar-10",
-    "cancel-async-tasks",
-    "chess-best-move",
-    "circuit-fibsqrt",
-    "count-dataset-tokens",
-    "distribution-search",
     "dna-assembly",
-    "dna-insert",
     "extract-moves-from-video",
     "filter-js-from-html",
-    "financial-document-processor",
     "gcode-to-text",
     "gpt2-codegolf",
-    "install-windows-3.11",
     "largest-eigenval",
-    "mailman",
     "make-doom-for-mips",
     "make-mips-interpreter",
-    "mcmc-sampling-stan",
-    "merge-diff-arc-agi-task",
     "model-extraction-relu-logits",
-    "mteb-leaderboard",
     "mteb-retrieve",
-    "overfull-hbox",
-    "password-recovery",
-    "path-tracing",
     "path-tracing-reverse",
-    "polyglot-rust-c",
     "protein-assembly",
-    "qemu-alpine-ssh",
-    "qemu-startup",
-    "query-optimize",
-    "raman-fitting",
     "regex-chess",
     "rstan-to-pystan",
-    "schemelike-metacircular-eval",
-    "torch-pipeline-parallelism",
     "train-fasttext",
-    "video-processing",
-    "winning-avg-corewars",
 )
 
 
@@ -108,7 +82,7 @@ def test_cheap_12_is_pinned_subset() -> None:
 def test_failed_prev_is_pinned_catalog_subset() -> None:
     suite = load_suite()
     assert suite.splits["failed-prev"] == FAILED_PREV
-    assert len(FAILED_PREV) == 41
+    assert len(FAILED_PREV) == 15
     assert set(FAILED_PREV) <= suite.catalog_set
     assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
@@ -324,7 +298,7 @@ def test_pack_floor_keeps_24_catalog_shards_inside_gha_wall() -> None:
         )
         for i in range(24)
     ]
-    assert sum(len(shard) for shard in failed) == 41
+    assert sum(len(shard) for shard in failed) == 15
     assert max(len(shard) for shard in failed) <= 2
     for packed in (catalog, failed):
         for bucket in packed:

@@ -3,10 +3,11 @@
 # may run. Homemade prompts are not a CI gate.
 #
 # cheap-12 avoids QEMU, GPU, video, and long compiles. It must stay a
-# subset of catalog. failed-prev is GHA catalog 33319154031 zeros plus
-# install/verifier errors (41 ids) so harness iteration does not rerun
-# all 89. The catalog lists the 89 task ids published at git_rev; do not
-# invent extra ids.
+# subset of catalog. failed-prev is remaining catalog-89 zeros after
+# failed-prev 33335556034 (15 ids: 13 scored reds plus shard-10
+# filter-js/regex-chess still running). Harness iteration does not
+# rerun all 89. The catalog lists the 89 task ids published at git_rev;
+# do not invent extra ids.
 
 dataset:
   name: terminal-bench/terminal-bench-2-1
@@ -211,47 +212,21 @@ splits:
     - winning-avg-corewars
     - write-compressor
   failed-prev:
-    - bn-fit-modify
-    - caffe-cifar-10
-    - cancel-async-tasks
-    - chess-best-move
-    - circuit-fibsqrt
-    - count-dataset-tokens
-    - distribution-search
     - dna-assembly
-    - dna-insert
     - extract-moves-from-video
     - filter-js-from-html
-    - financial-document-processor
     - gcode-to-text
     - gpt2-codegolf
-    - install-windows-3.11
     - largest-eigenval
-    - mailman
     - make-doom-for-mips
     - make-mips-interpreter
-    - mcmc-sampling-stan
-    - merge-diff-arc-agi-task
     - model-extraction-relu-logits
-    - mteb-leaderboard
     - mteb-retrieve
-    - overfull-hbox
-    - password-recovery
-    - path-tracing
     - path-tracing-reverse
-    - polyglot-rust-c
     - protein-assembly
-    - qemu-alpine-ssh
-    - qemu-startup
-    - query-optimize
-    - raman-fitting
     - regex-chess
     - rstan-to-pystan
-    - schemelike-metacircular-eval
-    - torch-pipeline-parallelism
     - train-fasttext
-    - video-processing
-    - winning-avg-corewars
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert
