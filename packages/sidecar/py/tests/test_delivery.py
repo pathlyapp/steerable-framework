@@ -281,6 +281,12 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "create a file /app/solution.txt that has all the moves they input"
     )
     assert "/app/solution.txt" in extract
+    steal = named_output_paths(
+        "write a file called `/app/steal.py` that when run will output a "
+        "matrix. The script should save this matrix to `/app/stolen_A1.npy`."
+    )
+    assert "/app/steal.py" in steal
+    assert "/app/stolen_A1.npy" in steal
 
 
 @pytest.mark.asyncio

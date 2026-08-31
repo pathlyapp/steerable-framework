@@ -202,6 +202,15 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert text.index("await self._inject_host_python") < text.index(
         "await self._ensure_python_310"
     )
+    inject_fn = text[
+        text.index("async def _inject_host_python") : text.index(
+            "async def _ensure_python_310"
+        )
+    ]
+    assert inject_fn.index("command=_trial_python_ok()") < inject_fn.index(
+        "_linux_cpython_tarball(fetch=True)"
+    )
+    assert "if check.return_code == 0" in inject_fn
     assert "_linux_cpython_tarball(fetch=True)" in text
     assert "/opt/steerable-python" in text
     assert "import ssl, zlib, sys" in text

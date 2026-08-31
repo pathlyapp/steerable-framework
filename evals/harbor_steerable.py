@@ -224,7 +224,17 @@ class SteerableHarborAgent(BaseInstalledAgent):
         qemu-alpine-ssh / qemu-startup are Debian 11 (3.9.2). GitHub GETs of
         python-build-standalone from inside those images fail; the GHA host
         already has that tarball from setup-harbor.
+
+        Do not overwrite ``/usr/local/bin/python3`` when the image already has
+        3.10+: largest-eigenval ships numpy on 3.13, and replacing it with a
+        bare 3.12 made Harbor's ``/usr/local/bin/python -m pytest`` miss pytest.
         """
+        check = await environment.exec(
+            command=_trial_python_ok(),
+            user="root",
+        )
+        if check.return_code == 0:
+            return
         src = _linux_cpython_tarball(fetch=True)
         if src is None:
             return
