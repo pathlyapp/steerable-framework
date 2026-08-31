@@ -104,6 +104,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "relative filename" in headless_mod._SYSTEM
     assert "system interpreter" in headless_mod._SYSTEM
     assert "stock video backend" in headless_mod._SYSTEM
+    assert "DOOMGENERIC_RESX" in headless_mod._SYSTEM
     assert "width×height" in headless_mod._SYSTEM
     assert "gzip|wc" in headless_mod._SYSTEM
     assert "/usr/local/bin/python" in headless_mod._SYSTEM

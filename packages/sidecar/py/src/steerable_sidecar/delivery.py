@@ -8,7 +8,7 @@ pytest `FileNotFoundError` on the named output (`eval.scm`, `program.py`,
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -21,6 +21,7 @@ from steerable_agent_runtime.hooks import (
 )
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.loop import LoopContext
+from steerable_sidecar.png_ascii import raster_header_size
 
 _MUTATING = frozenset({"write_file", "edit_file"})
 _EXPLORE = frozenset({"bash", "read_file"})
@@ -107,6 +108,23 @@ _INSPECT_BLOCKED = (
     "(cat/tee/python to that path). Further read_file or inspect-only bash "
     "is blocked until they exist."
 )
+# make-doom-for-mips wrote /tmp/frame.bmp at 1024×768 (stock display /
+# screenshot) while doomgeneric.h names 640×400. Instruction text does
+# not mention those numbers; they live in the named graphics source.
+_MAX_SIZE_RETRIES = 4
+_NAMED_C_FILE = re.compile(r"\b([A-Za-z][A-Za-z0-9._-]*\.c)\b")
+_RESX = re.compile(r"DOOMGENERIC_RESX\s+(\d+)")
+_RESY = re.compile(r"DOOMGENERIC_RESY\s+(\d+)")
+_IMAGE_SUFFIXES = frozenset({".bmp", ".png"})
+_SIZE_MISMATCH_RETRY = (
+    "{path} is {got}; the instruction-named graphics source defines "
+    "{want}. Compile that source into the binary that writes this file; "
+    "do not screenshot a different display size."
+)
+_UNREADABLE_IMAGE_RETRY = (
+    "{path} exists but is not a readable BMP/PNG header. Rewrite it from "
+    "the instruction-named graphics source."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -131,6 +149,7 @@ class DeliveryHooks(NoopHooks):
             if named_outputs is not None
             else named_output_paths(instruction)
         )
+        self._instruction = instruction
         self._required = tuple(p for p in raw if not Path(p).exists())
         self._delivered = 0
         self.writes = 0
@@ -138,6 +157,7 @@ class DeliveryHooks(NoopHooks):
         self.nudges = 0
         self.completion_retries = 0
         self.empty_round_retries = 0
+        self._size_retries = 0
         self._compact_nudges = 0
         self._force_tool = False
 
@@ -255,6 +275,44 @@ class DeliveryHooks(NoopHooks):
             self.consecutive_explore += 1
         return result
 
+    def _named_image_size_retry(self) -> CompletionAction | None:
+        """Veto a turn whose named BMP/PNG disagrees with source RESX/RESY."""
+        if self._size_retries >= _MAX_SIZE_RETRIES:
+            return None
+        wants = source_resolutions(self._instruction, self._required)
+        if not wants:
+            return None
+        for path in self._required:
+            suffix = Path(path).suffix.lower()
+            if suffix not in _IMAGE_SUFFIXES or not Path(path).is_file():
+                continue
+            try:
+                raw = Path(path).read_bytes()[:64]
+            except OSError:
+                continue
+            got = raster_header_size(raw)
+            if got is None:
+                self._size_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_UNREADABLE_IMAGE_RETRY.format(path=path),
+                    reason="named_image_unreadable",
+                )
+            if got in wants:
+                continue
+            want_text = " or ".join(f"{w}x{h}" for w, h in sorted(wants))
+            self._size_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_SIZE_MISMATCH_RETRY.format(
+                    path=path, got=f"{got[0]}x{got[1]}", want=want_text
+                ),
+                reason="named_image_size",
+            )
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -271,6 +329,9 @@ class DeliveryHooks(NoopHooks):
                 message=_MISSING_NAMED_RETRY.format(paths=listed),
                 reason="missing_named_output",
             )
+        size_retry = self._named_image_size_retry()
+        if size_retry is not None:
+            return size_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
@@ -294,6 +355,82 @@ class DeliveryHooks(NoopHooks):
                 reason="no_artifact",
             )
         return CompletionAction(kind="accept")
+
+
+def source_resolutions(
+    instruction: str, named_paths: Iterable[str]
+) -> frozenset[tuple[int, int]]:
+    """RESX×RESY pairs from instruction-named ``.c`` / sibling headers."""
+    names = tuple(dict.fromkeys(_NAMED_C_FILE.findall(instruction or "")))
+    if not names:
+        return frozenset()
+    images = [Path(p) for p in named_paths]
+    found: set[tuple[int, int]] = set()
+    for name in names:
+        located = _locate_named_file(name, images)
+        if located is None:
+            continue
+        for text in _source_cluster_texts(located, images):
+            found.update(_res_pairs(text))
+    return frozenset(found)
+
+
+def _res_pairs(text: str) -> set[tuple[int, int]]:
+    xs = [int(match.group(1)) for match in _RESX.finditer(text)]
+    ys = [int(match.group(1)) for match in _RESY.finditer(text)]
+    return set(zip(xs, ys))
+
+
+def _locate_named_file(name: str, images: Sequence[Path]) -> Path | None:
+    candidates: list[Path] = []
+    for image in images:
+        candidates.append(image.parent / name)
+    app = Path("/app")
+    if app.is_dir():
+        candidates.append(app / name)
+    for path in candidates:
+        if path.is_file():
+            return path
+    for image in images:
+        parent = image.parent
+        try:
+            children = list(parent.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.is_dir():
+                hit = child / name
+                if hit.is_file():
+                    return hit
+    if app.is_dir():
+        for hit in app.rglob(name):
+            if hit.is_file():
+                return hit
+    return None
+
+
+def _source_cluster_texts(
+    source: Path, images: Sequence[Path]
+) -> list[str]:
+    folders = [source.parent, source.parent.parent]
+    for image in images:
+        folders.append(image.parent)
+    paths = [source]
+    seen = {source}
+    for folder in folders:
+        if folder == folder.parent:
+            continue
+        header = folder / "doomgeneric.h"
+        if header.is_file() and header not in seen:
+            paths.append(header)
+            seen.add(header)
+    texts: list[str] = []
+    for path in paths:
+        try:
+            texts.append(path.read_text(encoding="utf-8", errors="replace")[:64_000])
+        except OSError:
+            continue
+    return texts
 
 
 def named_output_paths(instruction: str) -> tuple[str, ...]:

@@ -488,3 +488,73 @@ async def test_gated_executor_does_not_run_blocked_inspect(tmp_path) -> None:
     ok = await gated.execute(_call("write_file"), ctx)
     assert ok.success is True
     assert ran == ["write_file"]
+
+
+def _bmp_header(width: int, height: int) -> bytes:
+    import struct
+
+    raw = bytearray(54)
+    raw[0:2] = b"BM"
+    struct.pack_into("<I", raw, 10, 54)
+    struct.pack_into("<I", raw, 14, 40)
+    struct.pack_into("<ii", raw, 18, width, height)
+    struct.pack_into("<HH", raw, 26, 1, 24)
+    return bytes(raw)
+
+
+@pytest.mark.asyncio
+async def test_named_bmp_retries_when_header_disagrees_with_source(tmp_path) -> None:
+    frame = tmp_path / "frame.bmp"
+    (tmp_path / "doomgeneric_img.c").write_text("void DG_DrawFrame(void) {}\n")
+    (tmp_path / "doomgeneric.h").write_text(
+        "#ifndef DOOMGENERIC_RESX\n"
+        "#define DOOMGENERIC_RESX 640\n"
+        "#endif\n"
+        "#ifndef DOOMGENERIC_RESY\n"
+        "#define DOOMGENERIC_RESY 400\n"
+        "#endif\n"
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            "I wrote doomgeneric_img.c which writes each frame to "
+            f"{frame}."
+        ),
+        named_outputs=(str(frame),),
+    )
+    frame.write_bytes(_bmp_header(1024, 768))
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_image_size"
+    assert "1024x768" in (action.message or "")
+    assert "640x400" in (action.message or "")
+    frame.write_bytes(_bmp_header(640, 400))
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_bmp_unreadable_header_retries(tmp_path) -> None:
+    frame = tmp_path / "frame.bmp"
+    (tmp_path / "doomgeneric_img.c").write_text(
+        "#define DOOMGENERIC_RESX 640\n#define DOOMGENERIC_RESY 400\n"
+    )
+    hooks = DeliveryHooks(
+        instruction=f"use doomgeneric_img.c to write {frame}",
+        named_outputs=(str(frame),),
+    )
+    frame.write_bytes(b"not a bitmap")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_image_unreadable"
+
+
+@pytest.mark.asyncio
+async def test_named_bmp_skips_size_check_without_source_defines(tmp_path) -> None:
+    frame = tmp_path / "frame.bmp"
+    hooks = DeliveryHooks(
+        instruction=f"write a screenshot to {frame}",
+        named_outputs=(str(frame),),
+    )
+    frame.write_bytes(_bmp_header(1024, 768))
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"

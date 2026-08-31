@@ -7,6 +7,22 @@ import zlib
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _ASCII_RAMP = " .:-=+*#%@"
+_MAX_RASTER_EDGE = 4096
+
+
+def raster_header_size(raw: bytes) -> tuple[int, int] | None:
+    """Width×height from a PNG IHDR or BMP DIB header. No pixel decode."""
+    if raw.startswith(_PNG_MAGIC) and len(raw) >= 24 and raw[12:16] == b"IHDR":
+        width, height = struct.unpack(">II", raw[16:24])
+        if 0 < width <= _MAX_RASTER_EDGE and 0 < height <= _MAX_RASTER_EDGE:
+            return width, height
+        return None
+    if len(raw) >= 26 and raw[:2] == b"BM":
+        width, height_s = struct.unpack_from("<ii", raw, 18)
+        height = abs(height_s)
+        if 0 < width <= _MAX_RASTER_EDGE and 0 < height <= _MAX_RASTER_EDGE:
+            return width, height
+    return None
 
 
 def _paeth(a: int, b: int, c: int) -> int:
