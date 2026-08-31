@@ -32,6 +32,7 @@ from evals.harbor_helpers import (
     ensure_github_no_proxy as _ensure_github_no_proxy,
     merge_trial_path as _merge_trial_path,
     pip_install_command as _pip_install_command,
+    python_tag_supported as _python_tag_supported,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
     spec_as_json as _spec_as_json,
@@ -51,6 +52,18 @@ _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
 # as JSON (a YAML subset the runtime loader parses with stdlib json).
 _HARNESS_REMOTE = "/tmp/steerable-harness.json"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
+# The agent packages require Python >= 3.10; task images stuck on older
+# interpreters (qemu-alpine-ssh's Debian bullseye ships 3.9) get a pinned
+# python-build-standalone instead of a cryptic pip failure. The desktop app
+# bundles its own runtime for the same reason. Pinned for reproducibility;
+# no CN mirror carries astral-sh/python-build-standalone, so proxied local
+# runs may stall — GHA (the eval home) reaches GitHub directly.
+_STANDALONE_PY_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/"
+    "20250818/cpython-3.11.13%2B20250818-x86_64-unknown-linux-gnu-install_only.tar.gz"
+)
+_STANDALONE_PY_HOME = "/opt/steerable-py311"
+_STANDALONE_PY = f"{_STANDALONE_PY_HOME}/bin/python3.11"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
     "STEERABLE_BASE_URL",
@@ -119,6 +132,10 @@ class SteerableHarborAgent(BaseInstalledAgent):
             environment, command=f"mkdir -p {shlex.quote(_REMOTE_SRC)}"
         )
         py_tag = await self._python_tag(environment)
+        python_bin = "python3"
+        if py_tag and not _python_tag_supported(py_tag):
+            python_bin = await self._install_standalone_python(environment, proxy_env)
+            py_tag = await self._python_tag(environment, python=python_bin)
         cached = _venv_tarball(py_tag) if py_tag else None
         restored = False
         if cached is not None and cached.is_file():
@@ -128,7 +145,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # later trials pick up headless/runtime fixes without a full pip.
             await self._overlay_source(environment, proxy_env)
         else:
-            await self._pip_install_packages(environment, proxy_env)
+            await self._pip_install_packages(environment, proxy_env, python=python_bin)
             if py_tag:
                 await self._save_venv(environment, _venv_tarball(py_tag))
         await self._seed_uv(environment)
@@ -144,10 +161,10 @@ class SteerableHarborAgent(BaseInstalledAgent):
             ),
         )
 
-    async def _python_tag(self, environment: BaseEnvironment) -> str:
+    async def _python_tag(self, environment: BaseEnvironment, python: str = "python3") -> str:
         result = await environment.exec(
             command=(
-                "python3 -c 'import sys; print(\"%s%s\" % "
+                f"{shlex.quote(python)} -c 'import sys; print(\"%s%s\" % "
                 "(sys.version_info.major, sys.version_info.minor))'"
             ),
             user="root",
@@ -155,6 +172,36 @@ class SteerableHarborAgent(BaseInstalledAgent):
         if result.return_code != 0:
             return ""
         return (result.stdout or "").strip()
+
+    async def _install_standalone_python(
+        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+    ) -> str:
+        """Fetch the pinned python-build-standalone into the environment.
+
+        Fails loud: without it the agent cannot install at all, and a clear
+        download error beats pip's ``requires a different Python`` wall.
+        """
+        result = await self.exec_as_root(
+            environment,
+            command=(
+                f"curl -fsSL --retry 3 --max-time 600 "
+                f"{shlex.quote(_STANDALONE_PY_URL)} -o /tmp/steerable-py.tgz "
+                f"&& mkdir -p {shlex.quote(_STANDALONE_PY_HOME)} "
+                f"&& tar -xzf /tmp/steerable-py.tgz --strip-components=1 "
+                f"-C {shlex.quote(_STANDALONE_PY_HOME)} "
+                f"&& rm /tmp/steerable-py.tgz "
+                f"&& {shlex.quote(_STANDALONE_PY)} --version"
+            ),
+            env=proxy_env or None,
+            timeout_sec=900,
+        )
+        if result.return_code != 0:
+            raise RuntimeError(
+                "environment python3 is below the agent's >=3.10 requirement "
+                "and the standalone-python fallback failed to install: "
+                f"{(result.stderr or result.stdout or '').strip()[-400:]}"
+            )
+        return _STANDALONE_PY
 
     async def _ensure_python_apt(
         self, environment: BaseEnvironment, apt_env: dict[str, str]
@@ -253,17 +300,20 @@ class SteerableHarborAgent(BaseInstalledAgent):
         )
 
     async def _pip_install_packages(
-        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+        self,
+        environment: BaseEnvironment,
+        proxy_env: dict[str, str],
+        python: str = "python3",
     ) -> None:
         remote_pkgs = await self._upload_packages(environment)
         venv = f"{_REMOTE_SRC}/venv"
         venv_check = await environment.exec(
-            command=f"python3 -m venv {shlex.quote(venv)}", user="root"
+            command=f"{shlex.quote(python)} -m venv {shlex.quote(venv)}", user="root"
         )
         if venv_check.return_code != 0:
             await self.ensure_system_dependencies(environment, ("python_venv",))
             await self.exec_as_root(
-                environment, command=f"python3 -m venv {shlex.quote(venv)}"
+                environment, command=f"{shlex.quote(python)} -m venv {shlex.quote(venv)}"
             )
         await self._pip_install(environment, remote_pkgs, proxy_env)
 

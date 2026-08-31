@@ -13,7 +13,17 @@ from evals.harbor_helpers import (
     spec_as_json,
     uv_tarball,
     venv_tarball,
+    python_tag_supported,
 )
+
+
+def test_python_tag_supported_gates_standalone_fallback() -> None:
+    # qemu-alpine-ssh's bullseye image ships 3.9; the agent floor is 3.10.
+    assert not python_tag_supported("39")
+    assert python_tag_supported("310")
+    assert python_tag_supported("313")
+    assert python_tag_supported("")  # empty: no gate, pip reports the floor
+    assert python_tag_supported("garbage")
 
 
 def test_venv_tarball_is_abi_specific() -> None:

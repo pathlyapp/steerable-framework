@@ -7,6 +7,15 @@ import shlex
 import tempfile
 from pathlib import Path
 
+
+def python_tag_supported(tag: str) -> bool:
+    """The agent packages require Python >= 3.10 (match the pyproject floor)."""
+    try:
+        major, minor = int(tag[:1]), int(tag[1:])
+    except (ValueError, IndexError):
+        return True  # unparsable tag: let pip report the real requirement
+    return (major, minor) >= (3, 10)
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REMOTE_SRC = "/installed-agent/steerable"
 _VENV_CACHE_DIR = _REPO_ROOT / "evals" / ".cache"
