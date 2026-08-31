@@ -65,6 +65,7 @@ jobs:
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/**/result.json
             evals/jobs/${{ matrix.agent }}/**/config.json
+            evals/jobs/${{ matrix.agent }}/**/agent/headless.log
           if-no-files-found: ignore
 
   gather:
@@ -118,11 +119,13 @@ jobs:
           set -e
           args=()
           # Job-level config.json carries the agents array; trial-level does not.
+          # upload-artifact strips the upload path up to the first glob
+          # wildcard, so no jobs/ prefix survives — match at any depth.
           while IFS= read -r cfg; do
             if grep -q '"agents"' "$cfg"; then
               args+=(--job "default=$(dirname "$cfg")")
             fi
-          done < <(find artifacts -path "*jobs/*" -name config.json | sort)
+          done < <(find artifacts -name config.json | sort)
           if [ "${#args[@]}" -eq 0 ]; then
             echo "no scored job dirs in artifacts; skipping report"
             exit 0

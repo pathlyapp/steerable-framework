@@ -92,6 +92,7 @@ jobs:
           path: |
             evals/jobs/steerable-arm-${{ matrix.arm.letter }}/**/result.json
             evals/jobs/steerable-arm-${{ matrix.arm.letter }}/**/config.json
+            evals/jobs/steerable-arm-${{ matrix.arm.letter }}/**/agent/headless.log
           if-no-files-found: ignore
 
   attribution:
@@ -108,7 +109,10 @@ jobs:
           pattern: arm-*
           path: artifacts
       # Same contract as evals-weekly's attribution job, but the harness
-      # label comes from the jobs-dir name (steerable-arm-<letter>).
+      # label comes from the artifact name (arm-<letter>). upload-artifact
+      # strips the upload path up to the first glob wildcard, so the
+      # jobs-dir prefix never reaches the artifact — match on the
+      # job-level config.json (the one carrying "agents") at any depth.
       - name: Build attribution report
         run: |
           set -e
@@ -116,10 +120,10 @@ jobs:
           while IFS= read -r cfg; do
             if grep -q '"agents"' "$cfg"; then
               job_dir=$(dirname "$cfg")
-              label=$(basename "$(dirname "$job_dir")" | sed 's/^steerable-arm-//')
+              label=$(basename "$(dirname "$job_dir")" | sed 's/^arm-//')
               args+=(--job "$label=$job_dir")
             fi
-          done < <(find artifacts -path "*jobs/*" -name config.json | sort)
+          done < <(find artifacts -name config.json | sort)
           if [ "${#args[@]}" -eq 0 ]; then
             echo "no scored job dirs in artifacts; skipping report"
             exit 0
