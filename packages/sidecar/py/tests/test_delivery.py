@@ -554,6 +554,43 @@ async def test_inspect_allows_running_existing_named_script(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_inspect_allows_helper_python_that_writes_named_output(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "out.txt"
+    helper = tmp_path / "parse.py"
+    helper.write_text(
+        f"open({str(dest)!r}, 'w').write('Hello')\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        named_outputs=(str(dest),),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(2):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+        action = await hooks.pre_step([], ctx)
+        assert action.appends
+    run_helper = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {helper}"},
+    )
+    assert hooks.inspect_block_result(run_helper) is None
+    other = tmp_path / "explore.py"
+    other.write_text("print(open('/app/text.gcode').read()[:100])\n")
+    run_other = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {other}"},
+    )
+    assert hooks.inspect_block_result(run_other) is not None
+
+
+@pytest.mark.asyncio
 async def test_gated_executor_does_not_run_blocked_inspect(tmp_path) -> None:
     target = tmp_path / "out.txt"
     hooks = DeliveryHooks(named_outputs=(str(target),))
@@ -797,6 +834,27 @@ async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
     assert action.kind == "retry"
     assert action.reason == "named_shown_text"
     dest.write_text("HELLO\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_when_player_moves_file_is_an_ocr_dump(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "solution.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "Transcribe the video and create a file that has all the "
+            f"moves they input, one per line, at {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_bytes(b"You are standing in an open field.\n" * 200)
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_shown_text"
+    dest.write_text("n\nget bag\n", encoding="utf-8")
     done = await hooks.before_completion(_draft(tools=5), LoopContext())
     assert done.kind == "accept"
 

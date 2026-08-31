@@ -174,15 +174,17 @@ _PRETTIFY_RETRY = (
     "formatting. Remove pretty-print/re-serialize and leave files with "
     "no scripts byte-identical."
 )
-# gcode-to-text: "what will the text show?" — a raster dump is not the flag.
+# gcode-to-text / extract-moves: a raster or full-frame OCR dump is not
+# the scored string ("Hello", `n` / `get bag`).
 _ASKS_SHOWN_TEXT = re.compile(
-    r"what will the text show|what text a print",
+    r"what will the text show|what text a print|moves they input",
     re.IGNORECASE,
 )
 _MAX_SHOWN_TEXT_BYTES = 4096
 _SHOWN_TEXT_RETRY = (
-    "{path} is {got} bytes; the instruction asks for the text a print "
-    "shows, not a raster of the rendering. Write the short string."
+    "{path} is {got} bytes; the instruction asks for the short text or "
+    "player moves, not a raster or OCR dump of the rendering. Write the "
+    "short string."
 )
 # mteb-retrieve: 5th cosine of "terminal-bench" became HumanEval after
 # they stripped bge/mteb query prefixes.
@@ -267,9 +269,11 @@ class DeliveryHooks(NoopHooks):
 
         Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
         cannot eat the Harbor window. Bash that compiles (make/gcc), runs
-        ``node …`` (side-effect frames), runs an on-disk named ``.py``, or
-        mutates a still-missing named path still runs. ``python3 gen.py``
-        and ``cat > explore.py`` do not.
+        ``node …`` (side-effect frames), runs an on-disk named ``.py``,
+        runs a helper ``.py`` whose source mutates a still-missing named
+        path, or mutates a still-missing named path still runs.
+        ``python3 gen.py`` that only inspects, and ``cat > explore.py``,
+        do not.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
@@ -847,6 +851,8 @@ def _bash_delivers_required(
         return True
     if named and _bash_runs_existing_named_script(command, named):
         return True
+    if missing and _bash_runs_helper_writing_missing(command, missing):
+        return True
     if missing and any(path in command for path in missing):
         return bool(_BASH_MUTATE_FILE.search(command))
     return False
@@ -864,5 +870,33 @@ def _bash_runs_existing_named_script(command: str, named: tuple[str, ...]) -> bo
     for cand in candidates:
         path = cand if cand in named else names.get(Path(cand).name)
         if path is not None and Path(path).is_file():
+            return True
+    return False
+
+
+def _python_script_paths(command: str) -> list[str]:
+    match = _BASH_RUN_PYTHON.search(command)
+    if not match:
+        return []
+    raw = match.group(2)
+    out = [raw]
+    if not raw.startswith("/"):
+        out.append(f"/app/{raw.lstrip('./')}")
+    return out
+
+
+def _bash_runs_helper_writing_missing(
+    command: str, missing: tuple[str, ...]
+) -> bool:
+    """True when python3 foo.py's source writes a still-missing named output."""
+    for cand in _python_script_paths(command):
+        path = Path(cand)
+        if not path.is_file():
+            continue
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")[:64_000]
+        except OSError:
+            continue
+        if any(item in src for item in missing) and _BASH_MUTATE_FILE.search(src):
             return True
     return False
