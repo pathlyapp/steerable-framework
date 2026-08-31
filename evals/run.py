@@ -31,6 +31,16 @@ EXIT_SKIPPED = 3
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _JOB_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}__")
+# protein-assembly / other TB images: Docker Hub TLS or 429 during
+# `docker compose up` is an environment-start error, not an agent fail.
+_ENV_START_MARKERS = (
+    "tls handshake timeout",
+    "docker compose command failed",
+    "error response from daemon",
+    "toomanyrequests",
+    "429 too many requests",
+    "net/http: tls handshake timeout",
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,6 +126,30 @@ def main(argv: list[str] | None = None) -> int:
         completed = subprocess.run(
             argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
         )
+        retry_ids = env_start_error_tasks(jobs_dir)
+        if retry_ids:
+            argv_retry = harbor_argv(
+                suite,
+                agent=args.agent,
+                tasks=retry_ids,
+                jobs_dir=jobs_dir,
+                model=args.model,
+                n_concurrent=1,
+                n_attempts=args.n_attempts,
+                agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
+                environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
+                agent_timeout_multiplier=args.agent_timeout_multiplier,
+                verifier_timeout_multiplier=args.verifier_timeout_multiplier,
+                harbor_bin=args.harbor,
+            )
+            print(
+                f"harbor env-start retry ({len(retry_ids)}): {', '.join(retry_ids)}",
+                flush=True,
+            )
+            print(shlex.join(argv_retry), flush=True)
+            completed = subprocess.run(
+                argv_retry, cwd=REPO_ROOT, env=_harbor_child_env(env)
+            )
     finally:
         stop.set()
     if completed.returncode != 0:
@@ -210,6 +244,64 @@ def _harbor_child_env(env: dict[str, str]) -> dict[str, str]:
     return out
 
 
+def env_start_error_tasks(jobs_dir: Path) -> tuple[str, ...]:
+    """Catalog ids whose Harbor trial died in docker compose / image pull."""
+    found: list[str] = []
+    seen: set[str] = set()
+    if not jobs_dir.is_dir():
+        return ()
+    for exc in sorted(jobs_dir.rglob("exception.txt")):
+        try:
+            text = exc.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            continue
+        if not any(marker in text for marker in _ENV_START_MARKERS):
+            continue
+        task = exc.parent.name.rsplit("__", 1)[0]
+        if task in seen:
+            continue
+        seen.add(task)
+        found.append(task)
+    return tuple(found)
+
+
+def _trial_outcomes(jobs_dir: Path) -> dict[str, str]:
+    """task id → ``1`` / ``0`` / ``exception``. Later Harbor jobs overwrite."""
+    out: dict[str, str] = {}
+    for result in sorted(jobs_dir.glob("*/result.json")):
+        try:
+            payload = json.loads(result.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        stats = payload.get("stats") if isinstance(payload, dict) else None
+        if not isinstance(stats, dict):
+            continue
+        evals = stats.get("evals") or {}
+        if not isinstance(evals, dict):
+            continue
+        for body in evals.values():
+            if not isinstance(body, dict):
+                continue
+            exceptions = body.get("exception_stats") or {}
+            if isinstance(exceptions, dict):
+                for trials in exceptions.values():
+                    if not isinstance(trials, list):
+                        continue
+                    for trial in trials:
+                        out[str(trial).rsplit("__", 1)[0]] = "exception"
+            reward = ((body.get("reward_stats") or {}).get("reward")) or {}
+            if isinstance(reward, dict):
+                for score, trials in reward.items():
+                    if not isinstance(trials, list):
+                        continue
+                    tag = "1" if str(score).startswith("1") else "0"
+                    for trial in trials:
+                        out[str(trial).rsplit("__", 1)[0]] = tag
+    for exc in sorted(jobs_dir.rglob("exception.txt")):
+        out.setdefault(exc.parent.name.rsplit("__", 1)[0], "exception")
+    return out
+
+
 def harbor_progress_line(jobs_dir: Path) -> str:
     """One-line Harbor trial count for GHA logs while the CLI is still running."""
     finished: list[str] = []
@@ -256,8 +348,20 @@ def _print_summary(jobs_dir: Path, *, require_mean: float | None = None) -> int:
         print(f"harbor result missing stats: {latest}", file=sys.stderr)
         return EXIT_HARBOR
     print(json.dumps(stats, indent=2, sort_keys=True))
-    errored = stats.get("n_errored_trials") or 0
-    mean = _job_mean(stats)
+    if len(results) == 1:
+        errored = int(stats.get("n_errored_trials") or 0)
+        mean = _job_mean(stats)
+    else:
+        outcomes = _trial_outcomes(jobs_dir)
+        errored = sum(1 for value in outcomes.values() if value == "exception")
+        n = len(outcomes)
+        ones = sum(1 for value in outcomes.values() if value.startswith("1"))
+        mean = (ones / n) if n else None
+        print(
+            f"harbor merged {n} trials across {len(results)} jobs; "
+            f"errored={errored} mean={mean!r}",
+            flush=True,
+        )
     _append_github_step_summary(latest, mean=mean, n_errored=int(errored))
     if errored:
         print(f"harbor reported {errored} errored trial(s)", file=sys.stderr)

@@ -33,12 +33,20 @@ def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Pull Mean, pass/fail ids, and error count from a Harbor ``result.json``."""
     stats = payload.get("stats") if isinstance(payload, dict) else None
     if not isinstance(stats, dict):
-        return {"mean": None, "passed": [], "failed": [], "n_errored": 0, "n_completed": 0}
+        return {
+            "mean": None,
+            "passed": [],
+            "failed": [],
+            "errored": [],
+            "n_errored": 0,
+            "n_completed": 0,
+        }
     n_errored = int(stats.get("n_errored_trials") or 0)
     n_completed = int(stats.get("n_completed_trials") or 0)
     mean: float | None = None
     passed: list[str] = []
     failed: list[str] = []
+    errored: list[str] = []
     evals = stats.get("evals") or {}
     if isinstance(evals, dict):
         for body in evals.values():
@@ -62,11 +70,18 @@ def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
                         passed.extend(ids)
                     else:
                         failed.extend(ids)
+            exceptions = body.get("exception_stats") or {}
+            if isinstance(exceptions, dict):
+                for names in exceptions.values():
+                    if not isinstance(names, list):
+                        continue
+                    errored.extend(trial_task_id(str(n)) for n in names)
             break
     return {
         "mean": mean,
         "passed": passed,
         "failed": failed,
+        "errored": errored,
         "n_errored": n_errored,
         "n_completed": n_completed,
     }
@@ -180,18 +195,53 @@ def payloads_by_agent(root: Path) -> dict[str, list[dict[str, Any]]]:
 
 
 def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
-    """Weighted Mean and concatenated pass/fail lists across Harbor job shards."""
+    """Weighted Mean across shards; last Harbor job wins when a task id repeats.
+
+    Env-start retries write a second ``result.json`` in the same jobs dir.
+    """
+    seen: set[str] = set()
+    overlap = False
+    for summary in parts:
+        ids = set(summary.get("passed") or [])
+        ids.update(summary.get("failed") or [])
+        ids.update(summary.get("errored") or [])
+        if seen & ids:
+            overlap = True
+        seen.update(ids)
+    if overlap:
+        outcome: dict[str, str] = {}
+        for summary in parts:
+            for task in summary.get("errored") or []:
+                outcome[task] = "error"
+            for task in summary.get("failed") or []:
+                outcome[task] = "fail"
+            for task in summary.get("passed") or []:
+                outcome[task] = "pass"
+        passed = [task for task, kind in outcome.items() if kind == "pass"]
+        failed = [task for task, kind in outcome.items() if kind == "fail"]
+        errored = [task for task, kind in outcome.items() if kind == "error"]
+        n_completed = len(outcome)
+        return {
+            "mean": (len(passed) / n_completed) if n_completed else None,
+            "passed": passed,
+            "failed": failed,
+            "errored": errored,
+            "n_errored": len(errored),
+            "n_completed": n_completed,
+        }
     passed: list[str] = []
     failed: list[str] = []
+    errored: list[str] = []
     n_errored = 0
     n_completed = 0
     mean_acc = 0.0
     mean_weight = 0
     for summary in parts:
-        passed.extend(summary["passed"])
-        failed.extend(summary["failed"])
-        n_errored += int(summary["n_errored"] or 0)
-        n = int(summary["n_completed"] or 0)
+        passed.extend(summary.get("passed") or [])
+        failed.extend(summary.get("failed") or [])
+        errored.extend(summary.get("errored") or [])
+        n_errored += int(summary.get("n_errored") or 0)
+        n = int(summary.get("n_completed") or 0)
         n_completed += n
         mean = summary.get("mean")
         if isinstance(mean, float) and n:
@@ -201,6 +251,7 @@ def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
         "mean": (mean_acc / mean_weight) if mean_weight else None,
         "passed": passed,
         "failed": failed,
+        "errored": errored,
         "n_errored": n_errored,
         "n_completed": n_completed,
     }

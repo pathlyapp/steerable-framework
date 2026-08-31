@@ -10,6 +10,7 @@ from evals.run import (
     EXIT_USAGE,
     _harbor_child_env,
     _print_summary,
+    env_start_error_tasks,
     harbor_progress_line,
     main,
 )
@@ -227,4 +228,69 @@ def test_harbor_progress_line_counts_finished_trials(tmp_path: Path) -> None:
     (job / "result.json").write_text("{}")
     line = harbor_progress_line(tmp_path)
     assert line == "harbor progress: 1/2 trials done (fix-git)"
+
+
+def test_env_start_error_tasks_detects_docker_tls(tmp_path: Path) -> None:
+    trial = tmp_path / "2026-08-31__01-44-17" / "protein-assembly__7EyVCbZ"
+    trial.mkdir(parents=True)
+    (trial / "exception.txt").write_text(
+        "RuntimeError: Docker compose command failed for environment "
+        'protein-assembly. net/http: TLS handshake timeout\n'
+    )
+    other = tmp_path / "2026-08-31__01-44-17" / "video-processing__abc"
+    other.mkdir()
+    (other / "exception.txt").write_text("AssertionError: landing frame\n")
+    assert env_start_error_tasks(tmp_path) == ("protein-assembly",)
+
+
+def test_print_summary_retry_job_clears_env_start_error(
+    tmp_path: Path, capsys
+) -> None:
+    first = tmp_path / "2026-08-31__01-44-17"
+    first.mkdir()
+    (first / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 2,
+                    "n_errored_trials": 1,
+                    "evals": {
+                        "steerable": {
+                            "metrics": [{"mean": 0.5}],
+                            "reward_stats": {"reward": {"1.0": ["largest-eigenval__a"]}},
+                            "exception_stats": {
+                                "RuntimeError": ["protein-assembly__b"]
+                            },
+                        }
+                    },
+                }
+            }
+        )
+    )
+    (first / "protein-assembly__b").mkdir()
+    (first / "protein-assembly__b" / "exception.txt").write_text(
+        "TLS handshake timeout\n"
+    )
+    retry = tmp_path / "2026-08-31__04-20-00"
+    retry.mkdir()
+    (retry / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 1,
+                    "n_errored_trials": 0,
+                    "evals": {
+                        "steerable": {
+                            "metrics": [{"mean": 1.0}],
+                            "reward_stats": {
+                                "reward": {"1.0": ["protein-assembly__c"]}
+                            },
+                        }
+                    },
+                }
+            }
+        )
+    )
+    assert _print_summary(tmp_path) == EXIT_OK
+    assert "errored=0" in capsys.readouterr().out
 

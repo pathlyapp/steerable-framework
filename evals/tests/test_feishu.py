@@ -8,6 +8,7 @@ from evals.feishu import (
     build_message,
     card_payload,
     collect_rows,
+    merge_summaries,
     overall_ok,
     summarize_result,
     trial_task_id,
@@ -237,3 +238,28 @@ def test_collect_rows_merges_catalog_shards(tmp_path: Path) -> None:
     assert rows[0][2]["n_completed"] == 2
     assert rows[0][2]["passed"] == ["fix-git"]
     assert rows[0][2]["failed"] == ["qemu-alpine-ssh"]
+
+
+def test_merge_summaries_retry_overwrites_env_start_error() -> None:
+    first = {
+        "mean": 0.5,
+        "passed": ["largest-eigenval"],
+        "failed": ["video-processing"],
+        "errored": ["protein-assembly"],
+        "n_errored": 1,
+        "n_completed": 4,
+    }
+    retry = {
+        "mean": 1.0,
+        "passed": ["protein-assembly"],
+        "failed": [],
+        "errored": [],
+        "n_errored": 0,
+        "n_completed": 1,
+    }
+    merged = merge_summaries([first, retry])
+    assert set(merged["passed"]) == {"largest-eigenval", "protein-assembly"}
+    assert merged["failed"] == ["video-processing"]
+    assert merged["n_errored"] == 0
+    assert merged["n_completed"] == 3
+    assert merged["mean"] == 2 / 3
