@@ -1496,6 +1496,35 @@ def test_wrap_up_may_drop_tools_while_named_missing(tmp_path) -> None:
     assert bare.wrap_up_may_drop_tools() is True
 
 
+def test_wrap_up_may_drop_tools_while_telnet_closed() -> None:
+    port = _closed_tcp_port()
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Connect with `telnet 127.0.0.1 {port}` and wait for a login prompt."
+        ),
+        named_outputs=(),
+    )
+    assert hooks.wrap_up_may_drop_tools() is False
+    hooks._listen_retries = 4
+    assert hooks.wrap_up_may_drop_tools() is True
+
+
+def test_wrap_up_may_drop_tools_while_cpu_only_off(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = tmp_path / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("CPU_ONLY:BOOL=OFF\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="build for only CPU execution",
+        named_outputs=(),
+    )
+    assert hooks.wrap_up_may_drop_tools() is False
+    cache.write_text("CPU_ONLY:BOOL=ON\n", encoding="utf-8")
+    assert hooks.wrap_up_may_drop_tools() is True
+
+
 def _closed_tcp_port() -> int:
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))

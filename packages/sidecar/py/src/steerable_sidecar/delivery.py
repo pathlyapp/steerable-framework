@@ -412,7 +412,22 @@ class DeliveryHooks(NoopHooks):
         )
 
     def wrap_up_may_drop_tools(self) -> bool:
-        return not any(not _file_ready(p) for p in self._required)
+        if any(not _file_ready(p) for p in self._required):
+            return False
+        # qemu-startup / install-windows name no output files. If wrap-up
+        # withholds tools, before_completion (telnet/listen, CPU_ONLY) never
+        # runs. Keep tools until those instruction checks pass or retry out.
+        if (
+            self._listen_retries < _MAX_LISTEN_RETRIES
+            and self._listen_unsatisfied()
+        ):
+            return False
+        if (
+            self._cpu_only_retries < _MAX_CPU_ONLY_RETRIES
+            and self._cpu_only_unsatisfied()
+        ):
+            return False
+        return True
 
     def _scored_missing(self) -> tuple[str, ...]:
         return tuple(
@@ -992,6 +1007,41 @@ class DeliveryHooks(NoopHooks):
             return None
         return None
 
+    def _listen_unsatisfied(self) -> bool:
+        for host, port, kind in _instruction_listen_targets(self._instruction):
+            if kind == "telnet":
+                banner = _tcp_banner(host, port, prompt=True)
+                if banner is None or not _TELNET_LOGIN.search(banner):
+                    return True
+            elif not _tcp_accepts(host, port):
+                return True
+        return False
+
+    def _cpu_only_failing_path(self) -> Path | None:
+        if not _CPU_ONLY_INSTRUCTION.search(self._instruction or ""):
+            return None
+        makes, caches = _cpu_only_meta_files()
+        if makes:
+            for path in makes:
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if "CPU_ONLY:=1" not in re.sub(r"\s+", "", text):
+                    return path
+            return None
+        for path in caches:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "CPU_ONLY:BOOL=ON" not in text:
+                return path
+        return None
+
+    def _cpu_only_unsatisfied(self) -> bool:
+        return self._cpu_only_failing_path() is not None
+
     def _instruction_listen_retry(self) -> CompletionAction | None:
         if self._listen_retries >= _MAX_LISTEN_RETRIES:
             return None
@@ -1021,38 +1071,16 @@ class DeliveryHooks(NoopHooks):
     def _instruction_cpu_only_retry(self) -> CompletionAction | None:
         if self._cpu_only_retries >= _MAX_CPU_ONLY_RETRIES:
             return None
-        if not _CPU_ONLY_INSTRUCTION.search(self._instruction or ""):
+        path = self._cpu_only_failing_path()
+        if path is None:
             return None
-        makes, caches = _cpu_only_meta_files()
-        if makes:
-            for path in makes:
-                try:
-                    text = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                if "CPU_ONLY:=1" not in re.sub(r"\s+", "", text):
-                    self._cpu_only_retries += 1
-                    self._force_tool = True
-                    return CompletionAction(
-                        kind="retry",
-                        message=_CPU_ONLY_RETRY.format(path=path),
-                        reason="instruction_cpu_only",
-                    )
-            return None
-        for path in caches:
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if "CPU_ONLY:BOOL=ON" not in text:
-                self._cpu_only_retries += 1
-                self._force_tool = True
-                return CompletionAction(
-                    kind="retry",
-                    message=_CPU_ONLY_RETRY.format(path=path),
-                    reason="instruction_cpu_only",
-                )
-        return None
+        self._cpu_only_retries += 1
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=_CPU_ONLY_RETRY.format(path=path),
+            reason="instruction_cpu_only",
+        )
 
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext

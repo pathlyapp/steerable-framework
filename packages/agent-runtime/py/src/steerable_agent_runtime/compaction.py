@@ -275,12 +275,23 @@ class CompactionHooks(NoopHooks):
             # discarded: never write it into the prompt cache (pi's
             # retention=none rule). The kwarg is consumed by
             # CacheControlProvider; providers without it ignore the key.
-            message, _usage = await self._summarizer.complete(
-                prompt, cache_retention="none"
-            )
-            return message.content_text
-        # No summarizer configured: deterministic fallback keeps role + a short
-        # excerpt per message so the thread of actions survives.
+            try:
+                message, _usage = await self._summarizer.complete(
+                    prompt, cache_retention="none"
+                )
+            except Exception:
+                # Transport/protocol errors here run outside the stream
+                # retry loop. Falling back keeps wrap-up running so Harbor
+                # still scores files instead of a NonZeroAgentExit.
+                return self._excerpt_summary(middle)
+            text = (message.content_text or "").strip()
+            if text:
+                return text
+        return self._excerpt_summary(middle)
+
+    def _excerpt_summary(self, middle: list[LLMMessage]) -> str:
+        # No summarizer, empty model reply, or a failed complete(): keep
+        # role + a short excerpt per message so the thread of actions survives.
         lines = []
         for m in middle:
             excerpt = m.content_text.replace("\n", " ")[:200]

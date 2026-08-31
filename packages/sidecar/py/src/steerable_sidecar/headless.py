@@ -337,6 +337,11 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
         # sees EOF instead of hanging the whole n-concurrent shard.
         sys.stdout.write("\n[hard_timeout]\n")
         sys.stdout.flush()
+    except Exception as exc:
+        # Compaction summarizer / leftover stream errors used to unwind
+        # headless with exit 1 (Harbor NonZeroAgentExit) after files existed.
+        sys.stdout.write(f"\n[loop_error {type(exc).__name__}: {exc}]\n")
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":  # pragma: no cover

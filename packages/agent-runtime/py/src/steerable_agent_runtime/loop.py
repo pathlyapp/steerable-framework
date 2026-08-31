@@ -1234,9 +1234,7 @@ class CoreLoop:
                 # but never executed are dropped from the record — recording
                 # them would leave dangling tool_calls — but stay on the
                 # completion event's step summary for the trace.
-                aclose = getattr(stream, "aclose", None)
-                if aclose is not None:
-                    await aclose()
+                await _safe_aclose(stream)
                 record_terminal_content("".join(content_parts), [])
                 await self._flush_history(manager, chat_id)
                 yield emit_completion(
@@ -1255,9 +1253,7 @@ class CoreLoop:
                 return
 
             if stream_budget_cut or stream_idle_cut:
-                aclose = getattr(stream, "aclose", None)
-                if aclose is not None:
-                    await aclose()
+                await _safe_aclose(stream)
 
             # Flush the display pipeline: any held-back tail (partial marker
             # that never completed, deferred surrogate half) goes out now.
@@ -1942,6 +1938,18 @@ _CANCEL_SKIP_MESSAGE = (
     "[not executed: the turn was cancelled before this call ran. "
     "Do not claim this call produced a result.]"
 )
+
+
+async def _safe_aclose(stream: Any) -> None:
+    """Drop a cut HTTP body without aborting wrap-up."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:
+        # Idle-cut leaves an incomplete chunked HTTP body; wrap-up still runs.
+        pass
 
 
 def _append_unexecuted_tool_results(

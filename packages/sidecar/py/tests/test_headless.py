@@ -317,3 +317,29 @@ async def test_run_exits_on_hard_timeout(
     )
     await _run("hang", cwd=str(tmp_path), max_rounds=4)
     assert "[hard_timeout]" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_swallows_loop_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    class _BoomLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def run(self, *args, **kwargs):
+            raise ConnectionError("incomplete chunked read")
+            yield  # pragma: no cover — keep this an async generator
+
+    monkeypatch.setattr(headless_mod, "_hard_run_timeout_sec", lambda: None)
+    monkeypatch.setattr(
+        headless_mod, "_env_provider_params", lambda: {"model": "fake"}
+    )
+    monkeypatch.setattr(
+        headless_mod,
+        "default_llm_provider_factory",
+        lambda _params: _ScriptedProvider([[]]),
+    )
+    monkeypatch.setattr(headless_mod, "CoreLoop", _BoomLoop)
+    await _run("crash", cwd=str(tmp_path), max_rounds=2)
+    assert "[loop_error ConnectionError:" in capsys.readouterr().out

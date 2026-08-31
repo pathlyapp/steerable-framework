@@ -221,7 +221,8 @@ class NoopHooks:
         """False keeps offering tools after ``wrap_up_max_tool_rounds``.
 
         DeliveryHooks returns False while instruction-named required files
-        are still missing so wrap-up cannot accept a text-only stop.
+        are still missing, or named telnet/listen/CPU_ONLY checks still
+        fail, so wrap-up cannot accept a text-only stop.
         """
         return True
 
