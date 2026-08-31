@@ -34,6 +34,7 @@ from evals.harbor_helpers import (
     pip_install_command as _pip_install_command,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
+    spec_as_json as _spec_as_json,
     venv_tarball as _venv_tarball,
 )
 
@@ -45,7 +46,10 @@ _PACKAGE_DIRS = (
 )
 _VENV_PYTHON = f"{_REMOTE_SRC}/venv/bin/python"
 _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
-_HARNESS_REMOTE = "/tmp/steerable-harness.yaml"
+# The trial container installs only the workspace wheels — PyYAML is
+# deliberately not a runtime dependency, so the spec crosses the boundary
+# as JSON (a YAML subset the runtime loader parses with stdlib json).
+_HARNESS_REMOTE = "/tmp/steerable-harness.json"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
@@ -310,7 +314,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # headless.py must understand --harness (W1.2.2) — until it does,
             # argparse rejects the flag and the trial errors loudly rather
             # than silently rerunning the default harness under a new label.
-            await environment.upload_file(Path(self._harness_spec), _HARNESS_REMOTE)
+            await environment.upload_file(_spec_as_json(self._harness_spec), _HARNESS_REMOTE)
             harness_flag = f"--harness {shlex.quote(_HARNESS_REMOTE)} "
         provider = (self._parsed_model_provider or "openai").strip().lower()
         kind = "anthropic" if provider in {"anthropic", "claude"} else "openai_compat"

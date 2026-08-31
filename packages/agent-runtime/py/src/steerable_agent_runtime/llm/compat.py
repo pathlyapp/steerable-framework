@@ -208,7 +208,10 @@ PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
     # first so the normalized path wins; ``reasoning_content`` stays as the
     # pass-through fallback for upstreams OpenRouter does not rewrite.
     # Doc-verified 2026-08-30 against openrouter.ai/docs reasoning-tokens
-    # guide; live-key run pending.
+    # guide; live-verified 2026-08-31 (W5.4.3): deepseek/deepseek-r1 over the
+    # gateway delivered thinking in `reasoning` + `reasoning_details` on the
+    # raw wire, and the pinned order surfaced 965 reasoning chars plus the
+    # answer text through the framework's normalized chunk stream.
     (
         "openrouter.ai",
         OpenAICompatFlags(

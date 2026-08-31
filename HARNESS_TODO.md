@@ -677,7 +677,11 @@ dsh 与 pi 同为 TypeScript 才成立。字面照抄要求我们跑 Node sideca
       已落实：`test_compaction_threshold_follows_the_catalog`——同一 10k
       transcript，alibaba-cn/qwen-math-plus（目录 4k）触发压缩 rewrite，
       anthropic/claude-sonnet-4-6（目录 1M）原样通过。
-- [ ] **5.4.3** 顺带清掉 `compat.py:187` 与 `211` 标注的 live-key run pending。
+- [~] **5.4.3** 顺带清掉 `compat.py:187` 与 `211` 标注的 live-key run pending。
+      **openrouter.ai 已实盘验证**（2026-08-31）：deepseek-r1 经网关原始线
+      `reasoning` + `reasoning_details`，钉住顺序经框架归一化输出 965 字符
+      推理 + 正文，注释已改为 live-verified。`api.moonshot.cn` 条目**阻塞于
+      无 Moonshot key**（deeppath-api/.env 只有 OpenRouter），保留 pending。
 
 ---
 

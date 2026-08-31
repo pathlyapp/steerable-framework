@@ -12,3 +12,9 @@ validator: "null"
 tools: full
 memory: stateless
 orchestration: subagent
+# Same pins as default.harness.yaml — arms must differ in exactly the
+# orchestration dimension, not in an implicit fallback.
+loop:
+  max_rounds: 80
+  max_tool_errors: 16
+  tool_dedup: false

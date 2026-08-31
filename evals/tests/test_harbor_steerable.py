@@ -10,6 +10,7 @@ from evals.harbor_helpers import (
     pip_install_command,
     rewrite_forwarded_env_value,
     rewrite_loopback_host,
+    spec_as_json,
     uv_tarball,
     venv_tarball,
 )
@@ -112,3 +113,26 @@ def test_merge_trial_path_adds_sbin_and_uv() -> None:
     assert "/usr/bin" in empty.split(":")
     already = merge_trial_path("/usr/sbin:/usr/bin")
     assert already.split(":").count("/usr/sbin") == 1
+
+
+def test_spec_as_json_converts_yaml_for_the_container(tmp_path) -> None:
+    # Arm B failed live on 2026-08-31: the trial container has no PyYAML
+    # (deliberately not a runtime dep), so a .yaml upload died in
+    # load_harness_spec. The spec must cross as JSON.
+    spec = tmp_path / "arm.harness.yaml"
+    spec.write_text("tools: full\norchestration: single\nvalidator: \"null\"\n")
+    converted = spec_as_json(spec)
+    assert converted.suffix == ".json"
+    import json
+
+    assert json.loads(converted.read_text()) == {
+        "tools": "full",
+        "orchestration": "single",
+        "validator": "null",
+    }
+
+
+def test_spec_as_json_passes_json_through(tmp_path) -> None:
+    spec = tmp_path / "arm.harness.json"
+    spec.write_text('{"tools": "full"}')
+    assert spec_as_json(spec) == spec

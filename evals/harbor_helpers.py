@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shlex
+import tempfile
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -165,6 +167,30 @@ def pip_install_command(
 
 def venv_tarball(py_tag: str) -> Path:
     return _VENV_CACHE_DIR / f"steerable-venv-cp{py_tag}-linux-amd64.tgz"
+
+
+def spec_as_json(spec_path: str | Path) -> Path:
+    """Convert a host-side YAML/JSON harness spec to a JSON temp file.
+
+    The trial container installs only the workspace wheels — PyYAML is
+    deliberately not a runtime dependency — so the spec crosses the
+    boundary as JSON, which the runtime loader parses with stdlib json.
+    The conversion happens on the host, where PyYAML is available (the
+    evals venv already parses suite.yaml with it). The returned file
+    persists until process exit so the upload can read it later.
+    """
+    source = Path(spec_path)
+    if source.suffix.lower() == ".json":
+        return source
+    import yaml  # host-side only; the container never sees PyYAML
+
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="steerable-harness-", delete=False, encoding="utf-8"
+    )
+    with tmp:
+        json.dump(data, tmp)
+    return Path(tmp.name)
 
 
 def uv_tarball() -> Path | None:
