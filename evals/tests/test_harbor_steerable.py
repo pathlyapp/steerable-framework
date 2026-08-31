@@ -202,6 +202,11 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert text.index("await self._inject_host_python") < text.index(
         "await self._ensure_python_310"
     )
+    assert text.index("await self._ensure_python_310") < text.index(
+        "await self._align_verifier_python"
+    )
+    assert "ln -sf \"$p\" /usr/local/bin/python" in text
+    assert 'ln -sf "$b" /usr/local/bin/python' in text
     inject_fn = text[
         text.index("async def _inject_host_python") : text.index(
             "async def _ensure_python_310"

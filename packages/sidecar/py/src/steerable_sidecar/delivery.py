@@ -7,6 +7,7 @@ pytest `FileNotFoundError` on the named output (`eval.scm`, `program.py`,
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -148,6 +149,15 @@ _BYTES_CAP_RETRY = (
     "{path} is {got} bytes; the instruction requires < {cap} bytes. "
     "Shrink it (wc -c) before stopping."
 )
+# regex-chess: all_legal_next_positions uses fen.split("\n"); a trailing
+# newline in a JSON replacement became `Our move:  ` (empty illegal row).
+_SPLIT_NEWLINES = re.compile(r"""\.split\(\s*['\"]\\n['\"]\s*\)""")
+_MAX_JSON_RETRIES = 4
+_JSON_BLANK_RETRY = (
+    "{path} has an empty JSON string or a newline inside a string. A "
+    "checker that splits on newlines treats that as an empty illegal row. "
+    "Strip trailing newlines and empty replacements."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -182,6 +192,7 @@ class DeliveryHooks(NoopHooks):
         self.empty_round_retries = 0
         self._size_retries = 0
         self._bytes_retries = 0
+        self._json_retries = 0
         self._compact_nudges = 0
         self._force_tool = False
 
@@ -368,6 +379,30 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _named_json_blank_retry(self) -> CompletionAction | None:
+        """Veto JSON whose strings would become empty rows under split('\\n')."""
+        if self._json_retries >= _MAX_JSON_RETRIES:
+            return None
+        if not _SPLIT_NEWLINES.search(self._instruction or ""):
+            return None
+        for path in self._required:
+            if Path(path).suffix.lower() != ".json" or not Path(path).is_file():
+                continue
+            try:
+                payload = json.loads(Path(path).read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not _json_has_blank_split_row(payload):
+                continue
+            self._json_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_JSON_BLANK_RETRY.format(path=path),
+                reason="named_json_blank",
+            )
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -390,6 +425,9 @@ class DeliveryHooks(NoopHooks):
         bytes_retry = self._named_bytes_cap_retry()
         if bytes_retry is not None:
             return bytes_retry
+        json_retry = self._named_json_blank_retry()
+        if json_retry is not None:
+            return json_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
@@ -512,6 +550,17 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             if path not in seen:
                 seen.append(path)
     return tuple(seen)
+
+
+def _json_has_blank_split_row(value: object) -> bool:
+    """True when a JSON string is empty or contains a newline."""
+    if isinstance(value, str):
+        return (not value) or ("\n" in value)
+    if isinstance(value, list):
+        return any(_json_has_blank_split_row(item) for item in value)
+    if isinstance(value, dict):
+        return any(_json_has_blank_split_row(item) for item in value.values())
+    return False
 
 
 class DeliveryGatedExecutor:

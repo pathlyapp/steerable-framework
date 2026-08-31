@@ -113,6 +113,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         await self._inject_host_uv(environment)
         await self._inject_host_python(environment)
         await self._ensure_python_310(environment, proxy_env)
+        await self._align_verifier_python(environment)
         # The 3.10+ interpreter is /usr/local/bin/python3. Apply that PATH
         # before `python3 -m venv`, not only after install().
         environment._persistent_env["PATH"] = _merge_trial_path(
@@ -248,7 +249,8 @@ class SteerableHarborAgent(BaseInstalledAgent):
                     "for b in /opt/steerable-python/bin/python3 "
                     "/opt/steerable-python/bin/python3.12 "
                     "/opt/steerable-python/bin/python; do "
-                    '[ -x "$b" ] && ln -sf "$b" /usr/local/bin/python3 && break; '
+                    '[ -x "$b" ] && ln -sf "$b" /usr/local/bin/python3 '
+                    '&& ln -sf "$b" /usr/local/bin/python && break; '
                     "done && "
                     "/usr/local/bin/python3 -c "
                     "'import ssl, zlib, sys; raise SystemExit("
@@ -265,6 +267,28 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 )
             except Exception:
                 return
+            return
+
+    async def _align_verifier_python(self, environment: BaseEnvironment) -> None:
+        """Point Harbor's ``/usr/local/bin/python`` at the 3.10+ python3.
+
+        largest-eigenval: Harbor pip-installs pytest then runs
+        ``/usr/local/bin/python -m pytest``. Skip-inject left python3 as
+        3.13 with numpy, while ``python`` stayed a different binary without
+        pytest.
+        """
+        try:
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "p=/usr/local/bin/python3; "
+                    '[ -x "$p" ] || p=$(command -v python3 2>/dev/null || true); '
+                    'if [ -n "$p" ] && [ -x "$p" ]; then '
+                    'ln -sf "$p" /usr/local/bin/python; fi'
+                ),
+                timeout_sec=15,
+            )
+        except Exception:
             return
 
     async def _ensure_python_310(

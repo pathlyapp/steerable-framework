@@ -639,3 +639,47 @@ async def test_named_source_skips_bytes_cap_without_instruction_limit(
     src.write_bytes(b"x" * 8000)
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_json_retries_when_string_has_newline(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    hooks = DeliveryHooks(
+        instruction=(
+            "Write /app/re.json. "
+            "return fen.split(\"\\n\")"
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text('[["a", "b\\n"]]', encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_json_blank"
+    dest.write_text('[["a", "b"]]', encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_json_retries_when_replacement_is_empty(tmp_path) -> None:
+    dest = tmp_path / "re.json"
+    hooks = DeliveryHooks(
+        instruction='pairs; fen.split("\\n")',
+        named_outputs=(str(dest),),
+    )
+    dest.write_text('[["a", ""]]', encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_json_blank"
+
+
+@pytest.mark.asyncio
+async def test_named_json_skips_blank_check_without_split(tmp_path) -> None:
+    dest = tmp_path / "data.json"
+    hooks = DeliveryHooks(
+        instruction=f"write {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text('[["a", "b\\n"]]', encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
