@@ -184,7 +184,8 @@ PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
     # drives k3 can still pass either field explicitly — host extra kwargs
     # always win over flags. Reasoning arrives as ``reasoning_content``
     # (default covers it; pinned as data). Doc-verified 2026-08-30 against
-    # platform.kimi.ai/docs/api/models-overview; live-key run pending.
+    # platform.kimi.ai/docs/api/models-overview; no live-key run is planned
+    # (no Moonshot key available) — flags stay doc-sourced, not verified.
     (
         "api.moonshot.cn",
         OpenAICompatFlags(

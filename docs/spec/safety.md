@@ -299,6 +299,39 @@ Rules:
 - TS hosts implement it via `AgentRuntime.onProcessSpawn`; the Electron
   desktop wires its own reverse handler to the same method name.
 
+#### Reference implementation: `win-spawn-helper` (deeppath-agent, 2026-08-31)
+
+The desktop host implements the contract with a Rust helper binary
+(`native/windows-spawn-helper/`, packaged as an extraResource), following
+codex's windows-sandbox-rs legacy path:
+
+- **Token**: `CreateRestrictedToken` with `DISABLE_MAX_PRIVILEGE | LUA_TOKEN
+  | WRITE_RESTRICTED`; restricting SIDs are the per-root capability SIDs,
+  the logon SID, and Everyone. The token user is deliberately *not* a
+  restricting SID, so user-owned directories deny writes; a root accepts
+  writes only after a persistent `SET_ACCESS` ACE grants its capability SID
+  read+write+execute+delete (descendant `DELETE`, never parent
+  `FILE_DELETE_CHILD`). Capability SIDs derive deterministically from the
+  normalized root path, so repeat runs reuse the existing ACE.
+- **Job**: `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; the child joins atomically
+  at creation via `PROC_THREAD_ATTRIBUTE_JOB_LIST` (no CREATE_SUSPENDED
+  window). Helper death — crash, kill, host gone — closes the last job
+  handle and tears down the whole tree.
+- **Stdio**: anonymous pipes, framed back to the host as JSON lines with a
+  256 KiB per-stream cap (`truncated` flag); `lpDesktop` is pinned to
+  `Winsta0\Default` so restricted-token children don't die in DLL init.
+- **Honesty**: the helper enforces filesystem writes only. `network` /
+  `allowedHosts` policy fields come back in the exit frame's
+  `sandbox.notEnforced`, and the host reports `partial` when that list is
+  non-empty. Residual escape surface: Everyone-writable paths stay writable
+  (Everyone is a restricting SID) — the same posture as codex's legacy
+  backend; closing it needs the elevated/WFP machinery, which is out of
+  scope for this helper.
+- **Verification**: `cargo test` on the windows-2022 GHA runner
+  (`.github/workflows/test-windows-spawn.yml`) proves the acceptance
+  claims — write outside the writable roots is denied, `{"kill":true}`
+  tree-kills the child, unenforced policy fields are reported.
+
 ### Credential broker (egress-proxy inject mode)
 
 `steerable_egress_proxy --inject-host api.deepseek.com --inject-secret-env

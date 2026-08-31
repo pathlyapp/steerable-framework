@@ -619,24 +619,35 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
 但 `select_exec_backend()` 在 Windows 上直接返回 `None`（`sandbox.py:505`），
 宿主侧没有真实现。**当前 Windows 是不可用，而不是「委派」**——四家里只有我们如此。
 
-- [ ] **4.1.1** deeppath-agent 侧实现 `host.process.spawn`（受限令牌 + JobObject），
+- [~] **4.1.1** deeppath-agent 侧实现 `host.process.spawn`（受限令牌 + JobObject），
       参照 codex `windows-sandbox-rs` 与 dsh 的受限令牌 + ACL runner。
-      **阻塞记录（2026-08-31）**：实现载体现状盘点——deeppath-agent 无 FFI
-      依赖（无 koffi/ffi-napi），无 Rust 构建步骤（electron-rebuild 只管
-      node-pty/better-sqlite3）；受限令牌 + JobObject 必须经 Win32
-      （CreateRestrictedToken / CreateJobObject / SetInformationJobObject /
-      CreateProcessWithTokenW / AssignProcessToJobObject），纯 Node 无法表达。
-      可选载体：(a) 引入 koffi 直调 advapi32/kernel32（预编译二进制，
-      但安全关键的 FFI 盲写不可接受）；(b) 新增 Rust 辅助二进制
-      （参照 codex windows-sandbox-rs，需新增工具链与交叉编译管线）。
-      两者都必须先在 Windows 上编译验证才允许入库——安全边界不接受
-      未经实盘验证的实现（与 4.1.2 同一把锁）。当前行为已 fail closed：
-      无 handler → JSON-RPC error → sidecar 拒绝运行，不会静默裸奔。
-- [ ] **4.1.2** Windows 环境实盘验证，写入 `docs/spec/safety.md` 宿主能力面章。
-      需要：一台 Windows 机器或 VM（本机 macOS 无法验证），验证清单——
-      受限令牌进程写项目外目录被拒、JobObject kill-on-close 生效、
-      网络策略经 WFP 或代理环境变量落地、sandbox.enforcement 回报与实际
-      施加一致。
+      **已实现（2026-08-31），待 Windows CI 实盘验证后勾掉。** 载体决策
+      （用户拍板）：**(b) Rust 辅助二进制**——`native/windows-spawn-helper/`，
+      按 codex windows-sandbox-rs legacy 路径提取的最小正确配方：
+      `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE|LUA_TOKEN|WRITE_RESTRICTED)`
+      （限制 SID = 每根能力 SID + 登录 SID + Everyone，令牌用户刻意不在
+      限制表内）+ 可写根的持久 `SET_ACCESS` ACE（能力 SID 从规范化路径
+      确定性派生，重复运行复用既有 ACE）+ JobObject
+      `KILL_ON_JOB_CLOSE`（`PROC_THREAD_ATTRIBUTE_JOB_LIST` 原子入组，
+      无 CREATE_SUSPENDED 空窗）+ 匿名管道 stdio（256KiB/流截断）+
+      `lpDesktop=Winsta0\Default`。协议为 stdin/stdout JSON 行
+      （spec 行 → stdout/stderr/exit/error 帧 + `{"kill":true}` 树杀）。
+      宿主侧 `src/sidecar/reverse-spawn.ts` 注册 `host.process.spawn`
+      处理器：非 Windows 或 helper 缺失一律抛错（fail closed）；
+      `router.ts` 在 win32 下传 `hostSpawn: true` 接线。网络策略字段
+      （network/allowedHosts）helper 不执行（无 WFP），经退出帧
+      `sandbox.notEnforced` 如实上报 → 宿主报 `partial`。
+- [~] **4.1.2** Windows 环境实盘验证，写入 `docs/spec/safety.md` 宿主能力面章。
+      **验证机 = GHA windows-2022 runner**（用户决策：无需本机 Windows）。
+      新增 `.github/workflows/test-windows-spawn.yml`：helper 路径变更即触发，
+      `cargo test` 跑验收断言——写可写根内成功、写 `%USERPROFILE%` 被拒
+      （文件不存在 + 非零退出码）、`{"kill":true}` 树杀（30s 哨兵文件
+      不出现 + 等待即时返回）、notEnforced 如实列出 network/allowedHosts、
+      只读约束（零可写根）可用。`build-windows.yml` 增加 helper 构建步骤
+      （release 二进制进 `resources/windows-spawn-helper/` 随包分发，
+      electron-builder 条件收录）。safety.md 已写入实现章节（含
+      Everyone-writable 残余逃逸面的诚实说明）。**待 CI 首跑绿色后
+      本条勾掉。**
 
 ### 4.2 运行时指标
 
@@ -793,11 +804,12 @@ dsh 与 pi 同为 TypeScript 才成立。字面照抄要求我们跑 Node sideca
       已落实：`test_compaction_threshold_follows_the_catalog`——同一 10k
       transcript，alibaba-cn/qwen-math-plus（目录 4k）触发压缩 rewrite，
       anthropic/claude-sonnet-4-6（目录 1M）原样通过。
-- [~] **5.4.3** 顺带清掉 `compat.py:187` 与 `211` 标注的 live-key run pending。
+- [x] **5.4.3** 顺带清掉 `compat.py:187` 与 `211` 标注的 live-key run pending。
       **openrouter.ai 已实盘验证**（2026-08-31）：deepseek-r1 经网关原始线
       `reasoning` + `reasoning_details`，钉住顺序经框架归一化输出 965 字符
-      推理 + 正文，注释已改为 live-verified。`api.moonshot.cn` 条目**阻塞于
-      无 Moonshot key**（deeppath-api/.env 只有 OpenRouter），保留 pending。
+      推理 + 正文，注释已改为 live-verified。`api.moonshot.cn` 条目**收尾为
+      不验证**（2026-08-31 用户决策：无 Moonshot key，不计划获取）——
+      条目保留在目录中但标注 unverified，pending 关闭。
 
 ---
 
