@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import re
 import shutil
 import socket
@@ -346,6 +347,16 @@ _TELNET_RETRY = (
     "on that port. Keep the VM running in the background "
     "(-daemonize / nohup) until the port is open; do not stop on a "
     "helper that exits after qemu starts."
+)
+_TELNET_PROXY_RETRY = (
+    "The instruction names `telnet {host} {port}`. A userspace process "
+    "({comm}) is listening there instead of the VM serial. Bind the "
+    "hypervisor serial to that port directly (`-serial telnet:…`); a "
+    "replay proxy will not run a live login."
+)
+_SCRIPT_LISTEN_COMM = re.compile(
+    r"^(python(\d+(\.\d+)*)?|node(js)?|ruby|perl|bash|sh|dash|zsh|pytest)$",
+    re.IGNORECASE,
 )
 _LISTEN_RETRY = (
     "The instruction names a service on port {port}. Nothing accepted a "
@@ -1075,13 +1086,20 @@ class DeliveryHooks(NoopHooks):
             return None
         for host, port, kind in _instruction_listen_targets(self._instruction):
             if kind == "telnet":
-                if _telnet_port_ready(host, port):
+                status, comm = _telnet_status(host, port)
+                if status == "ready":
                     continue
                 self._listen_retries += 1
                 self._force_tool = True
+                if status == "proxy":
+                    message = _TELNET_PROXY_RETRY.format(
+                        host=host, port=port, comm=comm or "unknown"
+                    )
+                else:
+                    message = _TELNET_RETRY.format(host=host, port=port)
                 return CompletionAction(
                     kind="retry",
-                    message=_TELNET_RETRY.format(host=host, port=port),
+                    message=message,
                     reason="instruction_listen",
                 )
             if _tcp_accepts(host, port):
@@ -1626,7 +1644,12 @@ def _tcp_accepts(host: str, port: int, timeout: float = 2.0) -> bool:
 
 
 def _proc_tcp_listening(port: int) -> bool:
+    return bool(_proc_tcp_listen_inodes(port))
+
+
+def _proc_tcp_listen_inodes(port: int) -> tuple[str, ...]:
     needle = f"{port:04X}"
+    inodes: list[str] = []
     for path in (_PROC_TCP, _PROC_TCP6):
         try:
             text = path.read_text(encoding="ascii", errors="replace")
@@ -1634,20 +1657,74 @@ def _proc_tcp_listening(port: int) -> bool:
             continue
         for line in text.splitlines()[1:]:
             parts = line.split()
-            if len(parts) < 4 or parts[3] != _LISTEN_ST:
+            if len(parts) < 10 or parts[3] != _LISTEN_ST:
                 continue
             local = parts[1]
             if local.rsplit(":", 1)[-1].upper() == needle:
-                return True
-    return False
+                inodes.append(parts[9])
+    return tuple(inodes)
+
+
+def _is_script_listener(comm: str) -> bool:
+    base = Path(comm).name
+    if _SCRIPT_LISTEN_COMM.match(base):
+        return True
+    return base.lower().startswith("python")
+
+
+def _tcp_listen_comm(port: int) -> str | None:
+    inodes = _proc_tcp_listen_inodes(port)
+    if not inodes:
+        return None
+    want = {f"socket:[{inode}]" for inode in inodes}
+    try:
+        pid_dirs = Path("/proc").iterdir()
+    except OSError:
+        return None
+    for pid_dir in pid_dirs:
+        if not pid_dir.name.isdigit():
+            continue
+        fd_dir = pid_dir / "fd"
+        try:
+            fds = fd_dir.iterdir()
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(fd)
+            except OSError:
+                continue
+            if target not in want:
+                continue
+            try:
+                return (pid_dir / "comm").read_text(encoding="ascii").strip()
+            except OSError:
+                return None
+    return None
+
+
+def _telnet_status(host: str, port: int) -> tuple[str, str | None]:
+    """``ready`` / ``closed`` / ``proxy``. Never connect on Linux."""
+    if _PROC_TCP.is_file() or _PROC_TCP6.is_file():
+        if not _proc_tcp_listening(port):
+            return "closed", None
+        comm = _tcp_listen_comm(port)
+        if comm is not None and _is_script_listener(comm):
+            return "proxy", comm
+        return "ready", comm
+    if _tcp_accepts(host, port):
+        return "ready", None
+    return "closed", None
 
 
 def _telnet_port_ready(host: str, port: int) -> bool:
-    """True if the port is in LISTEN. Never connect on Linux: QEMU serial
-    telnet is one client, and a probe steals boot output from the verifier."""
-    if _PROC_TCP.is_file() or _PROC_TCP6.is_file():
-        return _proc_tcp_listening(port)
-    return _tcp_accepts(host, port)
+    """True if the VM serial (not a userspace proxy) is listening.
+
+    Never connect on Linux: QEMU serial telnet is one client, and a probe
+    steals boot output from the verifier.
+    """
+    status, _comm = _telnet_status(host, port)
+    return status == "ready"
 
 
 def _cpu_only_meta_files() -> tuple[list[Path], list[Path]]:

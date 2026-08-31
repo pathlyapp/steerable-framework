@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import socket
 import threading
+from pathlib import Path
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -13,6 +14,7 @@ from steerable_agent_runtime.loop import LoopContext
 from steerable_sidecar.delivery import (
     DeliveryGatedExecutor,
     DeliveryHooks,
+    _is_script_listener,
     named_output_paths,
 )
 
@@ -1563,7 +1565,11 @@ def test_wrap_up_may_drop_tools_when_telnet_listens() -> None:
             ),
             named_outputs=(),
         )
-        assert hooks.wrap_up_may_drop_tools() is True
+        if Path("/proc/net/tcp").is_file():
+            # pytest owns the socket; a script listener is not the VM serial.
+            assert hooks.wrap_up_may_drop_tools() is False
+        else:
+            assert hooks.wrap_up_may_drop_tools() is True
     finally:
         srv.close()
 
@@ -1644,9 +1650,41 @@ async def test_telnet_accepts_when_port_listens() -> None:
             min_tools_for_completion_retry=99,
         )
         action = await hooks.before_completion(_draft(tools=2), LoopContext())
-        assert action.kind == "accept"
+        if Path("/proc/net/tcp").is_file():
+            assert action.kind == "retry"
+            assert action.reason == "instruction_listen"
+            assert "userspace" in (action.message or "")
+        else:
+            assert action.kind == "accept"
     finally:
         srv.close()
+
+
+@pytest.mark.asyncio
+async def test_telnet_accepts_when_hypervisor_owns_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "steerable_sidecar.delivery._telnet_status",
+        lambda host, port: ("ready", "qemu-system-x86_64"),
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            "Connect with `telnet 127.0.0.1 6665` and wait for a login prompt."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+def test_script_listener_comm_names() -> None:
+    assert _is_script_listener("python3.13")
+    assert _is_script_listener("python")
+    assert _is_script_listener("/usr/bin/python3")
+    assert not _is_script_listener("qemu-system-x86_64")
+    assert not _is_script_listener("socat")
 
 
 @pytest.mark.asyncio
