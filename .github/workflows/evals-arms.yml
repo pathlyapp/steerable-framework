@@ -8,9 +8,11 @@ name: Evals harness arms
 #       (qemu-alpine-ssh / install-windows-3.11 / headless-terminal,
 #        task set pre-registered and frozen 2026-08-31 in HARNESS_TODO 1.5.3)
 #
-# Requires repo secrets: an OpenRouter-capable OPENAI_API_KEY and
-# OPENAI_BASE_URL=https://openrouter.ai/api/v1 — without them every trial
-# scores a structural zero (see HARNESS_TODO 1.3.4 audit note).
+# Requires repo secrets: STEERABLE_API_KEY + STEERABLE_BASE_URL (the pair
+# the product runs with; OpenRouter-capable for openai/* model ids), or an
+# OpenRouter-capable OPENAI_API_KEY + OPENAI_BASE_URL as fallback — without
+# a working pair every trial scores a structural zero (see HARNESS_TODO
+# 1.3.4 audit note).
 
 on:
   workflow_dispatch:
@@ -49,9 +51,14 @@ jobs:
       - run: docker info
       - name: Harbor arm
         env:
+          # The steerable agent resolves STEERABLE_API_KEY/STEERABLE_BASE_URL
+          # first (harbor_steerable api_key_envs/base_url_envs order) — the
+          # pair must both be forwarded; a key without its base URL hits the
+          # stock OpenAI endpoint and every trial scores a structural 0.
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
         run: |
           set +e
           if [ "${{ inputs.arm_set }}" = "bc" ]; then

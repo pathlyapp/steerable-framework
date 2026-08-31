@@ -34,11 +34,11 @@ jobs:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           # steerable's cheap-12 model is openai/z-ai/glm-5.3-flash — an
-          # OpenRouter id. Without OPENAI_BASE_URL the agent calls the stock
-          # OpenAI endpoint and every trial scores a structural 0 (first
-          # weekly run, 2026-08-31: 12/12 × 0.0, ~50s trials, no tokens).
-          # Pair an OpenRouter-capable OPENAI_API_KEY with
-          # OPENAI_BASE_URL=https://openrouter.ai/api/v1 in repo secrets.
+          # OpenRouter id. The agent resolves STEERABLE_BASE_URL first; a
+          # key without its base URL calls the stock OpenAI endpoint and
+          # every trial scores a structural 0 (first weekly run, 2026-08-31:
+          # 12/12 × 0.0, ~50s trials, no tokens).
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
         run: |
           set +e

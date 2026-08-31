@@ -189,10 +189,13 @@ ACP 不同——它在开发者的真实机器上被编辑器拉起。**两处�
       （同代码本地 arm A 0.833 / arm B 满分），是 CI 密钥配置缺口：
       模型是 OpenRouter 的 `z-ai/glm-5.3-flash`，workflow 只给了
       `OPENAI_API_KEY` 而没给 `OPENAI_BASE_URL`，agent 打到默认 OpenAI
-      端点快速失败（~50s/trial、无 token 计量）。已在 workflow 补上
-      `OPENAI_BASE_URL` secret 引用；**待办：仓库 secrets 需配置
-      OpenRouter 可用的 OPENAI_API_KEY + OPENAI_BASE_URL=
-      https://openrouter.ai/api/v1**，否则每周信号恒为结构零。
+      端点快速失败（~50s/trial、无 token 计量）。**二次审计（2026-08-31
+      下午）**：仓库实际已配 `STEERABLE_API_KEY` + `STEERABLE_BASE_URL`
+      （2026-08-30 入库），而 `harbor_steerable` 的 api_key_envs /
+      base_url_envs 以 STEERABLE_* 为首选——真正缺口是两个 workflow
+      只转发了 `STEERABLE_API_KEY` 没转发 `STEERABLE_BASE_URL`。已补上
+      转发（evals-weekly 与 evals-arms 同修）；OPENAI_* 降为回退对，
+      不再是待办。
 
 ### 1.4 评测 agent 工具面补齐（1.1.2 中 ToolSelector 与 Orchestration 两行的首次兑现）
 
