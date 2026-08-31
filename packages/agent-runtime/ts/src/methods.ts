@@ -33,6 +33,7 @@ export const SIDECAR_METHODS = [
   'config.get',
   'config.set',
   'compat.describe',
+  'harness.describe',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];

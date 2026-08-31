@@ -65,6 +65,26 @@ class InMemoryStorage:
         sessions.sort(key=lambda s: s.updatedAt, reverse=True)
         return [deepcopy(s) for s in sessions]
 
+    async def search_sessions(
+        self, query: str, *, user_id: str | None = None
+    ) -> list[AgentSession]:
+        """Substring match over the serialized message — same semantics as
+        the SQL LIKE in SqliteStorage, so contract tests can pin parity."""
+        async with self._lock:
+            hit_chat_ids = {
+                chat_id
+                for chat_id, bucket in self._messages.items()
+                if any(query in m.model_dump_json() for m in bucket)
+            }
+            sessions = [
+                s
+                for s in self._sessions.values()
+                if s.chatId in hit_chat_ids
+                and (user_id is None or s.userId == user_id)
+            ]
+            sessions.sort(key=lambda s: s.updatedAt, reverse=True)
+            return [deepcopy(s) for s in sessions]
+
     # ------------------------------------------------------------------
     # Agents
     # ------------------------------------------------------------------

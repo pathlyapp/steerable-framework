@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         jobs_dir = (
             Path(args.jobs_dir)
             if args.jobs_dir
-            else REPO_ROOT / suite.jobs_dir / args.agent
+            else REPO_ROOT
+            / suite.jobs_dir
+            / (args.agent if args.harness is None else f"{args.agent}-{args.harness}")
         )
         argv_harbor = harbor_argv(
             suite,
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
             environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
             agent_timeout_multiplier=args.agent_timeout_multiplier,
+            harness=args.harness,
             harbor_bin=args.harbor,
         )
     except SuiteError as exc:
@@ -119,8 +122,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="exit 3 when the agent is live but its API key is unset",
     )
-    parser.add_argument("--jobs-dir", help="Harbor --jobs-dir (default evals/jobs/<agent>)")
+    parser.add_argument("--jobs-dir", help="Harbor --jobs-dir (default evals/jobs/<agent>[-<harness>])")
     parser.add_argument("--model", help="override suite.yaml model (provider/model)")
+    parser.add_argument(
+        "--harness",
+        help="harness label from suite.yaml harnesses (steerable only); "
+        "the run unit becomes agent × harness",
+    )
     parser.add_argument("--n-concurrent", type=int)
     parser.add_argument("--n-attempts", type=int)
     parser.add_argument(

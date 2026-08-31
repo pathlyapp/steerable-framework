@@ -38,6 +38,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from steerable_agent_harness import BudgetLimit
@@ -243,6 +244,7 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
         register("agent.chat.steer", self._handle_chat_steer)
@@ -618,6 +620,26 @@ class Sidecar:
 
         return {"flags": describe_compat_flags()}
 
+    async def _handle_harness_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the harness vocabulary + the active default selection.
+
+        Same precedent as ``compat.describe`` (W1.2.2): the framework owns
+        the dimension/implementation catalog; hosts render harness pickers
+        from this payload so a new strategy needs no host-side constant.
+        """
+        from steerable_agent_runtime.harness_spec import (
+            describe_harness_registry,
+            load_harness_spec,
+        )
+
+        default_spec = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH)
+        return {
+            "default": default_spec.describe(),
+            "available": describe_harness_registry(),
+        }
+
     async def _handle_chat_stream(
         self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -915,9 +937,9 @@ class Sidecar:
         Returns ``{"lineage": [...root-first BranchPoints...], "children":
         [...]}``. Lineage walks seed provenance upwards and always works;
         children discovery needs record enumeration — stores implementing
-        the optional ``list_history_records`` extension get direct children
-        (records whose seed names this one as source), others report an
-        empty list (documented degradation, not an error).
+        Children discovery enumerates the record space
+        (``list_history_records``, first-class since W3.1.2) and keeps
+        records whose seed names this one as source.
         """
         params = _require_params(params)
         record_id = params.get("recordId")
@@ -925,27 +947,25 @@ class Sidecar:
             raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
         chain = await lineage(self.storage, str(record_id))
         children: list[dict[str, Any]] = []
-        list_records = getattr(self.storage, "list_history_records", None)
-        if callable(list_records):
-            for candidate in await list_records():
-                if candidate == record_id:
-                    continue
-                first = await self.storage.list_history(candidate, limit=1)
-                if not first:
-                    continue
-                entry = entry_from_dict(first[0])
-                if (
-                    isinstance(entry, HistorySeed)
-                    and entry.source_record_id == record_id
-                ):
-                    children.append(
-                        {
-                            "recordId": candidate,
-                            "sourceRecordId": record_id,
-                            "sourceUntilSeq": entry.source_until_seq,
-                            "label": branch_label(list(entry.messages)),
-                        }
-                    )
+        for candidate in await self.storage.list_history_records():
+            if candidate == record_id:
+                continue
+            first = await self.storage.list_history(candidate, limit=1)
+            if not first:
+                continue
+            entry = entry_from_dict(first[0])
+            if (
+                isinstance(entry, HistorySeed)
+                and entry.source_record_id == record_id
+            ):
+                children.append(
+                    {
+                        "recordId": candidate,
+                        "sourceRecordId": record_id,
+                        "sourceUntilSeq": entry.source_until_seq,
+                        "label": branch_label(list(entry.messages)),
+                    }
+                )
         return {
             "lineage": [
                 {
@@ -1758,6 +1778,8 @@ def _default_loop_hooks(
     max_ctx = resolve_context_window(
         params.get("model"),
         explicit=int(params.get("maxContextTokens") or 0) or None,
+        provider=params.get("provider"),
+        base_url=params.get("baseUrl"),
     )
     return ChainHooks(
         CompactionHooks(
@@ -1814,6 +1836,8 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         window = resolve_context_window(
             params.get("model"),
             explicit=int(params.get("maxContextTokens") or 0) or None,
+            provider=params.get("provider"),
+            base_url=params.get("baseUrl"),
         )
         budget = BudgetLimit(
             max_tokens=2 * window,
@@ -1928,6 +1952,21 @@ def _wrap_with_recording(provider: LLMProvider) -> LLMProvider:
     return RecordingProvider(provider, JsonlRequestSink(path))
 
 
+def _catalog_base_url(provider_kind: str) -> str | None:
+    """The catalog's api base URL for a first-party provider kind."""
+    from steerable_agent_runtime.model_resolve import provider_endpoint
+
+    endpoint = provider_endpoint(provider_kind)
+    return endpoint.api_base_url if endpoint else None
+
+
+#: The bundled default harness spec (W1.2.4): the built-in chain as data.
+_DEFAULT_HARNESS_SPEC_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml"
+)
+
+
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     """Construct an LLMProvider from a chat-stream request payload.
 
@@ -1959,7 +1998,12 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             if not base_url.endswith("/v1"):
                 base_url = f"{base_url}/v1"
 
-        resolved_base_url = base_url or "https://api.openai.com/v1"
+        # W5.3.1: a catalogued provider name supplies its own endpoint —
+        # ``provider: deepseek`` needs no hand-written base_url. Unknown
+        # kinds (openai_compat shims, ollama) keep the OpenAI default.
+        resolved_base_url = (
+            base_url or _catalog_base_url(provider_kind) or "https://api.openai.com/v1"
+        )
         # Vendor divergences arrive as data: an explicit ``compat`` payload
         # wins; otherwise auto-detect from the base-URL host (pi-style).
         compat_param = params.get("compat")

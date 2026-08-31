@@ -103,6 +103,108 @@ _EDIT_SCHEMA = {
 }
 
 
+_GREP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "Text or regex to search for."},
+        "isRegex": {
+            "type": "boolean",
+            "description": "Treat query as a regular expression (default false).",
+        },
+        "ignoreCase": {"type": "boolean", "description": "Case-insensitive match."},
+        "limit": {
+            "type": "integer",
+            "description": "Max hits returned (default 200, capped at 1000).",
+        },
+    },
+    "required": ["query"],
+}
+
+_GLOB_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pattern": {
+            "type": "string",
+            "description": "fnmatch pattern against repo-relative paths (e.g. '**/*.py').",
+        },
+        "limit": {"type": "integer", "description": "Max paths returned."},
+    },
+    "required": ["pattern"],
+}
+
+_APPLY_PATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "patches": {
+            "type": "array",
+            "description": (
+                "Edits across one or more files, applied atomically: every file "
+                "is planned against original bytes first; a failure anywhere "
+                "rolls back everything already written."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the workspace.",
+                    },
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "oldText": {"type": "string"},
+                                "newText": {"type": "string"},
+                            },
+                            "required": ["oldText", "newText"],
+                        },
+                    },
+                },
+                "required": ["path", "edits"],
+            },
+        },
+    },
+    "required": ["patches"],
+}
+
+_BASH_SESSION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "Optional command to run immediately after opening.",
+        },
+        "yieldMs": {
+            "type": "integer",
+            "description": "How long to wait for initial output (default 1000).",
+        },
+        "maxOutput": {
+            "type": "integer",
+            "description": "Max bytes of output returned per read.",
+        },
+    },
+}
+
+_WRITE_STDIN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sessionId": {"type": "string", "description": "The bash_session id."},
+        "chars": {
+            "type": "string",
+            "description": "Input to write (empty polls). '\\x03' sends Ctrl-C.",
+        },
+        "yieldMs": {"type": "integer", "description": "Wait for output (ms)."},
+        "maxOutput": {"type": "integer", "description": "Max bytes returned."},
+        "close": {
+            "type": "boolean",
+            "description": "Close the session instead of writing.",
+        },
+    },
+    "required": ["sessionId"],
+}
+
+
 def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
@@ -331,6 +433,203 @@ def workspace_tools_for_cwd(cwd: str | Path, *, jailed: bool = False) -> ToolRou
             "write_file when modifying existing files."
         ),
         schema=_EDIT_SCHEMA,
+        require_consent=False,
+    )
+
+    # W1.4.1: structured search + atomic multi-file patch. These replace the
+    # bash idioms (grep -r, find, hand-rolled sed loops) whose raw output
+    # burned context and whose partial writes corrupted workspaces.
+    def grep(
+        query: str,
+        isRegex: bool = False,
+        ignoreCase: bool = False,
+        limit: int = 200,
+    ) -> ToolResult:
+        from .search_tools import search
+
+        try:
+            hits = search(
+                root, query, is_regex=isRegex, ignore_case=ignoreCase, limit=limit
+            )
+        except ValueError as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        return ToolResult(
+            success=True,
+            data={
+                "hits": [
+                    {"path": h.path, "line": h.line, "text": h.text} for h in hits
+                ],
+                "truncated": len(hits) >= min(max(1, limit), 1000),
+            },
+        )
+
+    def glob(pattern: str, limit: int = 200) -> ToolResult:
+        from .search_tools import glob_files
+
+        try:
+            paths = glob_files(root, pattern, limit=limit)
+        except ValueError as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        return ToolResult(success=True, data={"paths": paths})
+
+    async def apply_patch_tool(patches: list[dict]) -> ToolResult:
+        from .multi_file_edit import FilePatch, apply_patch
+
+        entries = [
+            FilePatch(
+                path=str(p.get("path", "")),
+                edits=tuple(
+                    EditOp(
+                        old_text=str(e.get("oldText", "")),
+                        new_text=str(e.get("newText", "")),
+                    )
+                    for e in p.get("edits", [])
+                    if isinstance(e, dict)
+                ),
+            )
+            for p in patches
+            if isinstance(p, dict)
+        ]
+        # Serialise against concurrent single-file edits: a patch touching a
+        # file another edit holds must not interleave its read-modify-write.
+        try:
+            targets = sorted({_resolve_under(root, p.path) for p in entries})
+        except ValueError as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        locks = [_lock_for(t) for t in targets]
+        for lock in locks:
+            await lock.acquire()
+        try:
+            summary = apply_patch(
+                root,
+                entries,
+                resolve=lambda p: _resolve_under(root, p),
+            )
+        except (ValueError, EditError) as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        finally:
+            for lock in locks:
+                lock.release()
+        return ToolResult(
+            success=True,
+            data={"filesChanged": list(summary.files_changed), "diffs": list(summary.diffs)},
+        )
+
+    router.register(
+        grep,
+        name="grep",
+        mode="read",
+        description=(
+            "Search file contents across the workspace (ripgrep when available). "
+            "Returns structured {path, line, text} hits; the workspace ignore "
+            "set (node_modules, .git, …) is always applied. Prefer this over "
+            "bash grep -r."
+        ),
+        schema=_GREP_SCHEMA,
+        require_consent=False,
+    )
+    router.register(
+        glob,
+        name="glob",
+        mode="read",
+        description=(
+            "List workspace files matching an fnmatch pattern. The ignore set "
+            "is shared with grep. Prefer this over bash find/ls."
+        ),
+        schema=_GLOB_SCHEMA,
+        require_consent=False,
+    )
+    router.register(
+        apply_patch_tool,
+        name="apply_patch",
+        mode="safe_write",
+        description=(
+            "Edit several files in one atomic call: all files are planned "
+            "against original bytes, then written; any failure rolls back "
+            "everything. Prefer this over multiple edit_file calls when a "
+            "change spans files."
+        ),
+        schema=_APPLY_PATCH_SCHEMA,
+        require_consent=False,
+    )
+
+    # W1.5: persistent interactive shell sessions (REPLs, prompts, Ctrl-C).
+    # The manager is exposed on the router so the owner (headless run,
+    # sidecar shutdown) can close_all() — sessions are real processes.
+    from .shell_session import ShellSessionManager
+
+    shell_sessions = ShellSessionManager()
+    router.shell_sessions = shell_sessions  # type: ignore[attr-defined]
+
+    def bash_session(
+        command: str | None = None,
+        yieldMs: int = 1000,
+        maxOutput: int = 30_000,
+    ) -> ToolResult:
+        try:
+            read = shell_sessions.open(
+                cwd=root, command=command, yield_ms=yieldMs, max_output=maxOutput
+            )
+        except (ValueError, OSError) as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        return ToolResult(
+            success=True,
+            data={
+                "sessionId": read.session_id,
+                "output": read.output,
+                "exited": read.exited,
+                "exitCode": read.exit_code,
+            },
+        )
+
+    def write_stdin(
+        sessionId: str,
+        chars: str = "",
+        yieldMs: int = 1000,
+        maxOutput: int = 30_000,
+        close: bool = False,
+    ) -> ToolResult:
+        try:
+            if close:
+                shell_sessions.close(sessionId)
+                return ToolResult(success=True, data={"sessionId": sessionId, "closed": True})
+            read = shell_sessions.write_stdin(
+                sessionId, chars, yield_ms=yieldMs, max_output=maxOutput
+            )
+        except (ValueError, OSError) as exc:
+            return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        return ToolResult(
+            success=True,
+            data={
+                "sessionId": read.session_id,
+                "output": read.output,
+                "exited": read.exited,
+                "exitCode": read.exit_code,
+            },
+        )
+
+    router.register(
+        bash_session,
+        name="bash_session",
+        mode="other",
+        description=(
+            "Open a persistent interactive shell session (a real terminal: "
+            "REPLs, prompts, and Ctrl-C work). Returns a sessionId; feed it "
+            "with write_stdin. Prefer plain bash for one-shot commands."
+        ),
+        schema=_BASH_SESSION_SCHEMA,
+        require_consent=False,
+        metadata={"shell_command_param": "command"},
+    )
+    router.register(
+        write_stdin,
+        name="write_stdin",
+        mode="other",
+        description=(
+            "Write to a bash_session's stdin (empty chars polls output) or "
+            "close it. Send '\\x03' for Ctrl-C."
+        ),
+        schema=_WRITE_STDIN_SCHEMA,
         require_consent=False,
     )
     return router

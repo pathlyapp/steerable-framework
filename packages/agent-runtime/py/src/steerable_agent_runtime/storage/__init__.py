@@ -38,6 +38,13 @@ class StorageAdapter(Protocol):
         active_only: bool = False,
     ) -> list[AgentSession]: ...
 
+    async def search_sessions(
+        self, query: str, *, user_id: str | None = None
+    ) -> list[AgentSession]:
+        """Sessions whose chat has a message containing ``query`` (substring
+        over the serialized message), newest ``updatedAt`` first."""
+        ...
+
     # -- ChatAgent ------------------------------------------------------
 
     async def upsert_agent(self, agent: ChatAgent) -> ChatAgent: ...
@@ -76,6 +83,13 @@ class StorageAdapter(Protocol):
         self, record_id: str, entries: Iterable[dict[str, Any]]
     ) -> None:
         """Append record entries (already seq-ordered by the manager)."""
+        ...
+
+    async def list_history_records(self, *, prefix: str | None = None) -> list[str]:
+        """Enumerate known record ids (branch discovery, ACP session list).
+
+        First-class since W3.1.2 — sidecar branch discovery previously
+        duck-typed this and silently degraded on stores lacking it."""
         ...
 
     async def list_history(

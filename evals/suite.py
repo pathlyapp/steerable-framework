@@ -28,6 +28,18 @@ class AgentSpec:
     kwargs: tuple[tuple[str, str], ...]
     skipped: bool
     reason: str | None
+    #: Whether the agent takes a harness dimension (W1.3.1) — only the
+    #: product agent's harness is ours to vary; baselines run as shipped.
+    accepts_harness: bool = False
+
+
+@dataclass(frozen=True)
+class HarnessSpec:
+    """One named harness configuration (a `HarnessSpec` YAML on disk)."""
+
+    name: str
+    #: Repo-relative path to the spec file; existence is validated at load.
+    spec: str
 
 
 @dataclass(frozen=True)
@@ -42,6 +54,7 @@ class Suite:
     jobs_dir: str
     harbor_version: str
     agents: dict[str, AgentSpec]
+    harnesses: dict[str, HarnessSpec]
 
     @property
     def catalog_set(self) -> frozenset[str]:
@@ -128,6 +141,7 @@ def harbor_argv(
     agent_setup_timeout_multiplier: float | None = None,
     environment_build_timeout_multiplier: float | None = None,
     agent_timeout_multiplier: float | None = None,
+    harness: str | None = None,
     harbor_bin: str = "harbor",
 ) -> list[str]:
     spec = suite.agents.get(agent)
@@ -139,6 +153,17 @@ def harbor_argv(
         raise SuiteError(f"agent {agent!r} cannot run Harbor: {reason}")
     if not tasks:
         raise SuiteError("task list is empty")
+    if harness is not None:
+        if not spec.accepts_harness:
+            raise SuiteError(
+                f"agent {agent!r} does not accept a harness dimension — "
+                "the harness is the product agent's independent variable; "
+                "baselines run as shipped"
+            )
+        harness_spec = suite.harnesses.get(harness)
+        if harness_spec is None:
+            known = ", ".join(sorted(suite.harnesses))
+            raise SuiteError(f"unknown harness {harness!r}; expected one of {known}")
 
     argv = [
         harbor_bin,
@@ -185,6 +210,12 @@ def harbor_argv(
         )
     for key, value in spec.kwargs:
         argv.extend(["--agent-kwarg", f"{key}={value}"])
+    if harness is not None:
+        # Absolute path: the harbor child runs with cwd=REPO_ROOT but the
+        # agent uploads the file to the container, so the path must resolve
+        # regardless of either side's working directory.
+        spec_path = (SUITE_PATH.parent.parent / suite.harnesses[harness].spec).resolve()
+        argv.extend(["--agent-kwarg", f"harness={spec_path}"])
     for task in tasks:
         argv.extend(["--include-task-name", harbor_task_name(suite.dataset_name, task)])
     return argv
@@ -195,6 +226,7 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
     run = raw.get("run") or {}
     splits_raw = raw.get("splits") or {}
     agents_raw = raw.get("agents") or {}
+    harnesses_raw = raw.get("harnesses") or {}
 
     dataset_name = _require_str(dataset.get("name"), "dataset.name", source)
     git = _require_str(dataset.get("git"), "dataset.git", source)
@@ -239,7 +271,22 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
             kwargs=tuple((str(k), str(v)) for k, v in kwargs_raw.items()),
             skipped=bool(body.get("skipped")),
             reason=body.get("reason"),
+            accepts_harness=bool(body.get("accepts_harness")),
         )
+
+    harnesses: dict[str, HarnessSpec] = {}
+    repo_root = source.resolve().parent.parent
+    for name, body in harnesses_raw.items():
+        if not isinstance(body, dict):
+            raise SuiteError(f"{source}: harnesses.{name} must be a mapping")
+        spec_rel = _require_str(body.get("spec"), f"harnesses.{name}.spec", source)
+        if not (repo_root / spec_rel).is_file():
+            raise SuiteError(
+                f"{source}: harnesses.{name}.spec not found: {spec_rel} — "
+                "a harness label pointing at nothing would silently rerun "
+                "the default configuration under a new name"
+            )
+        harnesses[name] = HarnessSpec(name=name, spec=spec_rel)
 
     missing_agents = [name for name in REQUIRED_AGENTS if name not in agents]
     if missing_agents:
@@ -275,6 +322,7 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
         harbor_version=harbor_version,
         agents=agents,
+        harnesses=harnesses,
     )
 
 

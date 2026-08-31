@@ -97,6 +97,102 @@ def test_run_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_with_harness_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """W1.2.2: --harness assembles the spec's strategies instead of the
+    built-in default chain."""
+    from steerable_agent_runtime.harness_spec import load_harness_spec
+
+    spec_path = (
+        Path(headless_mod.__file__).parents[4]
+        / "agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml"
+    )
+    spec = load_harness_spec(spec_path)  # fails loud if the bundled spec breaks
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(
+        headless_mod, "_env_provider_params", lambda: {"model": "fake"}
+    )
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    await _run("hello", cwd=str(tmp_path), max_rounds=4, harness_path=spec_path)
+    assert "done" in capsys.readouterr().out
+
+
+def test_assemble_harness_replaces_default_chain(tmp_path: Path) -> None:
+    """The spec's strategies, not the built-in chain, drive the loop."""
+    from steerable_agent_runtime.compaction import CompactionHooks
+    from steerable_agent_runtime.hooks import ChainHooks
+    from steerable_agent_runtime.observation_aging import ObservationAgingHooks
+
+    spec_path = tmp_path / "aging.harness.yaml"
+    spec_path.write_text(
+        "context:\n"
+        "  - impl: observation_aging\n"
+        "retry:\n"
+        "  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: full\n"
+        "memory: stateless\n"
+        "orchestration: single\n",
+        encoding="utf-8",
+    )
+    hooks, storage, executor, descriptors, limits = headless_mod._assemble_harness(
+        spec_path,
+        {"model": "fake"},
+        provider=None,
+        executor=object(),
+        tools=_FakeTools(),
+    )
+
+    def _flatten(h: object) -> list[object]:
+        if isinstance(h, ChainHooks):
+            return [x for sub in h._hooks for x in _flatten(sub)]
+        return [h]
+
+    kinds = [type(h).__name__ for h in _flatten(hooks)]
+    assert "ObservationAgingHooks" in kinds
+    assert "CompactionHooks" not in kinds  # spec did not ask for it
+    assert "DeliveryHooks" in kinds  # transport semantics always stay
+    assert limits.max_rounds is None  # no loop section → entrypoint default
+
+
+def test_assemble_harness_loop_limits(tmp_path: Path) -> None:
+    """W3.4.2.4: the spec's loop section reaches LoopConfig."""
+    spec_path = tmp_path / "limits.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: full\nmemory: stateless\norchestration: single\n"
+        "loop:\n  max_rounds: 7\n  tool_dedup: true\n",
+        encoding="utf-8",
+    )
+    *_, limits = headless_mod._assemble_harness(
+        spec_path, {"model": "fake"}, provider=None, executor=object(), tools=_FakeTools()
+    )
+    assert limits.max_rounds == 7
+    assert limits.tool_dedup is True
+    assert limits.max_tool_errors is None
+
+
+class _FakeTools:
+    def describe_model(self) -> list[dict]:
+        return [{"name": "bash"}]
+
+
+@pytest.mark.asyncio
 async def test_run_with_bash_tool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

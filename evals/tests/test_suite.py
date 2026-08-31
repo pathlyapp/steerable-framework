@@ -40,6 +40,21 @@ def test_suite_yaml_exists() -> None:
     assert SUITE_PATH.is_file()
 
 
+def test_harnesses_parse_and_specs_exist() -> None:
+    suite = load_suite()
+    assert "default" in suite.harnesses
+    spec = suite.harnesses["default"]
+    assert (SUITE_PATH.parent.parent / spec.spec).is_file()
+
+
+def test_steerable_is_the_harness_aware_agent() -> None:
+    suite = load_suite()
+    assert suite.agents["steerable"].accepts_harness is True
+    # Baselines run as shipped: varying their harness is not our variable.
+    for name in ("oracle", "claude-code", "codex", "pi"):
+        assert suite.agents[name].accepts_harness is False
+
+
 def test_catalog_is_89_unique_ids() -> None:
     suite = load_suite()
     assert len(suite.catalog) == 89

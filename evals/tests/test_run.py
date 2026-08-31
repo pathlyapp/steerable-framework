@@ -57,6 +57,44 @@ def test_dry_run_steerable_uses_import_path(capsys) -> None:
     assert "--agent-timeout-multiplier 3" in captured.out
 
 
+def test_dry_run_steerable_with_harness_passes_spec_kwarg(capsys) -> None:
+    code = main(
+        [
+            "--agent",
+            "steerable",
+            "--split",
+            "oracle-canary",
+            "--harness",
+            "default",
+            "--dry-run",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "--agent-kwarg harness=" in captured.out
+    assert "default.harness.yaml" in captured.out
+    # The run unit is agent × harness: jobs land in their own directory.
+    assert "steerable-default" in captured.out
+
+
+def test_harness_rejected_for_baseline_agents(capsys) -> None:
+    code = main(
+        ["--agent", "codex", "--split", "oracle-canary", "--harness", "default", "--dry-run"]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "does not accept a harness dimension" in captured.err
+
+
+def test_unknown_harness_fails_loud(capsys) -> None:
+    code = main(
+        ["--agent", "steerable", "--split", "oracle-canary", "--harness", "nope", "--dry-run"]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "unknown harness" in captured.err
+
+
 def test_skip_missing_env_exits_3_for_pi(capsys, monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     code = main(

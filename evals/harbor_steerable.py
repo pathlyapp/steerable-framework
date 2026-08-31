@@ -45,6 +45,7 @@ _PACKAGE_DIRS = (
 )
 _VENV_PYTHON = f"{_REMOTE_SRC}/venv/bin/python"
 _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
+_HARNESS_REMOTE = "/tmp/steerable-harness.yaml"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
@@ -79,6 +80,13 @@ class SteerableHarborAgent(BaseInstalledAgent):
     @override
     def name() -> str:
         return "steerable"
+
+    def __init__(self, *args, harness: str | None = None, **kwargs) -> None:
+        # Harbor's base classes swallow unknown kwargs; capture the harness
+        # dimension (W1.3.1) explicitly so `--agent-kwarg harness=...` takes
+        # effect instead of vanishing.
+        super().__init__(*args, **kwargs)
+        self._harness_spec = harness
 
     @override
     def get_version_command(self) -> str | None:
@@ -296,6 +304,14 @@ class SteerableHarborAgent(BaseInstalledAgent):
             local = Path(tmp) / "instruction.md"
             local.write_text(instruction, encoding="utf-8")
             await environment.upload_file(local, _INSTRUCTION_REMOTE)
+        harness_flag = ""
+        if self._harness_spec:
+            # The spec is a host-side path; the container needs the file.
+            # headless.py must understand --harness (W1.2.2) — until it does,
+            # argparse rejects the flag and the trial errors loudly rather
+            # than silently rerunning the default harness under a new label.
+            await environment.upload_file(Path(self._harness_spec), _HARNESS_REMOTE)
+            harness_flag = f"--harness {shlex.quote(_HARNESS_REMOTE)} "
         provider = (self._parsed_model_provider or "openai").strip().lower()
         kind = "anthropic" if provider in {"anthropic", "claude"} else "openai_compat"
         env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS))
@@ -311,6 +327,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             command=(
                 f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
                 f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
+                f"{harness_flag}"
                 f"> {shlex.quote(log)} 2>&1"
             ),
             env=env,

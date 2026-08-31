@@ -1,0 +1,14 @@
+# Arm C (W1.4.2): the default harness plus subagent delegation.
+# Identical to default.harness.yaml except `orchestration: subagent` —
+# the factorial protocol (W1.4.3) requires arms differ in exactly one
+# dimension so the attribution report can isolate orchestration's effect.
+context:
+  - impl: pressure_compaction
+  - impl: spill
+retry:
+  - impl: informed_backtrack
+  - impl: simple
+validator: "null"
+tools: full
+memory: stateless
+orchestration: subagent

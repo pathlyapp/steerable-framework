@@ -141,6 +141,31 @@ async def test_compat_describe_serves_the_framework_flag_vocabulary(
         OpenAICompatFlags.from_dict({f["key"]: value})
 
 
+async def test_harness_describe_serves_registry_and_default(
+    sidecar: Sidecar,
+) -> None:
+    # W1.2.2: hosts render harness pickers from this payload; every impl it
+    # advertises must be loadable through the registry (a describe/registry
+    # skew fails loud here).
+    from steerable_agent_runtime.harness import STRATEGY_REGISTRY
+
+    response = await _call(sidecar, "harness.describe")
+    result = response["result"]
+    assert set(result["available"]) == set(STRATEGY_REGISTRY)
+    for dimension, impls in result["available"].items():
+        assert {i["impl"] for i in impls} == set(STRATEGY_REGISTRY[dimension])
+        for i in impls:
+            assert i["assumes"]  # every strategy carries its contract
+    default = result["default"]
+    assert default["orchestration"]["impl"] == "single"
+    # validator is a hooks-producing dimension: list form.
+    assert [v["impl"] for v in default["validator"]] == ["null"]
+    assert {c["impl"] for c in default["context"]} == {
+        "pressure_compaction",
+        "spill",
+    }
+
+
 async def test_workspace_apply_edits_returns_content_diff_and_matches(
     sidecar: Sidecar,
 ) -> None:

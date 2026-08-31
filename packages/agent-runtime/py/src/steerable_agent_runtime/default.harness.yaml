@@ -1,0 +1,25 @@
+# The framework's default harness (W1.2.4): a declaration of what the
+# sidecar chat path has always assembled by hand —
+#   ChainHooks(CompactionHooks, SpillHooks, RetryHooks) + InMemoryStorage
+#   + full tool surface + no delegation.
+# `max_context_tokens` is intentionally absent: the host resolves it from
+# the model catalog at assembly time (runtime_params), per-model.
+context:
+  - impl: pressure_compaction
+  - impl: spill
+retry:
+  # Order matters: overflow backtrack first (it declines non-overflow
+  # errors), then taxonomy-routed backoff. Mirrors ChainHooks ordering.
+  - impl: informed_backtrack
+  - impl: simple
+# Quoted: bare `null` is YAML's null literal, not the implementation name.
+validator: "null"
+tools: full
+memory: stateless
+orchestration: single
+# Loop limits the harness pins (W3.4.2.4): entrypoints read these instead of
+# hardcoding knobs. Absent fields fall back to the entrypoint's baseline.
+loop:
+  max_rounds: 80
+  max_tool_errors: 16
+  tool_dedup: false

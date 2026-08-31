@@ -84,6 +84,23 @@ export interface CompatFlagDescriptor {
   description: string;
 }
 
+/**
+ * One harness implementation choice as served by `harness.describe`
+ * (W1.2.2): the impl name plus its assumption contract.
+ */
+export interface HarnessImplDescriptor {
+  impl: string;
+  assumes: string;
+  params?: Record<string, unknown>;
+}
+
+/** The `harness.describe` payload: the registry vocabulary plus the
+ * active default selection, keyed by dimension. */
+export interface HarnessDescription {
+  available: Record<string, HarnessImplDescriptor[]>;
+  default: Record<string, HarnessImplDescriptor[] | HarnessImplDescriptor>;
+}
+
 export type ChatStreamStatus =
   | 'completed'
   | 'cancelled'
@@ -486,6 +503,16 @@ export class AgentRuntime {
    */
   describeCompatFlags(): Promise<{ flags: CompatFlagDescriptor[] }> {
     return this.process.request('compat.describe');
+  }
+
+  /**
+   * The framework-owned harness vocabulary (`harness.describe`, W1.2.2):
+   * every dimension's available implementations with their assumption
+   * contracts, plus the active default selection. Host harness pickers
+   * render from this payload; a new strategy needs no host-side constant.
+   */
+  describeHarness(): Promise<HarnessDescription> {
+    return this.process.request('harness.describe');
   }
 
   // ---- internals ---------------------------------------------------------

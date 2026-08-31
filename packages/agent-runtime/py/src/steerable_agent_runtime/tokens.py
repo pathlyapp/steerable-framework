@@ -131,13 +131,25 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 }
 
 
-def resolve_context_window(model: str | None, explicit: int | None = None) -> int:
-    """Context window for ``model``: explicit config wins, then the known-model
-    table, then the conservative fallback.
+def resolve_context_window(
+    model: str | None,
+    explicit: int | None = None,
+    *,
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> int:
+    """Context window for ``model``: explicit config wins, then the catalog
+    (provider/base_url scoped when given), then the legacy table, then the
+    conservative fallback.
 
     Compaction thresholds derive from this (``threshold_ratio * window``), so
     a fixed default would either waste small-window models or — as with the
     old fixed 60k against 131k models — compact far earlier than the provider
     requires.
     """
-    return resolve_model_info(model, context_window_override=explicit).context_window
+    return resolve_model_info(
+        model,
+        provider=provider,
+        base_url=base_url,
+        context_window_override=explicit,
+    ).context_window

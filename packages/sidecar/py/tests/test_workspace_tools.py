@@ -38,6 +38,125 @@ async def test_bash_read_write_roundtrip(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_grep_glob_apply_patch_wired(tmp_path: Path) -> None:
+    """W1.4.1 wiring: the three structured tools dispatch through the router."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def alpha():\n    return 1\n")
+    (tmp_path / "src" / "b.py").write_text("def beta():\n    return 2\n")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "junk.py").write_text("alpha junk\n")
+
+    router = workspace_tools_for_cwd(tmp_path)
+    names = {t.get("name") or t.get("function", {}).get("name") for t in router.describe_model()}
+    assert {"grep", "glob", "apply_patch"} <= names
+
+    hits = await _call(router, "grep", {"query": "alpha"})
+    assert hits.success is True
+    assert [h["path"] for h in hits.data["hits"]] == ["src/a.py"]  # junk ignored
+
+    paths = await _call(router, "glob", {"pattern": "**/*.py"})
+    assert paths.success is True
+    assert sorted(paths.data["paths"]) == ["src/a.py", "src/b.py"]
+
+    patched = await _call(
+        router,
+        "apply_patch",
+        {
+            "patches": [
+                {
+                    "path": "src/a.py",
+                    "edits": [{"oldText": "return 1", "newText": "return 10"}],
+                },
+                {
+                    "path": "src/b.py",
+                    "edits": [{"oldText": "return 2", "newText": "return 20"}],
+                },
+            ]
+        },
+    )
+    assert patched.success is True
+    assert sorted(patched.data["filesChanged"]) == ["src/a.py", "src/b.py"]
+    assert "return 10" in (tmp_path / "src" / "a.py").read_text()
+    assert "return 20" in (tmp_path / "src" / "b.py").read_text()
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_escape_rejected(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    result = await _call(
+        router,
+        "apply_patch",
+        {
+            "patches": [
+                {
+                    "path": "../outside.txt",
+                    "edits": [{"oldText": "x", "newText": "y"}],
+                }
+            ]
+        },
+    )
+    assert result.success is False
+    assert result.needsFollowup is True
+
+
+@pytest.mark.asyncio
+async def test_grep_invalid_regex_fails_loud(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    result = await _call(router, "grep", {"query": "([", "isRegex": True})
+    assert result.success is False
+    assert "invalid regex" in result.error
+
+
+@pytest.mark.asyncio
+async def test_bash_session_roundtrip_via_router(tmp_path: Path) -> None:
+    """W1.5 wiring: open → command → poll → close through the tool surface."""
+    router = workspace_tools_for_cwd(tmp_path)
+    try:
+        opened = await _call(
+            router, "bash_session", {"command": "echo sess-ready", "yieldMs": 3000}
+        )
+        assert opened.success is True
+        session_id = opened.data["sessionId"]
+        assert "sess-ready" in opened.data["output"]
+
+        # Poll until the command's output lands: the first read returns the
+        # terminal's echo of the input, not the result.
+        seen = ""
+        for _ in range(20):
+            polled = await _call(
+                router,
+                "write_stdin",
+                {
+                    "sessionId": session_id,
+                    "chars": "echo poll-$((6*7))\n" if not seen else "",
+                    "yieldMs": 500,
+                },
+            )
+            assert polled.success is True
+            seen += polled.data["output"]
+            if "poll-42" in seen:
+                break
+        assert "poll-42" in seen
+
+        closed = await _call(
+            router, "write_stdin", {"sessionId": session_id, "close": True}
+        )
+        assert closed.success is True and closed.data["closed"] is True
+    finally:
+        router.shell_sessions.close_all()
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_unknown_session_fails_loud(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    result = await _call(
+        router, "write_stdin", {"sessionId": "sh-nonexistent", "chars": ""}
+    )
+    assert result.success is False
+    assert result.needsFollowup is True
+
+
+@pytest.mark.asyncio
 async def test_bash_empty_and_nonzero(tmp_path: Path) -> None:
     router = workspace_tools_for_cwd(tmp_path)
     empty = await _call(router, "bash", {"command": "  "})

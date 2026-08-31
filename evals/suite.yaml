@@ -173,3 +173,16 @@ agents:
       - OPENAI_API_KEY
       - ANTHROPIC_API_KEY
     skipped: false
+    # The harness is this agent's independent variable (W1.3.1): run with
+    # `--harness <name>` to vary the harness under a locked model.
+    accepts_harness: true
+
+# Harness dimension (W1.3.1): the run unit is agent × harness. Each label
+# names a HarnessSpec YAML assembled by the runtime; the spec file must
+# exist at load time so a typo fails at parse, not after a paid run.
+harnesses:
+  default:
+    spec: packages/agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml
+  # Arm C (W1.4.2): default + subagent delegation, one-dimension diff.
+  subagent:
+    spec: evals/harnesses/subagent.harness.yaml

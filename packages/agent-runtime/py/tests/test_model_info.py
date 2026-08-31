@@ -14,17 +14,22 @@ from steerable_agent_runtime.model_info import (
     DEFAULT_CONTEXT_WINDOW,
     TOOL_FORMAT_NONE,
     _custom_infos,
+    _resolution_observers,
+    register_resolution_observer,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clean_custom_infos():
     snapshot = list(_custom_infos)
+    observers = list(_resolution_observers)
     try:
         yield
     finally:
         _custom_infos.clear()
         _custom_infos.extend(snapshot)
+        _resolution_observers.clear()
+        _resolution_observers.extend(observers)
 
 
 def test_longest_prefix_wins() -> None:
@@ -52,6 +57,51 @@ def test_context_window_override_wins() -> None:
     assert info.context_window == 32_000
     # ...but the rest of the descriptor is intact
     assert info.supports_tools is True
+
+
+# -- W5.2: catalog-first resolution -------------------------------------------
+
+
+def test_catalog_exact_hit_beats_legacy_prefix() -> None:
+    # Legacy table says claude = 200k; the catalog knows sonnet-4-6 is 1M.
+    info = resolve_model_info("anthropic/claude-sonnet-4-6")
+    assert info.context_window == 1_000_000
+    assert info.pattern == "anthropic/claude-sonnet-4-6"
+
+
+def test_catalog_scoped_hit_via_base_url_gateway() -> None:
+    # The eval deployment shape: wire provider openai-compatible, model id
+    # namespaced by the upstream vendor, endpoint naming the real provider.
+    info = resolve_model_info(
+        "z-ai/glm-5.3-flash",
+        provider="openai_compat",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    assert info.context_window == 1_310_720  # not the legacy 202,752
+
+
+def test_legacy_prefix_fallback_is_observable() -> None:
+    events: list[tuple[str, str]] = []
+    register_resolution_observer(lambda model, source: events.append((model, source)))
+    # ollama is a local daemon — no catalog presence by design.
+    info = resolve_model_info("llama3.3")
+    assert info.context_window == 131_072  # legacy table still serves it
+    assert events == [("llama3.3", "legacy_prefix")]
+
+
+def test_default_fallback_is_observable() -> None:
+    events: list[tuple[str, str]] = []
+    register_resolution_observer(lambda model, source: events.append((model, source)))
+    resolve_model_info("some-finetune-9b")
+    assert events == [("some-finetune-9b", "default")]
+
+
+def test_custom_override_still_wins_over_catalog() -> None:
+    register_model_info(
+        ModelInfo("anthropic/claude-sonnet-4-6", 42_000, frozenset({"text"}), "openai", frozenset())
+    )
+    info = resolve_model_info("anthropic/claude-sonnet-4-6")
+    assert info.context_window == 42_000
 
 
 def test_derived_capability_properties() -> None:

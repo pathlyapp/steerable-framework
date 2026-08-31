@@ -15,7 +15,11 @@ Ours is a static built-in table (extendable at runtime via
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
+from typing import Any
+
+_log = logging.getLogger(__name__)
 
 #: Canonical reasoning-effort ordering, lowest to highest. Used to clamp a
 #: requested effort to the nearest level a model actually supports (pi's
@@ -115,17 +119,87 @@ def _match(model: str | None) -> ModelInfo:
     return best
 
 
+#: Resolution observers (W5.2.3): called with (model, source) whenever
+#: resolution falls through to the legacy prefix table or the conservative
+#: default — the two paths that were silently wrong for years. The default
+#: observer logs; hosts register their own to surface the event.
+_resolution_observers: list[Any] = []
+
+
+def register_resolution_observer(observer: Any) -> None:
+    """Subscribe to fallback resolutions: ``observer(model, source)`` where
+    source is ``"legacy_prefix"`` or ``"default"``."""
+    _resolution_observers.append(observer)
+
+
+def _notify_fallback(model: str, source: str) -> None:
+    if not _resolution_observers:
+        _log.info("model %r resolved via %s (no catalog hit)", model, source)
+        return
+    for observer in _resolution_observers:
+        observer(model, source)
+
+
+def _catalog_match(
+    model: str, provider: str | None, base_url: str | None
+) -> ModelInfo | None:
+    from .model_resolve import catalog_provider_for_base_url, resolve_in_catalog
+
+    hit = resolve_in_catalog(provider, model)
+    if hit is None and base_url:
+        # Wire provider is often a compat shim ("openai_compat") that says
+        # nothing about the *serving* provider — the endpoint names it
+        # (openrouter.ai → openrouter namespace).
+        hit = resolve_in_catalog(catalog_provider_for_base_url(base_url), model)
+    if hit is None:
+        return None
+    return ModelInfo(
+        pattern=hit.key,
+        context_window=hit.context_window,
+        modalities=frozenset(hit.input_modalities),
+        tool_format=hit.tool_format,
+        reasoning_levels=frozenset(hit.reasoning_levels),
+    )
+
+
 def resolve_model_info(
     model: str | None,
     *,
+    provider: str | None = None,
+    base_url: str | None = None,
     context_window_override: int | None = None,
 ) -> ModelInfo:
     """The capability descriptor for ``model``.
 
-    ``context_window_override`` (a positive int) wins over the table — for
+    Resolution order (W5.2): runtime-registered overrides, then the bundled
+    models.dev catalog (exact → provider-scoped → same-provider prefix),
+    then the legacy prefix table (kept for what the catalog cannot know:
+    local daemons, delisted legacy ids), then the conservative default.
+    Both fallback tiers are observable via ``register_resolution_observer``.
+
+    ``context_window_override`` (a positive int) wins over every table — for
     local daemons whose effective window is the daemon's, not the model's.
     """
-    info = _match(model)
+    info: ModelInfo | None = None
+    if model:
+        name = model.lower()
+        custom_best: ModelInfo | None = None
+        custom_len = -1
+        for custom in _custom_infos:
+            if name.startswith(custom.pattern) and len(custom.pattern) > custom_len:
+                custom_best, custom_len = custom, len(custom.pattern)
+        if custom_best is not None:
+            info = custom_best
+        else:
+            info = _catalog_match(model, provider, base_url)
+            if info is None:
+                info = _match(model)
+                if info is _DEFAULT_INFO:
+                    _notify_fallback(model, "default")
+                else:
+                    _notify_fallback(model, "legacy_prefix")
+    if info is None:
+        info = _DEFAULT_INFO
     if context_window_override and context_window_override > 0:
         info = replace(info, context_window=context_window_override)
     return info
@@ -140,7 +214,7 @@ def clamp_reasoning_effort(model: str | None, effort: str | None) -> str | None:
     supported level by the canonical ordering; an unrecognized value falls
     back to a sane supported default.
     """
-    levels = _match(model).reasoning_levels
+    levels = resolve_model_info(model).reasoning_levels
     if not levels or not effort:
         return None
     requested = effort.strip().lower()

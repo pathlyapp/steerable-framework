@@ -57,6 +57,7 @@ jobs:
           path: |
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/**/result.json
+            evals/jobs/${{ matrix.agent }}/**/config.json
           if-no-files-found: ignore
 
   gather:
@@ -89,3 +90,41 @@ jobs:
           fi
           echo "every live agent was skipped (set ANTHROPIC_API_KEY and/or OPENAI_API_KEY / CODEX_API_KEY)"
           exit 1
+
+  attribution:
+    name: Harness × model attribution report
+    needs: [eval]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: eval-*
+          path: artifacts
+      # W1.3.4: reproducible artifact, not a gate — scoring costs money and
+      # the report must exist even when some matrix legs were skipped.
+      - name: Build attribution report
+        run: |
+          set -e
+          args=()
+          # Job-level config.json carries the agents array; trial-level does not.
+          while IFS= read -r cfg; do
+            if grep -q '"agents"' "$cfg"; then
+              args+=(--job "default=$(dirname "$cfg")")
+            fi
+          done < <(find artifacts -path "*jobs/*" -name config.json | sort)
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "no scored job dirs in artifacts; skipping report"
+            exit 0
+          fi
+          uv run python -m evals.attribution "${args[@]}" --out attribution.md
+          cat attribution.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: attribution
+          path: attribution.md
+          if-no-files-found: ignore

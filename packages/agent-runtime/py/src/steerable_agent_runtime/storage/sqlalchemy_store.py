@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
 
 from steerable_agent_protocol.generated import (
@@ -156,8 +157,40 @@ history_table = Table(
 )
 
 
-def _model_to_row(model: Any) -> dict[str, Any]:
-    return model.model_dump()
+def _model_to_row(model: Any, table: Table) -> dict[str, Any]:
+    """Dump only the columns the table persists, coercing value types.
+
+    Protocol models carry fields the relational schema deliberately drops
+    (``AgentSession.id`` duplicates ``sessionId``; ``ChatMessage.parts`` is
+    UI-only), and model timestamps are ISO strings while the schema uses
+    DateTime columns — both directions of that mismatch are the store's
+    job to bridge, or the write fails with unconsumed-column / type errors.
+    """
+    row: dict[str, Any] = {}
+    for key, value in model.model_dump().items():
+        column = table.c.get(key)
+        if column is None:
+            continue
+        if value is None and not column.nullable and column.default is not None:
+            # Omit so the column default fires — inserting explicit None
+            # into a non-nullable defaulted column is a constraint error.
+            continue
+        if value is not None and isinstance(column.type, DateTime) and isinstance(value, str):
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        row[key] = value
+    return row
+
+
+def _row_to_model(table: Table, row: dict[str, Any]) -> dict[str, Any]:
+    """Inverse of ``_model_to_row``: DateTime columns back to ISO strings."""
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        column = table.c.get(key)
+        if column is not None and isinstance(column.type, DateTime) and isinstance(value, datetime):
+            out[key] = value.isoformat()
+        else:
+            out[key] = value
+    return out
 
 
 class SqlAlchemyStorage:
@@ -176,12 +209,12 @@ class SqlAlchemyStorage:
     # ------------------------------------------------------------------
 
     async def upsert_session(self, session: AgentSession) -> AgentSession:
-        await self._upsert(sessions_table, "sessionId", session.sessionId, _model_to_row(session))
+        await self._upsert(sessions_table, "sessionId", session.sessionId, _model_to_row(session, sessions_table))
         return session
 
     async def get_session(self, session_id: str) -> AgentSession | None:
         row = await self._get_one(sessions_table, sessions_table.c.sessionId == session_id)
-        return AgentSession(**row) if row else None
+        return AgentSession(**_row_to_model(sessions_table, row)) if row else None
 
     async def list_sessions(
         self,
@@ -202,19 +235,45 @@ class SqlAlchemyStorage:
             clauses=clauses,
             order_by=[sessions_table.c.updatedAt.desc()],
         )
-        return [AgentSession(**row) for row in rows]
+        return [AgentSession(**_row_to_model(sessions_table, row)) for row in rows]
+
+    async def search_sessions(
+        self, query: str, *, user_id: str | None = None
+    ) -> list[AgentSession]:
+        """Sessions whose chat has a message whose content contains ``query``.
+
+        The messages table has a real ``content`` column, so the LIKE lands
+        on content directly — the substring semantics the protocol pins,
+        without the JSON-metadata false positives of a whole-row LIKE.
+        """
+        stmt = (
+            select(sessions_table)
+            .distinct()
+            .join(
+                messages_table,
+                messages_table.c.chatId == sessions_table.c.chatId,
+            )
+            .where(messages_table.c.content.like(f"%{query}%"))
+            .order_by(sessions_table.c.updatedAt.desc())
+        )
+        if user_id is not None:
+            stmt = stmt.where(sessions_table.c.userId == user_id)
+        async with self._sessionmaker() as session:
+            result = await session.execute(stmt)
+            rows = [dict(row) for row in result.mappings().all()]
+        return [AgentSession(**_row_to_model(sessions_table, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # Agents
     # ------------------------------------------------------------------
 
     async def upsert_agent(self, agent: ChatAgent) -> ChatAgent:
-        await self._upsert(agents_table, "id", agent.id, _model_to_row(agent))
+        await self._upsert(agents_table, "id", agent.id, _model_to_row(agent, agents_table))
         return agent
 
     async def get_agent(self, agent_id: str) -> ChatAgent | None:
         row = await self._get_one(agents_table, agents_table.c.id == agent_id)
-        return ChatAgent(**row) if row else None
+        return ChatAgent(**_row_to_model(agents_table, row)) if row else None
 
     async def list_agents(self, *, include_archived: bool = False) -> list[ChatAgent]:
         clauses = []
@@ -225,7 +284,7 @@ class SqlAlchemyStorage:
             clauses=clauses,
             order_by=[agents_table.c.sortOrder.asc(), agents_table.c.createdAt.asc()],
         )
-        return [ChatAgent(**row) for row in rows]
+        return [ChatAgent(**_row_to_model(agents_table, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # Messages
@@ -234,34 +293,44 @@ class SqlAlchemyStorage:
     async def append_message(self, message: ChatMessage) -> ChatMessage:
         if not message.chatId:
             raise StorageError("ChatMessage.chatId is required")
-        await self._insert(messages_table, _model_to_row(message))
+        await self._insert(messages_table, _model_to_row(message, messages_table))
         return message
 
     async def list_messages(self, chat_id: str, *, limit: int | None = None) -> list[ChatMessage]:
-        rows = await self._select_many(
-            messages_table,
-            clauses=[messages_table.c.chatId == chat_id],
-            order_by=[messages_table.c.createdAt.asc()],
-            limit=limit,
-        )
-        return [ChatMessage(**row) for row in rows]
+        # Protocol pins TAIL semantics for limit (newest N, ascending) —
+        # select newest-first with the limit, then re-order ascending.
+        if limit is None:
+            rows = await self._select_many(
+                messages_table,
+                clauses=[messages_table.c.chatId == chat_id],
+                order_by=[messages_table.c.createdAt.asc()],
+            )
+        else:
+            rows = await self._select_many(
+                messages_table,
+                clauses=[messages_table.c.chatId == chat_id],
+                order_by=[messages_table.c.createdAt.desc()],
+                limit=limit,
+            )
+            rows.reverse()
+        return [ChatMessage(**_row_to_model(messages_table, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # Traces / spans / events
     # ------------------------------------------------------------------
 
     async def upsert_trace(self, trace: HarnessTrace) -> HarnessTrace:
-        await self._upsert(traces_table, "traceId", trace.traceId, _model_to_row(trace))
+        await self._upsert(traces_table, "traceId", trace.traceId, _model_to_row(trace, traces_table))
         return trace
 
     async def get_trace(self, trace_id: str) -> HarnessTrace | None:
         row = await self._get_one(traces_table, traces_table.c.traceId == trace_id)
-        return HarnessTrace(**row) if row else None
+        return HarnessTrace(**_row_to_model(traces_table, row)) if row else None
 
     async def append_spans(self, trace_id: str, spans: Iterable[TraceSpan]) -> None:
         rows = []
         for span in spans:
-            data = _model_to_row(span)
+            data = _model_to_row(span, spans_table)
             data["traceId"] = trace_id
             rows.append(data)
         if rows:
@@ -273,12 +342,12 @@ class SqlAlchemyStorage:
             clauses=[spans_table.c.traceId == trace_id],
             order_by=[spans_table.c.startMs.asc()],
         )
-        return [TraceSpan(**row) for row in rows]
+        return [TraceSpan(**_row_to_model(spans_table, row)) for row in rows]
 
     async def append_events(self, trace_id: str, events: Iterable[TraceEvent]) -> None:
         rows = []
         for event in events:
-            data = _model_to_row(event)
+            data = _model_to_row(event, events_table)
             data["traceId"] = trace_id
             rows.append(data)
         if rows:
@@ -290,7 +359,7 @@ class SqlAlchemyStorage:
             clauses=[events_table.c.traceId == trace_id],
             order_by=[events_table.c.sequence.asc()],
         )
-        return [TraceEvent(**row) for row in rows]
+        return [TraceEvent(**_row_to_model(events_table, row)) for row in rows]
 
     # ------------------------------------------------------------------
     # History record (Wave 1)

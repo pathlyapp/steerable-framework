@@ -102,6 +102,11 @@ class ApprovalRequest:
     calls sharing a category share a cached decision. It defaults to the tool
     name; hosts with parameterized risk (e.g. a shell tool) can pass a
     resolver that categorizes by command class instead.
+
+    ``call_id`` is the originating tool call's id, for approver channels that
+    correlate the prompt with the tool call in the UI (ACP
+    ``session/request_permission`` requires it). Empty for synthesized
+    requests.
     """
 
     tool_name: str
@@ -109,6 +114,7 @@ class ApprovalRequest:
     mode: ToolMode
     category: str
     round_index: int = 0
+    call_id: str = ""
 
 
 @runtime_checkable
@@ -239,6 +245,7 @@ def _default_resolver(call: ToolCall, ctx: LoopContext) -> ApprovalRequest:
         mode=decide_tool_mode(call.name),
         category=call.name,
         round_index=ctx.round_index,
+        call_id=call.id,
     )
 
 
