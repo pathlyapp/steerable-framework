@@ -793,7 +793,7 @@ async def test_named_source_skips_gzip_cap_without_gzip_pipeline(
         instruction=f"Write {src}. Keep it <2k.",
         named_outputs=(str(src),),
     )
-    src.write_bytes(bytes(range(256)) * 40)
+    src.write_text("int x = 1;\n" * 400, encoding="utf-8")
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "accept"
 
@@ -987,3 +987,102 @@ async def test_named_checker_skips_when_outputs_still_missing(tmp_path) -> None:
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.kind == "retry"
     assert action.reason == "missing_named_output"
+
+
+@pytest.mark.asyncio
+async def test_named_empty_file_retries(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_empty"
+    dest.write_text("payload\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_utf8_source_retries(tmp_path) -> None:
+    dest = tmp_path / "prog.c"
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest} under 5000 bytes",
+        named_outputs=(str(dest),),
+    )
+    dest.write_bytes(b"\xff\xfeint main(void) { return 0; }\n")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_utf8"
+    dest.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_python_syntax_retries(tmp_path) -> None:
+    dest = tmp_path / "solve.py"
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("def (\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_syntax"
+    dest.write_text("def main():\n    return 0\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_workspace_check_py_runs_without_being_named(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_text("stale\n", encoding="utf-8")
+    (tmp_path / "check.py").write_text(
+        "import sys\nprint('mismatch')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=f"Edit {dest} in place.",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_checker"
+    assert "check.py" in (action.message or "")
+    assert "mismatch" in (action.message or "")
+    (tmp_path / "check.py").write_text("print('ok')\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_eval_py_not_run_unless_instruction_names_it(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_text("ok\n", encoding="utf-8")
+    (tmp_path / "eval.py").write_text(
+        "import sys\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_does_not_run_required_check_py_as_checker(tmp_path) -> None:
+    dest = tmp_path / "check.py"
+    hooks = DeliveryHooks(
+        instruction=f"Write {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+

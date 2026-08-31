@@ -199,6 +199,7 @@ _JSON_BLANK_RETRY = (
     "Strip trailing newlines and empty replacements."
 )
 _CHECKER_NAME = re.compile(r"\b((?:check|eval)\.py)\b", re.IGNORECASE)
+_CHECKER_FILENAMES = ("check.py", "eval.py")
 _MAX_CHECKER_RUNS = 2
 _CHECKER_TIMEOUT_SEC = 60
 _CHECKER_FAIL = (
@@ -210,9 +211,22 @@ _CHECKER_TIMEOUT = (
     "local check before stopping."
 )
 _CHECKER_RETRY = (
-    "A helper script named in the instruction ({name}) exists on disk. "
-    "Run it now (python3 {name}) against the named outputs and fix "
-    "failures before stopping."
+    "A helper script ({name}) exists on disk. Run it now (python3 {name}) "
+    "against the named outputs and fix failures before stopping."
+)
+# Mechanical checks on named artifacts. Not hidden-test answer matching.
+_MAX_VALIDATE_RETRIES = 4
+_SYNTAX_TIMEOUT_SEC = 20
+_EMPTY_RETRY = (
+    "{path} is empty. Write the real artifact at this path; an empty "
+    "file will fail the tests that read it."
+)
+_UTF8_RETRY = (
+    "{path} is not valid UTF-8. Rewrite it as UTF-8; compilers decode "
+    "named sources as text."
+)
+_SYNTAX_RETRY = (
+    "{path} does not parse:\n{output}"
 )
 
 
@@ -251,6 +265,7 @@ class DeliveryHooks(NoopHooks):
         self._bytes_retries = 0
         self._json_retries = 0
         self._check_retries = 0
+        self._validate_retries = 0
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
@@ -290,6 +305,18 @@ class DeliveryHooks(NoopHooks):
             for p in self._required
             if "." in Path(p).name and not Path(p).exists()
         )
+
+    def _output_files(self) -> tuple[str, ...]:
+        """Named artifacts to validate: created this turn, else in-place edits."""
+        created = tuple(p for p in self._required if Path(p).is_file())
+        if created:
+            return created
+        return tuple(p for p in self._named if Path(p).is_file())
+
+    def _veto_validate(self, message: str, reason: str) -> CompletionAction:
+        self._validate_retries += 1
+        self._force_tool = True
+        return CompletionAction(kind="retry", message=message, reason=reason)
 
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: LoopContext
@@ -399,10 +426,10 @@ class DeliveryHooks(NoopHooks):
         """Veto a turn whose named BMP/PNG disagrees with source RESX/RESY."""
         if self._size_retries >= _MAX_SIZE_RETRIES:
             return None
-        wants = source_resolutions(self._instruction, self._required)
+        wants = source_resolutions(self._instruction, self._named)
         if not wants:
             return None
-        for path in self._required:
+        for path in self._output_files():
             suffix = Path(path).suffix.lower()
             if suffix not in _IMAGE_SUFFIXES or not Path(path).is_file():
                 continue
@@ -443,7 +470,7 @@ class DeliveryHooks(NoopHooks):
         cap = int(match.group(1))
         if cap < 1:
             return None
-        for path in self._required:
+        for path in self._output_files():
             suffix = Path(path).suffix.lower()
             if suffix not in _SOURCE_SUFFIXES or not Path(path).is_file():
                 continue
@@ -473,7 +500,7 @@ class DeliveryHooks(NoopHooks):
         cap = cap_mb * 1024 * 1024
         if cap < 1:
             return None
-        for path in self._required:
+        for path in self._output_files():
             if not Path(path).is_file():
                 continue
             try:
@@ -497,7 +524,7 @@ class DeliveryHooks(NoopHooks):
             return None
         if not _ASKS_SHOWN_TEXT.search(self._instruction or ""):
             return None
-        for path in self._required:
+        for path in self._output_files():
             if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
                 continue
             try:
@@ -528,7 +555,7 @@ class DeliveryHooks(NoopHooks):
         cap = int(match.group(1)) * 1000
         if cap < 1:
             return None
-        for path in self._required:
+        for path in self._output_files():
             suffix = Path(path).suffix.lower()
             if suffix not in _SOURCE_SUFFIXES or not Path(path).is_file():
                 continue
@@ -554,7 +581,7 @@ class DeliveryHooks(NoopHooks):
             return None
         if not _SPLIT_NEWLINES.search(self._instruction or ""):
             return None
-        for path in self._required:
+        for path in self._output_files():
             if Path(path).suffix.lower() != ".json" or not Path(path).is_file():
                 continue
             try:
@@ -572,20 +599,102 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
-    def _named_checker_retry(self) -> CompletionAction | None:
-        """Run an instruction-named check.py/eval.py; veto a non-zero exit."""
-        if self._check_retries >= _MAX_CHECKER_RUNS or not self._required:
+    def _named_artifact_retry(self) -> CompletionAction | None:
+        """Veto empty, non-UTF-8, or unparseable named artifacts."""
+        if self._validate_retries >= _MAX_VALIDATE_RETRIES:
             return None
-        match = _CHECKER_NAME.search(self._instruction or "")
-        if not match:
+        required = set(self._required)
+        for path in self._output_files():
+            file = Path(path)
+            try:
+                size = file.stat().st_size
+            except OSError:
+                continue
+            if size == 0:
+                return self._veto_validate(
+                    _EMPTY_RETRY.format(path=path), "named_empty"
+                )
+            suffix = file.suffix.lower()
+            if suffix in _SOURCE_SUFFIXES:
+                try:
+                    file.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    return self._veto_validate(
+                        _UTF8_RETRY.format(path=path), "named_utf8"
+                    )
+                except OSError:
+                    continue
+            if (
+                suffix == ".py"
+                and file.name.lower() not in _CHECKER_FILENAMES
+            ):
+                fail = _syntax_check_python(file)
+                if fail:
+                    return self._veto_validate(
+                        _SYNTAX_RETRY.format(path=path, output=fail),
+                        "named_syntax",
+                    )
+            if suffix == ".js" and path in required:
+                fail = _syntax_check_js(file)
+                if fail:
+                    return self._veto_validate(
+                        _SYNTAX_RETRY.format(path=path, output=fail),
+                        "named_syntax",
+                    )
+        return None
+
+    def _workspace_checkers(self) -> list[Path]:
+        """Agent-visible check.py, plus instruction-named eval.py.
+
+        Skip helpers the agent still has to write, and skip hidden ``/tests``.
+        """
+        names: list[str] = ["check.py"]
+        seen_names = {"check.py"}
+        for match in _CHECKER_NAME.finditer(self._instruction or ""):
+            name = match.group(1)
+            key = name.lower()
+            if key not in seen_names:
+                names.append(name)
+                seen_names.add(key)
+        required: set[Path] = set()
+        for path in self._required:
+            try:
+                required.add(Path(path).resolve())
+            except OSError:
+                required.add(Path(path))
+        roots = [Path("/app")]
+        for path in (*self._named, *self._required):
+            parent = Path(path).parent
+            if parent not in roots:
+                roots.append(parent)
+        found: list[Path] = []
+        seen: set[Path] = set()
+        for name in names:
+            for root in roots:
+                candidate = root / name
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    continue
+                if resolved in seen or not candidate.is_file():
+                    continue
+                if resolved in required:
+                    continue
+                posix = resolved.as_posix()
+                if posix == "/tests" or posix.startswith("/tests/"):
+                    continue
+                seen.add(resolved)
+                found.append(candidate)
+        return found
+
+    def _named_checker_retry(self) -> CompletionAction | None:
+        """Run workspace check.py / instruction-named eval.py; veto nonzero."""
+        if self._check_retries >= _MAX_CHECKER_RUNS:
             return None
         if any(not Path(path).exists() for path in self._required):
             return None
-        name = match.group(1)
-        candidates = [Path("/app") / name, Path(name)]
-        candidates.extend(Path(path).parent / name for path in self._required)
-        checker = next((path for path in candidates if path.is_file()), None)
-        if checker is None:
+        checkers = self._workspace_checkers()
+        if not checkers:
             return None
         python = shutil.which("python3") or shutil.which("python")
         if python is None:
@@ -593,23 +702,34 @@ class DeliveryHooks(NoopHooks):
             self._force_tool = True
             return CompletionAction(
                 kind="retry",
-                message=_CHECKER_RETRY.format(name=name),
+                message=_CHECKER_RETRY.format(name=checkers[0].name),
                 reason="named_checker",
             )
-        code, output = _run_instruction_checker(python, checker)
-        self._check_retries += 1
-        if code == 0:
-            return None
-        self._force_tool = True
-        if code is None:
-            message = _CHECKER_TIMEOUT.format(name=name, sec=_CHECKER_TIMEOUT_SEC)
-        else:
-            message = _CHECKER_FAIL.format(name=name, code=code, output=output)
-        return CompletionAction(
-            kind="retry",
-            message=message,
-            reason="named_checker",
-        )
+        for checker in checkers:
+            code, output = _run_cmd(
+                [python, str(checker)],
+                cwd=str(checker.parent),
+                timeout=_CHECKER_TIMEOUT_SEC,
+            )
+            if code == 0:
+                continue
+            self._check_retries += 1
+            self._force_tool = True
+            name = checker.name
+            if code is None:
+                message = _CHECKER_TIMEOUT.format(
+                    name=name, sec=_CHECKER_TIMEOUT_SEC
+                )
+            else:
+                message = _CHECKER_FAIL.format(
+                    name=name, code=code, output=output
+                )
+            return CompletionAction(
+                kind="retry",
+                message=message,
+                reason="named_checker",
+            )
+        return None
 
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
@@ -645,6 +765,9 @@ class DeliveryHooks(NoopHooks):
         shown_retry = self._named_shown_text_retry()
         if shown_retry is not None:
             return shown_retry
+        artifact_retry = self._named_artifact_retry()
+        if artifact_retry is not None:
+            return artifact_retry
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry
@@ -658,7 +781,7 @@ class DeliveryHooks(NoopHooks):
                 reason="empty_round",
             )
         if (
-            not self._required
+            not self._named
             and self.writes == 0
             and draft.tool_calls_used >= self._min_tools_for_completion_retry
             and self.completion_retries < 1
@@ -772,15 +895,17 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def _run_instruction_checker(python: str, checker: Path) -> tuple[int | None, str]:
+def _run_cmd(
+    argv: list[str], *, cwd: str | None = None, timeout: int
+) -> tuple[int | None, str]:
     """Return ``(exit_code, tail)``; ``exit_code is None`` on timeout."""
     try:
         completed = subprocess.run(
-            [python, str(checker)],
-            cwd=str(checker.parent),
+            argv,
+            cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=_CHECKER_TIMEOUT_SEC,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -790,6 +915,38 @@ def _run_instruction_checker(python: str, checker: Path) -> tuple[int | None, st
     blob = (completed.stderr or "") + (completed.stdout or "")
     tail = blob[-1500:] if blob else "(no output)"
     return completed.returncode, tail
+
+
+def _syntax_check_python(path: Path) -> str:
+    python = shutil.which("python3") or shutil.which("python")
+    if python is None:
+        return ""
+    code, output = _run_cmd(
+        [python, "-m", "py_compile", str(path)],
+        cwd=str(path.parent),
+        timeout=_SYNTAX_TIMEOUT_SEC,
+    )
+    if code == 0:
+        return ""
+    if code is None:
+        return f"py_compile timed out after {_SYNTAX_TIMEOUT_SEC}s"
+    return output or f"py_compile exited {code}"
+
+
+def _syntax_check_js(path: Path) -> str:
+    node = shutil.which("node")
+    if node is None:
+        return ""
+    code, output = _run_cmd(
+        [node, "--check", str(path)],
+        cwd=str(path.parent),
+        timeout=_SYNTAX_TIMEOUT_SEC,
+    )
+    if code == 0:
+        return ""
+    if code is None:
+        return f"node --check timed out after {_SYNTAX_TIMEOUT_SEC}s"
+    return output or f"node --check exited {code}"
 
 
 def _json_has_blank_split_row(value: object) -> bool:
