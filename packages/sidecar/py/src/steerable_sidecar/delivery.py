@@ -476,7 +476,7 @@ class DeliveryHooks(NoopHooks):
         )
 
     def wrap_up_may_drop_tools(self) -> bool:
-        if any(not _file_ready(p) for p in self._required):
+        if self._delivery_missing():
             return False
         # qemu-startup / install-windows name no scored files. If wrap-up
         # withholds tools, before_completion (telnet/listen, monitor
@@ -499,11 +499,22 @@ class DeliveryHooks(NoopHooks):
             return False
         return True
 
+    def _delivery_missing(self) -> tuple[str, ...]:
+        """Named paths still absent: created outputs must be non-empty;
+        instruction-named files that existed at start must still exist."""
+        required = set(self._required)
+        missing: list[str] = []
+        for path in self._named:
+            if path in required:
+                if not _file_ready(path):
+                    missing.append(path)
+            elif not Path(path).exists():
+                missing.append(path)
+        return tuple(missing)
+
     def _scored_missing(self) -> tuple[str, ...]:
         return tuple(
-            p
-            for p in self._required
-            if "." in Path(p).name and not _file_ready(p)
+            p for p in self._delivery_missing() if "." in Path(p).name
         )
 
     def _output_files(self) -> tuple[str, ...]:
@@ -528,7 +539,7 @@ class DeliveryHooks(NoopHooks):
             1 for m in transcript if _COMPACT_MARKER in (m.content_text or "")
         )
         new_compact = n_compacts > self._compact_nudges
-        missing = tuple(p for p in self._required if not _file_ready(p))
+        missing = self._delivery_missing()
         named_missing = bool(missing)
         wrapping = any(
             _WRAP_UP_MARKER in (m.content_text or "") for m in transcript
@@ -1186,9 +1197,7 @@ class DeliveryHooks(NoopHooks):
             ran = self._run_named_entrypoint(unready)
             if ran is not None:
                 return ran
-            missing = tuple(p for p in self._required if not Path(p).exists())
-        else:
-            missing = ()
+        missing = tuple(p for p in self._named if not Path(p).exists())
         if missing and self.completion_retries < _MAX_MISSING_NAMED_RETRIES:
             self.completion_retries += 1
             self._force_tool = True

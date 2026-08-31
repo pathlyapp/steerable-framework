@@ -1552,6 +1552,50 @@ def test_wrap_up_may_drop_tools_while_named_missing(tmp_path) -> None:
     assert bare.wrap_up_may_drop_tools() is True
 
 
+def test_wrap_up_keeps_tools_when_seeded_named_path_vanishes(tmp_path) -> None:
+    seeded = tmp_path / "seed.dat"
+    seeded.write_text("", encoding="utf-8")
+    hooks = DeliveryHooks(named_outputs=(str(seeded),))
+    assert hooks._delivery_missing() == ()
+    assert hooks.wrap_up_may_drop_tools() is True
+    seeded.unlink()
+    assert hooks._delivery_missing() == (str(seeded),)
+    assert hooks.wrap_up_may_drop_tools() is False
+
+
+@pytest.mark.asyncio
+async def test_missing_named_retries_when_seeded_file_vanishes(tmp_path) -> None:
+    seeded = tmp_path / "seed.dat"
+    seeded.write_text("keep\n", encoding="utf-8")
+    hooks = DeliveryHooks(named_outputs=(str(seeded),))
+    ctx = LoopContext()
+    first = await hooks.before_completion(_draft(tools=2), ctx)
+    assert first.kind == "accept"
+    seeded.unlink()
+    second = await hooks.before_completion(_draft(tools=2), ctx)
+    assert second.reason == "missing_named_output"
+    assert str(seeded) in (second.message or "")
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_named_when_seeded_file_vanishes(tmp_path) -> None:
+    dest = tmp_path / "seed.dat"
+    dest.write_text("ok\n", encoding="utf-8")
+    hooks = DeliveryHooks(named_outputs=(str(dest),))
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason != "wrap_up_named_output"
+    dest.unlink()
+    second = await hooks.pre_step(notice, LoopContext())
+    assert second.reason == "wrap_up_named_output"
+    assert str(dest) in (second.appends[0].message.content_text or "")
+
+
 def test_wrap_up_may_drop_tools_while_telnet_closed() -> None:
     port = _closed_tcp_port()
     hooks = DeliveryHooks(
