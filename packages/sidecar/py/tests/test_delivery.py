@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import socket
+import threading
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -1462,4 +1464,129 @@ async def test_named_gcc_entrypoint_writes_ppm(tmp_path) -> None:
     assert "P3" in ppm.read_text(encoding="utf-8")
     assert action.kind == "accept"
     assert hooks._entry_runs == 1
+
+
+def test_wrap_up_may_drop_tools_while_named_missing(tmp_path) -> None:
+    missing = tmp_path / "ars.R"
+    hooks = DeliveryHooks(named_outputs=(str(missing),))
+    assert hooks.wrap_up_may_drop_tools() is False
+    missing.write_text("ars <- function() {}\n", encoding="utf-8")
+    assert hooks.wrap_up_may_drop_tools() is True
+    bare = DeliveryHooks(instruction="Solve the puzzle.", named_outputs=())
+    assert bare.wrap_up_may_drop_tools() is True
+
+
+def _closed_tcp_port() -> int:
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    port = int(srv.getsockname()[1])
+    srv.close()
+    return port
+
+
+def _serve_once(payload: bytes | None) -> tuple[str, int]:
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    host, port = srv.getsockname()[:2]
+
+    def run() -> None:
+        conn, _ = srv.accept()
+        try:
+            if payload:
+                conn.sendall(payload)
+        finally:
+            conn.close()
+            srv.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return host, port
+
+
+@pytest.mark.asyncio
+async def test_telnet_retries_when_nothing_listens() -> None:
+    port = _closed_tcp_port()
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Connect with `telnet 127.0.0.1 {port}` and wait for a login prompt."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_listen"
+    assert f"telnet 127.0.0.1 {port}" in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_telnet_accepts_when_banner_has_login() -> None:
+    host, port = _serve_once(b"localhost login: ")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Connect with `telnet {host} {port}` and wait for a login prompt."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_telnet_retries_when_banner_is_empty() -> None:
+    host, port = _serve_once(b"")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Connect with `telnet {host} {port}` and wait for a login prompt."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_listen"
+
+
+@pytest.mark.asyncio
+async def test_nginx_port_retries_when_closed() -> None:
+    port = _closed_tcp_port()
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Set up a web interface (nginx) on port {port} for remote access."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_listen"
+    assert f"port {port}" in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_nginx_port_accepts_when_listening() -> None:
+    _host, port = _serve_once(b"")
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Set up a web interface (nginx) on port {port} for remote access."
+        ),
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_listen_skips_when_instruction_names_no_port() -> None:
+    hooks = DeliveryHooks(
+        instruction="Write a headless terminal emulator. No ports are named.",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+    assert action.reason is None
 

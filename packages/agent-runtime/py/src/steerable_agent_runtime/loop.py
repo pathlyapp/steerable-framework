@@ -256,8 +256,9 @@ class LoopConfig:
     #: still write those files. Chat stays False.
     wrap_up_keeps_tools: bool = False
     #: Extra act rounds after wrap-up when ``wrap_up_keeps_tools`` is set.
-    #: Then tools are withheld for a final text round. Keep this small so
-    #: Harbor's remaining wall clock can still kill the trial.
+    #: Then tools are withheld for a final text round unless
+    #: ``hooks.wrap_up_may_drop_tools()`` is False (named outputs still
+    #: missing). Keep the default small so Harbor can still kill the trial.
     wrap_up_max_tool_rounds: int = 4
     #: Per-tool and per-stream wall-clock while wrap-up is active. A 1-hour
     #: bash or another reasoning stream after the soft timeout otherwise
@@ -782,7 +783,12 @@ class CoreLoop:
                 return False
             if not self._config.wrap_up_keeps_tools:
                 return True
-            return wrap_up_tool_rounds_used >= self._config.wrap_up_max_tool_rounds
+            if wrap_up_tool_rounds_used < self._config.wrap_up_max_tool_rounds:
+                return False
+            drop = getattr(self._hooks, "wrap_up_may_drop_tools", None)
+            if callable(drop) and not drop():
+                return False
+            return True
 
         self.trajectory = []
 

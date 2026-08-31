@@ -217,6 +217,14 @@ class NoopHooks:
     ) -> CompletionAction:
         return CompletionAction(kind="accept")
 
+    def wrap_up_may_drop_tools(self) -> bool:
+        """False keeps offering tools after ``wrap_up_max_tool_rounds``.
+
+        DeliveryHooks returns False while instruction-named required files
+        are still missing so wrap-up cannot accept a text-only stop.
+        """
+        return True
+
 
 class ChainHooks:
     """Compose several hooks into one ``LoopHooks``.
@@ -232,6 +240,7 @@ class ChainHooks:
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
       says ``fail``, the first failure reason is surfaced.
     - ``before_completion``: the first non-``accept`` action wins.
+    - ``wrap_up_may_drop_tools``: False if any hook forbids dropping tools.
 
     This is how a product stacks e.g. compaction + spill + retry without the
     loop knowing about any of them.
@@ -314,3 +323,10 @@ class ChainHooks:
             if action.kind != "accept":
                 return action
         return CompletionAction(kind="accept")
+
+    def wrap_up_may_drop_tools(self) -> bool:
+        for hook in self._hooks:
+            drop = getattr(hook, "wrap_up_may_drop_tools", None)
+            if callable(drop) and not drop():
+                return False
+        return True

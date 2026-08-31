@@ -329,6 +329,56 @@ async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
     assert events[-1].data["status"] == "completed"
 
 
+class _KeepToolsPastCap(NoopHooks):
+    def wrap_up_may_drop_tools(self) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_keeps_tools_past_cap_when_hook_forbids_drop() -> None:
+    """ars.R: wrap-up talked until the cap, then tools were withheld."""
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("slow")]},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "", "tool_calls": [tc("write")]},
+            {"content": "files are on disk"},
+        ]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        executed.append("slow")
+        return "slept"
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(slow)
+    router.register(write)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=1,
+            tool_dedup=False,
+        ),
+        hooks=_KeepToolsPastCap(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    await collect(loop.run([LLMMessage.text_of("user", "go")], tools=schemas))
+    assert executed == ["slow", "write", "write"]
+    assert provider.tools_seen[2] == schemas
+
+
 def test_max_completion_redos_covers_delivery_empty_rounds() -> None:
     # DeliveryHooks retries empty_round 6 times then missing_named_output;
     # idle-stream cuts also go through before_completion.

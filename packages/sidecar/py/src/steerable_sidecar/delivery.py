@@ -11,6 +11,7 @@ import gzip
 import json
 import re
 import shutil
+import socket
 import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -282,6 +283,32 @@ _ENTRY_STILL_MISSING = (
 # Named ELF still missing and a Makefile is on disk (doomgeneric / MIPS).
 _MAX_MAKE_RUNS = 1
 _MAKE_TIMEOUT_SEC = 180
+# Instruction-named TCP services (qemu ``telnet 127.0.0.1 6665``, nginx
+# on port 80). Not a listen-port retry for tasks that name no ports.
+_TELNET_ADDR = re.compile(
+    r"\btelnet\s+(\d{1,3}(?:\.\d{1,3}){3}|localhost)\s+(\d{1,5})\b",
+    re.IGNORECASE,
+)
+_NGINX_PORT = re.compile(
+    r"\bnginx\b[^\n]{0,80}\bon port\s+(\d{1,5})\b",
+    re.IGNORECASE,
+)
+_LISTENING_PORT = re.compile(
+    r"\blistening on port\s+(\d{1,5})\b",
+    re.IGNORECASE,
+)
+_MAX_LISTEN_RETRIES = 4
+_TELNET_LOGIN = re.compile(br"login\s*:", re.IGNORECASE)
+_TELNET_RETRY = (
+    "The instruction names `telnet {host} {port}`. That connection did "
+    "not show a login prompt. Keep the VM running in the background "
+    "(-daemonize / nohup) and poll until the prompt is actually there; "
+    "do not stop on a proxy that accepts TCP but sends no console."
+)
+_LISTEN_RETRY = (
+    "The instruction names a service on port {port}. Nothing accepted a "
+    "TCP connection there. Start it in the background and leave it running."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -325,6 +352,7 @@ class DeliveryHooks(NoopHooks):
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
+        self._listen_retries = 0
 
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
         """Refuse inspect-only tools after named-output nudges are ignored.
@@ -360,6 +388,9 @@ class DeliveryHooks(NoopHooks):
             error=_INSPECT_BLOCKED.format(paths=listed),
             needsFollowup=True,
         )
+
+    def wrap_up_may_drop_tools(self) -> bool:
+        return not any(not _file_ready(p) for p in self._required)
 
     def _scored_missing(self) -> tuple[str, ...]:
         return tuple(
@@ -928,6 +959,32 @@ class DeliveryHooks(NoopHooks):
             return None
         return None
 
+    def _instruction_listen_retry(self) -> CompletionAction | None:
+        if self._listen_retries >= _MAX_LISTEN_RETRIES:
+            return None
+        for host, port, kind in _instruction_listen_targets(self._instruction):
+            if kind == "telnet":
+                banner = _tcp_banner(host, port, prompt=True)
+                if banner is not None and _TELNET_LOGIN.search(banner):
+                    continue
+                self._listen_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_TELNET_RETRY.format(host=host, port=port),
+                    reason="instruction_listen",
+                )
+            if _tcp_accepts(host, port):
+                continue
+            self._listen_retries += 1
+            self._force_tool = True
+            return CompletionAction(
+                kind="retry",
+                message=_LISTEN_RETRY.format(port=port),
+                reason="instruction_listen",
+            )
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -980,6 +1037,9 @@ class DeliveryHooks(NoopHooks):
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry
+        listen_retry = self._instruction_listen_retry()
+        if listen_retry is not None:
+            return listen_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
@@ -1396,6 +1456,66 @@ def _file_ready(path: str) -> bool:
         return file.is_file() and file.stat().st_size > 0
     except OSError:
         return False
+
+
+def _instruction_listen_targets(
+    instruction: str,
+) -> tuple[tuple[str, int, str], ...]:
+    """Instruction-named TCP checks: ``(host, port, telnet|listen)``."""
+    by_addr: dict[tuple[str, int], str] = {}
+    for match in _TELNET_ADDR.finditer(instruction or ""):
+        port = int(match.group(2))
+        if 1 <= port <= 65535:
+            by_addr[(match.group(1), port)] = "telnet"
+    for match in _NGINX_PORT.finditer(instruction or ""):
+        port = int(match.group(1))
+        addr = ("127.0.0.1", port)
+        if 1 <= port <= 65535 and addr not in by_addr:
+            by_addr[addr] = "listen"
+    for match in _LISTENING_PORT.finditer(instruction or ""):
+        port = int(match.group(1))
+        addr = ("127.0.0.1", port)
+        if 1 <= port <= 65535 and addr not in by_addr:
+            by_addr[addr] = "listen"
+    return tuple((host, port, kind) for (host, port), kind in by_addr.items())
+
+
+def _tcp_accepts(host: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _tcp_banner(
+    host: str, port: int, *, prompt: bool, timeout: float = 3.0
+) -> bytes | None:
+    """None if connect failed, else up to 1024 bytes (possibly empty)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            if prompt:
+                try:
+                    sock.sendall(b"\r\n")
+                except OSError:
+                    pass
+            chunks = b""
+            try:
+                while len(chunks) < 1024:
+                    data = sock.recv(256)
+                    if not data:
+                        break
+                    chunks += data
+                    if prompt and _TELNET_LOGIN.search(chunks):
+                        break
+            except TimeoutError:
+                pass
+            except socket.timeout:
+                pass
+            return chunks
+    except OSError:
+        return None
 
 
 def _bash_command(call: ToolCall) -> str:
