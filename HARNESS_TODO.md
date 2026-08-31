@@ -180,6 +180,15 @@ ACP 不同——它在开发者的真实机器上被编辑器拉起。**两处�
       （needs: eval, if: always）下载全部工件、按 job 目录重建、跑
       `evals.attribution` 生成 markdown 上传为 `attribution` 工件并写进步骤摘要。
       矩阵未引入 harness 维度前报告如实标注 n/a（harness 主效应需要 ≥2 个水平）。
+      **首次定时运行实盘审计（2026-08-31）**：归因 job 端到端跑通并上传
+      `attribution` 工件；但 steerable 腿 12/12 全 0——非代码回归
+      （同代码本地 arm A 0.833 / arm B 满分），是 CI 密钥配置缺口：
+      模型是 OpenRouter 的 `z-ai/glm-5.3-flash`，workflow 只给了
+      `OPENAI_API_KEY` 而没给 `OPENAI_BASE_URL`，agent 打到默认 OpenAI
+      端点快速失败（~50s/trial、无 token 计量）。已在 workflow 补上
+      `OPENAI_BASE_URL` secret 引用；**待办：仓库 secrets 需配置
+      OpenRouter 可用的 OPENAI_API_KEY + OPENAI_BASE_URL=
+      https://openrouter.ai/api/v1**，否则每周信号恒为结构零。
 
 ### 1.4 评测 agent 工具面补齐（1.1.2 中 ToolSelector 与 Orchestration 两行的首次兑现）
 
