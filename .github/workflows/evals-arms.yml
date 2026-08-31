@@ -1,0 +1,127 @@
+name: Evals harness arms
+
+# Factorial harness arms (HARNESS_TODO W1.4.3 / W1.5.3). Dispatch-only:
+# scoring costs money, so nothing here runs on a schedule.
+#
+#   bc: cheap-12 × {b: default, c: subagent}  — orchestration dimension
+#   de: interactive-3 × {d: minimal, e: default} — session-tools dimension
+#       (qemu-alpine-ssh / install-windows-3.11 / headless-terminal,
+#        task set pre-registered and frozen 2026-08-31 in HARNESS_TODO 1.5.3)
+#
+# Requires repo secrets: an OpenRouter-capable OPENAI_API_KEY and
+# OPENAI_BASE_URL=https://openrouter.ai/api/v1 — without them every trial
+# scores a structural zero (see HARNESS_TODO 1.3.4 audit note).
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm_set:
+        description: "bc = cheap-12 orchestration arms; de = interactive-3 session-tool arms"
+        required: true
+        type: choice
+        options: [bc, de]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-arms-${{ inputs.arm_set }}
+  cancel-in-progress: false
+
+jobs:
+  arm:
+    name: arm ${{ matrix.arm.letter }} (${{ matrix.arm.harness }})
+    runs-on: ubuntu-latest
+    # cheap-12 arm measured ~4h wall clock locally; hosted runners have KVM
+    # so the QEMU arms are faster than arm64 TCG despite the 5x ceiling.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: ${{ fromJSON(inputs.arm_set == 'bc'
+          && '[{"letter":"b","harness":"default"},{"letter":"c","harness":"subagent"}]'
+          || '[{"letter":"d","harness":"minimal"},{"letter":"e","harness":"default"}]') }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor arm
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+        run: |
+          set +e
+          if [ "${{ inputs.arm_set }}" = "bc" ]; then
+            uv run python -m evals.run --agent steerable \
+              --harness "${{ matrix.arm.harness }}" --split cheap-12 \
+              --jobs-dir "evals/jobs/steerable-arm-${{ matrix.arm.letter }}" \
+              --skip-missing-env \
+              --agent-setup-timeout-multiplier 3 \
+              --environment-build-timeout-multiplier 3 \
+              --agent-timeout-multiplier 3
+          else
+            uv run python -m evals.run --agent steerable \
+              --harness "${{ matrix.arm.harness }}" \
+              --tasks qemu-alpine-ssh install-windows-3.11 headless-terminal \
+              --jobs-dir "evals/jobs/steerable-arm-${{ matrix.arm.letter }}" \
+              --skip-missing-env \
+              --agent-setup-timeout-multiplier 3 \
+              --environment-build-timeout-multiplier 3 \
+              --agent-timeout-multiplier 5
+          fi
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "skipped (missing model credentials)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: arm-${{ matrix.arm.letter }}
+          path: |
+            evals/jobs/steerable-arm-${{ matrix.arm.letter }}/**/result.json
+            evals/jobs/steerable-arm-${{ matrix.arm.letter }}/**/config.json
+          if-no-files-found: ignore
+
+  attribution:
+    name: Arm attribution report
+    needs: [arm]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arm-*
+          path: artifacts
+      # Same contract as evals-weekly's attribution job, but the harness
+      # label comes from the jobs-dir name (steerable-arm-<letter>).
+      - name: Build attribution report
+        run: |
+          set -e
+          args=()
+          while IFS= read -r cfg; do
+            if grep -q '"agents"' "$cfg"; then
+              job_dir=$(dirname "$cfg")
+              label=$(basename "$(dirname "$job_dir")" | sed 's/^steerable-arm-//')
+              args+=(--job "$label=$job_dir")
+            fi
+          done < <(find artifacts -path "*jobs/*" -name config.json | sort)
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "no scored job dirs in artifacts; skipping report"
+            exit 0
+          fi
+          uv run python -m evals.attribution "${args[@]}" --out attribution.md
+          cat attribution.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: attribution-${{ inputs.arm_set }}
+          path: attribution.md
+          if-no-files-found: ignore

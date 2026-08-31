@@ -257,12 +257,20 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
 **这一小节写在动手之前，文件本身即预注册产物。** 跑完再挑指标或挑题集是自毁信誉，
 而且我们刚在 R10 里引用了批评这种做法的论文。
 
-- [ ] **1.4.3.1** 三个 arm，同模型、同题集、同轮次上限、同随机种子：
+- [~] **1.4.3.1** 三个 arm，同模型、同题集、同轮次上限、同随机种子：
       | arm | ToolSelector | Orchestration |
       | --- | --- | --- |
       | A（基线，现状） | `MinimalToolset`（4 工具） | `SingleAgent` |
       | B | `FullToolset`（+ grep/glob/apply_patch） | `SingleAgent` |
       | C | `FullToolset` | `SubAgentDelegation` |
+      **运行场所决策（2026-08-31，用户指示）**：cheap-12 不在本地跑，
+      走 GHA——新增 `evals-arms.yml`（workflow_dispatch，`arm_set=bc`
+      矩阵 arm b=default / c=subagent，jobs-dir 用登记的
+      `steerable-arm-{b,c}`，跑完自动出归因工件）。本地 arm B 已停
+      （停前 6/12 全 1.0，仅作非正式信号）；正式数字以 GHA 为准。
+      **前置条件**：仓库 secrets 需配 OpenRouter 可用的
+      `OPENAI_API_KEY` + `OPENAI_BASE_URL`（见 1.3.4 审计注记），
+      否则 GHA 上全是结构零分。
 - [x] **1.4.3.2** 题集固定为 cheap-12（避开 QEMU/GPU/视频/长编译），**跑之前**写死在
       本文件里；结果出来后不得增删题目。
       已登记：cheap-12 十二题（suite.yaml splits），arm A/B/C 全部锁死
@@ -346,6 +354,10 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       `run.py --agent steerable --harness minimal --tasks qemu-alpine-ssh
       install-windows-3.11 headless-terminal --jobs-dir evals/jobs/steerable-arm-d`
       与同参 `--harness default …/steerable-arm-e`。
+      **运行场所（2026-08-31，用户指示）**：与 bc 同走 GHA——
+      `evals-arms.yml` 的 `arm_set=de`（矩阵 d=minimal / e=default，
+      jobs-dir 即登记的 arm-d/arm-e，5× 超时上限保留作安全余量；
+      GHA x86 有 KVM，实际应远快于本地 arm64 TCG）。
       **环境预构建（2026-08-31）**：两个 QEMU 题环境已在后台预建
       （`steerable-qemu-alpine-ssh-probe` / `steerable-win311-probe`），
       消除跑分时构建超时风险；三题名均已在 Harbor 任务缓存核验存在。
