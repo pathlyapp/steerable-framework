@@ -140,6 +140,30 @@ def test_openai_parse_stream_chunk_usage_only() -> None:
     assert parsed.usage.total_tokens == 19
 
 
+def test_openai_parse_stream_chunk_usage_on_final_choices_chunk() -> None:
+    """OpenRouter attaches usage to a final chunk that still carries a
+    choices array (a duplicate finish marker), not the OpenAI-style
+    choices:[] usage chunk. Live-verified 2026-08-31: z-ai/glm-5.3-flash via
+    OpenRouter; dropping it left the loop's token accounting at zero."""
+    chunk = {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "", "role": "assistant"},
+                "finish_reason": "length",
+                "native_finish_reason": "length",
+            }
+        ],
+        "usage": {"prompt_tokens": 14, "completion_tokens": 8, "total_tokens": 22},
+    }
+    parsed = _parse_stream_chunk(chunk)
+    assert parsed is not None
+    assert parsed.usage is not None
+    assert parsed.usage.prompt_tokens == 14
+    assert parsed.usage.completion_tokens == 8
+    assert parsed.finish_reason == "length"
+
+
 def test_openai_stream_requests_usage_chunk() -> None:
     """Streaming must ask for the final usage chunk — without it budget
     accounting (loop consumes chunk.usage) and usage calibration are blind."""

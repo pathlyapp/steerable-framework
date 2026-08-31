@@ -510,11 +510,19 @@ def _parse_stream_chunk(
             name=_sanitize_tool_name(function.get("name") or ""),
             arguments=arguments,
         )
+    # OpenRouter (and some other gateways) attach the usage object to a
+    # final chunk that still carries a choices array — a duplicate finish
+    # marker — instead of sending the OpenAI-style choices:[] usage chunk.
+    # Parse it here too or the loop's token/cost accounting stays blind on
+    # that wire (live-verified 2026-08-31: z-ai/glm-5.3-flash via OpenRouter
+    # delivered usage exactly this way and scored zeros).
+    usage = chunk.get("usage")
     return LLMStreamChunk(
         content_delta=content,
         reasoning_delta=reasoning,
         tool_call_delta=tool_call_delta,
         finish_reason=finish_reason,
+        usage=_parse_usage(usage, compat=flags) if usage else None,
         raw=chunk,
     )
 
