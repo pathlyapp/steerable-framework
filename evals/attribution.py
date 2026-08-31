@@ -29,6 +29,27 @@ from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
+class TrialMetrics:
+    """Efficiency metrics for one trial (W1.4.3.3's cost-normalized axis).
+
+    Every field is optional: arms A–C predate the run-summary line, so
+    only ``rounds`` (counted from the headless log's ``[tool`` markers)
+    is available for them. Runs whose headless emits a
+    ``STEERABLE_RUN_SUMMARY {json}`` final line carry the full set.
+    Missing data renders as n/a — never zero-filled, because an absent
+    measurement is not a measurement of zero.
+    """
+
+    rounds: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    peak_context_tokens: int | None = None
+    tool_errors: int | None = None
+    tool_recoveries: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class JobResult:
     """One job dir projected to its factor labels and per-task scores."""
 
@@ -37,12 +58,27 @@ class JobResult:
     model: str
     harness: str
     scores: dict[str, float]
+    metrics: dict[str, TrialMetrics]
+
+
+@dataclass(frozen=True, slots=True)
+class HarnessEfficiency:
+    """Per-harness cost-axis aggregates (W1.4.3.3). Each field is None
+    when no trial in the harness carried that measurement."""
+
+    mean_rounds: float | None
+    mean_tokens: float | None
+    mean_cost_usd: float | None
+    mean_peak_context: float | None
+    tool_error_rate: float | None
+    recovery_rate: float | None
 
 
 @dataclass(frozen=True, slots=True)
 class AttributionReport:
     harness_means: dict[str, float]
     model_means: dict[str, float]
+    efficiency: dict[str, HarnessEfficiency]
     #: Range (max − min) of per-harness mean scores within each model,
     #: averaged over models that ran ≥2 harnesses.
     harness_effect: float | None
@@ -73,6 +109,7 @@ def load_job(path: Path, *, harness: str) -> JobResult:
         raise ValueError(f"{path}: config.json missing agent name/model_name")
 
     scores: dict[str, float] = {}
+    metrics: dict[str, TrialMetrics] = {}
     for trial_dir in sorted(p for p in path.iterdir() if p.is_dir()):
         result_path = trial_dir / "result.json"
         if not result_path.exists():
@@ -83,10 +120,61 @@ def load_job(path: Path, *, harness: str) -> JobResult:
         if reward is None:
             continue  # verifier never scored (agent error) — not a zero
         scores[result["task_name"]] = float(reward)
+        metrics[result["task_name"]] = _trial_metrics(trial_dir)
     if not scores:
         raise ValueError(f"{path}: no scored trials")
     return JobResult(
-        label=path.name, agent=agent, model=model, harness=harness, scores=scores
+        label=path.name,
+        agent=agent,
+        model=model,
+        harness=harness,
+        scores=scores,
+        metrics=metrics,
+    )
+
+
+#: Final-line contract between headless.py and this report. headless prints
+#: ``STEERABLE_RUN_SUMMARY {json}`` at run end; anything earlier in the log
+#: is model output and must not be parsed as telemetry.
+RUN_SUMMARY_PREFIX = "STEERABLE_RUN_SUMMARY "
+
+
+def _trial_metrics(trial_dir: Path) -> TrialMetrics:
+    """Extract efficiency metrics from a trial's agent log.
+
+    Rounds are approximated by counting ``[tool`` markers in headless.log
+    (one per tool call; the loop makes at most one round's worth of calls
+    per step). The summary line, when present, overrides with exact values.
+    """
+    log_path = trial_dir / "agent" / "headless.log"
+    if not log_path.exists():
+        return TrialMetrics()
+    rounds = 0
+    summary: dict[str, object] | None = None
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("[tool "):
+            rounds += 1
+        elif line.startswith(RUN_SUMMARY_PREFIX):
+            try:
+                summary = json.loads(line[len(RUN_SUMMARY_PREFIX):])
+            except json.JSONDecodeError:
+                continue  # a truncated final line loses telemetry, not the score
+    if summary is None:
+        return TrialMetrics(rounds=rounds or None)
+
+    def integer(key: str) -> int | None:
+        value = summary.get(key)
+        return value if isinstance(value, int) else None
+
+    cost = summary.get("cost_usd")
+    return TrialMetrics(
+        rounds=integer("rounds") or (rounds or None),
+        input_tokens=integer("input_tokens"),
+        output_tokens=integer("output_tokens"),
+        cost_usd=cost if isinstance(cost, (int, float)) else None,
+        peak_context_tokens=integer("peak_context_tokens"),
+        tool_errors=integer("tool_errors"),
+        tool_recoveries=integer("tool_recoveries"),
     )
 
 
@@ -128,15 +216,64 @@ def attribute(jobs: list[JobResult]) -> AttributionReport:
         else None
     )
     reversals = _rank_reversals(jobs, shared)
+    efficiency = {
+        harness: _efficiency([j for j in jobs if j.harness == harness], shared)
+        for harness in dict.fromkeys(j.harness for j in jobs)
+    }
     return AttributionReport(
         harness_means=harness_means,
         model_means=model_means,
+        efficiency=efficiency,
         harness_effect=harness_effect,
         model_effect=model_effect,
         effect_ratio=ratio,
         rank_reversals=reversals,
         n_tasks=len(shared),
         n_jobs=len(jobs),
+    )
+
+
+def _efficiency(jobs: list[JobResult], shared: set[str]) -> HarnessEfficiency:
+    """Aggregate the cost axis over one harness's jobs on the shared tasks."""
+    trials = [j.metrics[t] for j in jobs for t in shared if t in j.metrics]
+
+    def mean_of(field: str) -> float | None:
+        values = [getattr(m, field) for m in trials]
+        present = [v for v in values if v is not None]
+        if not present or len(present) < len(values):
+            # Partial data would silently bias the mean toward tasks that
+            # happened to report — report nothing instead.
+            return None
+        return sum(present) / len(present)
+
+    mean_rounds = mean_of("rounds")
+    input_tokens = [m.input_tokens for m in trials]
+    output_tokens = [m.output_tokens for m in trials]
+    mean_tokens = (
+        sum(i + o for i, o in zip(input_tokens, output_tokens)) / len(trials)
+        if trials and all(v is not None for v in (*input_tokens, *output_tokens))
+        else None
+    )
+    errors = [m.tool_errors for m in trials]
+    recoveries = [m.tool_recoveries for m in trials]
+    rounds = [m.rounds for m in trials]
+    tool_error_rate = (
+        sum(errors) / sum(rounds)  # type: ignore[operator]
+        if trials and all(v is not None for v in (*errors, *rounds)) and sum(rounds)  # type: ignore[arg-type]
+        else None
+    )
+    recovery_rate = (
+        sum(recoveries) / sum(errors)  # type: ignore[operator]
+        if trials and all(v is not None for v in (*recoveries, *errors)) and sum(errors)  # type: ignore[arg-type]
+        else None
+    )
+    return HarnessEfficiency(
+        mean_rounds=mean_rounds,
+        mean_tokens=mean_tokens,
+        mean_cost_usd=mean_of("cost_usd"),
+        mean_peak_context=mean_of("peak_context_tokens"),
+        tool_error_rate=tool_error_rate,
+        recovery_rate=recovery_rate,
     )
 
 
@@ -215,7 +352,23 @@ def render_markdown(report: AttributionReport) -> str:
         f"- harness/model effect ratio: {report.effect_ratio:.2f}" if report.effect_ratio is not None else "- harness/model effect ratio: n/a",
         f"- model rank reversals across harnesses: {report.rank_reversals}",
         "",
+        "## Efficiency (cost-normalized axis, W1.4.3.3)",
+        "",
+        "| harness | mean rounds | mean tokens | mean cost | peak ctx | tool err | recovery |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
+
+    def num(value: float | None, digits: int = 1) -> str:
+        return "n/a" if value is None else f"{value:.{digits}f}"
+
+    for harness, eff in report.efficiency.items():
+        lines.append(
+            f"| `{harness}` | {num(eff.mean_rounds)} | {num(eff.mean_tokens, 0)} "
+            f"| {('n/a' if eff.mean_cost_usd is None else f'${eff.mean_cost_usd:.4f}')} "
+            f"| {num(eff.mean_peak_context, 0)} | {pct(eff.tool_error_rate)} "
+            f"| {pct(eff.recovery_rate)} |"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
