@@ -143,9 +143,14 @@ ACP 不同——它在开发者的真实机器上被编辑器拉起。**两处�
 - [~] **1.2.4** 现有默认装配等价迁移为一份 `default.harness.yaml`，
       迁移前后行为逐测试比对，证明这一步是纯重构。
       spec 文件已入库（pressure_compaction+spill / informed_backtrack+simple /
-      null / full / stateless / single），等价性测试已验证三种核心行为
-      （压力压缩、溢出回退、瞬态退避）。sidecar 工厂的实际切换待 arm A 基线
-      完成后进行（改既有文件）。
+      null / full / stateless / single + loop 节），等价性测试已验证三种核心行为
+      （压力压缩、溢出回退、瞬态退避），headless `--harness` 路径已按 spec 装配
+      （W1.2.2），`test_headless.py` 验证默认 spec 可作外部 spec 加载。
+      **剩余**：sidecar 聊天路径（`_default_loop_hooks`）仍手工装配——
+      切换需先解决 sidecar 特有关注点（AntiHallucinationHooks 开关、
+      toolsViaHost 的 HostToolExecutor、execSandbox 包装、审批层）与
+      spec 维度的分层关系，且 sidecar.py 在评测上传路径上，
+      待 arm B/C 跑完后进行。
 
 ### 1.3 评测台升级为因子设计
 
@@ -245,12 +250,18 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       | A（基线，现状） | `MinimalToolset`（4 工具） | `SingleAgent` |
       | B | `FullToolset`（+ grep/glob/apply_patch） | `SingleAgent` |
       | C | `FullToolset` | `SubAgentDelegation` |
-- [ ] **1.4.3.2** 题集固定为 cheap-12（避开 QEMU/GPU/视频/长编译），**跑之前**写死在
+- [x] **1.4.3.2** 题集固定为 cheap-12（避开 QEMU/GPU/视频/长编译），**跑之前**写死在
       本文件里；结果出来后不得增删题目。
-- [ ] **1.4.3.3** 指标同样预先定死：pass@1、平均轮次、平均 token、峰值上下文占用、
+      已登记：cheap-12 十二题（suite.yaml splits），arm A/B/C 全部锁死
+      `openai/z-ai/glm-5.3-flash`（已比对 arm A/B config.json 一致）、
+      轮次上限 80（A 为当时硬编码默认，B/C 由 spec loop 节钉住同值）、
+      解码参数一致（STEERABLE_REASONING_EFFORT=low 由 harbor_steerable 统一注入）。
+- [x] **1.4.3.3** 指标同样预先定死：pass@1、平均轮次、平均 token、峰值上下文占用、
       工具错误率、恢复率（工具失败后成功恢复的比例）、单题成本。
       **不只报 pass@1**——精简 harness 在成本归一化口径上有结构性优势，
       而 Harness-Bench 的口径本就包含 token 成本。
+      已登记（上文七项）；归因报告由 `evals/attribution.py` 实现（1.3.3），
+      轮次/token/峰值上下文从 trial 的 trace 与 result.json 取。
 - [x] **1.4.3.4** arm A 必须在动任何代码之前先跑，否则没有基线。
       **已跑完**（2026-08-31，`evals/jobs/steerable-arm-a/2026-08-31__11-14-23`）：
       12/12 完成、0 错误、**mean 0.833**。满分 10 题；零分两题：
@@ -643,12 +654,14 @@ dsh 与 pi 同为 TypeScript 才成立。字面照抄要求我们跑 Node sideca
 
 ### 5.2 解析改为精确匹配优先（本章的核心）
 
-- [~] **5.2.1** `resolve_model_info` 三级解析：精确 id → provider 限定 id → 前缀回退。
-      **解析器已实现**（`model_resolve.py`，新文件不在评测路径）：精确 →
+- [x] **5.2.1** `resolve_model_info` 三级解析：精确 id → provider 限定 id → 前缀回退。
+      **解析器已实现并完成接线**（`model_resolve.py`）：精确 →
       同 provider 末段匹配（网关场景：openrouter + `glm-5.3-flash` →
       `openrouter/z-ai/glm-5.3-flash`）→ **同 provider** 最长前缀
       （跨 provider 前缀会认领别家部署的上下文窗，已禁）。7 项测试全绿。
-      `model_info.py` 改为委托调用待 arm A。
+      `model_info.py` 已改为委托调用（自定义覆盖 → 目录 → 旧前缀表 →
+      保守默认），`resolve_context_window` 透传 provider/base_url，
+      sidecar 与 ACP 两路径都已接上。
 - [x] **5.2.2** 保留 `register_model_info` 运行时覆盖（`model_info.py:94`），
       部署仍可描述 fine-tune 或刚发布的模型而无需发版。已验证：
       `test_custom_override_still_wins_over_catalog`——自定义条目压目录精确命中。
