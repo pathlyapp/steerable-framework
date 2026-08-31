@@ -127,9 +127,13 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
-# Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). Sixteen retries still let
-# dna-assembly / steal.py / regex-chess stop after a text-only summary.
-_MAX_MISSING_NAMED_RETRIES = 16
+# Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). A lower cap accepted a
+# text-only stop while primers.fasta / steal.py / out.txt were still
+# missing, with wrap-up and idle-stream cuts still unused.
+_MAX_MISSING_NAMED_RETRIES = 32
+# Explore nudges stay bounded separately so inspect-gate (2 ignored
+# nudges) is not delayed by the completion-redo budget.
+_MAX_NAMED_EXPLORE_NUDGES = 16
 # Z.AI coerces tool_choice=required to auto, so nudges are user text only.
 # After this many ignored explore nudges, refuse inspect-only tools so
 # Harbor's 180 min wait_for cannot be spent on bash/read_file while
@@ -391,7 +395,7 @@ class DeliveryHooks(NoopHooks):
                 append_action="delivery_nudge",
             )
         nudge_limit = (
-            _MAX_MISSING_NAMED_RETRIES if named_missing else self._max_nudges
+            _MAX_NAMED_EXPLORE_NUDGES if named_missing else self._max_nudges
         )
         explore_gate = self._explore_before_nudge
         if named_missing and explore_gate > _EXPLORE_BEFORE_NUDGE_NAMED:

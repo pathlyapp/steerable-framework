@@ -538,6 +538,19 @@ async def test_missing_named_output_retries_past_old_eight_cap(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_missing_named_output_retries_match_completion_redos(tmp_path) -> None:
+    target = tmp_path / "primers.fasta"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    for i in range(32):
+        action = await hooks.before_completion(_draft(tools=2), ctx)
+        assert action.kind == "retry", i
+        assert action.reason == "missing_named_output"
+    done = await hooks.before_completion(_draft(tools=2), ctx)
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
 async def test_no_write_forces_tool_choice_until_first_write() -> None:
     hooks = DeliveryHooks()
     ctx = LoopContext()

@@ -209,7 +209,7 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wrap_up_max_tool_rounds=16" in src
     assert "wrap_up_tool_timeout_ms=120_000" in src
     assert "wrap_up_hard_cap_ms=10_500_000" in src
-    assert "idle_stream_timeout_ms=1_200_000" in src
+    assert "idle_stream_timeout_ms=600_000" in src
     assert "DeliveryGatedExecutor" in src
     hooks_src = src[src.index("ChainHooks") :]
     assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")

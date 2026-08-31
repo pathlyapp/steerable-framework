@@ -261,10 +261,10 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             wrap_up_tool_timeout_ms=120_000,
             wrap_up_hard_cap_ms=10_500_000,
             # dna-assembly / steal.py: hours of reasoning after the first
-            # inspect, zero writes. 20 min of *active* tokens (GLM 48 min
+            # inspect, zero writes. 10 min of *active* tokens (GLM 48 min
             # SSE gaps do not count) cuts the stream so delivery can name
             # the missing file. Does not wrap-up.
-            idle_stream_timeout_ms=1_200_000,
+            idle_stream_timeout_ms=600_000,
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the
