@@ -466,6 +466,22 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "/app/demo_metadata.csv"
     )
     assert "/app/convert_masks.py" in named
+    eval_scm = named_output_paths(
+        "Write a file eval.scm that is a metacircular evaluator. "
+        "Run `python3 interp.py eval.scm`."
+    )
+    assert "/app/eval.scm" in eval_scm
+    warrior = named_output_paths(
+        "Write your program to `my_warrior.red`. Do not modify files in "
+        "`warriors/`."
+    )
+    assert "/app/my_warrior.red" in warrior
+    cli = named_output_paths(
+        'The tool should be a binary executable called "cli_tool" and a '
+        'file called "prediction.txt".'
+    )
+    assert "/app/cli_tool" in cli
+    assert "/app/prediction.txt" in cli
     gcode = named_output_paths(
         "When I run the print, what will the text show? Write the output "
         "to /app/out.txt"

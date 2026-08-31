@@ -108,7 +108,7 @@ _CALLED_WITH_EXT = re.compile(
     r"\bcalled\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]?"
 )
 _FILE_CALLED = re.compile(
-    r"\b(?:file|program|script|binary|elf)\s+called\s+"
+    r"\b(?:file|program|script|binary|elf|executable)(?:\s+\w+){0,2}\s+called\s+"
     r"[`'\"]?([A-Za-z][A-Za-z0-9._-]*)[`'\"]?",
     re.IGNORECASE,
 )
@@ -121,6 +121,15 @@ _RUN_COMMAND = re.compile(
 )
 _TITLED_FILE = re.compile(
     r"\b(?:titled|named)\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]?",
+    re.IGNORECASE,
+)
+_WRITE_A_FILE = re.compile(
+    r"\bwrite a file\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
+    re.IGNORECASE,
+)
+_WRITE_TO_FILE = re.compile(
+    r"\bwrite (?:your )?(?:program|output|script|file|warrior)\s+to\s+"
+    r"[`'\"]([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]",
     re.IGNORECASE,
 )
 _EMPTY_ROUND_RETRY = (
@@ -1071,7 +1080,14 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             continue
         if path not in seen:
             seen.append(path)
-    for pattern in (_CALLED_WITH_EXT, _FILE_CALLED, _RUN_ENTRY, _TITLED_FILE):
+    for pattern in (
+        _CALLED_WITH_EXT,
+        _FILE_CALLED,
+        _RUN_ENTRY,
+        _TITLED_FILE,
+        _WRITE_A_FILE,
+        _WRITE_TO_FILE,
+    ):
         for match in pattern.finditer(text):
             name = match.group(1).rstrip(".,;:)")
             if name.startswith("/"):
