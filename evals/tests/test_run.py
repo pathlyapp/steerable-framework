@@ -10,6 +10,7 @@ from evals.run import (
     EXIT_USAGE,
     _harbor_child_env,
     _print_summary,
+    _retry_agent_timeout,
     env_start_error_tasks,
     harbor_progress_line,
     main,
@@ -241,6 +242,13 @@ def test_env_start_error_tasks_detects_docker_tls(tmp_path: Path) -> None:
     other.mkdir()
     (other / "exception.txt").write_text("AssertionError: landing frame\n")
     assert env_start_error_tasks(tmp_path) == ("protein-assembly",)
+
+
+def test_retry_agent_timeout_fits_remaining_gha_wall() -> None:
+    assert _retry_agent_timeout(None) is None
+    assert _retry_agent_timeout(3) == 3
+    assert _retry_agent_timeout(6) == 6
+    assert _retry_agent_timeout(12) == 6
 
 
 def test_print_summary_retry_job_clears_env_start_error(

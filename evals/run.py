@@ -28,6 +28,10 @@ EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_HARBOR = 2
 EXIT_SKIPPED = 3
+# GHA catalog jobs are 360 min. The first Harbor wave can already use
+# ~180 min; a TLS retry that also uses multiplier 12 would be killed
+# before protein-assembly finishes. Cap the retry at 90 min (6×900s).
+_ENV_START_RETRY_AGENT_TIMEOUT_MULTIPLIER = 6.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _JOB_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}__")
@@ -138,7 +142,9 @@ def main(argv: list[str] | None = None) -> int:
                 n_attempts=args.n_attempts,
                 agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
                 environment_build_timeout_multiplier=args.environment_build_timeout_multiplier,
-                agent_timeout_multiplier=args.agent_timeout_multiplier,
+                agent_timeout_multiplier=_retry_agent_timeout(
+                    args.agent_timeout_multiplier
+                ),
                 verifier_timeout_multiplier=args.verifier_timeout_multiplier,
                 harbor_bin=args.harbor,
             )
@@ -242,6 +248,13 @@ def _harbor_child_env(env: dict[str, str]) -> dict[str, str]:
     for key in _DOCKER_PROXY_KEYS:
         out.pop(key, None)
     return out
+
+
+def _retry_agent_timeout(requested: float | None) -> float | None:
+    """Keep env-start retries inside the remaining GHA wall."""
+    if requested is None:
+        return None
+    return min(float(requested), _ENV_START_RETRY_AGENT_TIMEOUT_MULTIPLIER)
 
 
 def env_start_error_tasks(jobs_dir: Path) -> tuple[str, ...]:
