@@ -167,9 +167,16 @@ ACP 不同——它在开发者的真实机器上被编辑器拉起。**两处�
       传给 harbor_steerable，后者上传 spec 进容器并加 `--harness` 标志——
       headless 支持该标志前（W1.2.2）argparse 会响亮失败，不会静默错标。
       笛卡尔积由多次调用组合（run.py 保持单次运行原语）。
-- [ ] **1.3.2** 锁模型对照运行：同一模型、同一题集、N 个 harness。
+- [x] **1.3.2** 锁模型对照运行：同一模型、同一题集、N 个 harness。
       `suite.yaml:167–169` 的注释已经预留了做法（`--model openai/gpt-5.5` 同档对照），
       本条是把它真正跑起来。
+      **已跑起来（2026-08-31）**：cheap-12 × `openai/z-ai/glm-5.3-flash`
+      × {minimal, default, subagent} 三 harness，全部走 GHA 同代码态
+      （5a01eff）——`evals-arms.yml` 新增 `arm_set=a`（minimal 基线，
+      run 33386478809）与 `arm_set=bc`（run 33386153944）合成本对照；
+      归因报告（harness 主效应 16.7%、效率七项）与结果分析写回 1.4.3.5。
+      gpt-5.5 同档跨 agent 对照留作后续增量（模型档切换是另一条轴，
+      不阻塞本条的 harness 维度闭环）。
 - [x] **1.3.3** 方差归因输出：报告 harness 主效应与模型主效应、二者比值、
       以及跨 harness 的模型排名反转次数（arXiv 2605.23950 要求的披露口径）。
       已实现 `evals/attribution.py`：`load_job` 从 config.json 取 agent/model、
@@ -253,18 +260,24 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       "no subagent tool exists"——arm C 差点空跑成 arm B 的复制；
       修复后 agent_spawn → agent_wait(0.1) → 子代理回 391 全链路验证
       （525344c）。默认 arm 保持 single 不追加，arm A/B 表面零变化。
-- [~] **1.4.2.2** 单独成 arm 跑对照，不与 1.4.1 合并计分——否则无法区分是工具面
+- [x] **1.4.2.2** 单独成 arm 跑对照，不与 1.4.1 合并计分——否则无法区分是工具面
       还是编排带来的差异，就又回到了「凭感觉说变好了」。**arm C spec 已就位**：
       `evals/harnesses/subagent.harness.yaml`（与 default 仅 orchestration
       一维之差，契约测试锁定）+ suite.yaml 注册 `subagent` harness 标签。
-      装配与委派两路实盘冒烟均已通过，跑对照随 arm B 完成后自动接续。
+      装配与委派两路实盘冒烟均已通过。**对照已跑完**（GHA run 33386153944，
+      cheap-12 同模型同代码态）：arm C 0.917 vs arm B 0.750，token 77.6K
+      vs 491.3K——编排维度的效应与工具面效应分离观测成功，结果与
+      方差披露见 1.4.3.5。
 
 #### 1.4.3 对照协议（先注册后跑，本节的硬约束）
 
 **这一小节写在动手之前，文件本身即预注册产物。** 跑完再挑指标或挑题集是自毁信誉，
 而且我们刚在 R10 里引用了批评这种做法的论文。
 
-- [~] **1.4.3.1** 三个 arm，同模型、同题集、同轮次上限、同随机种子：
+- [x] **1.4.3.1** 三个 arm，同模型、同题集、同轮次上限、同随机种子：
+      **三臂已在 GHA 同代码态（5a01eff）跑齐**：arm A（minimal）
+      run 33386478809、arm B/C（default/subagent）run 33386153944；
+      结果写回 1.4.3.5。
       | arm | ToolSelector | Orchestration |
       | --- | --- | --- |
       | A（基线，现状） | `MinimalToolset`（4 工具） | `SingleAgent` |
@@ -309,8 +322,27 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       **已跑完**（2026-08-31，`evals/jobs/steerable-arm-a/2026-08-31__11-14-23`）：
       12/12 完成、0 错误、**mean 0.833**。满分 10 题；零分两题：
       password-recovery、sqlite-with-gcov。基线锁定，接线批开工。
-- [ ] **1.4.3.5** 结果无论正负都写回本节。若 B 相对 A 无显著提升，
+- [x] **1.4.3.5** 结果无论正负都写回本节。若 B 相对 A 无显著提升，
       结论是「工具面在我们的题集上不是主效应」——这同样是有效产出，并直接影响 1.3 的设计。
+      **结果（2026-08-31，GHA 同代码态 5a01eff，模型锁 glm-5.3-flash，
+      cheap-12，轮次上限 80；arm A run 33386478809，arm B/C run 33386153944）**：
+      | arm | harness | pass@1 | 平均轮次 | 平均 token | 峰值上下文 | 工具错误率 | 恢复率 |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | A | minimal | 0.833 | 14.2 | 74.5K | 5.4K | 14.0% | 91.7% |
+      | B | default | 0.750 | 15.1 | **491.3K** | 22.4K | 11.6% | 90.5% |
+      | C | subagent | **0.917** | 12.8 | 77.6K | 6.5K | 20.3% | 100% |
+      harness 主效应 16.7%（归因工件：attribution-a / attribution-bc）。
+      **三条如实结论**：
+      (1) **B 相对 A 无提升**（0.750 vs 0.833）且 token 成本 6.6 倍——
+      按预登记口径，「工具面扩张在我们的题集上不是主效应」成立，
+      完整工具面的 schema 开销（峰值上下文 4 倍于 A/C）是结构性税负；
+      (2) C（子代理委派）拿到最高分且 token 与 A 同档——委派把
+      子任务上下文隔离在父循环之外，正好对冲 B 的 schema 税负；
+      (3) **方差披露**：b/c 排名在两次运行间反转（首跑 33376416616：
+      b 0.917 / c 0.833；二跑：b 0.750 / c 0.917）——n=12、单次
+      尝试下 0.75–0.92 的差值不能排除噪声，排名结论需要
+      n-attempts>1 的后续运行才能固化；token 效率差（6.6 倍）
+      是结构性数字，不受单次方差影响。
 
 ### 1.5 交互式会话（单独一组，不进 1.4 的对照）
 
@@ -338,7 +370,7 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       外部 kill -9 后下一次读报 exited。关键修正：交互式 bash 作业控制开着，
       后台作业有**自己的进程组**，killpg(shell) 会漏——回收顺序改为 SIGHUP
       （bash 转发给作业）→ killpg SIGKILL → ps 按 sid 清扫残余。
-- [~] **1.5.3** 单独 arm 对照，题集须包含至少 3 道当前必然 0 分的交互题，
+- [x] **1.5.3** 单独 arm 对照，题集须包含至少 3 道当前必然 0 分的交互题，
       否则这条的收益无法被 cheap-12 观测到。
       **题集预登记（2026-08-31，跑前写死，结果出来后不得增删）**：
       对 TB-2.1 全部 89 题 instruction 做交互标记扫描后的诚实结论——
@@ -391,10 +423,26 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       **二跑结果（2026-08-31，GHA run 33379793964，含 Python 地板 +
       usage 解析修复）**：`qemu-alpine-ssh` 两臂仍 errored——standalone
       回退脚本本身 exit 127：该最小镜像**连 curl/wget 都没有**，
-      busybox tar 也不认 `--strip-components`。已二次修复：
+      busybox tar 也不认 `--strip-components`。      已二次修复：
       下载改走环境自带 `python3` urllib（自动承代理），解包改
       「先解后 `cp -a` 就位」（`harbor_helpers._STANDALONE_PY_INSTALL`，
-      回归测试锁定无 curl/wget/--strip-components）。**待三跑。**
+      回归测试锁定无 curl/wget/--strip-components）。
+      **三跑结果（2026-08-31，GHA run 33386107981，含全部修复）**：
+      三题两臂全部正常计分，零 errored——Python 地板闭环。
+      | 题 | arm D（minimal） | arm E（default+会话） |
+      | --- | --- | --- |
+      | `qemu-alpine-ssh` | **1.0** | 1.0 |
+      | `install-windows-3.11` | **1.0** | 0.0 |
+      | `headless-terminal` | 1.0 | 1.0 |
+      共享题 mean：**D 1.000 / E 0.667**，harness 主效应 33.3%；
+      效率列已补齐（D：15.3 轮、54K token、峰值上下文 5.5K；
+      E：13.3 轮、58K token、峰值 6.2K，两臂 recovery 均 100%）。**「必然 0 分」硬度被实盘否证**：
+      模型用环境预装的 expect 一次性盲写解出 qemu-alpine-ssh，
+      预登记里「理论可英雄式解题」的对冲条款成为现实。
+      **结论（如实记）**：在登记的 interactive-3 上会话工具面
+      未观测到收益（E 反低 0.333，n=3 单次尝试，install-windows-3.11
+      一题两次运行两臂交叉 0/1，方差大于信号）。会话能力的收益
+      需要更硬的交互题集才能测量；本题集不足以充当它的判据。
 
 ---
 
