@@ -288,6 +288,12 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # cut starts wrap-up (Z.AI ignores tool_choice=required, so
             # retries otherwise Hmm for another 10 min each).
             idle_stream_timeout_ms=600_000,
+            # circuit-fibsqrt / regex-chess: 392 KB and 356 KB of reasoning
+            # in a single round, 75 and 110 min, zero tool calls. Silent-think
+            # gaps keep the active wall under the cap and a dense stream keeps
+            # every chunk inside the wrap-up per-chunk wait, so volume is the
+            # only trigger that fires. Well above a normal reasoning burst.
+            idle_stream_max_chars=200_000,
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the

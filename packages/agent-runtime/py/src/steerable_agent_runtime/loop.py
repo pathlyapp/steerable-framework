@@ -275,8 +275,17 @@ class LoopConfig:
     #: does not wrap-up — delivery can still force a named write. A second
     #: cut in the same run starts wrap-up: Z.AI coerces
     #: ``tool_choice=required`` to auto, so retries can Hmm for another
-    #: cap each and eat Harbor ``wait_for``. ``None`` disables.
+    #: cap each and eat Harbor ``wait_for``. Cuts keep firing during
+    #: wrap-up; each one spends a ``wrap_up_max_tool_rounds`` round, so the
+    #: spiral ends instead of streaming to Harbor's kill. ``None`` disables.
     idle_stream_timeout_ms: int | None = None
+    #: Cut a tool-less stream after this many reasoning + content chars.
+    #: Time alone misses the worst spirals: silent-think gaps are excluded
+    #: from the active wall, and a dense stream keeps every chunk inside the
+    #: wrap-up per-chunk wait, so circuit-fibsqrt emitted 392 KB in one
+    #: round over 75 min with zero tool calls. Volume is what the model
+    #: actually spends. ``None`` disables.
+    idle_stream_max_chars: int | None = None
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
     #: repeat only burns tokens and can push the model into a retry loop
@@ -335,6 +344,13 @@ class LoopConfig:
         ):
             raise ValueError(
                 "idle_stream_timeout_ms must be positive (or None to disable)"
+            )
+        if (
+            self.idle_stream_max_chars is not None
+            and self.idle_stream_max_chars <= 0
+        ):
+            raise ValueError(
+                "idle_stream_max_chars must be positive (or None to disable)"
             )
 
 
@@ -1040,7 +1056,9 @@ class CoreLoop:
             stream_cancelled = False
             stream_budget_cut = False
             stream_idle_cut = False
+            idle_cut_trigger: str | None = None
             reasoning_active_ms = 0.0
+            stream_chars = 0
             last_reason_chunk_at: float | None = None
             while True:
                 try:
@@ -1125,18 +1143,22 @@ class CoreLoop:
                         if (
                             chunk.reasoning_delta or chunk.content_delta
                         ) and not tool_calls:
+                            stream_chars += len(chunk.reasoning_delta or "") + len(
+                                chunk.content_delta or ""
+                            )
                             if last_reason_chunk_at is not None:
                                 gap = arrived - last_reason_chunk_at
                                 if gap < _IDLE_REASONING_GAP_SEC:
                                     reasoning_active_ms += gap * 1000
                             last_reason_chunk_at = arrived
                         idle_cap = self._config.idle_stream_timeout_ms
-                        if (
-                            idle_cap is not None
-                            and not wrap_up
-                            and not tool_calls
-                            and reasoning_active_ms >= idle_cap
-                        ):
+                        char_cap = self._config.idle_stream_max_chars
+                        if not tool_calls:
+                            if idle_cap is not None and reasoning_active_ms >= idle_cap:
+                                idle_cut_trigger = "active_ms"
+                            elif char_cap is not None and stream_chars >= char_cap:
+                                idle_cut_trigger = "chars"
+                        if idle_cut_trigger is not None:
                             stream_idle_cut = True
                             idle_cut_count += 1
                             break
@@ -1192,7 +1214,9 @@ class CoreLoop:
                         content_carry = ""
                         reasoning_carry = ""
                         stream_idle_cut = False
+                        idle_cut_trigger = None
                         reasoning_active_ms = 0.0
+                        stream_chars = 0
                         last_reason_chunk_at = None
                         # A hook may declare a transcript rewrite for the
                         # retry (context-overflow recovery compacts first) —
@@ -1304,6 +1328,8 @@ class CoreLoop:
                         "hook": "loop",
                         "action": "idle_stream_cut",
                         "elapsedMs": int(reasoning_active_ms),
+                        "chars": stream_chars,
+                        "trigger": idle_cut_trigger,
                         "round": round_index,
                     },
                 )

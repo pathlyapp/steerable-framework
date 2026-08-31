@@ -655,6 +655,178 @@ async def test_second_idle_stream_cut_starts_wrap_up() -> None:
 
 
 @pytest.mark.asyncio
+async def test_idle_stream_keeps_cutting_during_wrap_up() -> None:
+    """circuit-fibsqrt: the cut used to switch off once wrap-up began, so the
+    spiral streamed on until Harbor killed the trial."""
+
+    class _NeverStopsThinking:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.streams = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            self.streams += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                for i in range(8):
+                    yield LLMStreamChunk(reasoning_delta=f"hmm {i}")
+                    await asyncio.sleep(0.02)
+                yield LLMStreamChunk(content_delta="never reached")
+
+            return _gen()
+
+    class _AlwaysRetry(NoopHooks):
+        async def before_completion(self, draft, ctx):
+            return CompletionAction(
+                kind="retry",
+                message="write the named output files now",
+                reason="missing_named_output",
+            )
+
+    loop = CoreLoop(
+        _NeverStopsThinking(),
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(
+            idle_stream_timeout_ms=50,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=3,
+        ),
+        hooks=_AlwaysRetry(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert len(cuts) > 2
+    assert all(c.data["trigger"] == "active_ms" for c in cuts)
+    assert [e for e in events if e.kind == "soft_timeout"]
+    deltas = [e.data.get("delta", "") for e in events if e.kind == "content_delta"]
+    assert "never reached" not in "".join(deltas)
+
+
+@pytest.mark.asyncio
+async def test_idle_stream_cuts_on_reasoning_volume() -> None:
+    """A dense stream stays under the active-ms wall; volume must still cut."""
+
+    class _DenseNoGaps:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self._idx = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = self._idx
+            self._idx += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx == 0:
+                    for _ in range(20):
+                        yield LLMStreamChunk(reasoning_delta="x" * 100)
+                    yield LLMStreamChunk(content_delta="never reached")
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(write)
+    loop = CoreLoop(
+        _DenseNoGaps(),
+        RouterToolExecutor(router),
+        LoopConfig(idle_stream_timeout_ms=600_000, idle_stream_max_chars=500),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert len(cuts) == 1
+    assert cuts[0].data["trigger"] == "chars"
+    assert cuts[0].data["chars"] >= 500
+    deltas = [e.data.get("delta", "") for e in events if e.kind == "content_delta"]
+    assert "never reached" not in "".join(deltas)
+    assert executed == ["write"]
+
+
+@pytest.mark.asyncio
+async def test_idle_stream_volume_ignores_tool_call_arguments() -> None:
+    """A huge write_file argument is delivery, not a spiral: never cut it."""
+
+    class _BigToolArgs:
+        name = "fake"
+        model = "fake-model"
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                yield LLMStreamChunk(reasoning_delta="short plan")
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                for _ in range(20):
+                    yield LLMStreamChunk(content_delta="y" * 100)
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(write)
+    loop = CoreLoop(
+        _BigToolArgs(),
+        RouterToolExecutor(router),
+        LoopConfig(idle_stream_max_chars=500, max_rounds=2),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    assert not [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert executed == ["write"]
+
+
+@pytest.mark.asyncio
 async def test_idle_stream_ignores_long_sse_gaps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
