@@ -140,17 +140,21 @@ ACP 不同——它在开发者的真实机器上被编辑器拉起。**两处�
       沿用既定立场——缺失的引用绝不当作空配置放过。已实现并测试：未知维度、
       未知实现名、未知条目键、单选维度给列表、缺维度、坏参数名六类全在加载/
       装配期报错。
-- [~] **1.2.4** 现有默认装配等价迁移为一份 `default.harness.yaml`，
+- [x] **1.2.4** 现有默认装配等价迁移为一份 `default.harness.yaml`，
       迁移前后行为逐测试比对，证明这一步是纯重构。
       spec 文件已入库（pressure_compaction+spill / informed_backtrack+simple /
       null / full / stateless / single + loop 节），等价性测试已验证三种核心行为
       （压力压缩、溢出回退、瞬态退避），headless `--harness` 路径已按 spec 装配
       （W1.2.2），`test_headless.py` 验证默认 spec 可作外部 spec 加载。
-      **剩余**：sidecar 聊天路径（`_default_loop_hooks`）仍手工装配——
-      切换需先解决 sidecar 特有关注点（AntiHallucinationHooks 开关、
-      toolsViaHost 的 HostToolExecutor、execSandbox 包装、审批层）与
-      spec 维度的分层关系，且 sidecar.py 在评测上传路径上，
-      待 arm B/C 跑完后进行。
+      **sidecar 聊天路径已切换（2026-08-31，跑分迁移 GHA 解冻后）**：
+      `_default_loop_hooks` 改为装配 `default.harness.yaml`，sidecar 特有
+      关注点分层——AntiHallucination/审批/execSandbox/toolsViaHost 留在
+      装配之外（host 部署关注点，非 harness 策略）；spill 目录与
+      STEERABLE_SIDECAR_SPILL/SUMMARIZER 环境开关作为部署策略在装配前
+      应用。**迁移抓出一个真分歧**：spec 的 simple 重试默认 4 次而生产
+      默认（RetryHooks()）是 3 次——arm A 基线跑的是 3，arm B 若按旧
+      spec 跑 4 就引入未申报的第二维差异；三个 spec 已统一钉死
+      `max_attempts: 3`，结构等价测试锁死链序与切片类型。
 
 ### 1.3 评测台升级为因子设计
 

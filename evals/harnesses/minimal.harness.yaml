@@ -10,6 +10,7 @@ context:
 retry:
   - impl: informed_backtrack
   - impl: simple
+    params: {max_attempts: 3}
 validator: "null"
 tools: minimal
 memory: stateless

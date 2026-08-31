@@ -621,6 +621,12 @@ async def test_steer_requires_content() -> None:
     assert "error" in resp
 
 
+def _unwrap(hooks):
+    """W1.2.4: the default chain is spec-assembled, so entries are slice
+    wrappers (_PreStepOnly etc.) around the strategy's hooks — unwrap."""
+    return [getattr(h, "_inner", h) for h in hooks._hooks]
+
+
 def test_default_loop_hooks_resolves_window_from_model() -> None:
     """Fixed-60k default is gone: known models compact against their real
     context window; explicit maxContextTokens still wins."""
@@ -629,24 +635,67 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
 
     hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
     assert isinstance(hooks, ChainHooks)
-    compaction = next(h for h in hooks._hooks if isinstance(h, CompactionHooks))
+    compaction = next(
+        h for h in _unwrap(hooks) if isinstance(h, CompactionHooks)
+    )
     assert compaction._max_tokens == 131_072
 
     explicit = _default_loop_hooks(
         {"model": "gpt-oss:20b-cloud", "maxContextTokens": 24_000}
     )
     compaction = next(
-        h for h in explicit._hooks if isinstance(h, CompactionHooks)
+        h for h in _unwrap(explicit) if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 24_000
 
     unknown = _default_loop_hooks({"model": "my-finetune"})
     compaction = next(
-        h for h in unknown._hooks if isinstance(h, CompactionHooks)
+        h for h in _unwrap(unknown) if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 60_000
 
 
+def test_default_loop_hooks_matches_default_spec_structure() -> None:
+    """W1.2.4 pure refactor: the chat path chain is the bundled spec's
+    assembly — compaction pre_step slice, spill post_tool_result slice,
+    overflow backtrack ahead of 3-attempt retry on the error slice."""
+    from steerable_agent_runtime import CompactionHooks, RetryHooks
+    from steerable_agent_runtime.harness import (
+        _OnRequestErrorOnly,
+        _PostToolResultOnly,
+        _PreStepOnly,
+    )
+    from steerable_agent_runtime.spill import SpillHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks
+
+    hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    entries = hooks._hooks
+    assert isinstance(entries[0], _PreStepOnly)
+    assert isinstance(entries[0]._inner, CompactionHooks)
+    assert isinstance(entries[1], _PostToolResultOnly)
+    assert isinstance(entries[1]._inner, SpillHooks)
+    assert isinstance(entries[2], _OnRequestErrorOnly)
+    assert isinstance(entries[2]._inner, CompactionHooks)
+    assert isinstance(entries[3], _OnRequestErrorOnly)
+    assert isinstance(entries[3]._inner, RetryHooks)
+    # The spec pins the production default, not the strategy's own default.
+    assert entries[3]._inner._policy.max_attempts == 3
+
+
+def test_default_loop_hooks_spill_env_opt_out(monkeypatch, tmp_path) -> None:
+    """STEERABLE_SIDECAR_SPILL=0 drops the spill dimension; STEERABLE_SPILL_DIR
+    overrides the directory — deployment policy stays host-side."""
+    from steerable_agent_runtime.spill import SpillHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks
+
+    monkeypatch.setenv("STEERABLE_SPILL_DIR", str(tmp_path))
+    hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    spill = next(h for h in _unwrap(hooks) if isinstance(h, SpillHooks))
+    assert str(tmp_path) in str(spill._store._dir)
+
+    monkeypatch.setenv("STEERABLE_SIDECAR_SPILL", "0")
+    hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    assert not any(isinstance(h, SpillHooks) for h in _unwrap(hooks))
 
 
 def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
@@ -659,7 +708,9 @@ def test_default_loop_hooks_wires_summarizer(monkeypatch) -> None:
 
     provider = _ScriptedProvider([_text_round("summary")])
     hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"}, summarizer=provider)
-    compaction = next(h for h in hooks._hooks if isinstance(h, CompactionHooks))
+    compaction = next(
+        h for h in _unwrap(hooks) if isinstance(h, CompactionHooks)
+    )
     assert compaction._summarizer is provider
 
     # Default: the turn provider is reused as the summarizer.

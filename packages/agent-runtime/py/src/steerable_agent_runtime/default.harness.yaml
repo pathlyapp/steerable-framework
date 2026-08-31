@@ -11,7 +11,10 @@ retry:
   # Order matters: overflow backtrack first (it declines non-overflow
   # errors), then taxonomy-routed backoff. Mirrors ChainHooks ordering.
   - impl: informed_backtrack
+  # max_attempts 3 pins the production default (RetryHooks()); the strategy
+  # default of 4 would silently diverge the spec from the sidecar chat path.
   - impl: simple
+    params: {max_attempts: 3}
 # Quoted: bare `null` is YAML's null literal, not the implementation name.
 validator: "null"
 tools: full

@@ -55,7 +55,6 @@ from steerable_agent_runtime import (
     AutoApprover,
     BudgetExhaustedError,
     ChainHooks,
-    CompactionHooks,
     CoreLoop,
     FilesystemSkillProvider,
     HistorySeed,
@@ -65,7 +64,6 @@ from steerable_agent_runtime import (
     OrchestrationConfig,
     OrchestrationExecutor,
     PolicyDeniedError,
-    RetryHooks,
     RouterToolExecutor,
     SandboxedToolExecutor,
     SessionApprovalCache,
@@ -1762,14 +1760,19 @@ def _summarizer_for(provider: Any) -> Any | None:
 def _default_loop_hooks(
     params: dict[str, Any], summarizer: Any | None = None
 ) -> LoopHooks:
-    """Default hook chain for the CoreLoop chat path.
+    """Default hook chain for the CoreLoop chat path, assembled from the
+    bundled ``default.harness.yaml`` (W1.2.4: the declarative spec is the
+    single source of truth for the default harness — this function only
+    resolves the sidecar's runtime parameters and deployment env knobs).
 
-    CompactionHooks comes first: its ``on_request_error`` intercepts
-    context-overflow failures and retries with a compacted transcript, and
-    its ``pre_step`` keeps pressure under the threshold in the first place
-    (parity with the desktop TS loop). Everything it declines falls through
-    to RetryHooks' taxonomy-routed backoff.
+    Slice order is the spec's: pressure compaction's ``pre_step`` first,
+    spill's ``post_tool_result``, then overflow backtrack ahead of
+    taxonomy-routed backoff on ``on_request_error`` — the same effective
+    ordering as the previous hand-rolled chain.
     """
+    from dataclasses import replace
+
+    from steerable_agent_runtime.harness_spec import assemble_harness
     from steerable_agent_runtime.tokens import resolve_context_window
 
     # Explicit maxContextTokens wins; otherwise the model's known context
@@ -1781,35 +1784,47 @@ def _default_loop_hooks(
         provider=params.get("provider"),
         base_url=params.get("baseUrl"),
     )
-    return ChainHooks(
-        CompactionHooks(
-            max_context_tokens=max_ctx,
-            model=params.get("model"),
-            summarizer=summarizer,
-        ),
-        # Spill oversized tool results to disk instead of inlining them into
-        # the transcript (W4-7: this hook existed since Wave 0 but was never
-        # on the default chain — a single megabyte-sized shell output could
-        # blow the context in one round). Opt out with
-        # STEERABLE_SIDECAR_SPILL=0; override the spill directory with
-        # STEERABLE_SPILL_DIR (default: a per-process temp dir).
-        *_spill_hooks(),
-        RetryHooks(),
-    )
-
-
-def _spill_hooks() -> list[LoopHooks]:
+    spec = _default_harness_spec()
+    # STEERABLE_SIDECAR_SPILL=0 is deployment policy, not harness strategy:
+    # it drops the spill dimension before assembly rather than wrapping hooks.
     flag = os.environ.get("STEERABLE_SIDECAR_SPILL", "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
-        return []
+        spec = replace(spec, context=[c for c in spec.context if c.impl != "spill"])
+    model = params.get("model")
+    assembled = assemble_harness(
+        spec,
+        provider=summarizer,
+        runtime_params={
+            "pressure_compaction": {"max_context_tokens": max_ctx, "model": model},
+            "informed_backtrack": {"max_context_tokens": max_ctx, "model": model},
+            "spill": {"directory": _spill_directory()},
+        },
+    )
+    return assembled.hooks
+
+
+def _default_harness_spec():
+    """Load the bundled default spec once per process (chat turns are
+    frequent; the YAML parse is not free)."""
+    from functools import lru_cache
+
+    from steerable_agent_runtime.harness_spec import load_harness_spec
+
+    @lru_cache(maxsize=1)
+    def _cached(path: str):
+        return load_harness_spec(path)
+
+    return _cached(str(_DEFAULT_HARNESS_SPEC_PATH))
+
+
+def _spill_directory() -> str:
+    """Stable per-host spill dir (findable across a session), overridable
+    with STEERABLE_SPILL_DIR."""
     import tempfile
 
-    from steerable_agent_runtime import FilesystemSpillStore, SpillHooks
-
-    directory = os.environ.get("STEERABLE_SPILL_DIR") or os.path.join(
+    return os.environ.get("STEERABLE_SPILL_DIR") or os.path.join(
         tempfile.gettempdir(), "steerable-spill"
     )
-    return [SpillHooks(FilesystemSpillStore(directory))]
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
