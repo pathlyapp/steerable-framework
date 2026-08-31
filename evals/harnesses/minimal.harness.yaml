@@ -1,0 +1,20 @@
+# Arm D (W1.5.3): the default harness with the tool surface restricted to
+# the four eval-baseline tools (bash/read_file/write_file/edit_file).
+# Identical to default.harness.yaml except `tools: minimal` — the arm E
+# comparison (default spec, full surface incl. bash_session/write_stdin)
+# isolates the interactive-session tools' contribution on the interactive
+# task set pre-registered in HARNESS_TODO 1.5.3.
+context:
+  - impl: pressure_compaction
+  - impl: spill
+retry:
+  - impl: informed_backtrack
+  - impl: simple
+validator: "null"
+tools: minimal
+memory: stateless
+orchestration: single
+loop:
+  max_rounds: 80
+  max_tool_errors: 16
+  tool_dedup: false

@@ -198,3 +198,34 @@ def test_arm_c_subagent_spec_loads_and_differs_in_exactly_one_dimension() -> Non
         },
     )
     assert isinstance(harness.orchestration, SubAgentDelegation)
+
+
+def test_arm_d_minimal_spec_loads_and_differs_in_exactly_one_dimension() -> None:
+    """W1.5.3: the arm D spec must assemble and differ from the default
+    only in the tools dimension — the interactive-session control arm."""
+    repo = Path(__file__).resolve().parents[4]
+    arm_d = load_harness_spec(repo / "evals/harnesses/minimal.harness.yaml")
+    default = load_harness_spec(
+        repo / "packages/agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml"
+    )
+    assert arm_d.tools.impl == "minimal"
+    assert default.tools.impl == "full"
+    # Every other dimension identical, entry by entry, loop pins included.
+    assert arm_d.context == default.context
+    assert arm_d.retry == default.retry
+    assert arm_d.validator == default.validator
+    assert arm_d.memory == default.memory
+    assert arm_d.orchestration == default.orchestration
+    assert arm_d.loop == default.loop
+
+    harness = assemble_harness(
+        arm_d,
+        runtime_params={
+            "pressure_compaction": {"max_context_tokens": 100_000},
+            "informed_backtrack": {"max_context_tokens": 100_000},
+        },
+    )
+    selected = harness.tool_selection.select(
+        [{"name": n} for n in ("bash", "read_file", "grep", "bash_session", "write_stdin")]
+    )
+    assert [t["name"] for t in selected] == ["bash", "read_file"]

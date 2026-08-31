@@ -284,8 +284,23 @@ hooks 为 `DeliveryHooks + CompactionHooks + RetryHooks`，存储 `InMemoryStora
       外部 kill -9 后下一次读报 exited。关键修正：交互式 bash 作业控制开着，
       后台作业有**自己的进程组**，killpg(shell) 会漏——回收顺序改为 SIGHUP
       （bash 转发给作业）→ killpg SIGKILL → ps 按 sid 清扫残余。
-- [ ] **1.5.3** 单独 arm 对照，题集须包含至少 3 道当前必然 0 分的交互题，
+- [~] **1.5.3** 单独 arm 对照，题集须包含至少 3 道当前必然 0 分的交互题，
       否则这条的收益无法被 cheap-12 观测到。
+      **题集预登记（2026-08-31，跑前写死，结果出来后不得增删）**：
+      对 TB-2.1 全部 89 题 instruction 做交互标记扫描后的诚实结论——
+      目录里硬交互题只有一道，题集按硬度分级：
+      | 题 | 交互硬度 | 理由 |
+      | --- | --- | --- |
+      | `qemu-alpine-ssh` | 硬 | 必须读 VM 控制台输出并在登录提示符下应答；
+      | | | 一次性 bash 只能靠 sleep+管道盲写击键，必然 0 分 |
+      | `install-windows-3.11` | 半 | QEMU monitor socket 可程序化 sendkey，
+      | | | 一次性 bash 理论可脚本化但极脆；会话读屏大幅降低难度 |
+      | `headless-terminal` | 软 | 本体是写 PTY 类（一次性 bash 可解），
+      | | | 但有会话后 agent 可以交互地验证自己的实现 |
+      跑法：同模型同种子，arm D = 默认 harness（无 bash_session 工具面，
+      用 `tools: minimal` 规格挡住会话工具），arm E = 默认 + 会话工具。
+      预期：D 在 qemu-alpine-ssh 上 0 分，E 非零即收益被观测；
+      若 E 也 0 分，结论是「会话工具面对 QEMU 级交互不足」，同样写回。
 
 ---
 

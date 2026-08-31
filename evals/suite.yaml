@@ -186,3 +186,7 @@ harnesses:
   # Arm C (W1.4.2): default + subagent delegation, one-dimension diff.
   subagent:
     spec: evals/harnesses/subagent.harness.yaml
+  # Arm D (W1.5.3): default with the four-tool minimal surface — the
+  # control arm for the interactive-session comparison (arm E = default).
+  minimal:
+    spec: evals/harnesses/minimal.harness.yaml
