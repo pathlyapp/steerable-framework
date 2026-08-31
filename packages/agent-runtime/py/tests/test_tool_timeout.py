@@ -240,6 +240,8 @@ def test_non_positive_timeout_rejected() -> None:
         LoopConfig(wrap_up_tool_timeout_ms=0)
     with pytest.raises(ValueError, match="wrap_up_hard_cap_ms"):
         LoopConfig(wrap_up_hard_cap_ms=-1)
+    with pytest.raises(ValueError, match="idle_stream_timeout_ms"):
+        LoopConfig(idle_stream_timeout_ms=0)
 
 
 @pytest.mark.asyncio

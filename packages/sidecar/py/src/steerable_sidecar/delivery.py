@@ -127,7 +127,7 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
-# Match CoreLoop ``_MAX_COMPLETION_REDOS`` (16). Eight retries still let
+# Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). Sixteen retries still let
 # dna-assembly / steal.py / regex-chess stop after a text-only summary.
 _MAX_MISSING_NAMED_RETRIES = 16
 # Z.AI coerces tool_choice=required to auto, so nudges are user text only.

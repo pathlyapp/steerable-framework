@@ -330,8 +330,9 @@ async def test_wrap_up_keeps_tools_retries_text_only_stop() -> None:
 
 
 def test_max_completion_redos_covers_delivery_empty_rounds() -> None:
-    # DeliveryHooks retries empty_round 6 times then missing_named_output.
-    assert _MAX_COMPLETION_REDOS >= 16
+    # DeliveryHooks retries empty_round 6 times then missing_named_output;
+    # idle-stream cuts also go through before_completion.
+    assert _MAX_COMPLETION_REDOS >= 32
 
 
 @pytest.mark.asyncio
@@ -458,3 +459,121 @@ async def test_wrap_up_stream_timeout_stops_second_think() -> None:
     )
     assert [e for e in events if e.kind == "soft_timeout"]
     assert events[-1].data["status"] in {"completed", "failed", "budget_exhausted"}
+
+
+class _RetryOnce(NoopHooks):
+    def __init__(self) -> None:
+        self.retries = 0
+
+    async def before_completion(self, draft, ctx):
+        if self.retries == 0:
+            self.retries += 1
+            return CompletionAction(
+                kind="retry",
+                message="write the named output files now",
+                reason="missing_named_output",
+            )
+        return CompletionAction(kind="accept")
+
+
+@pytest.mark.asyncio
+async def test_idle_stream_cuts_dense_reasoning_without_wrap_up() -> None:
+    """dna-assembly: hours of tokens, zero tools; do not wait for soft wrap-up."""
+
+    class _DenseThinkThenWrite:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self._idx = 0
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            idx = self._idx
+            self._idx += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if idx == 0:
+                    for i in range(8):
+                        yield LLMStreamChunk(reasoning_delta=f"plan {i}")
+                        await asyncio.sleep(0.02)
+                    yield LLMStreamChunk(content_delta="never reached")
+                    return
+                yield LLMStreamChunk(tool_call_delta=tc("write"))
+                yield LLMStreamChunk(finish_reason="tool_calls")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(write)
+    loop = CoreLoop(
+        _DenseThinkThenWrite(),
+        RouterToolExecutor(router),
+        LoopConfig(idle_stream_timeout_ms=50),
+        hooks=_RetryOnce(),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert cuts
+    assert not [e for e in events if e.kind == "soft_timeout"]
+    deltas = [e.data.get("delta", "") for e in events if e.kind == "content_delta"]
+    assert "never reached" not in "".join(deltas)
+    assert executed == ["write"]
+
+
+@pytest.mark.asyncio
+async def test_idle_stream_ignores_long_sse_gaps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """regex-chess: ~48 min with no SSE must not count as active reasoning."""
+    import steerable_agent_runtime.loop as loop_mod
+
+    monkeypatch.setattr(loop_mod, "_IDLE_REASONING_GAP_SEC", 0.03)
+
+    class _GappyThink:
+        name = "fake"
+        model = "fake-model"
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                yield LLMStreamChunk(reasoning_delta="start")
+                await asyncio.sleep(0.08)
+                yield LLMStreamChunk(reasoning_delta="resume")
+                yield LLMStreamChunk(content_delta="done")
+                yield LLMStreamChunk(finish_reason="stop")
+
+            return _gen()
+
+    loop = CoreLoop(
+        _GappyThink(),
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(idle_stream_timeout_ms=50),
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+    cuts = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "idle_stream_cut"
+    ]
+    assert not cuts
+    assert events[-1].data["status"] == "completed"

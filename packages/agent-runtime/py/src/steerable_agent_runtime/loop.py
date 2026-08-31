@@ -268,6 +268,11 @@ class LoopConfig:
     #: min; headless sets 175 min so a tool started near the soft deadline
     #: still returns before the kill. ``None`` disables.
     wrap_up_hard_cap_ms: int | None = None
+    #: Cut a reasoning-only stream after this much *active* token wall.
+    #: Gaps longer than ``_IDLE_REASONING_GAP_SEC`` are GLM silent-think
+    #: (regex-chess ~48 min with no SSE) and do not count. Does not start
+    #: wrap-up — delivery can still force a named write. ``None`` disables.
+    idle_stream_timeout_ms: int | None = None
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
     #: repeat only burns tokens and can push the model into a retry loop
@@ -319,6 +324,13 @@ class LoopConfig:
         if self.wrap_up_hard_cap_ms is not None and self.wrap_up_hard_cap_ms <= 0:
             raise ValueError(
                 "wrap_up_hard_cap_ms must be positive (or None to disable)"
+            )
+        if (
+            self.idle_stream_timeout_ms is not None
+            and self.idle_stream_timeout_ms <= 0
+        ):
+            raise ValueError(
+                "idle_stream_timeout_ms must be positive (or None to disable)"
             )
 
 
@@ -1017,6 +1029,9 @@ class CoreLoop:
             reasoning_carry = ""
             stream_cancelled = False
             stream_budget_cut = False
+            stream_idle_cut = False
+            reasoning_active_ms = 0.0
+            last_reason_chunk_at: float | None = None
             while True:
                 try:
                     # Everything the model is about to see is durable first
@@ -1096,6 +1111,24 @@ class CoreLoop:
                             ctx.accumulated_completion_tokens += (
                                 chunk.usage.completion_tokens
                             )
+                        arrived = time.monotonic()
+                        if (
+                            chunk.reasoning_delta or chunk.content_delta
+                        ) and not tool_calls:
+                            if last_reason_chunk_at is not None:
+                                gap = arrived - last_reason_chunk_at
+                                if gap < _IDLE_REASONING_GAP_SEC:
+                                    reasoning_active_ms += gap * 1000
+                            last_reason_chunk_at = arrived
+                        idle_cap = self._config.idle_stream_timeout_ms
+                        if (
+                            idle_cap is not None
+                            and not wrap_up
+                            and not tool_calls
+                            and reasoning_active_ms >= idle_cap
+                        ):
+                            stream_idle_cut = True
+                            break
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
                                 budget_state, self._config.budget, tokens=chunk.usage.total_tokens
@@ -1147,6 +1180,9 @@ class CoreLoop:
                         stripper = PseudoStreamStripper()
                         content_carry = ""
                         reasoning_carry = ""
+                        stream_idle_cut = False
+                        reasoning_active_ms = 0.0
+                        last_reason_chunk_at = None
                         # A hook may declare a transcript rewrite for the
                         # retry (context-overflow recovery compacts first) —
                         # the declared replace_all path records the boundary.
@@ -1253,6 +1289,17 @@ class CoreLoop:
             # Belt-and-suspenders: drop any echo blocks that slipped past the
             # streaming filter before the content enters the transcript.
             content = strip_pseudo_fn_final(content)
+
+            if stream_idle_cut:
+                yield LoopEvent(
+                    "hook_action",
+                    {
+                        "hook": "loop",
+                        "action": "idle_stream_cut",
+                        "elapsedMs": int(reasoning_active_ms),
+                        "round": round_index,
+                    },
+                )
 
             if stream_budget_cut:
                 was_wrap = wrap_up
@@ -1777,10 +1824,15 @@ _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
 
 #: Hard cap on before_completion-granted redos (discipline retries +
 #: narration rounds) per run. Must cover DeliveryHooks empty-round retries
-#: (6) plus missing-named-output retries (8), or think-only rounds consume
-#: the budget before a forced write. Hooks still bound themselves; this is
+#: (6) plus missing-named-output retries (16), plus idle-stream cuts that
+#: also go through before_completion. Hooks still bound themselves; this is
 #: the defense-in-depth backstop so a faulty hook cannot spin forever.
-_MAX_COMPLETION_REDOS = 16
+_MAX_COMPLETION_REDOS = 32
+
+#: Gaps longer than this between reasoning/content chunks are GLM silent
+#: think (regex-chess ~48 min with no SSE) and do not count toward
+#: ``idle_stream_timeout_ms``.
+_IDLE_REASONING_GAP_SEC = 300.0
 
 _DISCIPLINE_RETRY_NOTICE = (
     "[system notice] The previous reply described an intended action but did "
