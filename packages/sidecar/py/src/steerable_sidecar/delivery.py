@@ -240,7 +240,7 @@ _SYNTAX_RETRY = (
 # Instruction backtick: `node vm.js` / `python3 steal.py`. One shot when
 # named outputs are still missing and the script is already on disk.
 _MAX_ENTRY_RUNS = 1
-_ENTRY_TIMEOUT_SEC = 60
+_ENTRY_TIMEOUT_SEC = 180
 _SIDE_EFFECT_SUFFIXES = frozenset(
     {".bmp", ".png", ".txt", ".npy", ".csv", ".json", ".fasta", ".fa"}
 )
@@ -834,19 +834,30 @@ class DeliveryHooks(NoopHooks):
         return None
 
     def _run_named_entrypoint(self, missing: tuple[str, ...]) -> CompletionAction | None:
-        """Run an instruction-backticked node/python command once if it can write missing outputs."""
+        """Run a named node/python command once if it can write missing outputs.
+
+        Prefers instruction backticks (``python3 helper.py``). If those are
+        absent, a named ``.py``/``.js`` that already exists is run when a
+        named side-effect file (npy/txt/bmp/…) is still missing.
+        """
         if self._entry_runs >= _MAX_ENTRY_RUNS or not missing:
             return None
-        commands = tuple(
+        pairs: list[tuple[str, Path]] = []
+        for command in (
             match.group(1)
             for match in _RUN_COMMAND.finditer(self._instruction or "")
-        )
-        for command in commands:
+        ):
             script = _resolve_run_script(command, (*self._named, *self._required))
             if script is None:
                 continue
             if script.name.lower() in _CHECKER_FILENAMES:
                 continue
+            pairs.append((command, script))
+        if not pairs:
+            pairs.extend(
+                _named_side_effect_scripts((*self._named, *self._required), missing)
+            )
+        for command, script in pairs:
             if _entrypoint_needs_missing_input(missing, script):
                 continue
             argv = _run_command_argv(command, script)
@@ -1172,6 +1183,27 @@ def _entrypoint_needs_missing_input(
             continue
         return True
     return False
+
+
+def _named_side_effect_scripts(
+    named: tuple[str, ...], missing: tuple[str, ...]
+) -> list[tuple[str, Path]]:
+    """Named ``.py``/``.js`` to run when a named side-effect file is still missing."""
+    if not any(Path(path).suffix.lower() in _SIDE_EFFECT_SUFFIXES for path in missing):
+        return []
+    pairs: list[tuple[str, Path]] = []
+    for raw in named:
+        path = Path(raw)
+        suffix = path.suffix.lower()
+        if suffix not in {".py", ".js"}:
+            continue
+        if path.name.lower() in _CHECKER_FILENAMES:
+            continue
+        if not _file_ready(raw):
+            continue
+        interp = "python3" if suffix == ".py" else "node"
+        pairs.append((f"{interp} {path.name}", path))
+    return pairs
 
 
 def _json_has_blank_split_row(value: object) -> bool:

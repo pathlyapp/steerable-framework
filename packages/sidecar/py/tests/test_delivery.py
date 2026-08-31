@@ -1260,6 +1260,28 @@ async def test_named_entrypoint_runs_when_only_side_effect_missing(
 
 
 @pytest.mark.asyncio
+async def test_named_script_runs_without_backticks_when_side_effect_missing(
+    tmp_path,
+) -> None:
+    npy = tmp_path / "weights.npy"
+    script = tmp_path / "helper.py"
+    hooks = DeliveryHooks(
+        instruction=(
+            f"write a file called helper.py that when run saves {npy}"
+        ),
+        named_outputs=(str(script), str(npy)),
+    )
+    script.write_text(
+        f"from pathlib import Path\nPath({str(npy)!r}).write_bytes(b'x')\n",
+        encoding="utf-8",
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert npy.read_bytes() == b"x"
+    assert action.kind == "accept"
+    assert hooks._entry_runs == 1
+
+
+@pytest.mark.asyncio
 async def test_named_make_builds_missing_elf(tmp_path) -> None:
     elf = tmp_path / "doomgeneric_mips"
     (tmp_path / "Makefile").write_text(
