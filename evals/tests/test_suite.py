@@ -162,7 +162,8 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "--split failed-prev" in weekly
     assert "--shards 16" not in weekly
     assert weekly.count("--shards 24") == 1
-    assert "--shards 32" in weekly
+    assert "--shards 32" not in weekly
+    assert "--shards 36" in weekly
     assert "--shards 8" not in weekly
     assert "--shards 4" not in weekly
     assert (
@@ -175,7 +176,8 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     ) == 1
     assert (
         "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
-        "16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]"
+        "16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, "
+        "32, 33, 34, 35]"
     ) in weekly
     assert "timeout-minutes: 360" in weekly
     assert weekly.count("--agent-timeout-multiplier 12") == 2
@@ -192,7 +194,7 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
-    assert '--split catalog --shard "${{ matrix.shard }}" --shards 32' in weekly
+    assert '--split catalog --shard "${{ matrix.shard }}" --shards 36' in weekly
     assert "OPENAI_API_KEY" not in failed_job.split("upload-artifact", 1)[0]
     assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog_job
     assert "agent/headless.log" in weekly
@@ -281,18 +283,18 @@ def test_pack_floor_keeps_catalog_shards_inside_gha_wall() -> None:
     """Harbor ×12 wrap is 180 min. n-concurrent=2, 360-minute GHA cap.
 
     24 catalog shards still pack 4 tasks (2×180 min waves = 360 min exact).
-    32 shards pack ≤3 so a late 180-minute trial leaves slack before the kill.
+    36 shards pack ≤3 after four exclusive MIPS/QEMU/Windows tasks.
     """
     suite = load_suite()
     catalog = [
         shard_tasks(
             suite.catalog,
             shard=i,
-            shards=32,
+            shards=36,
             minutes=suite.catalog_minutes,
             pack_floor=suite.pack_floor_minutes,
         )
-        for i in range(32)
+        for i in range(36)
     ]
     flat = [task for shard in catalog for task in shard]
     assert len(flat) == 89
