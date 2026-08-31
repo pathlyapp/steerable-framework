@@ -26,7 +26,7 @@ run:
   # Wall-clock minutes from GHA catalog run 33309282690 (n-concurrent=2).
   # Used to pack shards; not a score. pack_floor_minutes is 180 so a 170-minute
   # wrap cannot stack six "short" recorded tasks onto one 360-minute GHA job.
-  # Catalog GHA uses 36 shards (≤3 tasks/shard); failed-prev stays 24.
+  # Catalog GHA uses 48 shards (≤2 tasks/shard); failed-prev stays 24.
   # install-windows-3.11, qemu-startup, qemu-alpine-ssh, the MIPS ELF
   # compiles, and extract-moves-from-video pack onto exclusive shards so
   # n-concurrent=2 does not share the 4-vCPU runner.
