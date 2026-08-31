@@ -99,6 +99,9 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "position embeddings" in headless_mod._SYSTEM
     assert "held-out inputs" in headless_mod._SYSTEM
     assert "pre-shrink score" in headless_mod._SYSTEM
+    assert "valid UTF-8" in headless_mod._SYSTEM
+    assert "relative filename" in headless_mod._SYSTEM
+    assert "system interpreter" in headless_mod._SYSTEM
     assert "adapt-control" in headless_mod._SYSTEM
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
