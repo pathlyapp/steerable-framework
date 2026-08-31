@@ -991,6 +991,26 @@ async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_txt_retries_when_shown_text_is_a_stub(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("PROVISIONAL\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_shown_text"
+    assert "stub" in (action.message or "")
+    dest.write_text("HELLO\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
 async def test_named_json_retries_when_string_has_newline(tmp_path) -> None:
     dest = tmp_path / "re.json"
     hooks = DeliveryHooks(

@@ -216,6 +216,15 @@ _SHOWN_TEXT_RETRY = (
     "{path} is {got} bytes; the instruction asks for the text a print "
     "shows, not a raster of the rendering. Write the short string."
 )
+_SHOWN_TEXT_PLACEHOLDER = re.compile(
+    r"^(?:PROVISIONAL|PLACEHOLDER|TODO|TBD|FIXME|WIP|PENDING|STUB|"
+    r"UNFINISHED|INCOMPLETE|TEMPORARY)\s*$",
+    re.IGNORECASE,
+)
+_SHOWN_PLACEHOLDER_RETRY = (
+    "{path} is a stub ({got!r}), not the text a print shows. Write the "
+    "decoded print output; do not leave a status word."
+)
 # path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
 _GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
 _GZIP_CAP_RETRY = (
@@ -615,7 +624,7 @@ class DeliveryHooks(NoopHooks):
         return None
 
     def _named_shown_text_retry(self) -> CompletionAction | None:
-        """Veto a huge named .txt when the instruction asks for shown print text."""
+        """Veto a stub or huge named .txt when the instruction asks for print text."""
         if self._bytes_retries >= _MAX_BYTES_RETRIES:
             return None
         if not _ASKS_SHOWN_TEXT.search(self._instruction or ""):
@@ -624,9 +633,20 @@ class DeliveryHooks(NoopHooks):
             if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
                 continue
             try:
-                got = Path(path).stat().st_size
-            except OSError:
+                body = Path(path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
                 continue
+            got = len(body.encode("utf-8"))
+            if _SHOWN_TEXT_PLACEHOLDER.match(body.strip()):
+                self._bytes_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_SHOWN_PLACEHOLDER_RETRY.format(
+                        path=path, got=body.strip()
+                    ),
+                    reason="named_shown_text",
+                )
             if got <= _MAX_SHOWN_TEXT_BYTES:
                 continue
             self._bytes_retries += 1
