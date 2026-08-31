@@ -497,6 +497,14 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
     )
     assert "/app/steal.py" in steal
     assert "/app/stolen_A1.npy" in steal
+    tracing = named_output_paths(
+        "I've put an image at /app/image.ppm. Write a c program image.c. "
+        "Your output should be to a new file reconstructed.ppm in the cwd. "
+        "I will test it by calling gcc -static -o image image.c -lm && ./image."
+    )
+    assert "/app/image.c" in tracing
+    assert "/app/reconstructed.ppm" in tracing
+    assert "/app/image.ppm" in tracing
 
 
 @pytest.mark.asyncio
@@ -1406,4 +1414,52 @@ async def test_named_make_finds_makefile_two_levels_down(tmp_path) -> None:
     assert elf.read_text(encoding="utf-8") == "x"
     assert action.kind == "accept"
     assert hooks._make_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_named_make_promotes_basename_next_to_makefile(tmp_path) -> None:
+    dest = tmp_path / "doomgeneric_mips"
+    nested = tmp_path / "doomgeneric" / "doomgeneric"
+    nested.mkdir(parents=True)
+    (nested / "Makefile").write_text(
+        "all:\n\tprintf x > doomgeneric_mips\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction="producing an ELF called doomgeneric_mips",
+        named_outputs=(str(dest),),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert dest.is_file()
+    assert dest.read_text(encoding="utf-8") == "x"
+    assert action.kind == "accept"
+    assert hooks._make_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_named_gcc_entrypoint_writes_ppm(tmp_path) -> None:
+    source = tmp_path / "image.c"
+    ppm = tmp_path / "reconstructed.ppm"
+    source.write_text(
+        "#include <stdio.h>\n"
+        "int main(void) {\n"
+        '  FILE *f = fopen("reconstructed.ppm", "w");\n'
+        '  fputs("P3\\n1 1\\n255\\n0 0 0\\n", f);\n'
+        "  fclose(f);\n"
+        "  return 0;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            f"Write a c program image.c. Output to a new file reconstructed.ppm. "
+            f"I will test it by calling gcc -o image {source.name} && ./image"
+        ),
+        named_outputs=(str(source), str(ppm)),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert ppm.is_file()
+    assert "P3" in ppm.read_text(encoding="utf-8")
+    assert action.kind == "accept"
+    assert hooks._entry_runs == 1
 

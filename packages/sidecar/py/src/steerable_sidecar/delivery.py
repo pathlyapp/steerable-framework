@@ -124,13 +124,22 @@ _TITLED_FILE = re.compile(
     re.IGNORECASE,
 )
 _WRITE_A_FILE = re.compile(
-    r"\bwrite a file\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
+    r"\bwrite a (?:c |python |js |javascript |rust )?(?:file|program|script)\s+"
+    r"[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
     re.IGNORECASE,
 )
 _WRITE_TO_FILE = re.compile(
     r"\bwrite (?:your )?(?:program|output|script|file|warrior)\s+to\s+"
     r"[`'\"]([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)[`'\"]",
     re.IGNORECASE,
+)
+_NEW_FILE = re.compile(
+    r"\ba new file\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
+    re.IGNORECASE,
+)
+_COMPILE_AND_RUN = re.compile(
+    r"\b((?:g?cc|clang)(?:\s+-\S+)*\s+-o\s+\S+\s+\S+\.c(?:\s+-lm)?"
+    r"\s*&&\s*\./[A-Za-z0-9._-]+)"
 )
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
@@ -256,7 +265,7 @@ _SYNTAX_RETRY = (
 _MAX_ENTRY_RUNS = 1
 _ENTRY_TIMEOUT_SEC = 180
 _SIDE_EFFECT_SUFFIXES = frozenset(
-    {".bmp", ".png", ".txt", ".npy", ".csv", ".json", ".fasta", ".fa"}
+    {".bmp", ".png", ".ppm", ".txt", ".npy", ".csv", ".json", ".fasta", ".fa"}
 )
 _ENTRY_FAIL = (
     "Ran `{cmd}` because named outputs were still missing. It exited "
@@ -810,6 +819,7 @@ class DeliveryHooks(NoopHooks):
             cwd=str(makefile.parent),
             timeout=_MAKE_TIMEOUT_SEC,
         )
+        _promote_make_artifacts(makefile.parent, targets)
         still = tuple(p for p in self._required if not _file_ready(p))
         still_targets = tuple(
             path
@@ -850,16 +860,18 @@ class DeliveryHooks(NoopHooks):
     def _run_named_entrypoint(self, missing: tuple[str, ...]) -> CompletionAction | None:
         """Run a named node/python command once if it can write missing outputs.
 
-        Prefers instruction backticks (``python3 helper.py``). If those are
-        absent, a named ``.py``/``.js`` that already exists is run when a
-        named side-effect file (npy/txt/bmp/…) is still missing.
+        Prefers instruction backticks (``python3 helper.py``) and
+        instruction ``gcc … file.c && ./binary`` compile-and-run lines. If
+        those are absent, a named ``.py``/``.js`` that already exists is run
+        when a named side-effect file (npy/txt/bmp/ppm/…) is still missing.
         """
         if self._entry_runs >= _MAX_ENTRY_RUNS or not missing:
             return None
         pairs: list[tuple[str, Path]] = []
         for command in (
             match.group(1)
-            for match in _RUN_COMMAND.finditer(self._instruction or "")
+            for pattern in (_RUN_COMMAND, _COMPILE_AND_RUN)
+            for match in pattern.finditer(self._instruction or "")
         ):
             script = _resolve_run_script(command, (*self._named, *self._required))
             if script is None:
@@ -1087,6 +1099,7 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
         _TITLED_FILE,
         _WRITE_A_FILE,
         _WRITE_TO_FILE,
+        _NEW_FILE,
     ):
         for match in pattern.finditer(text):
             name = match.group(1).rstrip(".,;:)")
@@ -1156,10 +1169,16 @@ def _syntax_check_js(path: Path) -> str:
 def _resolve_run_script(
     command: str, named: tuple[str, ...] = ()
 ) -> Path | None:
-    parts = command.split()
+    parts = command.replace("&&", " ").split()
     if len(parts) < 2:
         return None
     raw = parts[1]
+    for tok in parts[1:]:
+        if tok.startswith("-"):
+            continue
+        if "." in Path(tok).name:
+            raw = tok
+            break
     name = Path(raw).name
     candidates = [Path(raw)]
     if not raw.startswith("/"):
@@ -1175,6 +1194,11 @@ def _resolve_run_script(
 
 def _run_command_argv(command: str, script: Path) -> list[str] | None:
     interpreter = command.split()[0]
+    if interpreter in {"gcc", "cc", "clang"} or "&&" in command:
+        bash = shutil.which("bash")
+        if bash is None:
+            return None
+        return [bash, "-lc", command]
     if interpreter.startswith("python") or interpreter.startswith("pypy"):
         binary = shutil.which("python3") or shutil.which("python")
     else:
@@ -1338,6 +1362,31 @@ def _find_makefile(named: tuple[str, ...]) -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+def _promote_make_artifacts(make_dir: Path, missing: tuple[str, ...]) -> None:
+    """Copy a named basename make wrote beside the Makefile to the named path.
+
+    ``make -C doomgeneric/doomgeneric`` leaves ``doomgeneric_mips`` in that
+    directory while the instruction names ``/app/doomgeneric_mips``.
+    """
+    for raw in missing:
+        dest = Path(raw)
+        name = dest.name
+        if not name or dest.suffix.lower() in _SIDE_EFFECT_SUFFIXES:
+            continue
+        if _file_ready(raw):
+            continue
+        src = make_dir / name
+        try:
+            if not src.is_file():
+                continue
+            if src.resolve() == dest.resolve():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+        except OSError:
+            continue
 
 
 def _file_ready(path: str) -> bool:
