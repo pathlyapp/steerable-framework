@@ -310,6 +310,15 @@ def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
         "`node vm.js` and this should run the MIPS file"
     )
     assert "/app/vm.js" in mips
+    assert "/tmp/frame.bmp" not in mips
+    mips_frames = named_output_paths(
+        "implement a MIPS interpreter called vm.js so that I can run "
+        "`node vm.js`. Running this file should result in saving the "
+        "frames as they are rendered. I will check that the first frame "
+        "is correctly created and saved."
+    )
+    assert "/app/vm.js" in mips_frames
+    assert "/tmp/frame.bmp" in mips_frames
     doom = named_output_paths(
         "vm.js will expect a file called doomgeneric_mips and will run it, "
         "so that I can run `node vm.js`."

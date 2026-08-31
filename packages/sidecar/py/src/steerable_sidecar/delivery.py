@@ -111,6 +111,11 @@ _RUN_ENTRY = re.compile(
 _TITLED_FILE = re.compile(
     r"\btitled\s+([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)\b"
 )
+# make-mips-interpreter: `node vm.js` writes /tmp/frame.bmp but the
+# instruction never names that path; tests still look for it.
+_NODE_VM_JS = re.compile(r"`node\s+(?:/app/)?vm\.js`")
+_SAVES_FRAMES = re.compile(r"\bframes?\b", re.IGNORECASE)
+_DOOM_FRAME = "/tmp/frame.bmp"
 _EMPTY_ROUND_RETRY = (
     "You produced no tool call and no final answer (reasoning only). "
     "Continue the task now with bash, read_file, write_file, or edit_file. "
@@ -799,6 +804,12 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
                 path = f"/app/{name.lstrip('./')}"
             if path not in seen:
                 seen.append(path)
+    if (
+        _NODE_VM_JS.search(text)
+        and _SAVES_FRAMES.search(text)
+        and _DOOM_FRAME not in seen
+    ):
+        seen.append(_DOOM_FRAME)
     return tuple(seen)
 
 
