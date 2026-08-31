@@ -277,6 +277,33 @@ _ENTRY_TIMEOUT_SEC = 180
 _SIDE_EFFECT_SUFFIXES = frozenset(
     {".bmp", ".png", ".ppm", ".txt", ".npy", ".csv", ".json", ".fasta", ".fa"}
 )
+# Named sources are written by the agent, not produced by ``make``. Treating
+# ``vm.js`` / ``ars.R`` as make targets burned the one make shot and skipped
+# the backtick entrypoint that actually writes /tmp/frame.bmp.
+_SOURCE_SUFFIXES = frozenset(
+    {
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".py",
+        ".r",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".scm",
+        ".lisp",
+        ".red",
+        ".rs",
+        ".go",
+        ".java",
+        ".rb",
+        ".sh",
+        ".pl",
+        ".ts",
+    }
+)
 _ENTRY_FAIL = (
     "Ran `{cmd}` because named outputs were still missing. It exited "
     "{code}:\n{output}\nStill missing: {paths}."
@@ -879,11 +906,7 @@ class DeliveryHooks(NoopHooks):
         """Run ``make`` once when a named ELF/binary is missing and a Makefile exists."""
         if self._make_runs >= _MAX_MAKE_RUNS or not missing:
             return None
-        targets = tuple(
-            path
-            for path in missing
-            if Path(path).suffix.lower() not in _SIDE_EFFECT_SUFFIXES
-        )
+        targets = _make_targets(missing)
         if not targets:
             return None
         makefile = _find_makefile((*self._named, *self._required))
@@ -900,11 +923,7 @@ class DeliveryHooks(NoopHooks):
         )
         _promote_make_artifacts(makefile.parent, targets)
         still = tuple(p for p in self._required if not _file_ready(p))
-        still_targets = tuple(
-            path
-            for path in still
-            if Path(path).suffix.lower() not in _SIDE_EFFECT_SUFFIXES
-        )
+        still_targets = _make_targets(still)
         if not still_targets:
             return None
         listed = ", ".join(still_targets[:8])
@@ -1522,6 +1541,16 @@ def _find_makefile(named: tuple[str, ...]) -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+def _make_targets(missing: tuple[str, ...]) -> tuple[str, ...]:
+    """Named ELFs/binaries ``make`` can produce; not sources or side-effect files."""
+    return tuple(
+        path
+        for path in missing
+        if Path(path).suffix.lower() not in _SIDE_EFFECT_SUFFIXES
+        and Path(path).suffix.lower() not in _SOURCE_SUFFIXES
+    )
 
 
 def _promote_make_artifacts(make_dir: Path, missing: tuple[str, ...]) -> None:

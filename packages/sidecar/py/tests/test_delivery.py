@@ -1419,6 +1419,27 @@ async def test_named_make_skips_when_only_side_effect_missing(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_make_skips_missing_js_source(tmp_path) -> None:
+    elf = tmp_path / "doomgeneric_mips"
+    elf.write_bytes(b"\x7fELF")
+    vm = tmp_path / "vm.js"
+    frame = tmp_path / "frame.bmp"
+    (tmp_path / "Makefile").write_text("all:\n\tfalse\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=(
+            "interpreter called vm.js so I can run `node vm.js` "
+            f"on the ELF called doomgeneric_mips; frames written to {frame}"
+        ),
+        named_outputs=(str(vm), str(elf), str(frame)),
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.reason == "missing_named_output"
+    assert hooks._make_runs == 0
+    assert hooks._entry_runs == 0
+    assert not vm.exists()
+
+
+@pytest.mark.asyncio
 async def test_named_make_finds_makefile_two_levels_down(tmp_path) -> None:
     elf = tmp_path / "doomgeneric_mips"
     nested = tmp_path / "doomgeneric" / "doomgeneric"
