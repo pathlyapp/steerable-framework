@@ -68,6 +68,28 @@ async def test_named_missing_keeps_nudging_after_max_nudges(tmp_path) -> None:
     second = await hooks.pre_step([], ctx)
     assert second.appends
     assert hooks.nudges == 2
+    assert str(target) in second.appends[0].message.content_text
+    assert "Still missing" in second.appends[0].message.content_text
+
+
+@pytest.mark.asyncio
+async def test_named_missing_explore_nudges_are_capped(tmp_path) -> None:
+    target = tmp_path / "re.json"
+    hooks = DeliveryHooks(
+        named_outputs=(str(target),),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    for _ in range(16):
+        await hooks.post_tool_result(ok, _call("bash"), ctx)
+        action = await hooks.pre_step([], ctx)
+        assert action.appends
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    stopped = await hooks.pre_step([], ctx)
+    assert stopped.appends is None
+    assert hooks.nudges == 16
 
 
 @pytest.mark.asyncio

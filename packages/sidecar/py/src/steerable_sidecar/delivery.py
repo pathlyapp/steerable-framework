@@ -50,6 +50,7 @@ _EXPLORE_NUDGE = (
     "whole program only in reasoning or chat. Do not write placeholders, "
     "decoys, guesses, or a prose description of a rendering."
 )
+_EXPLORE_NUDGE_MISSING = _EXPLORE_NUDGE + " Still missing: {paths}."
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "
     "tests look for those paths. If you already drafted the contents in "
@@ -139,12 +140,16 @@ class DeliveryHooks(NoopHooks):
             1 for m in transcript if _COMPACT_MARKER in (m.content_text or "")
         )
         new_compact = n_compacts > self._compact_nudges
-        named_missing = any(not Path(p).exists() for p in self._required)
+        missing = tuple(p for p in self._required if not Path(p).exists())
+        named_missing = bool(missing)
         # dna-assembly planned primers.fasta for the whole soft timeout after
         # three nudges; keep asking while named outputs are still absent.
+        nudge_limit = (
+            _MAX_MISSING_NAMED_RETRIES if named_missing else self._max_nudges
+        )
         if (
             self.writes == 0
-            and (self.nudges < self._max_nudges or named_missing)
+            and self.nudges < nudge_limit
             and (
                 self.consecutive_explore >= self._explore_before_nudge
                 or new_compact
@@ -154,9 +159,14 @@ class DeliveryHooks(NoopHooks):
             self.consecutive_explore = 0
             if new_compact:
                 self._compact_nudges = n_compacts
+            text = (
+                _EXPLORE_NUDGE_MISSING.format(paths=", ".join(missing[:8]))
+                if missing
+                else _EXPLORE_NUDGE
+            )
             appends = [
                 TranscriptAppend(
-                    message=LLMMessage.text_of("user", _EXPLORE_NUDGE),
+                    message=LLMMessage.text_of("user", text),
                     kind="delivery.explore_nudge",
                 )
             ]
