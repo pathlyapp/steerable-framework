@@ -51,6 +51,26 @@ async def test_nudge_after_explore_without_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_missing_keeps_nudging_after_max_nudges(tmp_path) -> None:
+    target = tmp_path / "primers.fasta"
+    hooks = DeliveryHooks(
+        named_outputs=(str(target),),
+        explore_before_nudge=1,
+        max_nudges=1,
+    )
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    first = await hooks.pre_step([], ctx)
+    assert first.appends
+    assert hooks.nudges == 1
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    second = await hooks.pre_step([], ctx)
+    assert second.appends
+    assert hooks.nudges == 2
+
+
+@pytest.mark.asyncio
 async def test_nudge_after_compact_without_write() -> None:
     hooks = DeliveryHooks(explore_before_nudge=20)
     ctx = LoopContext()
@@ -336,6 +356,17 @@ async def test_missing_named_output_retries_more_than_once(tmp_path) -> None:
     target.write_text("[]", encoding="utf-8")
     third = await hooks.before_completion(_draft(tools=4), ctx)
     assert third.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_missing_named_output_retries_past_old_eight_cap(tmp_path) -> None:
+    target = tmp_path / "re.json"
+    hooks = DeliveryHooks(named_outputs=(str(target),))
+    ctx = LoopContext()
+    for _ in range(9):
+        action = await hooks.before_completion(_draft(tools=2), ctx)
+        assert action.kind == "retry"
+        assert action.reason == "missing_named_output"
 
 
 @pytest.mark.asyncio

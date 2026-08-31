@@ -92,9 +92,9 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
-# Keep-tools wrap-up is 12 extra rounds; a single missing-path retry let
-# regex-chess stop after summarizing /app/re.json instead of writing it.
-_MAX_MISSING_NAMED_RETRIES = 8
+# Match CoreLoop ``_MAX_COMPLETION_REDOS`` (16). Eight retries still let
+# dna-assembly / steal.py / regex-chess stop after a text-only summary.
+_MAX_MISSING_NAMED_RETRIES = 16
 
 
 class DeliveryHooks(NoopHooks):
@@ -139,9 +139,12 @@ class DeliveryHooks(NoopHooks):
             1 for m in transcript if _COMPACT_MARKER in (m.content_text or "")
         )
         new_compact = n_compacts > self._compact_nudges
+        named_missing = any(not Path(p).exists() for p in self._required)
+        # dna-assembly planned primers.fasta for the whole soft timeout after
+        # three nudges; keep asking while named outputs are still absent.
         if (
             self.writes == 0
-            and self.nudges < self._max_nudges
+            and (self.nudges < self._max_nudges or named_missing)
             and (
                 self.consecutive_explore >= self._explore_before_nudge
                 or new_compact

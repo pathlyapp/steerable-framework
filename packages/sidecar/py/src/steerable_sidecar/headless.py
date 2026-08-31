@@ -137,8 +137,9 @@ _SYSTEM = (
     "embeddings, attention mask); do not drop them. "
     "If you recover a matrix from queries, check that it reconstructs "
     "the queried function on held-out inputs before stopping. "
-    "When porting a sampler, pass the source warmup, thinning, and "
-    "adapt-control values into the new client, not library defaults. "
+    "When porting a sampler, pass the source warmup, thinning, "
+    "adapt-control, seed, chains, and iteration counts into the new "
+    "client, not library defaults. "
     "Before finishing, write a small local check for the instruction's "
     "named thresholds (cosine, KL, Levenshtein, runtime, P@1), run it, "
     "and fix failures. If a local check prints a number below the named "
@@ -232,7 +233,7 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             soft_timeout_ms=_soft_timeout_ms(),
             tool_timeout_ms=3_600_000,
             wrap_up_keeps_tools=True,
-            wrap_up_max_tool_rounds=12,
+            wrap_up_max_tool_rounds=16,
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the

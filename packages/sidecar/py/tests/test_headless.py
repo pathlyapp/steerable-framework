@@ -107,6 +107,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "gzip|wc" in headless_mod._SYSTEM
     assert "/usr/local/bin/python" in headless_mod._SYSTEM
     assert "adapt-control" in headless_mod._SYSTEM
+    assert "iteration counts" in headless_mod._SYSTEM
     assert "NameError" in headless_mod._SYSTEM
     assert "baseline JPEG" in headless_mod._SYSTEM
     assert "runtime or speedup" in headless_mod._SYSTEM
@@ -192,7 +193,7 @@ def test_headless_wrap_up_keeps_tools() -> None:
 
     src = inspect.getsource(headless_mod._run)
     assert "wrap_up_keeps_tools=True" in src
-    assert "wrap_up_max_tool_rounds=12" in src
+    assert "wrap_up_max_tool_rounds=16" in src
     assert "DeliveryHooks(instruction=instruction)" in src
     assert src.index("_default_loop_hooks") < src.index(
         "DeliveryHooks(instruction=instruction)"
