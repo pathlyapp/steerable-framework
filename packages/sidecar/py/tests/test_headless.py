@@ -80,6 +80,7 @@ def test_system_prompt_names_edit_file_and_delivery() -> None:
     assert "uncompressed BMP" in headless_mod._SYSTEM
     assert "drafted required file contents" in headless_mod._SYSTEM
     assert "or in reasoning" in headless_mod._SYSTEM
+    assert "cat > path <<'EOF'" in headless_mod._SYSTEM
     assert "timeout N" in headless_mod._SYSTEM
     assert "login prompt" in headless_mod._SYSTEM
     assert "replay proxy" in headless_mod._SYSTEM

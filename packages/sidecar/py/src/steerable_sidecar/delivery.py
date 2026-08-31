@@ -76,7 +76,8 @@ _EXPLORE_NUDGE = (
     "You have inspected the workspace for many steps without creating the "
     "required output files. If you already know contents that satisfy every "
     "constraint the instruction states (path, length, format, metric), write "
-    "those files now with write_file, edit_file, or bash. Do not paste the "
+    "those files now with write_file, edit_file, or bash "
+    "(`cat > path <<'EOF'`). Do not paste the "
     "whole program only in reasoning or chat. Do not write placeholders, "
     "decoys, guesses, or a prose description of a rendering."
 )
@@ -84,20 +85,22 @@ _EXPLORE_NUDGE_MISSING = _EXPLORE_NUDGE + " Still missing: {paths}."
 _NO_ARTIFACT_RETRY = (
     "The turn is ending without a write to the named output files. Hidden "
     "tests look for those paths. If you already drafted the contents in "
-    "this chat, write them now with write_file, edit_file, or bash; do not "
-    "only describe a plan, dump a placeholder, or truncate an existing file."
+    "this chat, write them now with bash `cat > path <<'EOF'` or "
+    "write_file; do not only describe a plan, dump a placeholder, or "
+    "truncate an existing file."
 )
 _MISSING_NAMED_RETRY = (
     "The turn is ending but these instruction-named output files still "
-    "do not exist: {paths}. Hidden tests look for those paths. Write them "
-    "now with write_file, edit_file, or bash — helper scripts alone are "
-    "not enough."
+    "do not exist: {paths}. Hidden tests look for those paths. Emit a "
+    "bash tool call now: `cat > {first} <<'EOF'` (or write_file). "
+    "Pasting the program only in chat does not create the file."
 )
 _WRAP_UP_MARKER = "The time budget for this task is"
 _WRAP_UP_NAMED = (
     "Time is almost up. These instruction-named output files still do "
-    "not exist: {paths}. Write them now with write_file, edit_file, or "
-    "bash; do not keep exploring or only reason in chat."
+    "not exist: {paths}. Emit a bash tool call now: "
+    "`cat > {first} <<'EOF'` (or write_file). Do not keep exploring or "
+    "only reason in chat."
 )
 # Absolute paths TB instructions name as outputs (`/app/re.json`,
 # `/tmp/frame.bmp`, `/app/polyglot/cmain`). Existing paths at start are
@@ -539,7 +542,10 @@ class DeliveryHooks(NoopHooks):
                     TranscriptAppend(
                         message=LLMMessage.text_of(
                             "user",
-                            _WRAP_UP_NAMED.format(paths=", ".join(missing[:8])),
+                            _WRAP_UP_NAMED.format(
+                                paths=", ".join(missing[:8]),
+                                first=missing[0],
+                            ),
                         ),
                         kind="delivery.wrap_up_named",
                     )
@@ -1189,7 +1195,9 @@ class DeliveryHooks(NoopHooks):
             listed = ", ".join(missing[:8])
             return CompletionAction(
                 kind="retry",
-                message=_MISSING_NAMED_RETRY.format(paths=listed),
+                message=_MISSING_NAMED_RETRY.format(
+                    paths=listed, first=missing[0]
+                ),
                 reason="missing_named_output",
             )
         size_retry = self._named_image_size_retry()

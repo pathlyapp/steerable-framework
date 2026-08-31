@@ -189,6 +189,7 @@ async def test_wrap_up_lists_missing_named_paths_once(tmp_path) -> None:
     assert first.reason == "wrap_up_named_output"
     assert first.tool_choice == "required"
     assert str(dest) in (first.appends[0].message.content_text or "")
+    assert f"cat > {dest} <<'EOF'" in (first.appends[0].message.content_text or "")
     second = await hooks.pre_step(notice, LoopContext())
     assert second.reason != "wrap_up_named_output"
 
@@ -397,6 +398,7 @@ async def test_missing_named_output_beats_empty_round(tmp_path) -> None:
     assert action.kind == "retry"
     assert action.reason == "missing_named_output"
     assert str(target) in (action.message or "")
+    assert f"cat > {target} <<'EOF'" in (action.message or "")
 
 
 @pytest.mark.asyncio
