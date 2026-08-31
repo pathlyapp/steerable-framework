@@ -1610,3 +1610,127 @@ async def test_listen_skips_when_instruction_names_no_port() -> None:
     assert action.kind == "accept"
     assert action.reason is None
 
+
+@pytest.mark.asyncio
+async def test_cpu_only_retries_when_cmake_cache_is_off(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = tmp_path / "caffe" / "build" / "CMakeCache.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("# cache\nCPU_ONLY:BOOL=OFF\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="Install Caffe 1.0.0 and build for only CPU execution.",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_cpu_only"
+    cache.write_text("CPU_ONLY:BOOL=ON\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_cpu_only_makefile_beats_cmake_cache(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    caffe = tmp_path / "caffe"
+    caffe.mkdir()
+    (caffe / "Makefile.config").write_text("CPU_ONLY := 0\n", encoding="utf-8")
+    cache = caffe / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("CPU_ONLY:BOOL=ON\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="build for only CPU execution",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_cpu_only"
+    (caffe / "Makefile.config").write_text("CPU_ONLY := 1\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_cpu_only_skips_when_instruction_omits_cpu(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = tmp_path / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("CPU_ONLY:BOOL=OFF\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="Train the CIFAR-10 model.",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_cpu_only_retries_when_cmake_cache_is_off(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = tmp_path / "caffe" / "build" / "CMakeCache.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("# cache\nCPU_ONLY:BOOL=OFF\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="Install Caffe 1.0.0 and build for only CPU execution.",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_cpu_only"
+    cache.write_text("CPU_ONLY:BOOL=ON\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_cpu_only_makefile_beats_cmake_cache(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    caffe = tmp_path / "caffe"
+    caffe.mkdir()
+    (caffe / "Makefile.config").write_text("CPU_ONLY := 0\n", encoding="utf-8")
+    cache = caffe / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("CPU_ONLY:BOOL=ON\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="build for only CPU execution",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "instruction_cpu_only"
+    (caffe / "Makefile.config").write_text("CPU_ONLY := 1\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=3), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_cpu_only_skips_when_instruction_omits_cpu(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    cache = tmp_path / "build" / "CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("CPU_ONLY:BOOL=OFF\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction="Train the CIFAR-10 model.",
+        named_outputs=(),
+        min_tools_for_completion_retry=99,
+    )
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+

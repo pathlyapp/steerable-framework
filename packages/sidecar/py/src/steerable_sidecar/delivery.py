@@ -318,6 +318,18 @@ _LISTEN_RETRY = (
     "The instruction names a service on port {port}. Nothing accepted a "
     "TCP connection there. Start it in the background and leave it running."
 )
+# "build for only CPU execution": CMakeCache / Makefile.config must enable
+# CPU_ONLY. Not a hidden-test dump — the instruction names the constraint.
+_CPU_ONLY_INSTRUCTION = re.compile(
+    r"\bonly CPU\b|\bCPU-only\b|\bCPU only\b|\bCPU_ONLY\b",
+    re.IGNORECASE,
+)
+_MAX_CPU_ONLY_RETRIES = 4
+_CPU_ONLY_RETRY = (
+    "The instruction requires a CPU-only build. {path} does not enable "
+    "CPU_ONLY (CMakeCache `CPU_ONLY:BOOL=ON`, or Makefile.config "
+    "`CPU_ONLY := 1`). Reconfigure that build."
+)
 
 
 class DeliveryHooks(NoopHooks):
@@ -362,6 +374,7 @@ class DeliveryHooks(NoopHooks):
         self._wrap_up_named_nudges = 0
         self._force_tool = False
         self._listen_retries = 0
+        self._cpu_only_retries = 0
 
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
         """Refuse inspect-only tools after named-output nudges are ignored.
@@ -1005,6 +1018,42 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
+    def _instruction_cpu_only_retry(self) -> CompletionAction | None:
+        if self._cpu_only_retries >= _MAX_CPU_ONLY_RETRIES:
+            return None
+        if not _CPU_ONLY_INSTRUCTION.search(self._instruction or ""):
+            return None
+        makes, caches = _cpu_only_meta_files()
+        if makes:
+            for path in makes:
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if "CPU_ONLY:=1" not in re.sub(r"\s+", "", text):
+                    self._cpu_only_retries += 1
+                    self._force_tool = True
+                    return CompletionAction(
+                        kind="retry",
+                        message=_CPU_ONLY_RETRY.format(path=path),
+                        reason="instruction_cpu_only",
+                    )
+            return None
+        for path in caches:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "CPU_ONLY:BOOL=ON" not in text:
+                self._cpu_only_retries += 1
+                self._force_tool = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_CPU_ONLY_RETRY.format(path=path),
+                    reason="instruction_cpu_only",
+                )
+        return None
+
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
@@ -1060,6 +1109,9 @@ class DeliveryHooks(NoopHooks):
         listen_retry = self._instruction_listen_retry()
         if listen_retry is not None:
             return listen_retry
+        cpu_retry = self._instruction_cpu_only_retry()
+        if cpu_retry is not None:
+            return cpu_retry
         empty = not (draft.content or "").strip() and not draft.had_tool_calls
         if empty and self.empty_round_retries < self._max_empty_round_retries:
             self.empty_round_retries += 1
@@ -1536,6 +1588,56 @@ def _tcp_banner(
             return chunks
     except OSError:
         return None
+
+
+def _cpu_only_meta_files() -> tuple[list[Path], list[Path]]:
+    """Makefile.config and CMakeCache.txt under cwd and /app, depth 2."""
+    makes: list[Path] = []
+    caches: list[Path] = []
+    seen: set[Path] = set()
+    roots: list[Path] = []
+    cwd = Path.cwd()
+    if cwd.is_dir():
+        roots.append(cwd)
+    app = Path("/app")
+    try:
+        if app.is_dir() and app.resolve() != cwd.resolve():
+            roots.append(app)
+    except OSError:
+        if app.is_dir():
+            roots.append(app)
+
+    def rec(current: Path, depth: int) -> None:
+        if depth > 2:
+            return
+        try:
+            children = list(current.iterdir())
+        except OSError:
+            return
+        for child in children:
+            try:
+                if child.is_symlink():
+                    continue
+                if child.is_file() and child.name in {
+                    "Makefile.config",
+                    "CMakeCache.txt",
+                }:
+                    resolved = child.resolve()
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    if child.name == "Makefile.config":
+                        makes.append(child)
+                    else:
+                        caches.append(child)
+                elif child.is_dir() and child.name not in {".git", "node_modules"}:
+                    rec(child, depth + 1)
+            except OSError:
+                continue
+
+    for root in roots:
+        rec(root, 0)
+    return makes, caches
 
 
 def _bash_command(call: ToolCall) -> str:
