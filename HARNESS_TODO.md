@@ -548,7 +548,22 @@ W1.2 的 `agent.session.messages` 与分支族给了投影与分叉。
 
 - [ ] **4.1.1** deeppath-agent 侧实现 `host.process.spawn`（受限令牌 + JobObject），
       参照 codex `windows-sandbox-rs` 与 dsh 的受限令牌 + ACL runner。
+      **阻塞记录（2026-08-31）**：实现载体现状盘点——deeppath-agent 无 FFI
+      依赖（无 koffi/ffi-napi），无 Rust 构建步骤（electron-rebuild 只管
+      node-pty/better-sqlite3）；受限令牌 + JobObject 必须经 Win32
+      （CreateRestrictedToken / CreateJobObject / SetInformationJobObject /
+      CreateProcessWithTokenW / AssignProcessToJobObject），纯 Node 无法表达。
+      可选载体：(a) 引入 koffi 直调 advapi32/kernel32（预编译二进制，
+      但安全关键的 FFI 盲写不可接受）；(b) 新增 Rust 辅助二进制
+      （参照 codex windows-sandbox-rs，需新增工具链与交叉编译管线）。
+      两者都必须先在 Windows 上编译验证才允许入库——安全边界不接受
+      未经实盘验证的实现（与 4.1.2 同一把锁）。当前行为已 fail closed：
+      无 handler → JSON-RPC error → sidecar 拒绝运行，不会静默裸奔。
 - [ ] **4.1.2** Windows 环境实盘验证，写入 `docs/spec/safety.md` 宿主能力面章。
+      需要：一台 Windows 机器或 VM（本机 macOS 无法验证），验证清单——
+      受限令牌进程写项目外目录被拒、JobObject kill-on-close 生效、
+      网络策略经 WFP 或代理环境变量落地、sandbox.enforcement 回报与实际
+      施加一致。
 
 ### 4.2 运行时指标
 
