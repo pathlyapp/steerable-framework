@@ -38,6 +38,12 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# default.harness.yaml ships inside the wheel: the sidecar resolves it
+# relative to the installed package (Harbor trial containers pip-install
+# the wheels, so a repo-relative path would not exist there).
+[tool.setuptools.package-data]
+steerable_agent_runtime = ["*.yaml"]
+
 [tool.uv.sources]
 steerable-agent-protocol = { workspace = true }
 steerable-agent-harness = { workspace = true }

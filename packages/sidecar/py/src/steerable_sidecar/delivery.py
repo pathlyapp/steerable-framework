@@ -1775,7 +1775,9 @@ def _tcp_listen_comm(port: int) -> str | None:
         return None
     want = {f"socket:[{inode}]" for inode in inodes}
     try:
-        pid_dirs = Path("/proc").iterdir()
+        # iterdir() is lazy: the OSError (containerized /proc denies pid 1)
+        # raises on iteration, so materialize inside the try.
+        pid_dirs = list(Path("/proc").iterdir())
     except OSError:
         return None
     for pid_dir in pid_dirs:
@@ -1783,7 +1785,7 @@ def _tcp_listen_comm(port: int) -> str | None:
             continue
         fd_dir = pid_dir / "fd"
         try:
-            fds = fd_dir.iterdir()
+            fds = list(fd_dir.iterdir())
         except OSError:
             continue
         for fd in fds:

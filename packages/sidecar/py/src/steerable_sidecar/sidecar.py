@@ -29,6 +29,7 @@ Methods (see spec/sidecar/README.md for the full catalog):
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -2028,9 +2029,12 @@ def _catalog_base_url(provider_kind: str) -> str | None:
 
 
 #: The bundled default harness spec (W1.2.4): the built-in chain as data.
+#: Resolved inside the installed steerable_agent_runtime package (shipped as
+#: package data) so pip-installed venvs — Harbor trial containers — find it;
+#: the repo layout lands on the same file through the editable install.
 _DEFAULT_HARNESS_SPEC_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml"
+    Path(importlib.util.find_spec("steerable_agent_runtime").origin).resolve().parent
+    / "default.harness.yaml"
 )
 
 
