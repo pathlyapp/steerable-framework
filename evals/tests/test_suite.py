@@ -174,7 +174,12 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "--n-concurrent 2" in weekly
     assert "**/eval-status-*.txt" in weekly
     assert "evals/jobs/steerable/*/*/result.json" in weekly
-    assert weekly.count("evals/jobs/steerable/*/*/result.json") == 2
+    # A sharded job that forgets the per-trial path uploads only its status
+    # file, so its tasks read as absent instead of failed and the mean is
+    # computed over a smaller set without saying so.
+    assert weekly.count("evals/jobs/steerable/*/*/result.json") == weekly.count(
+        '--shard "${{ matrix.shard }}"'
+    )
     assert "pull_request:" not in weekly
     assert "--split catalog" in weekly
     assert "--split failed-prev" in weekly
@@ -201,8 +206,11 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
         "32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]"
     ) in weekly
     assert "timeout-minutes: 360" in weekly
-    assert weekly.count("--agent-timeout-multiplier 12") == 2
-    assert weekly.count("--verifier-timeout-multiplier 2") == 2
+    # The sharded splits run the long catalog tasks and need the generous
+    # multipliers; cheap-12 stays at ×3 so a smoke run stays a smoke run.
+    sharded = weekly.count('--shard "${{ matrix.shard }}"')
+    assert weekly.count("--agent-timeout-multiplier 12") == sharded
+    assert weekly.count("--verifier-timeout-multiplier 2") == sharded
     cheap_job = weekly.split("  failed-prev:", 1)[0]
     assert "--agent-timeout-multiplier 3" in cheap_job
     assert "--agent-timeout-multiplier 12" not in cheap_job
