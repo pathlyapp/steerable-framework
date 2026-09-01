@@ -145,6 +145,39 @@ _NEW_FILE = re.compile(
     r"\ba new file\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
     re.IGNORECASE,
 )
+# The patterns above each key on a verb phrasing ("write a file X", "named
+# X"), so an instruction that states the requirement as a checklist item
+# instead names no output at all. Four of the six stable reds whose hidden
+# test reported the required file simply absent were missed that way:
+# `image.c` must exist, `primers.fasta` exists and contains…, Confirms
+# `my_warrior.red` was created, The output files (`ACCOUNTS.DAT`, …).
+#
+# Anchoring on the existence assertion rather than on the backticks is what
+# keeps this selective. Treating every backticked filename as an output was
+# measured over the 89 catalog instructions and adds 105 candidates across 49
+# of the 58 passing tasks — including `test_outputs.py`, the hidden test
+# itself, and `np.float64`, which is not a file. These three add 3, all of
+# them plausible real outputs on tasks that already deliver them.
+_ASSERTS_EXISTS = re.compile(
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`\s+"
+    r"(?:must\s+|should\s+)?(?:exists?\b|be\s+created\b|was\s+created\b)",
+    re.IGNORECASE,
+)
+_CONFIRMS_CREATED = re.compile(
+    r"(?:confirms?|verif\w+|checks?)[^.\n]{0,30}"
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`"
+    r"[^.\n]{0,25}(?:created|exists?)",
+    re.IGNORECASE,
+)
+# Captures the run of text after "output file(s)" so every name in a list is
+# read, not just the first: cobol-modernization names three .DAT files in one
+# parenthesised list and the hidden test requires all three. The run cannot
+# stop at a full stop, because the filenames themselves contain one; the
+# length cap and the backtick requirement are what bound it instead.
+_OUTPUT_FILE_LIST = re.compile(r"output\s+files?\b([^\n]{0,120})", re.IGNORECASE)
+_BACKTICKED_FILE = re.compile(
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`"
+)
 _COMPILE_AND_RUN = re.compile(
     r"\b((?:g?cc|clang)(?:\s+-\S+)*\s+-o\s+\S+\s+\S+\.c(?:\s+-lm)?"
     r"\s*&&\s*\./[A-Za-z0-9._-]+)"
@@ -1432,6 +1465,7 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             continue
         if path not in seen:
             seen.append(path)
+    names: list[str] = []
     for pattern in (
         _CALLED_WITH_EXT,
         _FILE_CALLED,
@@ -1440,17 +1474,19 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
         _WRITE_A_FILE,
         _WRITE_TO_FILE,
         _NEW_FILE,
+        _ASSERTS_EXISTS,
+        _CONFIRMS_CREATED,
     ):
-        for match in pattern.finditer(text):
-            name = match.group(1).rstrip(".,;:)")
-            if name.startswith("/"):
-                path = name
-            else:
-                path = f"/app/{name.lstrip('./')}"
-            if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
-                continue
-            if path not in seen:
-                seen.append(path)
+        names.extend(match.group(1) for match in pattern.finditer(text))
+    for match in _OUTPUT_FILE_LIST.finditer(text):
+        names.extend(_BACKTICKED_FILE.findall(match.group(1)))
+    for raw_name in names:
+        name = raw_name.rstrip(".,;:)")
+        path = name if name.startswith("/") else f"/app/{name.lstrip('./')}"
+        if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
+            continue
+        if path not in seen:
+            seen.append(path)
     return tuple(seen)
 
 

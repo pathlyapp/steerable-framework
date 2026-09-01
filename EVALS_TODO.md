@@ -214,8 +214,39 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 不在全量跑完前实现：这一跑第一次测量现行门禁的真实效果，改了就分不清是哪版的功劳。
 
+### 22 道稳定红按 verifier 实际报错分类（不是"模型能力不够"）
+
+按 `verifier/test-stdout.txt` 的真实断言分类，而不是靠日志启发式：
+
+| 形态 | 题数 | 题目 |
+|---|---|---|
+| **要求的文件根本不存在** | **6** | adaptive-rejection-sampler `ars.R`、cobol-modernization `TRANSACTIONS.DAT`、dna-assembly `primers.fasta`、path-tracing `image.c`、regex-chess `re.json`、winning-avg-corewars `my_warrior.red` |
+| **交付的程序自己崩了** | **4** | largest-eigenval（matmul 维度不匹配）、torch-pipeline-parallelism（`UnboundLocalError: mb_idx`）、video-processing（`KeyError: 0`）、make-doom-for-mips（等 frame.bmp 超时） |
+| 数值差一点 | 3 | extract-moves-from-video 84.03% 差 90%、path-tracing-reverse 0.930 差 0.995、train-fasttext 0.562 差 0.62 |
+| 实质性错误 | 8 | raman-fitting（拟合值 x0=19196 应为 1580）、gcode-to-text（交了 `PROVISIONAL`）、mteb-retrieve、protein-assembly、schemelike-metacircular-eval、filter-js-from-html、install-windows-3.11、gpt2-codegolf |
+
+**前 10 道是 harness 能碰到的**（文件没交 + 交了但程序崩），值 +0.11。第二类正是验证门禁的目标：跑一次自己的程序就会看到崩溃。
+
+### 命名输出检测漏掉 6 道红题的路径（已修）
+
+`DeliveryHooks` 本来会在指令命名的输出缺失时拒绝完成（最多 32 次重试），所以文件缺失只有两种解释：被切流杀掉，或者**检测器从没把那个路径当成输出**。实测这 6 道，检测器全部漏掉（其中 3 道同时也被切流卡住）。
+
+原因：现有 5 个模式各锚定一种动词措辞（`write a file X`、`named X`、`a new file X`……），而这几道把要求写成**检查清单**：
+
+- `1. **File Existence**: \`image.c\` must exist`
+- `2. **Warrior Exists**: Confirms \`my_warrior.red\` was created`
+- `` 1. `primers.fasta` exists and contains exactly 8 primer pairs ``
+- `` - The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) must match byte-for-byte ``
+
+**通用规则"反引号裸文件名都算输出"已被实测否决**：跨 89 份指令会给 58 道通过题里的 49 道加上共 105 个假需求，包括 `test_outputs.py`（隐藏测试本身）和 `np.float64`（根本不是文件）。所以短语锚定是承重的，不是堆积。
+
+改为锚定**存在性断言**（`X must exist` / `Confirms X was created` / `output files (X, Y, Z)`）：**6/6 全部命中，通过题上只多出 3 个候选**（dna-insert `primers.fasta`、financial-document-processor `summary.csv`、polyglot-rust-c `main.rs`，都是真实输出，已交付所以门禁不触发）。输出列表要捕获整段，因为文件名本身带点号，正则不能在句号处停。
+
+新增 3 个测试，含一个反向测试锁住选择性（断言 `test_outputs.py` / `np.float64` / `chess_board.png` 不被当成输出）。
+
 - [x] **2.5.1** cuts A/B 完成
 - [x] **2.5.2** 切流默认关闭（保留 env 覆盖）
+- [x] **2.5.5** 命名输出检测补上检查清单措辞（6/6，假阳性 3）
 - [ ] **2.5.3** 加 codex 式持久性指令（绿 trial 中位数只用掉 150 分钟里的 12 分钟）
 - [ ] **2.5.4** 全量 89 记录 Mean ≥ 0.75
 

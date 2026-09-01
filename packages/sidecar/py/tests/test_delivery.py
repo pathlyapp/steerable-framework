@@ -534,6 +534,59 @@ def test_named_output_paths_keeps_nested_extensionless_binary() -> None:
     assert "/app/caffe" not in paths
 
 
+def test_named_output_paths_reads_a_checklist_not_only_a_verb_phrase() -> None:
+    """An output stated as something the tests confirm is still an output.
+
+    Six stable reds had their hidden test report the required file simply
+    absent, and four of them state the requirement this way rather than as
+    "write a file X" — so the completion gate that exists to refuse exactly
+    that ending never knew there was a path to wait for. Phrasing here is
+    taken verbatim from those instructions.
+    """
+    assert "/app/image.c" in named_output_paths(
+        "1. **File Existence**: `image.c` must exist\n"
+        "2. **Compilation**: Code must compile with `gcc -o image image.c -lm`"
+    )
+    assert "/app/primers.fasta" in named_output_paths(
+        "1. `primers.fasta` exists and contains exactly 8 primer pairs"
+    )
+    assert "/app/my_warrior.red" in named_output_paths(
+        "2. **Warrior Exists**: Confirms `my_warrior.red` was created"
+    )
+
+
+def test_named_output_paths_reads_every_name_in_an_output_list() -> None:
+    """A list of outputs is a list, and the hidden test wants all of them.
+
+    cobol-modernization names three files in one parenthesised list and is
+    scored on all three, so stopping at the first would leave the gate
+    satisfied while two were still missing. The run cannot end at a full stop
+    because the names contain one.
+    """
+    paths = named_output_paths(
+        "- The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) "
+        "must match byte-for-byte"
+    )
+    assert paths == ("/app/ACCOUNTS.DAT", "/app/BOOKS.DAT", "/app/TRANSACTIONS.DAT")
+
+
+def test_named_output_paths_ignores_backticked_files_that_assert_nothing() -> None:
+    """Selectivity is the whole reason this keys on the assertion.
+
+    Treating every backticked filename as an output was measured over the 89
+    catalog instructions: it adds 105 candidates across 49 of the 58 passing
+    tasks, among them the hidden test file itself and `np.float64`, which is
+    not a file at all. Those would become paths the gate waits for on trials
+    that are already correct.
+    """
+    paths = named_output_paths(
+        "The graders run `test_outputs.py` against your work. Cast with "
+        "`np.float64` rather than `np.float`, and read the reference image "
+        "`chess_board.png` from the working directory."
+    )
+    assert paths == ()
+
+
 def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:
     mips = named_output_paths(
         "implement a MIPS interpreter called vm.js so that I can run "
