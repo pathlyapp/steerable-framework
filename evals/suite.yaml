@@ -245,14 +245,16 @@ splits:
     - train-fasttext
     - video-processing
     - winning-avg-corewars
-  # Harness-change A/B set. Two full catalog runs at different commits agreed
-  # on 50 greens and 22 reds and disagreed on these 17, so the flappers carry
-  # every point a harness change can win or lose; fixing them alone reaches
-  # 0.753. The 12 controls are stable greens whose trials took a stream cut —
-  # feal-differential and write-compressor regressed from 21 and 14 tool calls
-  # to 2 and 1 without a control set to catch it. Run with n-attempts 3: at
-  # one attempt a flapper's outcome is a coin toss and the mean carries a
-  # ±0.19 band, wide enough to swallow any real effect.
+  # Harness-change A/B set, sized to the 50 jobs GHA has been observed to run
+  # at once so both arms finish in one wave. Two full catalog runs at
+  # different commits agreed on 50 greens and 22 reds and disagreed on these
+  # 17, so the flappers carry every point a harness change can win or lose;
+  # fixing them alone reaches 0.753. The 8 controls are stable greens whose
+  # trials took a stream cut, ordered by how many — feal-differential and
+  # write-compressor regressed from 21 and 14 tool calls to 2 and 1 with no
+  # control set to catch it. Run with n-attempts 3: at one attempt a
+  # flapper's outcome is a coin toss and the mean carries a ±0.19 band, wide
+  # enough to swallow any real effect.
   flaky:
     - bn-fit-modify
     - build-pov-ray
@@ -272,17 +274,29 @@ splits:
     - torch-tensor-parallelism
     - write-compressor
     - chess-best-move
-    - extract-elf
     - feal-linear-cryptanalysis
     - large-scale-text-editing
-    - llm-inference-batching-scheduler
     - mailman
-    - mteb-leaderboard
     - openssl-selfsigned-cert
-    - query-optimize
     - regex-log
     - reshard-c4-data
     - sparql-university
+  # The seven stable reds that lose their trial to unbounded reasoning: both
+  # catalog runs produced >=50 KB of reasoning per tool call, a regime that
+  # passes at 0.071 against 0.889 below 3 KB. They are absent from `flaky`
+  # because that set is paired arms over tasks whose baseline is a coin toss,
+  # and these have no coin to toss — two runs, zero passes. So this set runs
+  # one arm and asks a different question: does the change make any of them
+  # passable at all? Against a 0-for-2 baseline a single pass is the finding,
+  # which needs no second arm and no paired test.
+  spiral-red:
+    - circuit-fibsqrt
+    - dna-assembly
+    - extract-moves-from-video
+    - gpt2-codegolf
+    - regex-chess
+    - schemelike-metacircular-eval
+    - winning-avg-corewars
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert

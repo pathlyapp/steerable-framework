@@ -118,6 +118,38 @@ def test_failed_prev_is_pinned_catalog_subset() -> None:
     assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
 
+def test_iteration_splits_are_catalog_subsets_that_do_not_overlap() -> None:
+    """The two iteration sets ask different questions of different tasks.
+
+    ``flaky`` is paired arms over tasks whose baseline is a coin toss;
+    ``spiral-red`` is one arm over tasks with no passes to compare against.
+    A task in both would be measured twice under designs that disagree about
+    what its baseline is.
+    """
+    suite = load_suite()
+    flaky = set(suite.splits["flaky"])
+    spiral = set(suite.splits["spiral-red"])
+    assert flaky <= suite.catalog_set
+    assert spiral <= suite.catalog_set
+    assert not flaky & spiral
+
+
+def test_sharded_jobs_shard_over_their_whole_split() -> None:
+    """A shard count below the split size silently drops the tail.
+
+    ``--shards N`` and the matrix both have to move when a split grows, and
+    nothing at runtime complains if they disagree: the ids past the last
+    shard are simply never dispatched.
+    """
+    suite = load_suite()
+    root = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    weekly = (root / "evals-weekly.yml").read_text()
+    for split in ("flaky", "spiral-red"):
+        size = len(suite.splits[split])
+        assert f'--split {split} --shard "${{{{ matrix.shard }}}}" --shards {size}' in weekly
+        assert f"shard: {list(range(size))}" in weekly
+
+
 def test_oracle_canary_is_in_cheap_12() -> None:
     suite = load_suite()
     canary = suite.splits["oracle-canary"]
@@ -189,7 +221,12 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "--n-concurrent 2" in weekly
     assert "**/eval-status-*.txt" in weekly
     assert "evals/jobs/steerable/*/*/result.json" in weekly
-    assert weekly.count("evals/jobs/steerable/*/*/result.json") == 2
+    # A sharded job that forgets the per-trial path uploads only its status
+    # file, so its tasks read as absent instead of failed and the mean is
+    # computed over a smaller set without saying so.
+    assert weekly.count("evals/jobs/steerable/*/*/result.json") == weekly.count(
+        '--shard "${{ matrix.shard }}"'
+    )
     assert "pull_request:" not in weekly
     assert "--split catalog" in weekly
     assert "--split failed-prev" in weekly
@@ -216,8 +253,11 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
         "32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]"
     ) in weekly
     assert "timeout-minutes: 360" in weekly
-    assert weekly.count("--agent-timeout-multiplier 12") == 2
-    assert weekly.count("--verifier-timeout-multiplier 2") == 2
+    # The sharded splits run the long catalog tasks and need the generous
+    # multipliers; cheap-12 stays at ×3 so a smoke run stays a smoke run.
+    sharded = weekly.count('--shard "${{ matrix.shard }}"')
+    assert weekly.count("--agent-timeout-multiplier 12") == sharded
+    assert weekly.count("--verifier-timeout-multiplier 2") == sharded
     cheap_job = weekly.split("  failed-prev:", 1)[0]
     assert "--agent-timeout-multiplier 3" in cheap_job
     assert "--agent-timeout-multiplier 12" not in cheap_job

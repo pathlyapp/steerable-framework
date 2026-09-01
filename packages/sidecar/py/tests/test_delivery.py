@@ -307,13 +307,72 @@ async def test_completion_retry_without_artifacts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_completion_accepts_after_write() -> None:
+async def test_completion_accepts_a_write_once_it_has_been_checked() -> None:
+    """A bare write is refused once; an inspect call afterwards accepts it.
+
+    Stopping on the write means nothing ran against the output. Two catalog-89
+    runs put those trials at a 0.647 pass rate against 0.775 for trials that
+    ran one or two calls after their last write.
+    """
     hooks = DeliveryHooks()
     ctx = LoopContext()
     ok = ToolResult(success=True, data={})
     await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    refused = await hooks.before_completion(_draft(tools=1), ctx)
+    assert refused.kind == "retry"
+    assert refused.reason == "unverified_output"
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(id="t", name="bash", arguments={"command": "pytest -q"}),
+        ctx,
+    )
+    assert (await hooks.before_completion(_draft(tools=2), ctx)).kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_refuses_only_once() -> None:
+    """A model that ignores the retry is not held past one attempt.
+
+    The budget buys the step from no check to a check. Trials that kept going
+    for eleven or more calls after their last write passed at 0.000, so a
+    larger budget here would fund thrashing.
+    """
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    assert (await hooks.before_completion(_draft(tools=1), ctx)).kind == "retry"
+    assert (await hooks.before_completion(_draft(tools=1), ctx)).kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_stands_down_during_wrap_up() -> None:
+    """Once the budget notice has been seen, take the delivery over a check.
+
+    A refused completion buys another round, and in wrap-up that round can be
+    the one Harbor kills, losing a written artifact to check a written
+    artifact.
+    """
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.pre_step(
+        [LLMMessage.text_of("user", "The time budget for this task is almost up")],
+        ctx,
+    )
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    assert (await hooks.before_completion(_draft(tools=1), ctx)).kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_stays_out_of_a_trial_with_no_write() -> None:
+    """An inspect-only turn is the no_artifact retry's business, not this gate."""
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("read_file"), ctx)
     action = await hooks.before_completion(_draft(tools=1), ctx)
-    assert action.kind == "accept"
+    assert action.reason != "unverified_output"
 
 
 @pytest.mark.asyncio
@@ -331,7 +390,7 @@ async def test_completion_accepts_after_bash_write() -> None:
         ctx,
     )
     action = await hooks.before_completion(_draft(tools=1), ctx)
-    assert action.kind == "accept"
+    assert action.reason == "unverified_output"
     assert hooks.writes == 1
 
 
@@ -352,7 +411,7 @@ async def test_completion_accepts_after_python_script_or_make() -> None:
         ctx,
     )
     action = await hooks.before_completion(_draft(tools=2), ctx)
-    assert action.kind == "accept"
+    assert action.reason == "unverified_output"
     assert hooks.writes == 2
 
 
@@ -473,6 +532,59 @@ def test_named_output_paths_keeps_nested_extensionless_binary() -> None:
     assert "/app/polyglot/cmain" in paths
     assert "/app/result.txt" in paths
     assert "/app/caffe" not in paths
+
+
+def test_named_output_paths_reads_a_checklist_not_only_a_verb_phrase() -> None:
+    """An output stated as something the tests confirm is still an output.
+
+    Six stable reds had their hidden test report the required file simply
+    absent, and four of them state the requirement this way rather than as
+    "write a file X" — so the completion gate that exists to refuse exactly
+    that ending never knew there was a path to wait for. Phrasing here is
+    taken verbatim from those instructions.
+    """
+    assert "/app/image.c" in named_output_paths(
+        "1. **File Existence**: `image.c` must exist\n"
+        "2. **Compilation**: Code must compile with `gcc -o image image.c -lm`"
+    )
+    assert "/app/primers.fasta" in named_output_paths(
+        "1. `primers.fasta` exists and contains exactly 8 primer pairs"
+    )
+    assert "/app/my_warrior.red" in named_output_paths(
+        "2. **Warrior Exists**: Confirms `my_warrior.red` was created"
+    )
+
+
+def test_named_output_paths_reads_every_name_in_an_output_list() -> None:
+    """A list of outputs is a list, and the hidden test wants all of them.
+
+    cobol-modernization names three files in one parenthesised list and is
+    scored on all three, so stopping at the first would leave the gate
+    satisfied while two were still missing. The run cannot end at a full stop
+    because the names contain one.
+    """
+    paths = named_output_paths(
+        "- The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) "
+        "must match byte-for-byte"
+    )
+    assert paths == ("/app/ACCOUNTS.DAT", "/app/BOOKS.DAT", "/app/TRANSACTIONS.DAT")
+
+
+def test_named_output_paths_ignores_backticked_files_that_assert_nothing() -> None:
+    """Selectivity is the whole reason this keys on the assertion.
+
+    Treating every backticked filename as an output was measured over the 89
+    catalog instructions: it adds 105 candidates across 49 of the 58 passing
+    tasks, among them the hidden test file itself and `np.float64`, which is
+    not a file at all. Those would become paths the gate waits for on trials
+    that are already correct.
+    """
+    paths = named_output_paths(
+        "The graders run `test_outputs.py` against your work. Cast with "
+        "`np.float64` rather than `np.float`, and read the reference image "
+        "`chess_board.png` from the working directory."
+    )
+    assert paths == ()
 
 
 def test_named_output_paths_called_entrypoint_without_app_prefix() -> None:

@@ -145,6 +145,39 @@ _NEW_FILE = re.compile(
     r"\ba new file\s+[`'\"]?([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*)",
     re.IGNORECASE,
 )
+# The patterns above each key on a verb phrasing ("write a file X", "named
+# X"), so an instruction that states the requirement as a checklist item
+# instead names no output at all. Four of the six stable reds whose hidden
+# test reported the required file simply absent were missed that way:
+# `image.c` must exist, `primers.fasta` exists and contains…, Confirms
+# `my_warrior.red` was created, The output files (`ACCOUNTS.DAT`, …).
+#
+# Anchoring on the existence assertion rather than on the backticks is what
+# keeps this selective. Treating every backticked filename as an output was
+# measured over the 89 catalog instructions and adds 105 candidates across 49
+# of the 58 passing tasks — including `test_outputs.py`, the hidden test
+# itself, and `np.float64`, which is not a file. These three add 3, all of
+# them plausible real outputs on tasks that already deliver them.
+_ASSERTS_EXISTS = re.compile(
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`\s+"
+    r"(?:must\s+|should\s+)?(?:exists?\b|be\s+created\b|was\s+created\b)",
+    re.IGNORECASE,
+)
+_CONFIRMS_CREATED = re.compile(
+    r"(?:confirms?|verif\w+|checks?)[^.\n]{0,30}"
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`"
+    r"[^.\n]{0,25}(?:created|exists?)",
+    re.IGNORECASE,
+)
+# Captures the run of text after "output file(s)" so every name in a list is
+# read, not just the first: cobol-modernization names three .DAT files in one
+# parenthesised list and the hidden test requires all three. The run cannot
+# stop at a full stop, because the filenames themselves contain one; the
+# length cap and the backtick requirement are what bound it instead.
+_OUTPUT_FILE_LIST = re.compile(r"output\s+files?\b([^\n]{0,120})", re.IGNORECASE)
+_BACKTICKED_FILE = re.compile(
+    r"`([A-Za-z][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]{0,7})`"
+)
 _COMPILE_AND_RUN = re.compile(
     r"\b((?:g?cc|clang)(?:\s+-\S+)*\s+-o\s+\S+\s+\S+\.c(?:\s+-lm)?"
     r"\s*&&\s*\./[A-Za-z0-9._-]+)"
@@ -154,6 +187,26 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
+_UNVERIFIED_RETRY = (
+    "The turn is ending on the write itself — nothing has run against the "
+    "output since it was produced, so nothing would have caught it being "
+    "wrong. Run one check now and fix what it reports: the program the "
+    "instruction says hidden tests will execute, on the examples the "
+    "instruction gives; the scoring CLI, eval command, or helper script it "
+    "names; or a small check of the thresholds it states. Reading the file "
+    "back is not a check. If the check passes, say so and stop."
+)
+# One retry, because the gain is in going from no check to a check, not in
+# checking more. Measured over catalog-89 run 33369888461 by how many tool
+# calls followed the last write, classified by ``_bash_writes`` — the same
+# detector the gate itself uses, since most TB tasks deliver through bash
+# rather than write_file: stopping on the write passes at 0.6875 (n=32),
+# one or two calls after it at 0.7429 (n=35), three to five at 0.7273
+# (n=11), and eleven or more at 0.0000 (n=4). So one extra round is worth
+# about five points and further rounds are not, but note that the tail
+# carrying "further rounds are harmful" is seven trials, which sets the cap
+# by the shape of the curve rather than by a well-measured cliff.
+_MAX_UNVERIFIED_RETRIES = 1
 # Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). A lower cap accepted a
 # text-only stop while primers.fasta / steal.py / out.txt were still
 # missing, with wrap-up and idle-stream cuts still unused.
@@ -428,6 +481,8 @@ class DeliveryHooks(NoopHooks):
         self._validate_retries = 0
         self._entry_runs = 0
         self._make_runs = 0
+        self._verify_retries = 0
+        self._wrapping = False
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
@@ -560,6 +615,11 @@ class DeliveryHooks(NoopHooks):
         wrapping = any(
             _WRAP_UP_MARKER in (m.content_text or "") for m in transcript
         )
+        # Remembered because ``before_completion`` is handed a draft, not the
+        # transcript, and the verification gate there must stand down once
+        # the budget is short: another round costs more than the check is
+        # worth when the alternative is Harbor killing the trial.
+        self._wrapping = self._wrapping or wrapping
         if wrapping and missing and self._wrap_up_named_nudges < 1:
             self._wrap_up_named_nudges += 1
             self._force_tool = True
@@ -654,6 +714,36 @@ class DeliveryHooks(NoopHooks):
         elif name in _EXPLORE:
             self.consecutive_explore += 1
         return result
+
+    def _unverified_retry(self) -> CompletionAction | None:
+        """Refuse one completion that stops on the write itself.
+
+        ``consecutive_explore`` is zeroed by every landed write and raised by
+        every inspect call, so zero here means the write was the last thing
+        that happened: whatever is on disk has had nothing run against it.
+        That is the one unchecked state the loop can identify without reading
+        tool arguments, which is why the gate is this and not a pattern over
+        bash commands — the prompt asks for a check on every task, and a
+        regex over command text would only recognise the checks it was
+        written for.
+
+        Reached only after the named-output and cap retries above have
+        accepted, so the files exist and satisfy every constraint stated in
+        the instruction that this module can evaluate on its own. Stands down
+        once wrap-up has been announced, where an extra round risks the
+        delivery it would be checking.
+        """
+        if self._wrapping or self._verify_retries >= _MAX_UNVERIFIED_RETRIES:
+            return None
+        if self.writes == 0 or self.consecutive_explore != 0:
+            return None
+        self._verify_retries += 1
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=_UNVERIFIED_RETRY,
+            reason="unverified_output",
+        )
 
     def _named_image_size_retry(self) -> CompletionAction | None:
         """Veto a turn whose named BMP/PNG disagrees with source RESX/RESY."""
@@ -1267,6 +1357,9 @@ class DeliveryHooks(NoopHooks):
                 message=_EMPTY_ROUND_RETRY,
                 reason="empty_round",
             )
+        unverified = self._unverified_retry()
+        if unverified is not None:
+            return unverified
         if (
             not self._named
             and self.writes == 0
@@ -1372,6 +1465,7 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
             continue
         if path not in seen:
             seen.append(path)
+    names: list[str] = []
     for pattern in (
         _CALLED_WITH_EXT,
         _FILE_CALLED,
@@ -1380,17 +1474,19 @@ def named_output_paths(instruction: str) -> tuple[str, ...]:
         _WRITE_A_FILE,
         _WRITE_TO_FILE,
         _NEW_FILE,
+        _ASSERTS_EXISTS,
+        _CONFIRMS_CREATED,
     ):
-        for match in pattern.finditer(text):
-            name = match.group(1).rstrip(".,;:)")
-            if name.startswith("/"):
-                path = name
-            else:
-                path = f"/app/{name.lstrip('./')}"
-            if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
-                continue
-            if path not in seen:
-                seen.append(path)
+        names.extend(match.group(1) for match in pattern.finditer(text))
+    for match in _OUTPUT_FILE_LIST.finditer(text):
+        names.extend(_BACKTICKED_FILE.findall(match.group(1)))
+    for raw_name in names:
+        name = raw_name.rstrip(".,;:)")
+        path = name if name.startswith("/") else f"/app/{name.lstrip('./')}"
+        if Path(path).suffix.lower() in _SOCKET_SUFFIXES:
+            continue
+        if path not in seen:
+            seen.append(path)
     return tuple(seen)
 
 
