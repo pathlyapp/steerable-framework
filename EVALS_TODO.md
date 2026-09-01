@@ -4,7 +4,7 @@
 > 顺序：**先 Terminal-Bench 2.1 跑通，再上全量 SWE-bench Verified。**
 > 跑分器是 [Harbor](https://www.harborframework.com/docs/run-jobs/run-evals)，隐藏测试打分，不用 LLM judge，不自制 prompt 当门禁。
 >
-> 套件钉死在 [`evals/suite.yaml`](./evals/suite.yaml)。当前能力说明：[`docs/evals.md`](./docs/evals.md)。
+> 套件钉死在 `[evals/suite.yaml](./evals/suite.yaml)`。当前能力说明：`[docs/evals.md](./docs/evals.md)`。
 
 **评测对象**：无头 CoreLoop + 能改文件、跑 shell 的工具面（sidecar ACP）。
 不是 Electron 窗口，也不是 Harbor 自带的 `claude-code` / `codex` / `pi`（那些只做同题对照）。
@@ -32,8 +32,8 @@
 
 - [x] **0.1** `harbor_argv` 把 `--include-task-name` 写成 `terminal-bench/<短 id>`（否则过滤为空）
 - [x] **0.2** Harbor 安装：composite action 钉 `harbor==0.22.0`，`~/.local/bin` 进 `PATH`
-- [x] **0.3** oracle workflow：`evals/**` 变更 + `workflow_dispatch`；Mean ≠ 1.0 或安装异常 → 红；上传 `result.json`
-- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；产品走 `STEERABLE_*`，对照走官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
+- [x] **0.3** oracle workflow：`evals/`\*\* 变更 + `workflow_dispatch`；Mean ≠ 1.0 或安装异常 → 红；上传 `result.json`
+- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；产品走 `STEERABLE_`\*，对照走官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
 - [x] **0.5** 仓库 secrets：`STEERABLE_API_KEY` + `STEERABLE_BASE_URL`（本机同一网关，产品分必填）。`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 仅对照基线，可选
 - [x] **0.6** 安装失败当红（`n_errored_trials > 0`）；题没做对只记 Mean（0 是成绩）
 
@@ -81,16 +81,24 @@
 
 ## Phase 2.5 · catalog-89 冲 0.75
 
-分数记录：`b929af1` / [33464114983](https://github.com/pathlyapp/steerable-framework/actions/runs/33464114983) **Mean 0.6629**（59/89），基线 0.6517。两次跑的同题对照：**50 稳定绿 / 17 翻面 / 22 稳定红**——翻面题全转绿也只到 67/89 = 0.753，所以稳定红里必须出题。
+**目标已达成：`27d521a` / [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) Mean 0.8202（73/89）**，对基线 0.6517 净 +15 题。这一跑合入三项改动：切流三个预算全部默认关掉、验证门禁、提示词精简 35%。奖励只有 0.0/1.0 两值，无部分分。
 
-单次全量的测量噪声：SD ±0.0232，95% 带 ±0.0454。**`n_attempts=1` 的单次 A/B 无意义**，故新增 `flaky` split（17 翻面 + 8 受切流影响的稳定绿作对照，共 25 题）× `n_attempts=3` × 双臂 = 50 job，配对符号检验 + bootstrap CI 见 [`evals/flaky_score.py`](./evals/flaky_score.py)。每 trial 加 85 分钟绝对帽（两次全量里只有 4/117 个获胜 trial 超过 90 分钟）。实测一轮约 1.75 h，对比全量 89 的约 6 h。
+净 +15 的构成：18 道转绿，3 道转红（`extract-elf`、`pytorch-model-cli`、`torch-tensor-parallelism`）。转绿里有 7 道原属 22 道稳定红，其中 `torch-pipeline-parallelism` 正是"交付程序自身崩溃"（`UnboundLocalError`）那一类——**切流关闭后模型自行发现并修好了崩溃**，不需要原计划的"收工前跑一遍"门禁。这也说明先前"删切流只值 +2 题"的估计低估了：当时只按"轨迹极短"一个特征计数被切流害死的 trial，漏掉了没被切死但交出半成品的那一类。
+
+仍失败 16 道：`build-pov-ray`、`circuit-fibsqrt`、`dna-assembly`、`extract-elf`、`extract-moves-from-video`、`filter-js-from-html`、`gcode-to-text`、`make-doom-for-mips`、`path-tracing`、`path-tracing-reverse`、`pytorch-model-cli`、`raman-fitting`、`regex-chess`、`sanitize-git-repo`、`torch-tensor-parallelism`、`winning-avg-corewars`。
+
+已落地但**这一跑未测量**：命名输出检测修复（`8acc022`），针对 6 道"必需文件缺失"的红题。
+
+以下为达成 0.75 之前的分析记录。分数记录：`b929af1` / [33464114983](https://github.com/pathlyapp/steerable-framework/actions/runs/33464114983) **Mean 0.6629**（59/89），基线 0.6517。两次跑的同题对照：**50 稳定绿 / 17 翻面 / 22 稳定红**——翻面题全转绿也只到 67/89 = 0.753，所以稳定红里必须出题。
+
+单次全量的测量噪声：SD ±0.0232，95% 带 ±0.0454。`**n_attempts=1` 的单次 A/B 无意义\*\*，故新增 `flaky` split（17 翻面 + 8 受切流影响的稳定绿作对照，共 25 题）× `n_attempts=3` × 双臂 = 50 job，配对符号检验 + bootstrap CI 见 `[evals/flaky_score.py](./evals/flaky_score.py)`。每 trial 加 85 分钟绝对帽（两次全量里只有 4/117 个获胜 trial 超过 90 分钟）。实测一轮约 1.75 h，对比全量 89 的约 6 h。
 
 **功效（模拟，翻面题按 50/50、对照按 0.85 建模）**：
 
 | 真实每题效应 | +0.05 | +0.10 | +0.15 | +0.20 | +0.30 |
-|---|---|---|---|---|---|
-| 功效（n=3） | 0.11 | 0.30 | 0.59 | 0.74 | 0.95 |
-| 功效（n=5） | 0.15 | 0.43 | 0.80 | 0.92 | 1.00 |
+| ------------ | ----- | ----- | ----- | ----- | ----- |
+| 功效（n=3）  | 0.11  | 0.30  | 0.59  | 0.74  | 0.95  |
+| 功效（n=5）  | 0.15  | 0.43  | 0.80  | 0.92  | 1.00  |
 
 假阳性率 0.025。bootstrap CI 只比符号检验高 1–3 个点（+0.10 时 0.33 vs 0.31），**瓶颈是数据量而非检验方法**。含义：这套循环**不能逐个验证 +0.05~+0.10 的小赢**（+0.10 有 70% 概率被判为无差异），但 0.663 → 0.75 需要 +7.7 题、若全来自 17 道翻面题则每题 +0.45，那个量级功效接近 1.00。**所以改动要打包成一个 arm 测，不要一条一条试。**
 
@@ -98,18 +106,18 @@
 
 ### 对照 pi / dsh / codex：参数与循环逻辑
 
-| | Steerable | pi | dsh | codex |
-|---|---|---|---|---|
-| 单命令超时 | 1 h | 无（按需传参） | 120 s（沙箱 60 s） | 10 s 默认 / 用户 shell 1 h |
-| 会话软超时 | 150 min（Harbor ×12 → 180 min 硬杀） | 无 | 无 | 无 |
-| 最大轮次 | 250 | 无 | 无 | 无 |
-| 压缩阈值 | **0.8** | ctx − 16384（≈0.87–0.92） | 0.8 | **0.9**（有效窗口 95%） |
-| 压缩保留 | 6 条消息 / 2 工具结果 | 20 000 tokens | retain 0.16 | — |
-| 流空闲超时 | 170 min（GLM 静默思考可达 48 min） | 300 s | 300 s | 300 s |
-| 只推理即切流 | **有** | 无 | 无 | 无 |
-| `tool_choice` 强制 | **有**（约 18 处） | 无 | 无 | 无（auto） |
-| 运行时验证门禁 | **有** | 无 | 无 | 无（仅提示词） |
-| 持久性提示词 | 无 | 无 | 无 | **有** |
+|                    | Steerable                            | pi                        | dsh                | codex                      |
+| ------------------ | ------------------------------------ | ------------------------- | ------------------ | -------------------------- |
+| 单命令超时         | 1 h                                  | 无（按需传参）            | 120 s（沙箱 60 s） | 10 s 默认 / 用户 shell 1 h |
+| 会话软超时         | 150 min（Harbor ×12 → 180 min 硬杀） | 无                        | 无                 | 无                         |
+| 最大轮次           | 250                                  | 无                        | 无                 | 无                         |
+| 压缩阈值           | **0.8**                              | ctx − 16384（≈0.87–0.92） | 0.8                | **0.9**（有效窗口 95%）    |
+| 压缩保留           | 6 条消息 / 2 工具结果                | 20 000 tokens             | retain 0.16        | —                          |
+| 流空闲超时         | 170 min（GLM 静默思考可达 48 min）   | 300 s                     | 300 s              | 300 s                      |
+| 只推理即切流       | **有**                               | 无                        | 无                 | 无                         |
+| `tool_choice` 强制 | **有**（约 18 处）                   | 无                        | 无                 | 无（auto）                 |
+| 运行时验证门禁     | **有**                               | 无                        | 无                 | 无（仅提示词）             |
+| 持久性提示词       | 无                                   | 无                        | 无                 | **有**                     |
 
 结论：**"竞品分高是因为超时更宽"不成立**——我们的单命令超时和流空闲超时都是四家里最宽的，会话软超时和轮次上限也没有任何一家更紧。三家的高分不来自参数余量。真正的差异是：三家都**没有**切流、轮次上限、`tool_choice` 强制这些机制，而 codex 有一句我们缺的持久性指令。
 
@@ -128,7 +136,6 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 已证伪、不要再试：
 
 - 收紧单命令超时（我们 1 h vs codex 10 s / dsh 120 s）——全量里"时间耗在长命令"只造成 **1** 次失败，改它换不到分。
-
 - dsh 式重复调用提醒——178 个 trial 的最长连续相同调用都是 1，我们没这个问题（`tool_dedup=False` 无害）。
 - "先写一个能跑的版本"提示词——通过与失败的首次落盘**都在第 1 次调用**，首写位置与结果无关（0.649 / 0.644 / 0.706）。agent 本来就立刻动手，这条会是空指令。
 - 轮次上限——两次全量 runaway guard 从未触发，250 不是瓶颈。
@@ -139,23 +146,23 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 两臂唯一差别是三个切流预算（b 臂全设 0），已从 job log 核实无其它变量。
 
-| | arm a 切流开 | arm b 切流关 |
-|---|---|---|
-| 通过率 | 51/74 = 0.689 | 59/73 = 0.808 |
-| ≤5 次工具调用就结束的 trial | **15/74** | 5/73 |
-| 其中通过 | 4 | 3 |
-| 每题通过率均值变化 | — | **+0.0933**（净 +2.33 题 / 25） |
-| 符号检验 | — | 7 胜 4 负，**p=0.55（不显著）** |
+|                             | arm a 切流开  | arm b 切流关                    |
+| --------------------------- | ------------- | ------------------------------- |
+| 通过率                      | 51/74 = 0.689 | 59/73 = 0.808                   |
+| ≤5 次工具调用就结束的 trial | **15/74**     | 5/73                            |
+| 其中通过                    | 4             | 3                               |
+| 每题通过率均值变化          | —             | **+0.0933**（净 +2.33 题 / 25） |
+| 符号检验                    | —             | 7 胜 4 负，**p=0.55（不显著）** |
 
 **判决依据不是通过率，是可复现的饿死。** 通过率的配对检验没过 0.05，而且按功效模拟这个量级的效应本来就只有约三成概率被测出来，所以它既不能支持也不能否定。决定性的是饿死信号完全可复现：
 
-| 题 | arm a 工具调用数 | arm a | arm b 工具调用数 | arm b |
-|---|---|---|---|---|
-| write-compressor | **[2, 2, 2]** | 0/3 | [21, 31, 31] | **3/3** |
-| feal-linear-cryptanalysis | [2, 4, 13] | 0/3 | [6, 14, 17] | **3/3** |
-| feal-differential-cryptanalysis | [2, 3, **5435**] | 1/3 | [13, 20, 26] | **3/3** |
-| model-extraction-relu-logits | **[3, 3, 3]** | 0/3 | [0, 3]（job 失败） | 0/2 |
-| regex-log | [0, 3, 4] | 2/3 | [6, 9, 10] | **3/3** |
+| 题                              | arm a 工具调用数 | arm a | arm b 工具调用数   | arm b   |
+| ------------------------------- | ---------------- | ----- | ------------------ | ------- |
+| write-compressor                | **[2, 2, 2]**    | 0/3   | [21, 31, 31]       | **3/3** |
+| feal-linear-cryptanalysis       | [2, 4, 13]       | 0/3   | [6, 14, 17]        | **3/3** |
+| feal-differential-cryptanalysis | [2, 3, **5435**] | 1/3   | [13, 20, 26]       | **3/3** |
+| model-extraction-relu-logits    | **[3, 3, 3]**    | 0/3   | [0, 3]（job 失败） | 0/2     |
+| regex-log                       | [0, 3, 4]        | 2/3   | [6, 9, 10]         | **3/3** |
 
 `[2,2,2]` 和 `[3,3,3]` 这种零方差不是采样噪声能产生的，是机制在稳定复现同一个失败。`5435` 那次是切流与重试活锁。目标陈述里独立点名的两道被饿死的题（feal-differential 21→2、write-compressor 14→1）**全部恢复**。
 
@@ -167,11 +174,11 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 31 个失败按"干了多少活"拆开，结论是**剩下的缺口不是时间/轮次不够，是产出错误**：
 
-| 形态 | 题数 | 能靠什么补 |
-|---|---|---|
-| 什么都没产出（≤5 次调用，被切流卡住） | 4 | 切流关闭（已落地） |
-| 跑了 10 次调用仍无产出 | 1 | 未知 |
-| **产出了但产出是错的** | **26** | 交付前验证 |
+| 形态                                  | 题数   | 能靠什么补         |
+| ------------------------------------- | ------ | ------------------ |
+| 什么都没产出（≤5 次调用，被切流卡住） | 4      | 切流关闭（已落地） |
+| 跑了 10 次调用仍无产出                | 1      | 未知               |
+| **产出了但产出是错的**                | **26** | 交付前验证         |
 
 对照组信号很干净：**58 个通过的 trial 里，产出为空的是 0 个**；≤5 次调用结束的 trial 也是 0 个通过。所以"停在 5 次调用以内"= 必败，"什么都没产出"= 必败，两者都已被切流关闭覆盖。
 
@@ -185,13 +192,13 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 但原注释引用的依据（0.647 → 0.775）是用 `write_file`/`edit_file` 这个窄定义算的，用门禁自己那套判定重算后幅度小得多：
 
-| 写完之后又跑了几次调用 | n | 通过率 |
-|---|---|---|
-| 0（写完就收工） | 32 | 0.6875 |
-| 1–2 | 35 | **0.7429** |
-| 3–5 | 11 | 0.7273 |
-| 6–10 | 3 | 0.6667 |
-| 11+ | 4 | **0.0000** |
+| 写完之后又跑了几次调用 | n   | 通过率     |
+| ---------------------- | --- | ---------- |
+| 0（写完就收工）        | 32  | 0.6875     |
+| 1–2                    | 35  | **0.7429** |
+| 3–5                    | 11  | 0.7273     |
+| 6–10                   | 3   | 0.6667     |
+| 11+                    | 4   | **0.0000** |
 
 方向不变（多跑一轮值约 5 个百分点、再多就是瞎折腾），但"再多就有害"这一侧只有 7 个样本。注释已改成按这个口径陈述并写明样本量，避免以后拿它当"放宽预算"的依据。
 
@@ -199,12 +206,12 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 门禁看不见的 56 个 trial（收尾是非写入 bash），按最后一条命令实际做了什么拆开（`cd X &&` 前缀已剥离，整条流水线判定）：
 
-| 最后一条 bash | n | 通过率 |
-|---|---|---|
-| 跑了程序 | 22 | 0.7273 |
+| 最后一条 bash      | n      | 通过率     |
+| ------------------ | ------ | ---------- |
+| 跑了程序           | 22     | 0.7273     |
 | **只看了一眼产出** | **15** | **0.5333** |
-| `sed`（盲改） | 4 | 0.0000 |
-| 跑了测试或评分器 | 2 | 0.5000 |
+| `sed`（盲改）      | 4      | 0.0000     |
+| 跑了测试或评分器   | 2      | 0.5000     |
 
 **空档是那 15 个"只看了一眼"的，7 个失败**，与"跑了程序"差 20 个百分点——比门禁自身 0.6875 → 0.7429 那 5 个百分点强得多。样例：circuit-fibsqrt 收尾 `cat gates.txt | head -50; wc -l`（只数自己产出的行数，从未送进电路求值器）；extract-moves-from-video `wc -l solution.txt; head -5; tail -3`；regex-chess 收尾是 `ls -la /`。
 
@@ -218,12 +225,12 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 按 `verifier/test-stdout.txt` 的真实断言分类，而不是靠日志启发式：
 
-| 形态 | 题数 | 题目 |
-|---|---|---|
-| **要求的文件根本不存在** | **6** | adaptive-rejection-sampler `ars.R`、cobol-modernization `TRANSACTIONS.DAT`、dna-assembly `primers.fasta`、path-tracing `image.c`、regex-chess `re.json`、winning-avg-corewars `my_warrior.red` |
-| **交付的程序自己崩了** | **4** | largest-eigenval（matmul 维度不匹配）、torch-pipeline-parallelism（`UnboundLocalError: mb_idx`）、video-processing（`KeyError: 0`）、make-doom-for-mips（等 frame.bmp 超时） |
-| 数值差一点 | 3 | extract-moves-from-video 84.03% 差 90%、path-tracing-reverse 0.930 差 0.995、train-fasttext 0.562 差 0.62 |
-| 实质性错误 | 8 | raman-fitting（拟合值 x0=19196 应为 1580）、gcode-to-text（交了 `PROVISIONAL`）、mteb-retrieve、protein-assembly、schemelike-metacircular-eval、filter-js-from-html、install-windows-3.11、gpt2-codegolf |
+| 形态                     | 题数  | 题目                                                                                                                                                                                                     |
+| ------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **要求的文件根本不存在** | **6** | adaptive-rejection-sampler `ars.R`、cobol-modernization `TRANSACTIONS.DAT`、dna-assembly `primers.fasta`、path-tracing `image.c`、regex-chess `re.json`、winning-avg-corewars `my_warrior.red`           |
+| **交付的程序自己崩了**   | **4** | largest-eigenval（matmul 维度不匹配）、torch-pipeline-parallelism（`UnboundLocalError: mb_idx`）、video-processing（`KeyError: 0`）、make-doom-for-mips（等 frame.bmp 超时）                             |
+| 数值差一点               | 3     | extract-moves-from-video 84.03% 差 90%、path-tracing-reverse 0.930 差 0.995、train-fasttext 0.562 差 0.62                                                                                                |
+| 实质性错误               | 8     | raman-fitting（拟合值 x0=19196 应为 1580）、gcode-to-text（交了 `PROVISIONAL`）、mteb-retrieve、protein-assembly、schemelike-metacircular-eval、filter-js-from-html、install-windows-3.11、gpt2-codegolf |
 
 **前 10 道是 harness 能碰到的**（文件没交 + 交了但程序崩），值 +0.11。第二类正是验证门禁的目标：跑一次自己的程序就会看到崩溃。
 
@@ -233,10 +240,10 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 原因：现有 5 个模式各锚定一种动词措辞（`write a file X`、`named X`、`a new file X`……），而这几道把要求写成**检查清单**：
 
-- `1. **File Existence**: \`image.c\` must exist`
-- `2. **Warrior Exists**: Confirms \`my_warrior.red\` was created`
-- `` 1. `primers.fasta` exists and contains exactly 8 primer pairs ``
-- `` - The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) must match byte-for-byte ``
+- `1. **File Existence**: \`image.c must exist`
+- `2. **Warrior Exists**: Confirms \`my_warrior.red was created`
+- `1. `primers.fasta` exists and contains exactly 8 primer pairs`
+- `- The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) must match byte-for-byte`
 
 **通用规则"反引号裸文件名都算输出"已被实测否决**：跨 89 份指令会给 58 道通过题里的 49 道加上共 105 个假需求，包括 `test_outputs.py`（隐藏测试本身）和 `np.float64`（根本不是文件）。所以短语锚定是承重的，不是堆积。
 
