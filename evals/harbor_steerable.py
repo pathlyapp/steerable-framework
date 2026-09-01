@@ -32,6 +32,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
+    is_zai_glm as _is_zai_glm,
     merge_trial_path as _merge_trial_path,
     musl_uv_binary as _musl_uv_binary,
     linux_cpython_tarball as _linux_cpython_tarball,
@@ -464,12 +465,11 @@ class SteerableHarborAgent(BaseInstalledAgent):
         provider = (self._parsed_model_provider or "openai").strip().lower()
         kind = "anthropic" if provider in {"anthropic", "claude"} else "openai_compat"
         env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS, *_TUNING_KEYS))
+        model = self._parsed_model_name or ""
         env["STEERABLE_PROVIDER"] = kind
-        env["STEERABLE_MODEL"] = self._parsed_model_name or ""
+        env["STEERABLE_MODEL"] = model
         env["PYTHONUNBUFFERED"] = "1"
-        # Z.AI GLM-5.3 coding default is reasoning_effort=max (high is weaker).
         # Claude Code TB 84.3 used temperature=1.0, max_new_tokens=65536, 6h.
-        env.setdefault("STEERABLE_REASONING_EFFORT", "max")
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")
         # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap at
@@ -483,14 +483,20 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
         env.setdefault("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
         env.setdefault("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
-        # OpenRouter cheapest route is Relace, not Z.ai. GLM's 83+ TB score
-        # is the official endpoint; pin so catalog quality matches.
         # Do not set require_parameters: Harbor streams with
         # stream_options.include_usage, which no GLM endpoint advertises —
         # require_parameters then 404s "No endpoints found".
-        env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
-        env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
         env.setdefault("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0")
+        if _is_zai_glm(model):
+            # Z.AI GLM-5.3 coding default is reasoning_effort=max; high is
+            # weaker. Other vendors reject `max` outright, so this cannot be
+            # a suite-wide default.
+            env.setdefault("STEERABLE_REASONING_EFFORT", "max")
+            # OpenRouter cheapest route is Relace, not Z.ai. GLM's 83+ TB
+            # score is the official endpoint; pin so catalog quality matches.
+            # Pinning it for any other model 404s, since z-ai serves only GLM.
+            env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
+            env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",
