@@ -243,8 +243,9 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 由此：
 
-- **catalog-89 [33514869908](https://github.com/pathlyapp/steerable-framework/actions/runs/33514869908) 是纯空对照**，跑的行为和 0.8202 那跑逐位相同。它测不出 `8acc022`，只能当第三个噪声样本用。
-- 这一跑相对 0.8202 的翻面（`chess-best-move`、`dna-insert`、`mteb-retrieve`、`protein-assembly`、`torch-pipeline-parallelism` 绿→红，`build-pov-ray`、`torch-tensor-parallelism` 红→绿）**全部是跑间波动**，和代码无关。
+- **catalog-89 [33514869908](https://github.com/pathlyapp/steerable-framework/actions/runs/33514869908) 是纯空对照**，跑的行为和 0.8202 那跑逐位相同。**已在 54/89 处取消**，不值得为一个空对照烧完剩下的两小时。
+- 取消前 54 道的翻面（`chess-best-move`、`dna-insert`、`mteb-retrieve`、`protein-assembly`、`torch-pipeline-parallelism` 绿→红，`build-pov-ray`、`torch-tensor-parallelism` 红→绿）**全部是跑间波动**，和代码无关。同一批 54 道基线 0.944、这次 0.889，净 −3——**同一份代码两跑就能差 3 题，这比原先估的 SD ±0.0232 更值得记住**。
+- `torch-pipeline-parallelism` 这次绿→红特别要紧：0.8202 那跑它是"切流关闭后模型自行发现并修好 `UnboundLocalError`"的招牌案例，还被当成"不需要收工前跑一遍门禁"的依据。它一跑就掉，说明**那个结论只建立在单次 trial 上，不能再拿来否决验证门禁**。
 
 **方法论教训：验证一个修复"命中目标"不等于验证它"改变了行为"。上机前必须和改动前的 commit 并排比，不能只跑新版本看命中。**
 
