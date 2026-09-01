@@ -154,6 +154,22 @@ _EMPTY_ROUND_RETRY = (
     "Continue the task now with bash, read_file, write_file, or edit_file. "
     "Do not stop until the required output files exist."
 )
+_UNVERIFIED_RETRY = (
+    "The turn is ending on the write itself — nothing has run against the "
+    "output since it was produced, so nothing would have caught it being "
+    "wrong. Run one check now and fix what it reports: the program the "
+    "instruction says hidden tests will execute, on the examples the "
+    "instruction gives; the scoring CLI, eval command, or helper script it "
+    "names; or a small check of the thresholds it states. Reading the file "
+    "back is not a check. If the check passes, say so and stop."
+)
+# One retry, because the gain is in going from no check to a check, not in
+# checking more. Across two catalog-89 runs, trials whose last tool call was
+# the write passed at 0.647; those that ran one or two calls afterwards
+# passed at 0.775. Past that the relationship inverts — six to ten calls
+# after the last write pass at 0.571 and eleven or more at 0.000, which is
+# thrashing, not diligence, and a larger budget here would fund it.
+_MAX_UNVERIFIED_RETRIES = 1
 # Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). A lower cap accepted a
 # text-only stop while primers.fasta / steal.py / out.txt were still
 # missing, with wrap-up and idle-stream cuts still unused.
@@ -428,6 +444,8 @@ class DeliveryHooks(NoopHooks):
         self._validate_retries = 0
         self._entry_runs = 0
         self._make_runs = 0
+        self._verify_retries = 0
+        self._wrapping = False
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
@@ -560,6 +578,11 @@ class DeliveryHooks(NoopHooks):
         wrapping = any(
             _WRAP_UP_MARKER in (m.content_text or "") for m in transcript
         )
+        # Remembered because ``before_completion`` is handed a draft, not the
+        # transcript, and the verification gate there must stand down once
+        # the budget is short: another round costs more than the check is
+        # worth when the alternative is Harbor killing the trial.
+        self._wrapping = self._wrapping or wrapping
         if wrapping and missing and self._wrap_up_named_nudges < 1:
             self._wrap_up_named_nudges += 1
             self._force_tool = True
@@ -654,6 +677,36 @@ class DeliveryHooks(NoopHooks):
         elif name in _EXPLORE:
             self.consecutive_explore += 1
         return result
+
+    def _unverified_retry(self) -> CompletionAction | None:
+        """Refuse one completion that stops on the write itself.
+
+        ``consecutive_explore`` is zeroed by every landed write and raised by
+        every inspect call, so zero here means the write was the last thing
+        that happened: whatever is on disk has had nothing run against it.
+        That is the one unchecked state the loop can identify without reading
+        tool arguments, which is why the gate is this and not a pattern over
+        bash commands — the prompt asks for a check on every task, and a
+        regex over command text would only recognise the checks it was
+        written for.
+
+        Reached only after the named-output and cap retries above have
+        accepted, so the files exist and satisfy every constraint stated in
+        the instruction that this module can evaluate on its own. Stands down
+        once wrap-up has been announced, where an extra round risks the
+        delivery it would be checking.
+        """
+        if self._wrapping or self._verify_retries >= _MAX_UNVERIFIED_RETRIES:
+            return None
+        if self.writes == 0 or self.consecutive_explore != 0:
+            return None
+        self._verify_retries += 1
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=_UNVERIFIED_RETRY,
+            reason="unverified_output",
+        )
 
     def _named_image_size_retry(self) -> CompletionAction | None:
         """Veto a turn whose named BMP/PNG disagrees with source RESX/RESY."""
@@ -1267,6 +1320,9 @@ class DeliveryHooks(NoopHooks):
                 message=_EMPTY_ROUND_RETRY,
                 reason="empty_round",
             )
+        unverified = self._unverified_retry()
+        if unverified is not None:
+            return unverified
         if (
             not self._named
             and self.writes == 0
