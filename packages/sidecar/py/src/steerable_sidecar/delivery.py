@@ -164,11 +164,15 @@ _UNVERIFIED_RETRY = (
     "back is not a check. If the check passes, say so and stop."
 )
 # One retry, because the gain is in going from no check to a check, not in
-# checking more. Across two catalog-89 runs, trials whose last tool call was
-# the write passed at 0.647; those that ran one or two calls afterwards
-# passed at 0.775. Past that the relationship inverts — six to ten calls
-# after the last write pass at 0.571 and eleven or more at 0.000, which is
-# thrashing, not diligence, and a larger budget here would fund it.
+# checking more. Measured over catalog-89 run 33369888461 by how many tool
+# calls followed the last write, classified by ``_bash_writes`` — the same
+# detector the gate itself uses, since most TB tasks deliver through bash
+# rather than write_file: stopping on the write passes at 0.6875 (n=32),
+# one or two calls after it at 0.7429 (n=35), three to five at 0.7273
+# (n=11), and eleven or more at 0.0000 (n=4). So one extra round is worth
+# about five points and further rounds are not, but note that the tail
+# carrying "further rounds are harmful" is seven trials, which sets the cap
+# by the shape of the curve rather than by a well-measured cliff.
 _MAX_UNVERIFIED_RETRIES = 1
 # Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). A lower cap accepted a
 # text-only stop while primers.fasta / steal.py / out.txt were still
