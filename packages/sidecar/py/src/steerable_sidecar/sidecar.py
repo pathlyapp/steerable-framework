@@ -2029,12 +2029,16 @@ def _catalog_base_url(provider_kind: str) -> str | None:
 
 
 #: The bundled default harness spec (W1.2.4): the built-in chain as data.
-#: Resolved inside the installed steerable_agent_runtime package (shipped as
-#: package data) so pip-installed venvs — Harbor trial containers — find it;
-#: the repo layout lands on the same file through the editable install.
+#: The JSON copy is the runtime-loaded one — PyYAML is deliberately not a
+#: runtime dependency, and JSON is a YAML subset the loader parses with
+#: stdlib json. Resolved inside the installed steerable_agent_runtime
+#: package (shipped as package data) so pip-installed venvs — Harbor trial
+#: containers — find it; the repo layout lands on the same file through
+#: the editable install. default.harness.yaml stays the commented source;
+#: test_harness_spec pins the two in sync.
 _DEFAULT_HARNESS_SPEC_PATH = (
     Path(importlib.util.find_spec("steerable_agent_runtime").origin).resolve().parent
-    / "default.harness.yaml"
+    / "default.harness.json"
 )
 
 

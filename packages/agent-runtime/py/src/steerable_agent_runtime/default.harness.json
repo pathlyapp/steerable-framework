@@ -1,0 +1,30 @@
+{
+  "context": [
+    {
+      "impl": "pressure_compaction"
+    },
+    {
+      "impl": "spill"
+    }
+  ],
+  "retry": [
+    {
+      "impl": "informed_backtrack"
+    },
+    {
+      "impl": "simple",
+      "params": {
+        "max_attempts": 3
+      }
+    }
+  ],
+  "validator": "null",
+  "tools": "full",
+  "memory": "stateless",
+  "orchestration": "single",
+  "loop": {
+    "max_rounds": 80,
+    "max_tool_errors": 16,
+    "tool_dedup": false
+  }
+}

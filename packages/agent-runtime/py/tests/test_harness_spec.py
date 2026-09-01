@@ -52,6 +52,26 @@ def test_default_spec_loads_and_describes() -> None:
     assert described["orchestration"]["assumes"]
 
 
+def test_default_spec_json_copy_in_sync() -> None:
+    """The wheel ships the .json copy for PyYAML-free runtimes (Harbor trial
+    containers); the .yaml stays the commented source. They must not drift."""
+    import json as stdlib_json
+
+    import yaml
+
+    yaml_data = yaml.safe_load(_DEFAULT_SPEC.read_text(encoding="utf-8"))
+    json_data = stdlib_json.loads(
+        _DEFAULT_SPEC.with_suffix(".json").read_text(encoding="utf-8")
+    )
+    assert json_data == yaml_data, (
+        "default.harness.json drifted from default.harness.yaml — regenerate: "
+        "python -c \"import yaml, json, pathlib; p = pathlib.Path("
+        "'packages/agent-runtime/py/src/steerable_agent_runtime/default.harness.yaml'"
+        "); p.with_suffix('.json').write_text(json.dumps(yaml.safe_load("
+        "p.read_text()), indent=2) + '\\n')\""
+    )
+
+
 def test_json_spec_loads(tmp_path: Path) -> None:
     path = tmp_path / "spec.json"
     path.write_text(
