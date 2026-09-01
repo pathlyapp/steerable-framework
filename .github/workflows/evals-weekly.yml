@@ -6,11 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke, flaky A/B (25 ids × 2 arms × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
+        description: cheap-12 smoke, flaky A/B (25 ids × 2 arms × 3 attempts), spiral-red unblock check (7 ids × 1 arm × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12
           - flaky
+          - spiral-red
           - failed-prev
           - catalog
         default: cheap-12
@@ -268,6 +269,76 @@ jobs:
             evals/jobs/steerable/*/*/exception.txt
           if-no-files-found: ignore
 
+  # One arm, because the baseline these are measured against is 0 passes in 2
+  # catalog runs rather than a rate to compare against. Seven jobs leaves the
+  # 50-job wave free for a `flaky` dispatch to run beside it. `arm_b_env`
+  # applies unconditionally here: there is no arm A to keep on the defaults.
+  spiral:
+    name: TB 2.1 spiral-red shard ${{ matrix.shard }}/7
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'spiral-red' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Tunable overrides
+        env:
+          ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
+        run: |
+          set -eu
+          printf '%s\n' "$ARM_B_ENV" | while IFS= read -r line; do
+            line="${line%$'\r'}"
+            case "$line" in
+              "") ;;
+              STEERABLE_*=*) printf '%s\n' "$line" >> "$GITHUB_ENV" ;;
+              *) echo "refusing override outside the STEERABLE_ namespace: $line" >&2; exit 1 ;;
+            esac
+          done
+          echo "spiral-red overrides:" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$ARM_B_ENV" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+      - name: Harbor spiral-red shard
+        env:
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+          STEERABLE_SOFT_TIMEOUT_MS: "4500000"
+          STEERABLE_HARD_TIMEOUT_SEC: "5100"
+        run: |
+          set +e
+          uv run python -m evals.run --agent steerable --split spiral-red --shard "${{ matrix.shard }}" --shards 7 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            echo ran > eval-status-steerable.txt
+            echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo failed > eval-status-steerable.txt
+          echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-steerable-spiral-${{ matrix.shard }}
+          path: |
+            eval-status-steerable.txt
+            evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/result.json
+            evals/jobs/steerable/*/*/agent/headless.log
+            evals/jobs/steerable/*/*/verifier/test-stdout.txt
+            evals/jobs/steerable/*/*/exception.txt
+          if-no-files-found: ignore
+
   notify-start:
     name: Feishu started
     runs-on: ubuntu-latest
@@ -316,7 +387,7 @@ jobs:
 
   gather:
     name: At least one live agent ran
-    needs: [eval, flaky, catalog, failed-prev]
+    needs: [eval, flaky, spiral, catalog, failed-prev]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

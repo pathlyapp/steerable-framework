@@ -103,6 +103,38 @@ def test_failed_prev_is_pinned_catalog_subset() -> None:
     assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
 
+def test_iteration_splits_are_catalog_subsets_that_do_not_overlap() -> None:
+    """The two iteration sets ask different questions of different tasks.
+
+    ``flaky`` is paired arms over tasks whose baseline is a coin toss;
+    ``spiral-red`` is one arm over tasks with no passes to compare against.
+    A task in both would be measured twice under designs that disagree about
+    what its baseline is.
+    """
+    suite = load_suite()
+    flaky = set(suite.splits["flaky"])
+    spiral = set(suite.splits["spiral-red"])
+    assert flaky <= suite.catalog_set
+    assert spiral <= suite.catalog_set
+    assert not flaky & spiral
+
+
+def test_sharded_jobs_shard_over_their_whole_split() -> None:
+    """A shard count below the split size silently drops the tail.
+
+    ``--shards N`` and the matrix both have to move when a split grows, and
+    nothing at runtime complains if they disagree: the ids past the last
+    shard are simply never dispatched.
+    """
+    suite = load_suite()
+    root = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    weekly = (root / "evals-weekly.yml").read_text()
+    for split in ("flaky", "spiral-red"):
+        size = len(suite.splits[split])
+        assert f'--split {split} --shard "${{{{ matrix.shard }}}}" --shards {size}' in weekly
+        assert f"shard: {list(range(size))}" in weekly
+
+
 def test_oracle_canary_is_in_cheap_12() -> None:
     suite = load_suite()
     canary = suite.splits["oracle-canary"]

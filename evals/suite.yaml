@@ -281,6 +281,22 @@ splits:
     - regex-log
     - reshard-c4-data
     - sparql-university
+  # The seven stable reds that lose their trial to unbounded reasoning: both
+  # catalog runs produced >=50 KB of reasoning per tool call, a regime that
+  # passes at 0.071 against 0.889 below 3 KB. They are absent from `flaky`
+  # because that set is paired arms over tasks whose baseline is a coin toss,
+  # and these have no coin to toss — two runs, zero passes. So this set runs
+  # one arm and asks a different question: does the change make any of them
+  # passable at all? Against a 0-for-2 baseline a single pass is the finding,
+  # which needs no second arm and no paired test.
+  spiral-red:
+    - circuit-fibsqrt
+    - dna-assembly
+    - extract-moves-from-video
+    - gpt2-codegolf
+    - regex-chess
+    - schemelike-metacircular-eval
+    - winning-avg-corewars
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert
