@@ -40,15 +40,6 @@ jobs:
       - name: Harbor cheap-12
         env:
           # Product agent: same OpenAI-compatible gateway as local glm
-          # (OpenRouter / 万界). Do not put that key in OPENAI_API_KEY —
-          # Codex would send it to api.openai.com.
-          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
-          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
-          # Baseline agents: official vendor keys, skipped when unset.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-          # Product agent: same OpenAI-compatible gateway as local glm
           # (OpenRouter / 万界). The agent resolves STEERABLE_BASE_URL first,
           # so the steerable leg needs no OPENAI_BASE_URL — and setting one
           # would leak the gateway URL into the codex baseline leg. Do not
@@ -56,7 +47,11 @@ jobs:
           # it to api.openai.com.
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
-          run: |
+          # Baseline agents: official vendor keys, skipped when unset.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
           set +e
           uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
           code=$?
