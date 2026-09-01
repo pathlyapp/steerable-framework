@@ -236,3 +236,76 @@ def test_non_positive_timeout_rejected() -> None:
         LoopConfig(tool_timeout_ms=0)
     with pytest.raises(ValueError, match="tool_timeout_ms"):
         LoopConfig(tool_timeout_ms=-1)
+    with pytest.raises(ValueError, match="wrap_up_tool_timeout_ms"):
+        LoopConfig(wrap_up_tool_timeout_ms=0)
+    with pytest.raises(ValueError, match="wrap_up_hard_cap_ms"):
+        LoopConfig(wrap_up_hard_cap_ms=-1)
+    with pytest.raises(ValueError, match="idle_stream_timeout_ms"):
+        LoopConfig(idle_stream_timeout_ms=0)
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_hard_cap_caps_tool_before_wrap() -> None:
+    provider = make_provider(
+        [{"content": "", "tool_calls": [tc("hang")]}, {"content": "recovered"}]
+    )
+    router = ToolRouter()
+
+    async def hang() -> str:
+        await asyncio.sleep(60)
+        return "never"  # pragma: no cover
+
+    router.register(hang)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(tool_timeout_ms=60_000, wrap_up_hard_cap_ms=30),
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+    assert events[-1].data["status"] == "completed"
+    results = results_of(events)
+    assert results[0].data["error"] == "tool_timeout"
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_tool_timeout_caps_hung_write() -> None:
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("slow")]},
+            {"content": "", "tool_calls": [tc("hang")]},
+            {"content": "wrote what I could"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def slow() -> str:
+        await asyncio.sleep(0.05)
+        return "slept"
+
+    async def hang() -> str:
+        await asyncio.sleep(60)
+        return "never"  # pragma: no cover
+
+    router.register(slow)
+    router.register(hang)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            soft_timeout_ms=10,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=2,
+            wrap_up_tool_timeout_ms=20,
+            tool_timeout_ms=60_000,
+        ),
+    )
+    schemas = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "hang", "parameters": {}}},
+    ]
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "go")], tools=schemas)
+    )
+    assert events[-1].data["status"] == "completed"
+    errors = [e.data.get("error") for e in results_of(events)]
+    assert "tool_timeout" in errors

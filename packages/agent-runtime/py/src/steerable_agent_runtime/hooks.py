@@ -193,6 +193,16 @@ class LoopHooks(Protocol):
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction: ...
 
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Whether this call advanced the task, resetting the loop's
+        ``reasoning_without_progress_chars`` budget.
+
+        The loop knows nothing about tool semantics, so the product decides.
+        DeliveryHooks counts only calls that wrote a file, which is what
+        separates catalog spirals from long-but-productive trials.
+        """
+        ...
+
 
 class NoopHooks:
     """Default hooks: pass everything through unchanged."""
@@ -217,6 +227,24 @@ class NoopHooks:
     ) -> CompletionAction:
         return CompletionAction(kind="accept")
 
+    def wrap_up_may_drop_tools(self) -> bool:
+        """False keeps offering tools after ``wrap_up_max_tool_rounds``.
+
+        DeliveryHooks returns False while instruction-named required files
+        are still missing, or named telnet/listen/CPU_ONLY checks still
+        fail, so wrap-up cannot accept a text-only stop.
+        """
+        return True
+
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Any call that returned without error counts as progress.
+
+        The conservative default: it resets the budget often, so the loop
+        cuts less. Products that can tell delivery from inspection should
+        narrow it.
+        """
+        return result.success
+
 
 class ChainHooks:
     """Compose several hooks into one ``LoopHooks``.
@@ -232,6 +260,7 @@ class ChainHooks:
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
       says ``fail``, the first failure reason is surfaced.
     - ``before_completion``: the first non-``accept`` action wins.
+    - ``wrap_up_may_drop_tools``: False if any hook forbids dropping tools.
 
     This is how a product stacks e.g. compaction + spill + retry without the
     loop knowing about any of them.
@@ -314,3 +343,23 @@ class ChainHooks:
             if action.kind != "accept":
                 return action
         return CompletionAction(kind="accept")
+
+    def wrap_up_may_drop_tools(self) -> bool:
+        for hook in self._hooks:
+            drop = getattr(hook, "wrap_up_may_drop_tools", None)
+            if callable(drop) and not drop():
+                return False
+        return True
+
+    def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
+        """Progress only when every hook that judges it agrees.
+
+        Any hook may withhold, matching ``wrap_up_may_drop_tools``: a narrow
+        judge (DeliveryHooks counts writes only) would otherwise be
+        overridden by a broad one and the budget would never accumulate.
+        """
+        for hook in self._hooks:
+            judge = getattr(hook, "tool_made_progress", None)
+            if callable(judge) and not judge(result, call):
+                return False
+        return True

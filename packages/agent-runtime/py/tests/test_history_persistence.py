@@ -64,6 +64,15 @@ def test_message_codec_roundtrip_full_fidelity() -> None:
     tool_msg = LLMMessage.text_of("tool", "result body", name="echo", tool_call_id="c1")
     assert message_from_dict(message_to_dict(tool_msg)) == tool_msg
 
+    reasoned = LLMMessage.text_of(
+        "assistant",
+        "",
+        tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+        reasoning="need echo",
+        reasoning_details=[{"type": "reasoning.text", "text": "need echo"}],
+    )
+    assert message_from_dict(message_to_dict(reasoned)) == reasoned
+
 
 def test_entry_codec_roundtrip_all_kinds() -> None:
     entries = [

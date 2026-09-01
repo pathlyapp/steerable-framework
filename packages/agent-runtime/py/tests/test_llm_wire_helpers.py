@@ -129,6 +129,31 @@ def test_openai_parse_stream_chunk_openrouter_reasoning_field() -> None:
     assert parsed.reasoning_delta == "plan the edit"
 
 
+def test_openai_parse_and_encode_reasoning_details() -> None:
+    details = [{"id": "r1", "type": "reasoning.text", "text": "step", "format": "unknown"}]
+    parsed = _parse_stream_chunk(
+        {"choices": [{"delta": {"reasoning_details": details}, "finish_reason": None}]}
+    )
+    assert parsed is not None
+    assert parsed.reasoning_details == details
+    encoded = _encode_message(
+        LLMMessage.text_of(
+            "assistant",
+            "",
+            tool_calls=[ToolCall(id="c1", name="bash", arguments={"command": "ls"})],
+            reasoning="step",
+            reasoning_details=details,
+        )
+    )
+    assert encoded["reasoning_details"] == details
+    assert "reasoning" not in encoded
+    plaintext = _encode_message(
+        LLMMessage.text_of("assistant", "ok", reasoning="just think")
+    )
+    assert plaintext["reasoning"] == "just think"
+    assert "reasoning_details" not in plaintext
+
+
 def test_openai_parse_stream_chunk_usage_only() -> None:
     chunk = {
         "choices": [],
@@ -216,6 +241,131 @@ def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
     assert "reasoning_effort" not in build("m")  # unknown model → no knob
     # An explicit per-request effort always wins over the env default.
     assert build("deepseek-reasoner", {"reasoning_effort": "max"})["reasoning_effort"] == "max"
+
+
+def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "max")
+    monkeypatch.delenv("STEERABLE_OPENROUTER_PROVIDER", raising=False)
+    zai = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://api.z.ai/api/coding/paas/v4",
+    )
+    body = zai._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert body["reasoning_effort"] == "max"
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["tool_stream"] is True
+    other = OpenAICompatProvider(
+        name="t", model="z-ai/glm-5.3-flash", base_url="https://openrouter.ai/api/v1"
+    )
+    openrouter = other._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={},
+    )
+    assert openrouter["reasoning_effort"] == "max"
+    assert openrouter["reasoning"] == {"effort": "max", "exclude": False}
+    assert "thinking" not in openrouter
+    assert "tool_stream" not in openrouter
+    assert "provider" not in openrouter
+
+
+def test_openai_build_body_openrouter_pins_z_ai(monkeypatch) -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
+    monkeypatch.setenv("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+    monkeypatch.setenv("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "1")
+    monkeypatch.setenv("STEERABLE_HTTP_REFERER", "https://example.test")
+    monkeypatch.setenv("STEERABLE_HTTP_TITLE", "TB")
+    provider = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=False,
+        extra={},
+    )
+    assert body["provider"] == {
+        "order": ["z-ai"],
+        "only": ["z-ai"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
+    headers = provider._headers()
+    assert headers["HTTP-Referer"] == "https://example.test"
+    assert headers["X-Title"] == "TB"
+
+
+def test_openai_build_body_z_ai_coerces_required_tool_choice_to_auto() -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    openrouter = OpenAICompatProvider(
+        name="t",
+        model="z-ai/glm-5.3-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = openrouter._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+
+    openai = OpenAICompatProvider(
+        name="t",
+        model="gpt-4.1",
+        base_url="https://api.openai.com/v1",
+        api_key="k",
+    )
+    kept = openai._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert kept["tool_choice"] == "required"
+
+
+def test_http_error_copies_retry_after_header() -> None:
+    from types import SimpleNamespace
+
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    provider = OpenAICompatProvider(name="t", model="m", base_url="http://x/v1")
+    exc = SimpleNamespace(
+        response=SimpleNamespace(
+            status_code=429,
+            headers={"retry-after": "12"},
+        )
+    )
+    err = provider._http_error(exc, body_text="rate limited")
+    assert err.kind == "rate_limit"
+    assert err.retry_after_ms == 12_000
 
 
 def test_stream_timeout_is_idle_read_not_infinite(monkeypatch) -> None:

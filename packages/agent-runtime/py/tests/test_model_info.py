@@ -164,9 +164,22 @@ def test_clamp_reasoning_effort_unrecognized_value_falls_back() -> None:
     assert clamp_reasoning_effort("deepseek-reasoner", "ultra") == "medium"
 
 
+def test_clamp_reasoning_effort_glm_supports_max() -> None:
+    assert clamp_reasoning_effort("z-ai/glm-5.3-flash", "max") == "max"
+    assert clamp_reasoning_effort("z-ai/glm-5.3-flash", "high") == "high"
+    # Harbor leaf id and a gateway that forwards the full openai/z-ai/... string.
+    assert clamp_reasoning_effort("glm-5.3-flash", "max") == "max"
+    assert clamp_reasoning_effort("openai/z-ai/glm-5.3-flash", "max") == "max"
+    assert resolve_model_info("glm-5.3-flash").context_window == 1_048_576
+    assert resolve_model_info("z-ai/glm-5.3-flash").context_window == 1_048_576
+    assert resolve_model_info("openai/z-ai/glm-5.3-flash").context_window == 1_048_576
+
+
 def test_builtin_table_is_consistent() -> None:
     for info in MODEL_INFOS:
         assert info.pattern and info.pattern == info.pattern.lower()
         assert info.context_window > 0
         assert "text" in info.modalities
-        assert info.reasoning_levels <= frozenset({"minimal", "low", "medium", "high"})
+        assert info.reasoning_levels <= frozenset(
+            {"minimal", "low", "medium", "high", "max"}
+        )

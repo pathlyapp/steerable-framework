@@ -15,7 +15,16 @@ from steerable_agent_runtime import (
     ToolRouter,
     estimate_tokens,
 )
+from steerable_agent_runtime.compaction import _fold_content
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
+
+
+def test_fold_content_keeps_head_and_tail() -> None:
+    text = "HEAD-START" + ("x" * 400) + "TAIL-METRIC-0.549"
+    folded = _fold_content(text, excerpt_chars=80)
+    assert "HEAD-START" in folded
+    assert "TAIL-METRIC-0.549" in folded
+    assert "truncated" in folded
 
 
 def make_provider(script: list[dict[str, Any]]):
@@ -212,6 +221,49 @@ async def test_over_threshold_uses_configured_summarizer() -> None:
     )
     assert summarized_seen
     assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_summarizer_transport_error_falls_back_to_excerpt() -> None:
+    big = "z" * 4_000
+    provider = make_provider(
+        [
+            {"content": big, "tool_calls": [tc("emit")]},
+            {"content": big, "tool_calls": [tc("emit")]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit() -> str:
+        return "ok"
+
+    router.register(emit)
+
+    class _Boom:
+        name = "summarizer"
+        model = "summarizer-model"
+
+        async def complete(self, messages, *, cache_retention=None, **kw):
+            raise ConnectionError("incomplete chunked read")
+
+    hooks = CompactionHooks(
+        max_context_tokens=1_200,
+        threshold_ratio=0.5,
+        keep_last_messages=2,
+        keep_last_tool_results=0,
+        summarizer=_Boom(),
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+    assert hooks.compactions >= 1
+    assert events[-1].data["status"] == "completed"
+    excerpt_seen = any(
+        "[assistant]" in m.content_text or "[user]" in m.content_text
+        for call in provider.calls[1:]
+        for m in call
+    )
+    assert excerpt_seen
 
 
 def test_pressure_blends_observed_usage_with_delta_estimate() -> None:

@@ -16,6 +16,7 @@ from steerable_agent_runtime import (
     ToolRouter,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
+from steerable_agent_runtime.llm.errors import LLMError
 
 
 def make_flaky_provider(*, fail_on: set[int] | None, script: list[dict[str, Any]]):
@@ -137,3 +138,15 @@ async def test_retry_budget_resets_each_round() -> None:
     # attempts: round0 fails x2 + success, round1 fails x2 + success = 6
     assert provider.attempts == 6
     assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_waits_retry_after_header() -> None:
+    hooks = RetryHooks(_policy())
+    ctx = type("Ctx", (), {"round_index": 0})()
+    err = LLMError(
+        "429", kind="rate_limit", status_code=429, retry_after_ms=30_000
+    )
+    action = await hooks.on_request_error(err, [], ctx)
+    assert action.kind == "retry"
+    assert action.delay_ms == 30_000

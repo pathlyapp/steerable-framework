@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -24,20 +25,23 @@ from harbor.models.agent.context import AgentContext
 
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
+    _ENSURE_PYTHON_310,
     _NO_PROXY_ENV,
     _REMOTE_SRC,
     _REPO_ROOT,
-    _STANDALONE_PY,
-    _STANDALONE_PY_INSTALL,
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
     merge_trial_path as _merge_trial_path,
+    musl_uv_binary as _musl_uv_binary,
+    linux_cpython_tarball as _linux_cpython_tarball,
     pip_install_command as _pip_install_command,
-    python_tag_supported as _python_tag_supported,
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
     spec_as_json as _spec_as_json,
+    trial_python_ok as _trial_python_ok,
+    trial_python_tag as _trial_python_tag,
+    trial_python_venv as _trial_python_venv,
     venv_tarball as _venv_tarball,
 )
 
@@ -61,6 +65,16 @@ _CREDENTIAL_KEYS = (
     "OPENAI_BASE_URL",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
+)
+#: Loop tunables an A/B dispatch may override per arm. Forwarded before the
+#: ``setdefault`` block below, so a host value wins over the run defaults and
+#: an unset key leaves ``headless.py`` in charge. Only calibration knobs
+#: belong here: a catalog run costs hours, so arms have to differ by env
+#: rather than by commit to share one task set.
+_TUNING_KEYS = (
+    "STEERABLE_IDLE_STREAM_TIMEOUT_MS",
+    "STEERABLE_IDLE_STREAM_MAX_CHARS",
+    "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS",
 )
 _PROXY_KEYS = (
     "HTTP_PROXY",
@@ -118,14 +132,23 @@ class SteerableHarborAgent(BaseInstalledAgent):
         if pip_check.return_code != 0:
             apt_env = {"DEBIAN_FRONTEND": "noninteractive", **proxy_env}
             await self._ensure_python_apt(environment, apt_env)
+        await self._inject_host_uv(environment)
+        await self._inject_host_python(environment)
+        await self._ensure_python_310(environment, proxy_env)
+        await self._align_verifier_python(environment)
+        # The 3.10+ interpreter is /usr/local/bin/python3. Apply that PATH
+        # before `python3 -m venv`, not only after install().
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
         await self.exec_as_root(
             environment, command=f"mkdir -p {shlex.quote(_REMOTE_SRC)}"
         )
         py_tag = await self._python_tag(environment)
-        python_bin = "python3"
-        if py_tag and not _python_tag_supported(py_tag):
-            python_bin = await self._install_standalone_python(environment, proxy_env)
-            py_tag = await self._python_tag(environment, python=python_bin)
+        if py_tag and int(py_tag) < 310:
+            raise RuntimeError(
+                f"trial python cp{py_tag} is still <3.10 before venv"
+            )
         cached = _venv_tarball(py_tag) if py_tag else None
         restored = False
         if cached is not None and cached.is_file():
@@ -135,7 +158,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # later trials pick up headless/runtime fixes without a full pip.
             await self._overlay_source(environment, proxy_env)
         else:
-            await self._pip_install_packages(environment, proxy_env, python=python_bin)
+            await self._pip_install_packages(environment, proxy_env)
             if py_tag:
                 await self._save_venv(environment, _venv_tarball(py_tag))
         await self._seed_uv(environment)
@@ -151,39 +174,14 @@ class SteerableHarborAgent(BaseInstalledAgent):
             ),
         )
 
-    async def _python_tag(self, environment: BaseEnvironment, python: str = "python3") -> str:
+    async def _python_tag(self, environment: BaseEnvironment) -> str:
         result = await environment.exec(
-            command=(
-                f"{shlex.quote(python)} -c 'import sys; print(\"%s%s\" % "
-                "(sys.version_info.major, sys.version_info.minor))'"
-            ),
+            command=_trial_python_tag(),
             user="root",
         )
         if result.return_code != 0:
             return ""
         return (result.stdout or "").strip()
-
-    async def _install_standalone_python(
-        self, environment: BaseEnvironment, proxy_env: dict[str, str]
-    ) -> str:
-        """Fetch the pinned python-build-standalone into the environment.
-
-        Fails loud: without it the agent cannot install at all, and a clear
-        download error beats pip's ``requires a different Python`` wall.
-        """
-        result = await self.exec_as_root(
-            environment,
-            command=_STANDALONE_PY_INSTALL,
-            env=proxy_env or None,
-            timeout_sec=900,
-        )
-        if result.return_code != 0:
-            raise RuntimeError(
-                "environment python3 is below the agent's >=3.10 requirement "
-                "and the standalone-python fallback failed to install: "
-                f"{(result.stderr or result.stdout or '').strip()[-400:]}"
-            )
-        return _STANDALONE_PY
 
     async def _ensure_python_apt(
         self, environment: BaseEnvironment, apt_env: dict[str, str]
@@ -216,6 +214,134 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 environment, ("python3", "python_pip")
             )
 
+    async def _inject_host_uv(self, environment: BaseEnvironment) -> None:
+        """Put a Linux musl ``uv`` in the trial before Python upgrade.
+
+        Debian 11 / Alpine 3.9 cannot pip-install a recent uv. A musl-static
+        binary from GitHub (downloaded on the Harbor host) runs in those
+        images; copying a macOS ``uv`` does not. Fall back to ``which uv``.
+        """
+        src = _musl_uv_binary(fetch=True)
+        if src is None:
+            host = shutil.which("uv")
+            if not host:
+                return
+            src = Path(host)
+        try:
+            await environment.upload_file(src, "/tmp/steerable-host-uv")
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "cp /tmp/steerable-host-uv /usr/local/bin/uv && "
+                    "chmod 0755 /usr/local/bin/uv && "
+                    "/usr/local/bin/uv --version"
+                ),
+                timeout_sec=30,
+            )
+        except Exception:
+            return
+
+    async def _inject_host_python(self, environment: BaseEnvironment) -> None:
+        """Install a host-packed Linux 3.12 before ``uv python install`` in-trial.
+
+        qemu-alpine-ssh / qemu-startup are Debian 11 (3.9.2). GitHub GETs of
+        python-build-standalone from inside those images fail; the GHA host
+        already has that tarball from setup-harbor.
+
+        Do not overwrite ``/usr/local/bin/python3`` when the image already has
+        3.10+: largest-eigenval ships numpy on 3.13, and replacing it with a
+        bare 3.12 made Harbor's ``/usr/local/bin/python -m pytest`` miss pytest.
+        """
+        check = await environment.exec(
+            command=_trial_python_ok(),
+            user="root",
+        )
+        if check.return_code == 0:
+            return
+        src = _linux_cpython_tarball(fetch=True)
+        if src is None:
+            return
+        try:
+            await environment.upload_file(src, "/tmp/steerable-cpython.tgz")
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "mkdir -p /opt/steerable-python && "
+                    "tar -C /opt/steerable-python -xzf /tmp/steerable-cpython.tgz && "
+                    "for b in /opt/steerable-python/bin/python3 "
+                    "/opt/steerable-python/bin/python3.12 "
+                    "/opt/steerable-python/bin/python; do "
+                    '[ -x "$b" ] && ln -sf "$b" /usr/local/bin/python3 '
+                    '&& ln -sf "$b" /usr/local/bin/python && break; '
+                    "done && "
+                    "/usr/local/bin/python3 -c "
+                    "'import ssl, zlib, sys; raise SystemExit("
+                    "0 if sys.version_info >= (3, 10) else 1)'"
+                ),
+                timeout_sec=120,
+            )
+        except Exception:
+            try:
+                await self.exec_as_root(
+                    environment,
+                    command="rm -f /usr/local/bin/python3",
+                    timeout_sec=15,
+                )
+            except Exception:
+                return
+            return
+
+    async def _align_verifier_python(self, environment: BaseEnvironment) -> None:
+        """Point Harbor's ``/usr/local/bin/python`` at the 3.10+ python3.
+
+        largest-eigenval: Harbor pip-installs pytest then runs
+        ``/usr/local/bin/python -m pytest``. Skip-inject left python3 as
+        3.13 with numpy, while ``python`` stayed a different binary without
+        pytest.
+        """
+        try:
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "p=/usr/local/bin/python3; "
+                    '[ -x "$p" ] || p=$(command -v python3 2>/dev/null || true); '
+                    'if [ -n "$p" ] && [ -x "$p" ]; then '
+                    'ln -sf "$p" /usr/local/bin/python; fi'
+                ),
+                timeout_sec=15,
+            )
+        except Exception:
+            return
+
+    async def _ensure_python_310(
+        self, environment: BaseEnvironment, proxy_env: dict[str, str]
+    ) -> None:
+        """Raise the trial interpreter to >=3.10 before creating the agent venv."""
+        check = await environment.exec(
+            command=_trial_python_ok(),
+            user="root",
+        )
+        if check.return_code == 0:
+            return
+        await self.exec_as_root(
+            environment,
+            command=_ENSURE_PYTHON_310,
+            env=proxy_env or None,
+            timeout_sec=900,
+        )
+        environment._persistent_env["PATH"] = _merge_trial_path(
+            environment._persistent_env.get("PATH", "")
+        )
+        again = await environment.exec(
+            command=_trial_python_ok(),
+            user="root",
+        )
+        if again.return_code != 0:
+            raise RuntimeError(
+                "trial python is still <3.10 after _ENSURE_PYTHON_310 "
+                f"(stdout={again.stdout!r} stderr={again.stderr!r})"
+            )
+
     async def _seed_uv(self, environment: BaseEnvironment) -> None:
         """Install uv from a PyPI mirror so TB ``test.sh`` need not hit GitHub.
 
@@ -231,12 +357,15 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 env=_NO_PROXY_ENV,
                 timeout_sec=180,
             )
-            await self.exec_as_root(environment, command=_UV_SEED)
+            await self.exec_as_root(
+                environment, command=_UV_SEED, timeout_sec=600
+            )
         except Exception:
             return
         environment._persistent_env["PATH"] = _merge_trial_path(
             environment._persistent_env.get("PATH", "")
         )
+        environment._persistent_env["UV_PYTHON_INSTALL_DIR"] = "/opt/uv-python"
 
     async def _restore_venv(
         self, environment: BaseEnvironment, tarball: Path
@@ -285,18 +414,14 @@ class SteerableHarborAgent(BaseInstalledAgent):
         self,
         environment: BaseEnvironment,
         proxy_env: dict[str, str],
-        python: str = "python3",
     ) -> None:
         remote_pkgs = await self._upload_packages(environment)
         venv = f"{_REMOTE_SRC}/venv"
-        venv_check = await environment.exec(
-            command=f"{shlex.quote(python)} -m venv {shlex.quote(venv)}", user="root"
-        )
+        venv_cmd = _trial_python_venv(venv)
+        venv_check = await environment.exec(command=venv_cmd, user="root")
         if venv_check.return_code != 0:
             await self.ensure_system_dependencies(environment, ("python_venv",))
-            await self.exec_as_root(
-                environment, command=f"{shlex.quote(python)} -m venv {shlex.quote(venv)}"
-            )
+            await self.exec_as_root(environment, command=venv_cmd)
         await self._pip_install(environment, remote_pkgs, proxy_env)
 
     async def _pip_install(
@@ -350,24 +475,57 @@ class SteerableHarborAgent(BaseInstalledAgent):
             harness_flag = f"--harness {shlex.quote(_HARNESS_REMOTE)} "
         provider = (self._parsed_model_provider or "openai").strip().lower()
         kind = "anthropic" if provider in {"anthropic", "claude"} else "openai_compat"
-        env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS))
+        env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS, *_TUNING_KEYS))
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = self._parsed_model_name or ""
         env["PYTHONUNBUFFERED"] = "1"
-        # GLM-5.3-Flash thinking defaults to max and can sit silent for many
-        # minutes before the first tool call. Harbor wants cheap/fast rounds.
-        env.setdefault("STEERABLE_REASONING_EFFORT", "low")
-        log = f"{self.environment_logs_dir.as_posix()}/headless.log"
-        await self.exec_as_agent(
-            environment,
-            command=(
-                f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
-                f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
-                f"{harness_flag}"
-                f"> {shlex.quote(log)} 2>&1"
-            ),
-            env=env,
+        # Z.AI GLM-5.3 coding default is reasoning_effort=max (high is weaker).
+        # Claude Code TB 84.3 used temperature=1.0, max_new_tokens=65536, 6h.
+        env.setdefault("STEERABLE_REASONING_EFFORT", "max")
+        env.setdefault("STEERABLE_TEMPERATURE", "1.0")
+        env.setdefault("STEERABLE_MAX_TOKENS", "65536")
+        # Catalog/failed-prev Harbor ×12 on 900s tasks is 180 min; wrap at
+        # 150 min so keep-tools wrap-up has ~30 min before the kill
+        # (regex-chess drafted /app/re.json in chat, then wrap-up had ~10 min).
+        env.setdefault("STEERABLE_SOFT_TIMEOUT_MS", "9000000")
+        # High GLM thinking can emit no SSE bytes for many minutes
+        # (regex-chess thought ~48 min). Idle read must cover the wrap.
+        env.setdefault("STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "10200")
+        # OpenRouter 429s during 16-shard GHA; default 3×200ms dies immediately.
+        env.setdefault("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
+        env.setdefault("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
+        env.setdefault("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
+        # OpenRouter cheapest route is Relace, not Z.ai. GLM's 83+ TB score
+        # is the official endpoint; pin so catalog quality matches.
+        # Do not set require_parameters: Harbor streams with
+        # stream_options.include_usage; paired with require_parameters the
+        # Z.ai pin 404s "No endpoints found".
+        env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
+        env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+        env.setdefault("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0")
+        env.setdefault(
+            "STEERABLE_HTTP_REFERER",
+            "https://github.com/pathlyapp/steerable-framework",
         )
+        env.setdefault("STEERABLE_HTTP_TITLE", "Steerable Harbor TB")
+        log = f"{self.environment_logs_dir.as_posix()}/headless.log"
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
+                    f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
+                    f"--max-rounds 250 "
+                    f"{harness_flag}"
+                    f"> {shlex.quote(log)} 2>&1"
+                ),
+                env=env,
+            )
+        finally:
+            # Harbor pip-installs pytest then runs /usr/local/bin/python -m
+            # pytest. Re-point python at python3 after the agent in case a
+            # trial retargeted the symlink.
+            await self._align_verifier_python(environment)
 
     def _forwarded_env(self, keys: tuple[str, ...]) -> dict[str, str]:
         env: dict[str, str] = {}

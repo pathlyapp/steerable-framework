@@ -46,7 +46,7 @@ jobs:
         if: always()
         with:
           name: oracle-fix-git
-          path: evals/jobs/oracle/**/result.json
+          path: evals/jobs/oracle/*/result.json
           if-no-files-found: ignore
 
   steerable:
@@ -61,14 +61,14 @@ jobs:
       - run: docker info
       - name: Harbor product canary
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
         run: |
           set +e
           uv run python -m evals.run --agent steerable --split oracle-canary --skip-missing-env --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
           code=$?
           if [ "$code" -eq 3 ]; then
-            echo "::warning::steerable canary skipped (set OPENAI_API_KEY or ANTHROPIC_API_KEY)"
+            echo "::warning::steerable canary skipped (set STEERABLE_API_KEY and STEERABLE_BASE_URL)"
             exit 0
           fi
           exit "$code"
@@ -76,5 +76,30 @@ jobs:
         if: always()
         with:
           name: steerable-fix-git
-          path: evals/jobs/steerable/**/result.json
+          path: |
+            evals/jobs/steerable/*/result.json
+            evals/jobs/steerable/*/*/agent/headless.log
+            evals/jobs/steerable/*/*/verifier/test-stdout.txt
+            evals/jobs/steerable/*/*/exception.txt
           if-no-files-found: ignore
+
+  notify:
+    name: Feishu result
+    needs: [oracle, steerable]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-fix-git"
+          path: statuses
+      - name: Feishu result
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+        run: |
+          python3 -m evals.feishu \
+            --root statuses \
+            --label "GHA oracle canary" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            || echo "::warning::Feishu post failed"

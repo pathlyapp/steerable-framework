@@ -1790,17 +1790,69 @@ def _default_loop_hooks(
     flag = os.environ.get("STEERABLE_SIDECAR_SPILL", "1").strip().lower()
     if flag in {"0", "false", "no", "off"}:
         spec = replace(spec, context=[c for c in spec.context if c.impl != "spill"])
+    # STEERABLE_RETRY_* is the same kind of knob: the desktop cadence
+    # (3×200ms) dies instantly on Harbor's OpenRouter 429s, so eval jobs
+    # retune the spec's simple retry without editing the bundled YAML.
+    retry_params = _retry_params_from_env()
+    if retry_params:
+        spec = replace(
+            spec,
+            retry=[
+                replace(c, params={**c.params, **retry_params})
+                if c.impl == "simple"
+                else c
+                for c in spec.retry
+            ],
+        )
     model = params.get("model")
+    # Desktop 60k–131k windows keep 2 tool results. GLM 1M Harbor traces
+    # otherwise fold compile/train tails after two bash calls.
+    large = max_ctx >= 200_000
     assembled = assemble_harness(
         spec,
         provider=summarizer,
         runtime_params={
-            "pressure_compaction": {"max_context_tokens": max_ctx, "model": model},
+            "pressure_compaction": {
+                "max_context_tokens": max_ctx,
+                "model": model,
+                "keep_last_tool_results": 16 if large else 2,
+                "keep_last_messages": 16 if large else 6,
+                "fold_excerpt_chars": 4_000 if large else 160,
+            },
             "informed_backtrack": {"max_context_tokens": max_ctx, "model": model},
-            "spill": {"directory": _spill_directory()},
+            # Desktop 16k inline. GLM 1M Harbor keeps full 100k bash clips
+            # until compaction; 2k previews hid compile/train endings.
+            "spill": {
+                "directory": _spill_directory(),
+                "max_inline_bytes": 100_000 if large else 16_000,
+                "preview_bytes": 8_000 if large else 2_000,
+            },
         },
     )
     return assembled.hooks
+
+
+def _retry_params_from_env() -> dict[str, int]:
+    """STEERABLE_RETRY_* deployment overrides for the spec's simple retry.
+
+    Desktop default is 3×200ms. Harbor OpenRouter 429s need minutes.
+    """
+    params: dict[str, int] = {}
+    for env_name, param in (
+        ("STEERABLE_RETRY_MAX_ATTEMPTS", "max_attempts"),
+        ("STEERABLE_RETRY_BASE_DELAY_MS", "base_delay_ms"),
+        ("STEERABLE_RETRY_MAX_DELAY_MS", "max_delay_ms"),
+    ):
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            params[param] = value
+    return params
 
 
 def _default_harness_spec():

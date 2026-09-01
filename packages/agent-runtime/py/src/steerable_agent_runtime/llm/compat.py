@@ -213,6 +213,12 @@ PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
     # gateway delivered thinking in `reasoning` + `reasoning_details` on the
     # raw wire, and the pinned order surfaced 965 reasoning chars plus the
     # answer text through the framework's normalized chunk stream.
+    #
+    # ``stream_options.include_usage`` stays ON: the 404 ("No endpoints
+    # found") came from pairing it with ``require_parameters`` on the Z.ai
+    # pin, not from include_usage itself — without require_parameters the
+    # pinned endpoint returns usage (on a final choices-bearing chunk, which
+    # the stream parser handles). Token accounting depends on it.
     (
         "openrouter.ai",
         OpenAICompatFlags(

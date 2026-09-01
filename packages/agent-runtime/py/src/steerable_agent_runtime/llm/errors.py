@@ -8,8 +8,8 @@ of treating every failure as "transient".
 Kinds and their default retry routing:
 
 - ``transport`` — connection reset / timeout / DNS. Retryable (backoff).
-- ``rate_limit`` — HTTP 429. Retryable (backoff; providers usually want a
-  longer wait, which the retry policy's backoff already gives).
+- ``rate_limit`` — HTTP 429. Retryable (backoff; honor ``Retry-After`` when
+  the provider sends one).
 - ``server`` — HTTP 5xx. Retryable (backoff).
 - ``context_overflow`` — prompt exceeds the model's window. NOT retryable
   as-is: the same request must fail again. ``CompactionHooks`` intercepts
@@ -53,12 +53,14 @@ class LLMError(Exception):
         status_code: int | None = None,
         provider: str | None = None,
         raw: Any | None = None,
+        retry_after_ms: int | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status_code = status_code
         self.provider = provider
         self.raw = raw
+        self.retry_after_ms = retry_after_ms
 
     @property
     def retryable(self) -> bool:
@@ -81,6 +83,25 @@ _OVERFLOW_MARKERS = (
     "context size",
     "token limit",
 )
+
+
+def parse_retry_after_ms(value: object, *, cap_ms: int = 180_000) -> int | None:
+    """Parse HTTP ``Retry-After`` delta-seconds into a bounded wait.
+
+    HTTP-date values are ignored. Cap so a day-long header cannot stall wrap.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return None
+    if seconds <= 0:
+        return None
+    return min(int(seconds * 1000), cap_ms)
 
 
 def classify_http_status(status_code: int, body: str = "") -> LLMErrorKind:

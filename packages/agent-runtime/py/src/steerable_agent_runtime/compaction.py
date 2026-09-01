@@ -47,8 +47,15 @@ _FOLD_EXCERPT_CHARS = 160
 __all__ = ["CompactionHooks", "estimate_tokens"]
 
 
-def _fold_content(content: str | None) -> str:
-    excerpt = " ".join((content or "").split())[:_FOLD_EXCERPT_CHARS]
+def _fold_content(content: str | None, excerpt_chars: int = _FOLD_EXCERPT_CHARS) -> str:
+    text = content or ""
+    if len(text) <= excerpt_chars:
+        excerpt = text
+    else:
+        head = max(excerpt_chars // 5, 1)
+        tail = excerpt_chars - head
+        omitted = len(text) - excerpt_chars
+        excerpt = f"{text[:head]}\n...[{omitted} chars truncated]...\n{text[-tail:]}"
     if excerpt:
         return f"{_FOLDED_TOOL_MARKER} excerpt: {excerpt}"
     return _FOLDED_TOOL_MARKER
@@ -67,6 +74,7 @@ class CompactionHooks(NoopHooks):
         summarizer: LLMProvider | None = None,
         model: str | None = None,
         recompact_margin_ratio: float = 0.1,
+        fold_excerpt_chars: int = _FOLD_EXCERPT_CHARS,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
@@ -76,6 +84,7 @@ class CompactionHooks(NoopHooks):
         self._threshold = threshold_ratio
         self._keep_last = keep_last_messages
         self._keep_last_tools = keep_last_tool_results
+        self._fold_excerpt_chars = fold_excerpt_chars
         self._summarizer = summarizer
         #: Model name used for calibrated token estimates (see tokens.py).
         self._model = model
@@ -219,7 +228,7 @@ class CompactionHooks(NoopHooks):
         return [
             LLMMessage.text_of(
                 "tool",
-                _fold_content(m.content_text),
+                _fold_content(m.content_text, self._fold_excerpt_chars),
                 name=m.name,
                 tool_call_id=m.tool_call_id,
             )
@@ -266,12 +275,23 @@ class CompactionHooks(NoopHooks):
             # discarded: never write it into the prompt cache (pi's
             # retention=none rule). The kwarg is consumed by
             # CacheControlProvider; providers without it ignore the key.
-            message, _usage = await self._summarizer.complete(
-                prompt, cache_retention="none"
-            )
-            return message.content_text
-        # No summarizer configured: deterministic fallback keeps role + a short
-        # excerpt per message so the thread of actions survives.
+            try:
+                message, _usage = await self._summarizer.complete(
+                    prompt, cache_retention="none"
+                )
+            except Exception:
+                # Transport/protocol errors here run outside the stream
+                # retry loop. Falling back keeps wrap-up running so Harbor
+                # still scores files instead of a NonZeroAgentExit.
+                return self._excerpt_summary(middle)
+            text = (message.content_text or "").strip()
+            if text:
+                return text
+        return self._excerpt_summary(middle)
+
+    def _excerpt_summary(self, middle: list[LLMMessage]) -> str:
+        # No summarizer, empty model reply, or a failed complete(): keep
+        # role + a short excerpt per message so the thread of actions survives.
         lines = []
         for m in middle:
             excerpt = m.content_text.replace("\n", " ")[:200]

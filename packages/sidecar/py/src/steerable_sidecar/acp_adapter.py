@@ -226,7 +226,7 @@ def _env_provider_params() -> dict[str, Any]:
                 api_key = os.environ.get(var)
                 if api_key:
                     break
-    return {
+    params: dict[str, Any] = {
         "provider": provider,
         "model": os.environ.get("STEERABLE_MODEL", ""),
         "baseUrl": (
@@ -236,6 +236,13 @@ def _env_provider_params() -> dict[str, Any]:
         ),
         "apiKey": api_key or "",
     }
+    temperature = os.environ.get("STEERABLE_TEMPERATURE")
+    if temperature and temperature.strip():
+        params["temperature"] = float(temperature)
+    max_tokens = os.environ.get("STEERABLE_MAX_TOKENS")
+    if max_tokens and max_tokens.strip():
+        params["maxTokens"] = int(max_tokens)
+    return params
 
 
 def _default_loop_config() -> LoopConfig:

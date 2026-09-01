@@ -151,6 +151,13 @@ def test_registry_covers_documented_vendors() -> None:
     assert "prompt_cache_hit_tokens" in entry.cached_tokens_fields
     # The reference API itself needs no entry.
     assert compat_for_base_url("https://api.openai.com/v1") is None
+    openrouter = compat_for_base_url("https://openrouter.ai/api/v1")
+    assert openrouter is not None
+    # include_usage stays ON: the 404 came from pairing it with
+    # require_parameters on the Z.ai pin, not from include_usage itself
+    # (live-verified W5.4.3); token accounting depends on it.
+    assert openrouter.supports_usage_in_streaming is True
+    assert "reasoning" in openrouter.reasoning_delta_fields
 
 
 def test_registry_moonshot_flips_temperature_and_effort() -> None:

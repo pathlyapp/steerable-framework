@@ -169,6 +169,7 @@ class PressureCompaction:
     threshold_ratio: float = 0.8
     keep_last_messages: int = 6
     keep_last_tool_results: int = 2
+    fold_excerpt_chars: int | None = None
     model: str | None = None
     name: str = "pressure_compaction"
     assumes: str = (
@@ -178,6 +179,11 @@ class PressureCompaction:
     )
 
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
+        extra = (
+            {"fold_excerpt_chars": self.fold_excerpt_chars}
+            if self.fold_excerpt_chars is not None
+            else {}
+        )
         return _PreStepOnly(
             CompactionHooks(
                 max_context_tokens=self.max_context_tokens,
@@ -186,6 +192,7 @@ class PressureCompaction:
                 keep_last_tool_results=self.keep_last_tool_results,
                 summarizer=provider,
                 model=self.model,
+                **extra,
             )
         )
 
@@ -273,6 +280,8 @@ class SimpleRetry:
     """The existing bounded exponential backoff (RetryHooks)."""
 
     max_attempts: int = 4
+    base_delay_ms: int = 200
+    max_delay_ms: int = 5000
     name: str = "simple"
     assumes: str = (
         "failures are dominated by transient transport/rate-limit/server "
@@ -284,7 +293,13 @@ class SimpleRetry:
         from steerable_agent_harness import RetryPolicy
 
         return _OnRequestErrorOnly(
-            RetryHooks(RetryPolicy(max_attempts=self.max_attempts))
+            RetryHooks(
+                RetryPolicy(
+                    max_attempts=self.max_attempts,
+                    base_delay_ms=self.base_delay_ms,
+                    max_delay_ms=self.max_delay_ms,
+                )
+            )
         )
 
 

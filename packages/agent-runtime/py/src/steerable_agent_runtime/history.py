@@ -562,6 +562,10 @@ def message_to_dict(message: LLMMessage) -> dict[str, Any]:
             {"id": call.id, "name": call.name, "arguments": call.arguments or {}}
             for call in message.tool_calls
         ]
+    if message.reasoning:
+        out["reasoning"] = message.reasoning
+    if message.reasoning_details:
+        out["reasoning_details"] = message.reasoning_details
     return out
 
 
@@ -598,6 +602,8 @@ def message_from_dict(data: dict[str, Any]) -> LLMMessage:
             if tool_calls is not None
             else None
         ),
+        reasoning=data.get("reasoning"),
+        reasoning_details=data.get("reasoning_details"),
     )
 
 

@@ -26,8 +26,13 @@ Implemented so far (see docs/spec/core-loop.md + CORELOOP_TODO.md A3):
     hook rewrites go through the declared ``ContextManager.replace_all``
     path (the only rewrite, itself append-only)
   * soft timeout: a wall-clock limit (LoopConfig.soft_timeout_ms) checked at
-    round boundaries; once exceeded the loop stops offering tools and asks
-    the model for a final answer instead of hard-killing the run
+    round boundaries *and* between LLM stream chunks. An in-flight reasoning
+    stream that overruns the deadline is closed so wrap-up can still write
+    files (Harbor ×12 kills the trial ~30 min later). Chat withholds tools
+    and asks for a final answer; ``wrap_up_keeps_tools`` keeps offering
+    tools for a few act rounds so Harbor can still score files on disk.
+    ``wrap_up_tool_timeout_ms`` caps wrap-up streams and tools;
+    ``wrap_up_hard_cap_ms`` caps every tool from run start.
   * per-tool timeout (LoopConfig.tool_timeout_ms): a hung tool returns a
     failed ToolResult instead of hanging the turn; the consecutive-error
     breaker treats it like any other tool failure
@@ -206,6 +211,11 @@ class LoopContext:
     #: Successful tool results this turn — the anti-hallucination layer keys
     #: off "zero usable tool returns" to detect fabricated data reports.
     tool_successes: int = 0
+    #: Reasoning chars streamed since the last tool call the hooks counted as
+    #: progress (see ``LoopHooks.tool_made_progress``). Unlike the per-round
+    #: stream counters this survives across rounds, so it measures reasoning
+    #: that produced nothing rather than reasoning that was merely long.
+    reasoning_since_progress: int = 0
     #: Provider-reported prompt tokens of the last completed request, and the
     #: transcript length at that moment. Ground truth for compaction pressure
     #: (the heuristic estimate drifts per model; this does not). Hooks that
@@ -245,10 +255,58 @@ class LoopConfig:
     budget: BudgetLimit | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    #: Wall-clock soft limit. When exceeded, the loop stops offering tools and
-    #: asks the model to wrap up with what it has (one final no-tools round),
-    #: instead of hard-killing the run. ``None`` disables.
+    #: Wall-clock soft limit. When exceeded, the loop asks the model to wrap
+    #: up instead of hard-killing the run. Checked at round boundaries and
+    #: between LLM stream chunks so a 2-hour reasoning stream cannot skip
+    #: wrap-up. Default wrap-up withholds tools (one text round). ``None``
+    #: disables.
     soft_timeout_ms: int | None = None
+    #: Coding evals (Harbor / Terminal-Bench) score files on disk, not chat
+    #: text. Keep offering tools after the soft timeout so the model can
+    #: still write those files. Chat stays False.
+    wrap_up_keeps_tools: bool = False
+    #: Extra act rounds after wrap-up when ``wrap_up_keeps_tools`` is set.
+    #: Then tools are withheld for a final text round unless
+    #: ``hooks.wrap_up_may_drop_tools()`` is False (named outputs still
+    #: missing). Keep the default small so Harbor can still kill the trial.
+    wrap_up_max_tool_rounds: int = 4
+    #: Per-tool and per-stream wall-clock while wrap-up is active. A 1-hour
+    #: bash or another reasoning stream after the soft timeout otherwise
+    #: eats Harbor's remaining wait_for. ``None`` leaves ``tool_timeout_ms``
+    #: (and unbounded wrap-up streams) unchanged.
+    wrap_up_tool_timeout_ms: int | None = None
+    #: Absolute tool wall-clock from run start. Harbor catalog ×12 is 180
+    #: min; headless sets 175 min so a tool started near the soft deadline
+    #: still returns before the kill. ``None`` disables.
+    wrap_up_hard_cap_ms: int | None = None
+    #: Cut a reasoning-only stream after this much *active* token wall.
+    #: Gaps longer than ``_IDLE_REASONING_GAP_SEC`` are GLM silent-think
+    #: (regex-chess ~48 min with no SSE) and do not count. The first cut
+    #: does not wrap-up — delivery can still force a named write. A second
+    #: cut in the same run starts wrap-up: Z.AI coerces
+    #: ``tool_choice=required`` to auto, so retries can Hmm for another
+    #: cap each and eat Harbor ``wait_for``. Cuts keep firing during
+    #: wrap-up; each one spends a ``wrap_up_max_tool_rounds`` round, so the
+    #: spiral ends instead of streaming to Harbor's kill. ``None`` disables.
+    idle_stream_timeout_ms: int | None = None
+    #: Cut a tool-less stream after this many reasoning + content chars.
+    #: Time alone misses the worst spirals: silent-think gaps are excluded
+    #: from the active wall, and a dense stream keeps every chunk inside the
+    #: wrap-up per-chunk wait, so circuit-fibsqrt emitted 392 KB in one
+    #: round over 75 min with zero tool calls. Volume is what the model
+    #: actually spends. ``None`` disables.
+    idle_stream_max_chars: int | None = None
+    #: Cut a tool-less stream once this many reasoning chars have accumulated
+    #: since the last tool call the hooks counted as progress. The per-round
+    #: caps above measure one stream, which barely separates a spiral from a
+    #: long but productive run — a passing catalog trial reasoned 1.79 M chars
+    #: across the run and still delivered, because it kept writing. Reasoning
+    #: that produced nothing is the discriminator. The cut spends the budget,
+    #: so this bounds interruptions to one per cap rather than cutting every
+    #: later round at its first chunk. ``LoopHooks.tool_made_progress`` owns
+    #: what counts as progress, keeping the loop free of tool semantics.
+    #: ``None`` disables.
+    reasoning_without_progress_chars: int | None = None
     #: Block re-issuing an identical ``(name, args)`` call within one run.
     #: Deterministic tools return identical output for identical input, so a
     #: repeat only burns tokens and can push the model into a retry loop
@@ -268,15 +326,15 @@ class LoopConfig:
     #: serial. Event order stays deterministic: start events in call order,
     #: result events in call order after each batch completes.
     parallel_tools: bool = True
-    #: Per-tool-execution wall-clock limit. ``soft_timeout_ms`` is only
-    #: checked at round boundaries, so without this a hung tool (a dead
+    #: Per-tool-execution wall-clock limit. Without this a hung tool (a dead
     #: remote server, a stuck reverse-channel call) hangs the whole turn.
     #: On expiry the call returns a failed ``ToolResult`` (error
     #: ``tool_timeout``) instead of raising through the loop, so the
     #: consecutive-error breaker handles it like any other tool failure.
     #: Applies to every executor, in-process or remote. The default is a
     #: backstop against *hung* tools, not a budget — products with fast
-    #: tools should set a tighter value. ``None`` disables.
+    #: tools should set a tighter value. ``None`` disables. Wrap-up may
+    #: shrink this via ``wrap_up_tool_timeout_ms`` / ``wrap_up_hard_cap_ms``.
     tool_timeout_ms: int | None = 300_000
     #: Bound on one mid-turn ``steer()`` injection (W4-7). Oversized
     #: injections are truncated with a visible marker. ``None`` disables
@@ -299,6 +357,41 @@ class LoopConfig:
         if self.steer_mode not in ("boundary", "interrupt"):
             raise ValueError(
                 f"steer_mode must be 'boundary' or 'interrupt', got {self.steer_mode!r}"
+            )
+        if self.wrap_up_max_tool_rounds < 0:
+            raise ValueError("wrap_up_max_tool_rounds must be >= 0")
+        if (
+            self.wrap_up_tool_timeout_ms is not None
+            and self.wrap_up_tool_timeout_ms <= 0
+        ):
+            raise ValueError(
+                "wrap_up_tool_timeout_ms must be positive (or None to disable)"
+            )
+        if self.wrap_up_hard_cap_ms is not None and self.wrap_up_hard_cap_ms <= 0:
+            raise ValueError(
+                "wrap_up_hard_cap_ms must be positive (or None to disable)"
+            )
+        if (
+            self.idle_stream_timeout_ms is not None
+            and self.idle_stream_timeout_ms <= 0
+        ):
+            raise ValueError(
+                "idle_stream_timeout_ms must be positive (or None to disable)"
+            )
+        if (
+            self.idle_stream_max_chars is not None
+            and self.idle_stream_max_chars <= 0
+        ):
+            raise ValueError(
+                "idle_stream_max_chars must be positive (or None to disable)"
+            )
+        if (
+            self.reasoning_without_progress_chars is not None
+            and self.reasoning_without_progress_chars <= 0
+        ):
+            raise ValueError(
+                "reasoning_without_progress_chars must be positive "
+                "(or None to disable)"
             )
 
 
@@ -365,6 +458,8 @@ class CoreLoop:
         # W6-9: the live LoopContext of the current/last run, so the host can
         # read accumulated billable usage after the run via `last_run_usage`.
         self._run_context: LoopContext | None = None
+        self._run_started = 0.0
+        self._wrap_up_active = False
 
     def steer(self, content: str) -> None:
         """Inject a user message into a running turn.
@@ -548,7 +643,7 @@ class CoreLoop:
         blocked by a hung peer again.
         """
 
-        timeout_ms = self._config.tool_timeout_ms
+        timeout_ms = self._effective_tool_timeout_ms()
         if timeout_ms is None:
             return await self._executor.execute(call, ctx)
         try:
@@ -568,6 +663,24 @@ class CoreLoop:
                     ),
                 },
             )
+
+    def _effective_tool_timeout_ms(self) -> int | None:
+        """Resolve the wall-clock cap for the tool about to run.
+
+        Wrap-up uses ``wrap_up_tool_timeout_ms`` when set so a 1-hour bash
+        cannot eat Harbor's remaining wait_for. ``wrap_up_hard_cap_ms`` is
+        an absolute cap from run start (eval jobs only).
+        """
+        timeout_ms = self._config.tool_timeout_ms
+        wrap_cap = self._config.wrap_up_tool_timeout_ms
+        if self._wrap_up_active and wrap_cap is not None:
+            timeout_ms = wrap_cap if timeout_ms is None else min(timeout_ms, wrap_cap)
+        hard_cap = self._config.wrap_up_hard_cap_ms
+        if hard_cap is not None:
+            remaining = int(hard_cap - (time.monotonic() - self._run_started) * 1000)
+            remaining = max(remaining, 1_000)
+            timeout_ms = remaining if timeout_ms is None else min(timeout_ms, remaining)
+        return timeout_ms
 
     async def _execute_tool_cancellable(
         self, call: ToolCall, ctx: LoopContext
@@ -732,12 +845,55 @@ class CoreLoop:
         budget_state = BudgetState()
         tool_call_signatures: set[tuple[str, str]] = set()
         started = time.monotonic()
+        self._run_started = started
+        self._wrap_up_active = False
         soft_deadline = (
             started + self._config.soft_timeout_ms / 1000
             if self._config.soft_timeout_ms is not None
             else None
         )
         wrap_up = False
+        wrap_up_tool_rounds_used = 0
+        idle_cut_count = 0
+
+        def mark_wrap_up() -> None:
+            nonlocal wrap_up
+            wrap_up = True
+            self._wrap_up_active = True
+
+        def begin_soft_timeout() -> LoopEvent:
+            mark_wrap_up()
+            manager.append_fragment(
+                SoftTimeoutNotice(
+                    body=(
+                        _SOFT_TIMEOUT_NOTICE_KEEP_TOOLS
+                        if self._config.wrap_up_keeps_tools
+                        else _SOFT_TIMEOUT_NOTICE
+                    )
+                )
+            )
+            return LoopEvent(
+                "soft_timeout",
+                {
+                    "round": round_index,
+                    "elapsedMs": int((time.monotonic() - started) * 1000),
+                    "softTimeoutMs": self._config.soft_timeout_ms,
+                },
+            )
+
+        def withholding_tools() -> bool:
+            """True when this round must not offer or execute tools."""
+            if not wrap_up:
+                return False
+            if not self._config.wrap_up_keeps_tools:
+                return True
+            if wrap_up_tool_rounds_used < self._config.wrap_up_max_tool_rounds:
+                return False
+            drop = getattr(self._hooks, "wrap_up_may_drop_tools", None)
+            if callable(drop) and not drop():
+                return False
+            return True
+
         self.trajectory = []
 
         def emit_completion(
@@ -789,12 +945,35 @@ class CoreLoop:
             """
             if tool_calls or not content.strip():
                 return
-            manager.append(LLMMessage.text_of("assistant", content))
+            manager.append(_assistant_message(content))
+
+        def _assistant_message(
+            content: str, tool_calls: list[ToolCall] | None = None
+        ) -> LLMMessage:
+            return LLMMessage.text_of(
+                "assistant",
+                content,
+                tool_calls=tool_calls,
+                reasoning="".join(reasoning_parts) or None,
+                reasoning_details=list(reasoning_details_acc) or None,
+            )
+
+        def _cut_draft(content: str) -> LLMMessage:
+            """The draft of a round whose stream was cut, without its trace.
+
+            A cut interrupts reasoning mid-thought, so the fragment carries no
+            conclusion, and openai_compat replays `reasoning` on every later
+            request — re-priming the spiral the cut just stopped, at up to
+            idle_stream_max_chars per round.
+            """
+            return LLMMessage.text_of("assistant", content, tool_calls=[])
 
         yield LoopEvent("stage_start", {"model": self._provider.model})
 
         decision = CompletionDecision(status="failed", reason="loop did not run")
         round_index = 0
+        reasoning_parts: list[str] = []
+        reasoning_details_acc: list[Any] = []
         # Discipline retries / narration rounds granted by before_completion do
         # not consume the round budget (mirrors the TS loop's `turn -= 1`), but
         # the loop still caps them so a faulty hook cannot spin forever.
@@ -857,7 +1036,7 @@ class CoreLoop:
                 if narrate is not None:
                     prompt, reason = narrate
                     completion_redos += 1
-                    wrap_up = True
+                    mark_wrap_up()
                     manager.append_fragment(NarrationRequest(prompt))
                     yield LoopEvent(
                         "hook_action",
@@ -881,23 +1060,15 @@ class CoreLoop:
                 return
 
             # ── soft timeout: stop offering tools, ask for the wrap-up ────
-            # Soft = we never interrupt an in-flight stream or tool; the
-            # deadline is only checked at round boundaries.
+            # Also checked between stream chunks (below) so a long reasoning
+            # generation cannot skip wrap-up. In-flight tools still run until
+            # their own timeout / wrap_up_hard_cap_ms.
             if (
                 soft_deadline is not None
                 and not wrap_up
                 and time.monotonic() >= soft_deadline
             ):
-                wrap_up = True
-                yield LoopEvent(
-                    "soft_timeout",
-                    {
-                        "round": round_index,
-                        "elapsedMs": int((time.monotonic() - started) * 1000),
-                        "softTimeoutMs": self._config.soft_timeout_ms,
-                    },
-                )
-                manager.append_fragment(SoftTimeoutNotice())
+                yield begin_soft_timeout()
 
             # ── hook: pre_step (compaction / turn rejection / tool_choice) ──
             # Hooks receive a throwaway projection list and return
@@ -955,7 +1126,9 @@ class CoreLoop:
                 )
             # tool_choice only makes sense when tools are actually offered.
             step_tool_choice = (
-                pre.tool_choice if (pre.tool_choice and tools and not wrap_up) else None
+                pre.tool_choice
+                if (pre.tool_choice and tools and not withholding_tools())
+                else None
             )
             if step_tool_choice:
                 yield LoopEvent(
@@ -971,6 +1144,8 @@ class CoreLoop:
             # ── think: consume one LLM stream (retry via hook) ───────────
             content_parts: list[str] = []
             tool_calls: list[ToolCall] = []
+            reasoning_parts.clear()
+            reasoning_details_acc.clear()
             # Display pipeline: raw text is accumulated for recovery and the
             # transcript, but content_delta events pass through a surrogate
             # carry (half-emoji split across chunks) and the pseudo stripper
@@ -980,6 +1155,12 @@ class CoreLoop:
             reasoning_carry = ""
             stream_cancelled = False
             llm_attempt = 0
+            stream_budget_cut = False
+            stream_idle_cut = False
+            idle_cut_trigger: str | None = None
+            reasoning_active_ms = 0.0
+            stream_chars = 0
+            last_reason_chunk_at: float | None = None
             while True:
                 llm_attempt += 1
                 llm_started = time.monotonic()
@@ -991,11 +1172,12 @@ class CoreLoop:
                         "llm_request",
                         {"round": round_index, "attempt": llm_attempt},
                     )
+                    stream_started = time.monotonic()
                     stream = self._provider.stream(
                         manager.projection,
                         # wrap-up round: withhold tool descriptors so the model
                         # cannot start another act phase.
-                        tools=None if wrap_up else tools,
+                        tools=None if withholding_tools() else tools,
                         temperature=self._config.temperature,
                         max_tokens=self._config.max_tokens,
                         **(
@@ -1004,11 +1186,34 @@ class CoreLoop:
                             else {}
                         ),
                     )
-                    async for chunk in stream:
-                        # Cooperative cancel: stop consuming at the next
-                        # chunk rather than mid-processing one.
+                    stream_iter = aiter(stream)
+                    while True:
                         if self._cancel_event.is_set():
                             stream_cancelled = True
+                            break
+                        now = time.monotonic()
+                        wait_s: float | None = None
+                        wrap_stream_cap = self._config.wrap_up_tool_timeout_ms
+                        if not wrap_up and soft_deadline is not None:
+                            wait_s = max(soft_deadline - now, 0.05)
+                        elif wrap_up and wrap_stream_cap is not None:
+                            wait_s = max(
+                                wrap_stream_cap / 1000 - (now - stream_started),
+                                0.05,
+                            )
+                        try:
+                            if wait_s is None:
+                                chunk = await stream_iter.__anext__()
+                            else:
+                                chunk = await asyncio.wait_for(
+                                    stream_iter.__anext__(), timeout=wait_s
+                                )
+                        except StopAsyncIteration:
+                            break
+                        except (TimeoutError, asyncio.TimeoutError):
+                            # asyncio.TimeoutError is the builtin only on
+                            # 3.11+; on 3.10 wait_for raises the asyncio one.
+                            stream_budget_cut = True
                             break
                         if chunk.content_delta:
                             content_parts.append(chunk.content_delta)
@@ -1019,11 +1224,14 @@ class CoreLoop:
                             if display:
                                 yield LoopEvent("content_delta", {"delta": display})
                         if chunk.reasoning_delta:
+                            reasoning_parts.append(chunk.reasoning_delta)
                             emit, reasoning_carry = split_trailing_high_surrogate(
                                 chunk.reasoning_delta, reasoning_carry
                             )
                             if emit:
                                 yield LoopEvent("reasoning_delta", {"delta": emit})
+                        if chunk.reasoning_details:
+                            reasoning_details_acc.extend(chunk.reasoning_details)
                         if chunk.tool_call_delta is not None:
                             tool_calls.append(chunk.tool_call_delta)
                         if chunk.usage is not None:
@@ -1040,6 +1248,36 @@ class CoreLoop:
                             ctx.accumulated_completion_tokens += (
                                 chunk.usage.completion_tokens
                             )
+                        arrived = time.monotonic()
+                        if (
+                            chunk.reasoning_delta or chunk.content_delta
+                        ) and not tool_calls:
+                            stream_chars += len(chunk.reasoning_delta or "") + len(
+                                chunk.content_delta or ""
+                            )
+                            if last_reason_chunk_at is not None:
+                                gap = arrived - last_reason_chunk_at
+                                if gap < _IDLE_REASONING_GAP_SEC:
+                                    reasoning_active_ms += gap * 1000
+                            last_reason_chunk_at = arrived
+                        idle_cap = self._config.idle_stream_timeout_ms
+                        char_cap = self._config.idle_stream_max_chars
+                        stale_cap = self._config.reasoning_without_progress_chars
+                        if not tool_calls:
+                            if idle_cap is not None and reasoning_active_ms >= idle_cap:
+                                idle_cut_trigger = "active_ms"
+                            elif char_cap is not None and stream_chars >= char_cap:
+                                idle_cut_trigger = "chars"
+                            elif (
+                                stale_cap is not None
+                                and ctx.reasoning_since_progress + stream_chars
+                                >= stale_cap
+                            ):
+                                idle_cut_trigger = "no_progress"
+                        if idle_cut_trigger is not None:
+                            stream_idle_cut = True
+                            idle_cut_count += 1
+                            break
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
                                 budget_state, self._config.budget, tokens=chunk.usage.total_tokens
@@ -1115,6 +1353,11 @@ class CoreLoop:
                         stripper = PseudoStreamStripper()
                         content_carry = ""
                         reasoning_carry = ""
+                        stream_idle_cut = False
+                        idle_cut_trigger = None
+                        reasoning_active_ms = 0.0
+                        stream_chars = 0
+                        last_reason_chunk_at = None
                         # A hook may declare a transcript rewrite for the
                         # retry (context-overflow recovery compacts first) —
                         # the declared replace_all path records the boundary.
@@ -1155,9 +1398,7 @@ class CoreLoop:
                 # but never executed are dropped from the record — recording
                 # them would leave dangling tool_calls — but stay on the
                 # completion event's step summary for the trace.
-                aclose = getattr(stream, "aclose", None)
-                if aclose is not None:
-                    await aclose()
+                await _safe_aclose(stream)
                 record_terminal_content("".join(content_parts), [])
                 await self._flush_history(manager, chat_id)
                 yield emit_completion(
@@ -1174,6 +1415,9 @@ class CoreLoop:
                     ),
                 )
                 return
+
+            if stream_budget_cut or stream_idle_cut:
+                await _safe_aclose(stream)
 
             # Flush the display pipeline: any held-back tail (partial marker
             # that never completed, deferred surrogate half) goes out now.
@@ -1196,9 +1440,9 @@ class CoreLoop:
             # try to recover inline calls from the content so the act phase
             # runs instead of ending the turn tool-less. The cleaned text
             # (pseudo blocks removed) becomes the round's content.
-            # Skipped in wrap-up mode: tools are no longer offered, and any
-            # tool intent (structured or pseudo) is dropped so the turn ends.
-            if wrap_up:
+            # Skipped when wrap-up is withholding tools: any tool intent
+            # (structured or pseudo) is dropped so the turn ends.
+            if withholding_tools():
                 tool_calls = []
             elif not tool_calls and content:
                 recovered, cleaned = extract_inline_tool_calls(content)
@@ -1217,6 +1461,50 @@ class CoreLoop:
             # streaming filter before the content enters the transcript.
             content = strip_pseudo_fn_final(content)
 
+            # Reasoning this round produced no tool call, so it counts against
+            # the progress budget; a call resets it in the tool-result path.
+            if not tool_calls:
+                ctx.reasoning_since_progress += stream_chars
+
+            if stream_idle_cut:
+                yield LoopEvent(
+                    "hook_action",
+                    {
+                        "hook": "loop",
+                        "action": "idle_stream_cut",
+                        "elapsedMs": int(reasoning_active_ms),
+                        "chars": stream_chars,
+                        "staleChars": ctx.reasoning_since_progress,
+                        "trigger": idle_cut_trigger,
+                        "round": round_index,
+                    },
+                )
+                # Spend the budget on the cut. Left standing it would be over
+                # cap for every later round too, cutting each one at its first
+                # chunk — and the model cannot decide what to write with no
+                # reasoning at all, so it would never reach a tool call. One
+                # interruption per cap of unproductive reasoning is the point.
+                ctx.reasoning_since_progress = 0
+
+            idle_wrap = stream_idle_cut and idle_cut_count >= 2
+            if stream_budget_cut or idle_wrap:
+                was_wrap = wrap_up
+                if not wrap_up:
+                    yield begin_soft_timeout()
+                if not tool_calls and not withholding_tools():
+                    # steal.py / gcode: dense Hmm with zero writes. Keep the
+                    # draft on the record and start wrap-up instead of waiting
+                    # for the stream to finish. A first idle cut still retries
+                    # a write; the second cut takes this path so 32 missing-
+                    # named retries cannot each Hmm for another idle cap.
+                    if content.strip():
+                        manager.append(_cut_draft(content))
+                    if stream_idle_cut:
+                        manager.append_fragment(StreamCutNotice())
+                    if was_wrap:
+                        wrap_up_tool_rounds_used += 1
+                    continue
+
             # ── decide: no tool calls → terminal (unless a hook vetoes) ──
             if not tool_calls:
                 if content.strip():
@@ -1231,15 +1519,22 @@ class CoreLoop:
                         reason="no tool calls and no final response",
                         confidence=0.75,
                     )
-                # A wrap-up round IS the final answer — offering a NON-empty
-                # wrap-up back to before_completion would loop (its content
-                # is exactly what a discipline retry would flag). An EMPTY
-                # wrap-up is different: the model glitched on the narration
-                # ask itself, so give hooks one bounded second chance
-                # (AntiHallucinationHooks caps narrations at 2).
+                # A no-tools wrap-up with text is the final answer — offering
+                # it back to before_completion would loop. Keep-tools wrap-up
+                # is different: Harbor still scores files, so hooks may veto
+                # a text-only stop while extra act rounds remain (regex-chess
+                # summarized instead of writing /app/re.json). An empty
+                # wrap-up still gets one bounded second chance.
                 if (
-                    (not wrap_up or not content.strip())
-                    and completion_redos < _MAX_COMPLETION_REDOS
+                    completion_redos < _MAX_COMPLETION_REDOS
+                    and (
+                        not wrap_up
+                        or not content.strip()
+                        or (
+                            self._config.wrap_up_keeps_tools
+                            and not withholding_tools()
+                        )
+                    )
                 ):
                     action = await self._hooks.before_completion(
                         CompletionDraft(
@@ -1259,7 +1554,11 @@ class CoreLoop:
                         # what it said, then the discipline notice corrects it.
                         completion_redos += 1
                         if content.strip():
-                            manager.append(LLMMessage.text_of("assistant", content))
+                            manager.append(
+                                _cut_draft(content)
+                                if stream_idle_cut or stream_budget_cut
+                                else _assistant_message(content)
+                            )
                         manager.append_fragment(DisciplineRetryNotice(action.message))
                         yield LoopEvent(
                             "hook_action",
@@ -1281,7 +1580,7 @@ class CoreLoop:
                         continue
                     if action.kind == "narrate":
                         completion_redos += 1
-                        wrap_up = True
+                        mark_wrap_up()
                         manager.append_fragment(NarrationRequest(action.message))
                         yield LoopEvent(
                             "hook_action",
@@ -1307,9 +1606,7 @@ class CoreLoop:
                 return
 
             # ── act: append assistant turn, then run each tool ───────────
-            manager.append(
-                LLMMessage.text_of("assistant", content, tool_calls=tool_calls)
-            )
+            manager.append(_assistant_message(content, tool_calls))
 
             # Parallel batching: consecutive concurrency-safe calls run under
             # one asyncio.gather; any other call is a barrier batch of one.
@@ -1538,6 +1835,11 @@ class CoreLoop:
                     # ── hook: post_tool_result (spill / truncation) ──────
                     result = await self._hooks.post_tool_result(result, call, ctx)
 
+                    if self._config.reasoning_without_progress_chars is not None:
+                        judge = getattr(self._hooks, "tool_made_progress", None)
+                        if judge is None or judge(result, call):
+                            ctx.reasoning_since_progress = 0
+
                     ctx.tool_calls_used += 1
                     tool_started = started_by_idx.get(call_idx, time.monotonic())
                     duration_ms = int((time.monotonic() - tool_started) * 1000)
@@ -1693,7 +1995,7 @@ class CoreLoop:
                         if narrate is not None:
                             prompt, reason = narrate
                             completion_redos += 1
-                            wrap_up = True
+                            mark_wrap_up()
                             manager.append_fragment(NarrationRequest(prompt))
                             yield LoopEvent(
                                 "hook_action",
@@ -1736,10 +2038,14 @@ class CoreLoop:
                         return
 
             # ── observe: continue to next round ──────────────────────────
-            # A narration grant broke out of the tool loop above — skip the
-            # "executing" bookkeeping and run the wrap-up round directly.
-            if wrap_up:
+            # A text wrap-up (tools withheld) broke out of the tool loop
+            # above — skip the "executing" bookkeeping and run the wrap-up
+            # round directly. Artifact wrap-up still executes tools, so it
+            # falls through and increments like a normal round.
+            if wrap_up and withholding_tools():
                 continue
+            if wrap_up:
+                wrap_up_tool_rounds_used += 1
             # Tool results are durable before the next round builds on them.
             await self._flush_history(manager, chat_id)
             yield LoopEvent(
@@ -1782,16 +2088,40 @@ _SOFT_TIMEOUT_NOTICE = (
     "final answer now."
 )
 
+_SOFT_TIMEOUT_NOTICE_KEEP_TOOLS = (
+    "[system notice] The time budget for this task is nearly exhausted. "
+    "Wait for background jobs (`wait`). Write the required output files "
+    "now with bash, write_file, or edit_file. If you already drafted "
+    "those contents in this chat, write_file them to the named paths. "
+    "If those files already exist and look complete, verify them — do "
+    "not overwrite with a truncated copy. Hidden tests score those "
+    "files, not this chat. Do not keep exploring."
+)
+
 #: Hard cap on before_completion-granted redos (discipline retries +
-#: narration rounds) per run. Hooks bound themselves; this is the
-#: defense-in-depth backstop so a faulty hook cannot spin the loop forever.
-_MAX_COMPLETION_REDOS = 4
+#: narration rounds) per run. Must cover DeliveryHooks empty-round retries
+#: (6) plus missing-named-output retries (32), plus idle-stream cuts that
+#: also go through before_completion. Hooks still bound themselves; this is
+#: the defense-in-depth backstop so a faulty hook cannot spin forever.
+_MAX_COMPLETION_REDOS = 32
+
+#: Gaps longer than this between reasoning/content chunks are GLM silent
+#: think (regex-chess ~48 min with no SSE) and do not count toward
+#: ``idle_stream_timeout_ms``.
+_IDLE_REASONING_GAP_SEC = 300.0
 
 _DISCIPLINE_RETRY_NOTICE = (
     "[system notice] The previous reply described an intended action but did "
     "not actually issue any tool call. Either make the tool call now, or — "
     "if no tool is genuinely needed — give the final answer directly without "
     "open-ended phrasing."
+)
+
+_STREAM_CUT_NOTICE = (
+    "[system notice] The previous reply was cut off mid-reasoning because it "
+    "ran on without issuing a tool call. Do not resume that train of thought "
+    "and do not re-derive it. Issue the next concrete tool call now — write "
+    "the file, run the command, or check the result."
 )
 
 _NARRATION_REQUEST = (
@@ -1806,8 +2136,11 @@ class SoftTimeoutNotice(ContextFragment):
 
     content_kind = "loop.soft_timeout_notice"
 
+    def __init__(self, body: str | None = None) -> None:
+        self._body = body or _SOFT_TIMEOUT_NOTICE
+
     def body(self) -> str:
-        return _SOFT_TIMEOUT_NOTICE
+        return self._body
 
     @classmethod
     def type_markers(cls) -> tuple[str, str]:
@@ -1828,6 +2161,24 @@ class DisciplineRetryNotice(ContextFragment):
     @classmethod
     def type_markers(cls) -> tuple[str, str]:
         return ("[system notice] The previous reply", "")
+
+
+class StreamCutNotice(ContextFragment):
+    """Tells the model its stream was cut, so it does not resume the spiral.
+
+    Without it the transcript just ends on the model's own truncated draft
+    and the next request reads as "keep going". Codex marks an interrupted
+    turn the same way; pi drops the aborted message outright.
+    """
+
+    content_kind = "loop.stream_cut_notice"
+
+    def body(self) -> str:
+        return _STREAM_CUT_NOTICE
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] The previous reply was cut off", "")
 
 
 class NarrationRequest(ContextFragment):
@@ -1892,6 +2243,18 @@ _STEER_INTERRUPT_SKIP_MESSAGE = (
     "skipped so the model can respond to it. Do not claim this call "
     "produced a result.]"
 )
+
+
+async def _safe_aclose(stream: Any) -> None:
+    """Drop a cut HTTP body without aborting wrap-up."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:
+        # Idle-cut leaves an incomplete chunked HTTP body; wrap-up still runs.
+        pass
 
 
 def _append_unexecuted_tool_results(

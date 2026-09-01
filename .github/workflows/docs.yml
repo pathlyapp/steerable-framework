@@ -25,7 +25,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Per PR / branch. A repo-wide `pages` group made every docs PR cancel
+  # every other in-flight docs build (this PR's check went cancelled).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

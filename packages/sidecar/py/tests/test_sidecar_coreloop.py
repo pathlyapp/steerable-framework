@@ -630,7 +630,7 @@ def _unwrap(hooks):
 def test_default_loop_hooks_resolves_window_from_model() -> None:
     """Fixed-60k default is gone: known models compact against their real
     context window; explicit maxContextTokens still wins."""
-    from steerable_agent_runtime import ChainHooks, CompactionHooks
+    from steerable_agent_runtime import ChainHooks, CompactionHooks, SpillHooks
     from steerable_sidecar.sidecar import _default_loop_hooks
 
     hooks = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
@@ -639,6 +639,8 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
         h for h in _unwrap(hooks) if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 131_072
+    spill = next(h for h in _unwrap(hooks) if isinstance(h, SpillHooks))
+    assert spill._max_inline == 16_000
 
     explicit = _default_loop_hooks(
         {"model": "gpt-oss:20b-cloud", "maxContextTokens": 24_000}
@@ -653,6 +655,40 @@ def test_default_loop_hooks_resolves_window_from_model() -> None:
         h for h in _unwrap(unknown) if isinstance(h, CompactionHooks)
     )
     assert compaction._max_tokens == 60_000
+    assert compaction._keep_last_tools == 2
+
+    glm = _default_loop_hooks({"model": "z-ai/glm-5.3-flash"})
+    compaction = next(h for h in _unwrap(glm) if isinstance(h, CompactionHooks))
+    assert compaction._max_tokens == 1_048_576
+    assert compaction._keep_last_tools == 16
+    assert compaction._keep_last == 16
+    assert compaction._fold_excerpt_chars == 4_000
+    spill = next(h for h in _unwrap(glm) if isinstance(h, SpillHooks))
+    assert spill._max_inline == 100_000
+    assert spill._preview == 8_000
+
+
+def test_default_loop_hooks_retry_policy_from_env(monkeypatch) -> None:
+    from steerable_agent_runtime import RetryHooks
+    from steerable_sidecar.sidecar import _default_loop_hooks
+
+    monkeypatch.delenv("STEERABLE_RETRY_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("STEERABLE_RETRY_BASE_DELAY_MS", raising=False)
+    monkeypatch.delenv("STEERABLE_RETRY_MAX_DELAY_MS", raising=False)
+    default = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    retry = next(h for h in _unwrap(default) if isinstance(h, RetryHooks))
+    assert retry._policy.max_attempts == 3
+    assert retry._policy.base_delay_ms == 200
+    assert retry._policy.max_delay_ms == 5000
+
+    monkeypatch.setenv("STEERABLE_RETRY_MAX_ATTEMPTS", "12")
+    monkeypatch.setenv("STEERABLE_RETRY_BASE_DELAY_MS", "2000")
+    monkeypatch.setenv("STEERABLE_RETRY_MAX_DELAY_MS", "120000")
+    harbor = _default_loop_hooks({"model": "gpt-oss:20b-cloud"})
+    retry = next(h for h in _unwrap(harbor) if isinstance(h, RetryHooks))
+    assert retry._policy.max_attempts == 12
+    assert retry._policy.base_delay_ms == 2000
+    assert retry._policy.max_delay_ms == 120_000
 
 
 def test_default_loop_hooks_matches_default_spec_structure() -> None:

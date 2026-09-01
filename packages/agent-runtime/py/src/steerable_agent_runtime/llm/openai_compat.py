@@ -27,7 +27,7 @@ from steerable_agent_protocol.generated import ToolCall
 from ..model_info import clamp_reasoning_effort
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
-from .errors import LLMError, classify_http_status
+from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,50 @@ def _timeout_sec(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _glm_z_ai_host(base_url: str | None) -> bool:
+    host = (base_url or "").lower()
+    return "z.ai" in host or "bigmodel.cn" in host
+
+
+def _openrouter_host(base_url: str | None) -> bool:
+    return "openrouter.ai" in (base_url or "").lower()
+
+
+def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
+    """Z.AI rejects ``tool_choice=required`` with HTTP 400 (must be auto)."""
+    if _glm_z_ai_host(base_url):
+        return True
+    lowered = (model or "").lower()
+    return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
+
+
+def _env_flag(name: str) -> bool | None:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _openrouter_provider_prefs() -> dict[str, Any] | None:
+    """Pin OpenRouter to named upstreams (Harbor TB: Z.ai, not Relace)."""
+    raw = os.environ.get("STEERABLE_OPENROUTER_PROVIDER", "").strip()
+    if not raw:
+        return None
+    order = [part.strip() for part in raw.split(",") if part.strip()]
+    if not order:
+        return None
+    prefs: dict[str, Any] = {"order": order, "only": order}
+    fallbacks = _env_flag("STEERABLE_OPENROUTER_ALLOW_FALLBACKS")
+    if fallbacks is not None:
+        prefs["allow_fallbacks"] = fallbacks
+    require = _env_flag("STEERABLE_OPENROUTER_REQUIRE_PARAMETERS")
+    if require is not None:
+        prefs["require_parameters"] = require
+    return prefs
 
 
 def _stream_timeout():
@@ -130,6 +174,8 @@ class OpenAICompatProvider:
             "assistant",
             message.get("content") or "",
             tool_calls=_decode_tool_calls(message.get("tool_calls")),
+            reasoning=_reasoning_text(message, ("reasoning_content", "reasoning")),
+            reasoning_details=_reasoning_details_list(message.get("reasoning_details")),
         )
         return out, _parse_usage(payload.get("usage") or {}, compat=self.compat)
 
@@ -192,6 +238,7 @@ class OpenAICompatProvider:
                         parsed = LLMStreamChunk(
                             content_delta=parsed.content_delta,
                             reasoning_delta=parsed.reasoning_delta,
+                            reasoning_details=parsed.reasoning_details,
                             finish_reason=parsed.finish_reason,
                             usage=parsed.usage,
                             raw=parsed.raw,
@@ -199,6 +246,7 @@ class OpenAICompatProvider:
                     if (
                         parsed.content_delta
                         or parsed.reasoning_delta
+                        or parsed.reasoning_details
                         or parsed.finish_reason
                         or parsed.usage is not None
                     ):
@@ -221,18 +269,27 @@ class OpenAICompatProvider:
         status = exc.response.status_code
         kind = classify_http_status(status, body_text)
         snippet = (body_text or "").strip().replace("\n", " ")[:300]
+        headers = getattr(exc.response, "headers", None) or {}
+        retry_after = parse_retry_after_ms(headers.get("retry-after"))
         return LLMError(
             f"{self.name}: HTTP {status} ({kind})"
             + (f": {snippet}" if snippet else ""),
             kind=kind,
             status_code=status,
             provider=self.name,
+            retry_after_ms=retry_after,
         )
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        referer = os.environ.get("STEERABLE_HTTP_REFERER", "").strip()
+        if referer:
+            headers["HTTP-Referer"] = referer
+        title = os.environ.get("STEERABLE_HTTP_TITLE", "").strip()
+        if title:
+            headers["X-Title"] = title
         return headers
 
     def _build_body(
@@ -267,6 +324,13 @@ class OpenAICompatProvider:
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
+        # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
+        # Harbor still logs the hook; the wire must send auto or the trial
+        # dies on round 0 (failed-prev 33335200327).
+        if body.get("tool_choice") == "required" and _z_ai_tool_choice_auto_only(
+            self.model, self.base_url
+        ):
+            body["tool_choice"] = "auto"
         # W6-8: clamp the env-requested reasoning effort to a level the model
         # actually supports (structured ModelInfo replaces the raw env
         # passthrough). A model with no reasoning knob gets no parameter at
@@ -274,14 +338,25 @@ class OpenAICompatProvider:
         effort = clamp_reasoning_effort(
             self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
         )
-        if (
-            effort
-            and compat.supports_reasoning_effort
-            and "reasoning_effort" not in body
-            and "reasoning" not in body
-        ):
-            # GLM-5.3-Flash defaults to max thinking; Harbor sets `low`.
-            body["reasoning_effort"] = effort
+        if effort and compat.supports_reasoning_effort:
+            # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
+            if "reasoning_effort" not in body:
+                body["reasoning_effort"] = effort
+            # OpenRouter documents ``reasoning.effort``; some providers ignore
+            # the Z.AI ``reasoning_effort`` pass-through.
+            if _openrouter_host(self.base_url) and "reasoning" not in body:
+                # ``exclude: false`` keeps thinking tokens in the response so
+                # we can round-trip ``reasoning_details`` after tool turns.
+                body["reasoning"] = {"effort": effort, "exclude": False}
+        if _openrouter_host(self.base_url) and "provider" not in body:
+            prefs = _openrouter_provider_prefs()
+            if prefs:
+                body["provider"] = prefs
+        if _glm_z_ai_host(self.base_url) and "thinking" not in body:
+            # Forced-on for GLM-5.3; omitting is fine, disabling 400s.
+            body["thinking"] = {"type": "enabled"}
+            if stream:
+                body["tool_stream"] = True
         return body
 
 
@@ -412,6 +487,12 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
             }
             for tc in message.tool_calls
         ]
+    # OpenRouter: echo reasoning_details unmodified so GLM continues after
+    # tools. Prefer the structured block; plaintext is the fallback.
+    if message.reasoning_details:
+        out["reasoning_details"] = message.reasoning_details
+    elif message.reasoning:
+        out["reasoning"] = message.reasoning
     return out
 
 
@@ -520,11 +601,19 @@ def _parse_stream_chunk(
     return LLMStreamChunk(
         content_delta=content,
         reasoning_delta=reasoning,
+        reasoning_details=_reasoning_details_list(delta.get("reasoning_details")),
         tool_call_delta=tool_call_delta,
         finish_reason=finish_reason,
         usage=_parse_usage(usage, compat=flags) if usage else None,
         raw=chunk,
     )
+
+
+def _reasoning_details_list(value: Any) -> list[Any] | None:
+    """Keep a non-empty ``reasoning_details`` array; otherwise omit."""
+    if isinstance(value, list) and value:
+        return list(value)
+    return None
 
 
 def _reasoning_text(delta: dict[str, Any], fields: tuple[str, ...]) -> str | None:

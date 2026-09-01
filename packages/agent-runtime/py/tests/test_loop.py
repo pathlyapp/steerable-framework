@@ -45,6 +45,10 @@ def make_provider(script: list[dict[str, Any]]):
                 content = entry.get("content", "")
                 if content:
                     yield LLMStreamChunk(content_delta=content)
+                if entry.get("reasoning"):
+                    yield LLMStreamChunk(reasoning_delta=entry["reasoning"])
+                if entry.get("reasoning_details"):
+                    yield LLMStreamChunk(reasoning_details=entry["reasoning_details"])
                 for tc in entry.get("tool_calls", []):
                     yield LLMStreamChunk(tool_call_delta=tc)
                 usage = entry.get("usage")
@@ -117,6 +121,40 @@ async def test_tool_round_then_completion() -> None:
     tool_msgs = [m for m in second_call_messages if m.role == "tool"]
     assert len(tool_msgs) == 1 and tool_msgs[0].name == "add"
     assert '"success": true' in tool_msgs[0].content_text
+
+
+@pytest.mark.asyncio
+async def test_loop_echoes_reasoning_details_after_tools() -> None:
+    """OpenRouter GLM continues thinking only if the prior details come back."""
+    details = [{"type": "reasoning.text", "text": "need add", "index": 0}]
+    provider = make_provider(
+        [
+            {
+                "content": "",
+                "tool_calls": [tc("add", {"a": 1, "b": 2})],
+                "reasoning": "need add",
+                "reasoning_details": details,
+            },
+            {"content": "Sum is 3."},
+        ]
+    )
+    router = ToolRouter()
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    router.register(add)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    await collect(loop.run([LLMMessage.text_of("user", "add")]))
+
+    assistant = [m for m in provider.calls[1] if m.role == "assistant"][-1]
+    assert assistant.reasoning == "need add"
+    assert assistant.reasoning_details == details
+    from steerable_agent_runtime.llm.openai_compat import _encode_message
+
+    encoded = _encode_message(assistant)
+    assert encoded["reasoning_details"] == details
+    assert "reasoning" not in encoded
 
 
 @pytest.mark.asyncio

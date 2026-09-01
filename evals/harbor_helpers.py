@@ -8,43 +8,6 @@ import tempfile
 from pathlib import Path
 
 
-def python_tag_supported(tag: str) -> bool:
-    """The agent packages require Python >= 3.10 (match the pyproject floor)."""
-    try:
-        major, minor = int(tag[:1]), int(tag[1:])
-    except (ValueError, IndexError):
-        return True  # unparsable tag: let pip report the real requirement
-    return (major, minor) >= (3, 10)
-
-
-# The agent packages require Python >= 3.10; task images stuck on older
-# interpreters (qemu-alpine-ssh's Debian bullseye ships 3.9) get a pinned
-# python-build-standalone instead of a cryptic pip failure. The desktop app
-# bundles its own runtime for the same reason. Pinned for reproducibility;
-# no CN mirror carries astral-sh/python-build-standalone, so proxied local
-# runs may stall — GHA (the eval home) reaches GitHub directly.
-_STANDALONE_PY_URL = (
-    "https://github.com/astral-sh/python-build-standalone/releases/download/"
-    "20250818/cpython-3.11.13%2B20250818-x86_64-unknown-linux-gnu-install_only.tar.gz"
-)
-_STANDALONE_PY_HOME = "/opt/steerable-py311"
-_STANDALONE_PY = f"{_STANDALONE_PY_HOME}/bin/python3.11"
-# Minimal-image portability: the download goes through the environment's own
-# python3 (urllib honours *_proxy), because neither curl nor wget is
-# guaranteed (qemu-alpine-ssh has neither — exit 127). Extraction avoids
-# `tar --strip-components` (busybox tar lacks it): unpack, then `cp -a` the
-# single top-level python/ tree into place.
-_STANDALONE_PY_INSTALL = (
-    "python3 -c \"import urllib.request, sys; "
-    "urllib.request.urlretrieve(sys.argv[1], sys.argv[2])\" "
-    f"{shlex.quote(_STANDALONE_PY_URL)} /tmp/steerable-py.tgz"
-    f" && mkdir -p {shlex.quote(_STANDALONE_PY_HOME)} /tmp/steerable-py-x"
-    " && tar -xzf /tmp/steerable-py.tgz -C /tmp/steerable-py-x"
-    f" && cp -a /tmp/steerable-py-x/python/. {shlex.quote(_STANDALONE_PY_HOME)}/"
-    " && rm -rf /tmp/steerable-py.tgz /tmp/steerable-py-x"
-    f" && {shlex.quote(_STANDALONE_PY)} --version"
-)
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REMOTE_SRC = "/installed-agent/steerable"
 _VENV_CACHE_DIR = _REPO_ROOT / "evals" / ".cache"
@@ -106,6 +69,68 @@ wait_dpkg() {
 }
 wait_dpkg
 apt-get update && apt-get install -y python3 python3-pip python3-venv
+""".strip()
+# Packages require Python >=3.10. qemu-alpine-ssh (and Debian 11 images)
+# ship 3.9.2; pip then fails with NonZeroAgentExitCodeError before the
+# agent runs. Prefer an injected /usr/local/bin/uv (GHA host copy) so
+# 3.9 need not pip-install uv. Distro python3.11/3.12 next; curl uv last.
+_ENSURE_PYTHON_310 = r"""
+ok() {
+  p=/usr/local/bin/python3
+  [ -x "$p" ] || p=python3
+  "$p" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
+}
+uv_py() {
+  command -v uv >/dev/null 2>&1 || return 1
+  export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+  i=0
+  while [ "$i" -lt 3 ]; do
+    uv python install 3.12 && break
+    i=$((i+1))
+    sleep 5
+  done
+  py=$(uv python find 3.12 2>/dev/null || true)
+  if [ -z "$py" ] || [ ! -x "$py" ]; then
+    uv python install 3.11 || true
+    py=$(uv python find 3.11 2>/dev/null || true)
+  fi
+  if [ -n "$py" ] && [ -x "$py" ]; then
+    ln -sf "$py" /usr/local/bin/python3
+  fi
+  hash -r
+  ok
+}
+ok && exit 0
+export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+uv_py && exit 0
+if command -v apk >/dev/null 2>&1; then
+  apk add --no-cache python3 py3-pip py3-virtualenv curl ca-certificates || true
+fi
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update || true
+  apt-get install -y python3.12 python3.12-venv python3.12-dev python3-pip curl ca-certificates \
+    || apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip curl ca-certificates \
+    || apt-get install -y python3-pip curl ca-certificates \
+    || true
+fi
+if command -v python3.12 >/dev/null 2>&1; then
+  ln -sf "$(command -v python3.12)" /usr/local/bin/python3
+elif command -v python3.11 >/dev/null 2>&1; then
+  ln -sf "$(command -v python3.11)" /usr/local/bin/python3
+fi
+hash -r
+ok && exit 0
+python3 -m pip install --quiet uv==0.9.5 || python3 -m pip install --quiet --user uv==0.9.5 || true
+hash -r
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/0.9.5/install.sh | sh || true
+  export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+  hash -r
+fi
+uv_py
+python3 -V >&2
+ok
 """.strip()
 _UV_SEED = r"""
 set -e
@@ -178,6 +203,15 @@ echo "curl: not installed" >&2
 exit 1
 EOF
 chmod +x /usr/local/bin/curl
+export UV_PYTHON_INSTALL_DIR=/opt/uv-python
+# TB test.sh often runs `uvx -p 3.13`. Prefetch so the verifier is not a
+# 30-minute GitHub GET (mcmc-sampling-stan VerifierTimeoutError).
+i=0
+while [ "$i" -lt 3 ]; do
+  /root/.local/bin/uv python install 3.13 && break
+  i=$((i+1))
+  sleep 5
+done
 /root/.local/bin/uv --version
 """.strip()
 _UV_PIP_INSTALL = (
@@ -238,6 +272,119 @@ def uv_tarball() -> Path | None:
     return None
 
 
+_UV_MUSL_URL = (
+    "https://github.com/astral-sh/uv/releases/download/0.9.5/"
+    "uv-x86_64-unknown-linux-musl.tar.gz"
+)
+_UV_MUSL_BIN = "uv-x86_64-unknown-linux-musl"
+_UV_MUSL_MIN_BYTES = 1_000_000
+_CPYTHON_TGZ = "cpython-3.12-linux-x86_64-gnu.tgz"
+_CPYTHON_MIN_BYTES = 5_000_000
+_ELF_MAGIC = b"\x7fELF"
+
+
+def musl_uv_binary(*, fetch: bool = False) -> Path | None:
+    """Linux musl-static uv for Debian 11 / Alpine trial images.
+
+    Downloaded on the Harbor host (GHA has GitHub). ``fetch=False`` is for
+    tests and never touches the network.
+    """
+    dest = _VENV_CACHE_DIR / _UV_MUSL_BIN
+    if dest.is_file() and dest.stat().st_size >= _UV_MUSL_MIN_BYTES:
+        return dest
+    if not fetch:
+        return None
+    _VENV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tar_path = _VENV_CACHE_DIR / f"{_UV_MUSL_BIN}.tar.gz"
+    try:
+        import tarfile
+        import urllib.request
+
+        urllib.request.urlretrieve(_UV_MUSL_URL, tar_path)
+        with tarfile.open(tar_path, "r:gz") as tf:
+            member = next(
+                (
+                    m
+                    for m in tf.getmembers()
+                    if m.isfile()
+                    and (m.name.endswith("/uv") or m.name == "uv")
+                ),
+                None,
+            )
+            if member is None:
+                return None
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                return None
+            dest.write_bytes(extracted.read())
+        dest.chmod(0o755)
+    except OSError:
+        return None
+    if dest.is_file() and dest.stat().st_size >= _UV_MUSL_MIN_BYTES:
+        return dest
+    return None
+
+
+def linux_cpython_tarball(*, fetch: bool = False) -> Path | None:
+    """Relocatable Linux CPython for Debian 11 qemu trials.
+
+    ``uv python install`` inside those images hits GitHub and often leaves
+    the agent on 3.9.2. Pack on the Harbor host (GHA is Ubuntu). macOS
+    interpreters are skipped (not ELF). ``fetch=False`` never installs.
+    """
+    dest = _VENV_CACHE_DIR / _CPYTHON_TGZ
+    if dest.is_file() and dest.stat().st_size >= _CPYTHON_MIN_BYTES:
+        return dest
+    if not fetch:
+        return None
+    return _pack_host_cpython(dest)
+
+
+def _pack_host_cpython(dest: Path) -> Path | None:
+    import shutil
+    import subprocess
+    import tarfile
+
+    uv = shutil.which("uv")
+    if uv is None:
+        return None
+    try:
+        subprocess.run(
+            [uv, "python", "install", "3.12"],
+            check=False,
+            timeout=180,
+            capture_output=True,
+        )
+        found = subprocess.check_output(
+            [uv, "python", "find", "3.12"],
+            text=True,
+            timeout=30,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    py = Path(found)
+    if not py.is_file():
+        return None
+    try:
+        magic = py.read_bytes()[:4]
+    except OSError:
+        return None
+    if magic != _ELF_MAGIC:
+        return None
+    prefix = py.parent.parent
+    if not (prefix / "bin").is_dir():
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(dest, "w:gz") as tf:
+            tf.add(prefix, arcname=".")
+    except OSError:
+        return None
+    if dest.is_file() and dest.stat().st_size >= _CPYTHON_MIN_BYTES:
+        return dest
+    return None
+
+
 def rewrite_loopback_host(value: str) -> str:
     """Docker Desktop: host Clash on 127.0.0.1 is not the container loopback."""
     return value.replace("127.0.0.1", "host.docker.internal").replace(
@@ -289,12 +436,52 @@ def ensure_github_no_proxy(env: dict[str, str]) -> None:
     env["no_proxy"] = merged
 
 
+# Prefer the interpreter _ENSURE_PYTHON_310 installs. Harbor environment.exec
+# may ignore _persistent_env PATH, so `python3 -m venv` would still hit
+# /usr/bin/python3 3.9.2 on qemu-alpine-ssh.
+_PY310_BIN = 'p=/usr/local/bin/python3; [ -x "$p" ] || p=python3'
+
+
+def trial_python_ok() -> str:
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
+        "0 if sys.version_info >= (3, 10) else 1)'"
+    )
+
+
+def trial_python_tag() -> str:
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; print(\"%s%s\" % "
+        "(sys.version_info.major, sys.version_info.minor))'"
+    )
+
+
+def trial_python_venv(venv: str) -> str:
+    quoted = shlex.quote(venv)
+    # Harbor environment.exec may ignore PATH, so pin uv like python3.
+    # qemu-startup Debian 11: `python3 -m venv` dies in ensurepip; a failed
+    # first attempt also leaves a half-dir that blocks the retry.
+    return (
+        f"{_PY310_BIN}; $p -c 'import sys; raise SystemExit("
+        "0 if sys.version_info >= (3, 10) else 1)' && "
+        'u=/usr/local/bin/uv; [ -x "$u" ] || u=$(command -v uv 2>/dev/null || true); '
+        f"rm -rf {quoted}; "
+        'if [ -n "$u" ] && [ -x "$u" ] && '
+        f'"$u" venv --python "$p" --seed {quoted}; then :; '
+        f"elif rm -rf {quoted} && $p -m venv {quoted}; then :; "
+        f"else rm -rf {quoted} && $p -m venv --without-pip {quoted} && "
+        '[ -n "$u" ] && [ -x "$u" ] && '
+        f'"$u" pip install --python {quoted}/bin/python pip; fi'
+    )
+
+
 _DEFAULT_TRIAL_PATH = (
     "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
 )
 _TRIAL_PATH_EXTRAS = (
     "/root/.local/bin",
     "/usr/local/sbin",
+    "/usr/local/bin",
     "/usr/sbin",
 )
 

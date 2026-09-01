@@ -626,6 +626,8 @@ def test_env_provider_params_fallbacks(monkeypatch) -> None:
 
     monkeypatch.delenv("STEERABLE_API_KEY", raising=False)
     monkeypatch.delenv("STEERABLE_BASE_URL", raising=False)
+    monkeypatch.delenv("STEERABLE_TEMPERATURE", raising=False)
+    monkeypatch.delenv("STEERABLE_MAX_TOKENS", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     monkeypatch.setenv("STEERABLE_MODEL", "gpt-5.5")
@@ -633,6 +635,13 @@ def test_env_provider_params_fallbacks(monkeypatch) -> None:
     assert params["apiKey"] == "sk-openai"
     assert params["baseUrl"] == "https://example.test/v1"
     assert params["model"] == "gpt-5.5"
+    assert "temperature" not in params
+    assert "maxTokens" not in params
+    monkeypatch.setenv("STEERABLE_TEMPERATURE", "1.0")
+    monkeypatch.setenv("STEERABLE_MAX_TOKENS", "65536")
+    with_knobs = _env_provider_params()
+    assert with_knobs["temperature"] == 1.0
+    assert with_knobs["maxTokens"] == 65536
 
 
 def test_env_provider_params_catalog_env_vars(monkeypatch) -> None:

@@ -37,6 +37,13 @@ class LLMMessage:
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] | None = None
+    #: Plaintext thinking from the last completion (OpenRouter ``reasoning``,
+    #: DeepSeek ``reasoning_content``). Echoed on the next request so a
+    #: reasoning model can continue after tool results.
+    reasoning: str | None = None
+    #: OpenRouter ``reasoning_details`` block, unmodified. Prefer this over
+    #: ``reasoning`` when the provider returned it (encrypted / summarized).
+    reasoning_details: list[Any] | None = None
 
     @classmethod
     def text_of(
@@ -47,6 +54,8 @@ class LLMMessage:
         name: str | None = None,
         tool_call_id: str | None = None,
         tool_calls: list[ToolCall] | None = None,
+        reasoning: str | None = None,
+        reasoning_details: list[Any] | None = None,
     ) -> LLMMessage:
         """Build a text-only message (single ``TextPart``)."""
         return cls(
@@ -55,6 +64,8 @@ class LLMMessage:
             name=name,
             tool_call_id=tool_call_id,
             tool_calls=tool_calls,
+            reasoning=reasoning,
+            reasoning_details=reasoning_details,
         )
 
     @property
@@ -85,6 +96,7 @@ class LLMStreamChunk:
 
     content_delta: str | None = None
     reasoning_delta: str | None = None
+    reasoning_details: list[Any] | None = None
     tool_call_delta: ToolCall | None = None
     finish_reason: str | None = None
     usage: LLMUsage | None = None

@@ -9,7 +9,7 @@
 **评测对象**：无头 CoreLoop + 能改文件、跑 shell 的工具面（sidecar ACP）。
 不是 Electron 窗口，也不是 Harbor 自带的 `claude-code` / `codex` / `pi`（那些只做同题对照）。
 
-**正式分在 GitHub Actions**（`ubuntu-latest`，官方 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）。本机代理只用于改 adapter，不作为分数来源。
+**产品分在 GitHub Actions**（`ubuntu-latest`，`STEERABLE_API_KEY` + `STEERABLE_BASE_URL`，与本机 glm 同一套 OpenAI 兼容网关）。对照 agent（`claude-code` / `codex` / `pi`）才要官方 Anthropic / OpenAI key，缺则 skip。本机 Clash 只用于改 adapter，不上 GHA。
 
 ---
 
@@ -22,19 +22,19 @@
 - [x] 本机 Harbor oracle × `fix-git`：**Mean 1.000**（题和隐藏测试通）
 - [x] Harbor CLI 版本钉在 suite：`run.harbor_version: "0.22.0"`
 
-本机产品 cheap-12 已有隐藏测试分：`evals/jobs/steerable/2026-08-29__23-02-40`，glm-5.3-flash，**Mean 0.750**（9 过 / 3 不过），12/12 pytest，`n_errored_trials=0`。GHA 正式分仍未落盘；本机 Claude Code 因容器 Debian 源失败，**忽略，改走 GHA**。
+本机产品 cheap-12：`evals/jobs/steerable/2026-08-29__23-02-40`，glm-5.3-flash，**Mean 0.750**。GHA 产品分已落盘（见 2.1）。本机 Claude Code 因容器 Debian 源失败，**忽略，改走 GHA**。
 
 ---
 
 ## Phase 0 · TB 基础设施（GHA 能打对照分）
 
-出口：GHA 上 oracle × `fix-git` Mean **1.0**；weekly 能跑基线（有官方 key）或明确 skip（无 key 则整次失败）。
+出口：GHA 上 oracle × `fix-git` Mean **1.0**；weekly 能跑产品（网关 key）或明确 skip；对照基线有官方 key 才跑。全部 skip 则整次失败。
 
 - [x] **0.1** `harbor_argv` 把 `--include-task-name` 写成 `terminal-bench/<短 id>`（否则过滤为空）
 - [x] **0.2** Harbor 安装：composite action 钉 `harbor==0.22.0`，`~/.local/bin` 进 `PATH`
 - [x] **0.3** oracle workflow：`evals/**` 变更 + `workflow_dispatch`；Mean ≠ 1.0 或安装异常 → 红；上传 `result.json`
-- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
-- [ ] **0.5** 仓库 secrets：`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`（官方，不用万界、不配 `*_BASE_URL`）
+- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；产品走 `STEERABLE_*`，对照走官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
+- [x] **0.5** 仓库 secrets：`STEERABLE_API_KEY` + `STEERABLE_BASE_URL`（本机同一网关，产品分必填）。`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 仅对照基线，可选
 - [x] **0.6** 安装失败当红（`n_errored_trials > 0`）；题没做对只记 Mean（0 是成绩）
 
 ---
@@ -56,10 +56,10 @@
 
 出口：GHA 一张表：产品 vs `claude-code` / `codex` / `pi`，同一 cheap-12、同一隐藏 pytest、n-attempts=1。
 
-- [ ] **2.1** weekly（或独立 workflow）跑产品 × cheap-12（本机已有 `2026-08-29__23-02-40` Mean 0.750；此项要 GHA artifact）
+- [x] **2.1** weekly（或独立 workflow）跑产品 × cheap-12。GHA artifact：[33307477867](https://github.com/pathlyapp/steerable-framework/actions/runs/33307477867) glm-5.3-flash **Mean 0.750**（9 过 / 3 不过：`filter-js-from-html`, `password-recovery`, `git-multibranch`），12/12，`n_errored_trials=0`。硬化 `--n-concurrent 2`：[33308738073](https://github.com/pathlyapp/steerable-framework/actions/runs/33308738073) **Mean 0.833**（10 过 / 2 不过：`filter-js-from-html`, `password-recovery`；`git-multibranch` 这次过了），约 16 min，飞书 `成功 · GHA cheap-12 · steerable 0.833`（无 unknown）。本机 `2026-08-29__23-02-40` 同为 Mean 0.750（失败题不完全相同）。
 - [ ] **2.2** 钉模型档，便于和基线比 harness 而不是比模型（Claude/Pi 默认 `anthropic/claude-sonnet-4-5`，Codex `openai/gpt-5.5`；产品默认 `openai/z-ai/glm-5.3-flash`，同档对照时 `--model openai/gpt-5.5`）
 - [ ] **2.3** Mean / exception / artifact 进 job summary；周更
-- [ ] **2.4** 全量 89 题：可选、手动/`workflow_dispatch`，**不上每 PR**
+- [ ] **2.4** 全量 89 题：可选、手动/`workflow_dispatch`（`Evals weekly` split=`catalog`，49 分片），**不上每 PR**
 
 **Phase 2 出口成立之后，才开始 Phase 3。**
 
@@ -84,6 +84,7 @@
 - 自制 prompt YAML / 知识库场景题当作能力门禁
 - LLM-as-judge
 - 把 Electron GUI、PTY、deeppath-knowledge 场景塞进 TB/SWE
-- 用万界 key 或本机 Clash 当 GHA 正式分
+- 把网关 key 写进 `OPENAI_API_KEY`（Codex 对照会误打官方端点）
+- 本机 Clash 当 GHA 出网代理
 - DeepSeek Harness 进同一矩阵（它也还没有 Harbor adapter）
 - 在产品还不能 TB 交卷时开 SWE

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
-    _STANDALONE_PY_INSTALL,
+    _ENSURE_PYTHON_310,
+    _PY310_BIN,
     _UV_MIN_BYTES,
     _UV_PIP_INSTALL,
     _UV_SEED,
@@ -12,35 +15,19 @@ from evals.harbor_helpers import (
     rewrite_forwarded_env_value,
     rewrite_loopback_host,
     spec_as_json,
+    trial_python_ok,
+    trial_python_tag,
+    trial_python_venv,
     uv_tarball,
+    musl_uv_binary,
+    linux_cpython_tarball,
     venv_tarball,
-    python_tag_supported,
 )
-
-
-def test_python_tag_supported_gates_standalone_fallback() -> None:
-    # qemu-alpine-ssh's bullseye image ships 3.9; the agent floor is 3.10.
-    assert not python_tag_supported("39")
-    assert python_tag_supported("310")
-    assert python_tag_supported("313")
-    assert python_tag_supported("")  # empty: no gate, pip reports the floor
-    assert python_tag_supported("garbage")
 
 
 def test_venv_tarball_is_abi_specific() -> None:
     path = venv_tarball("313")
     assert path.name == "steerable-venv-cp313-linux-amd64.tgz"
-
-
-def test_standalone_python_install_runs_on_minimal_images() -> None:
-    # qemu-alpine-ssh has neither curl nor wget (exit 127 on the first
-    # fallback version) and its busybox tar lacks --strip-components.
-    assert "curl" not in _STANDALONE_PY_INSTALL
-    assert "wget" not in _STANDALONE_PY_INSTALL
-    assert "--strip-components" not in _STANDALONE_PY_INSTALL
-    assert "urllib.request.urlretrieve" in _STANDALONE_PY_INSTALL
-    assert "cp -a /tmp/steerable-py-x/python/." in _STANDALONE_PY_INSTALL
-    assert "/opt/steerable-py311/bin/python3.11 --version" in _STANDALONE_PY_INSTALL
 
 
 def test_overlay_pip_install_is_no_deps() -> None:
@@ -97,9 +84,63 @@ def test_apt_python_install_waits_without_fuser() -> None:
     assert "archive.ubuntu.com" in _APT_PYTHON_INSTALL
 
 
+def test_ensure_python_310_upgrades_before_venv() -> None:
+    assert "sys.version_info >= (3, 10)" in _ENSURE_PYTHON_310
+    assert "python3.12" in _ENSURE_PYTHON_310
+    assert "apk add" in _ENSURE_PYTHON_310
+    assert "uv python install 3.12" in _ENSURE_PYTHON_310
+    assert 'PATH="/usr/local/bin:' in _ENSURE_PYTHON_310
+    assert "hash -r" in _ENSURE_PYTHON_310
+    assert "ca-certificates" in _ENSURE_PYTHON_310
+    assert "python3-pip" in _ENSURE_PYTHON_310
+    assert "astral.sh/uv/0.9.5/install.sh" in _ENSURE_PYTHON_310
+    assert "pin_usr_bin" not in _ENSURE_PYTHON_310
+    assert "/usr/bin/python3.9" not in _ENSURE_PYTHON_310
+    assert "ln -sf /usr/local/bin/python3 /usr/bin/python3" not in _ENSURE_PYTHON_310
+    assert "/usr/local/bin/python3" in _ENSURE_PYTHON_310
+    assert "uv_py()" in _ENSURE_PYTHON_310
+    assert _ENSURE_PYTHON_310.index("uv_py && exit 0") < _ENSURE_PYTHON_310.index(
+        "pip install"
+    )
+    assert 'while [ "$i" -lt 3 ]' in _ENSURE_PYTHON_310
+    assert "uv python find 3.12" in _ENSURE_PYTHON_310
+    assert "uv python install 3.11" in _ENSURE_PYTHON_310
+
+
 def test_uv_tarball_missing_skips_seed(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
     assert uv_tarball() is None
+
+
+def test_musl_uv_binary_skips_network_without_fetch(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    assert musl_uv_binary(fetch=False) is None
+
+
+def test_musl_uv_binary_uses_cached_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    cached = tmp_path / "uv-x86_64-unknown-linux-musl"
+    cached.write_bytes(b"u" * 1_000_001)
+    assert musl_uv_binary(fetch=False) == cached
+
+
+def test_linux_cpython_tarball_skips_network_without_fetch(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    assert linux_cpython_tarball(fetch=False) is None
+
+
+def test_linux_cpython_tarball_uses_cached_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    cached = tmp_path / "cpython-3.12-linux-x86_64-gnu.tgz"
+    cached.write_bytes(b"c" * 5_000_001)
+    assert linux_cpython_tarball(fetch=False) == cached
+
+
+def test_linux_cpython_tarball_rejects_tiny_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("evals.harbor_helpers._VENV_CACHE_DIR", tmp_path)
+    tiny = tmp_path / "cpython-3.12-linux-x86_64-gnu.tgz"
+    tiny.write_bytes(b"c" * 100)
+    assert linux_cpython_tarball(fetch=False) is None
 
 
 def test_uv_seed_installs_from_tsinghua_without_github() -> None:
@@ -115,6 +156,9 @@ def test_uv_seed_installs_from_tsinghua_without_github() -> None:
     assert "HTTP_PROXY" in _UV_SEED
     assert "uvx.real" in _UV_SEED
     assert '"$arg" == 3.13' in _UV_SEED
+    assert "/root/.local/bin/uv python install 3.13" in _UV_SEED
+    assert "UV_PYTHON_INSTALL_DIR" in _UV_SEED
+    assert 'while [ "$i" -lt 3 ]' in _UV_SEED
 
 
 def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:
@@ -128,6 +172,7 @@ def test_uv_tarball_rejects_truncated_cache(tmp_path, monkeypatch) -> None:
 def test_merge_trial_path_adds_sbin_and_uv() -> None:
     merged = merge_trial_path("/usr/bin:/bin")
     assert merged.startswith("/root/.local/bin")
+    assert "/usr/local/bin" in merged.split(":")
     assert "/usr/sbin" in merged.split(":")
     assert merged.endswith("/usr/bin:/bin")
     empty = merge_trial_path("")
@@ -158,3 +203,68 @@ def test_spec_as_json_passes_json_through(tmp_path) -> None:
     spec = tmp_path / "arm.harness.json"
     spec.write_text('{"tools": "full"}')
     assert spec_as_json(spec) == spec
+
+
+def test_harbor_run_matches_claude_code_tb_knobs() -> None:
+    src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
+    text = src.read_text()
+    assert 'STEERABLE_REASONING_EFFORT", "max"' in text
+    assert 'STEERABLE_TEMPERATURE", "1.0"' in text
+    assert 'STEERABLE_MAX_TOKENS", "65536"' in text
+    assert 'STEERABLE_SOFT_TIMEOUT_MS", "9000000"' in text
+    assert 'STEERABLE_LLM_STREAM_READ_TIMEOUT_SEC", "10200"' in text
+    assert 'STEERABLE_RETRY_MAX_ATTEMPTS", "12"' in text
+    assert 'STEERABLE_RETRY_BASE_DELAY_MS", "2000"' in text
+    assert 'STEERABLE_RETRY_MAX_DELAY_MS", "120000"' in text
+    assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in text
+    assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
+    assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
+    assert "--max-rounds 250" in text
+    run_fn = text[
+        text.index("@with_prompt_template") : text.index("def _forwarded_env")
+    ]
+    assert run_fn.index("await self.exec_as_agent") < run_fn.index(
+        "await self._align_verifier_python"
+    )
+    assert "finally:" in run_fn
+    assert text.index("await self._inject_host_uv") < text.index(
+        "await self._inject_host_python"
+    )
+    assert text.index("await self._inject_host_python") < text.index(
+        "await self._ensure_python_310"
+    )
+    assert text.index("await self._ensure_python_310") < text.index(
+        "await self._align_verifier_python"
+    )
+    assert "ln -sf \"$p\" /usr/local/bin/python" in text
+    assert 'ln -sf "$b" /usr/local/bin/python' in text
+    inject_fn = text[
+        text.index("async def _inject_host_python") : text.index(
+            "async def _ensure_python_310"
+        )
+    ]
+    assert inject_fn.index("command=_trial_python_ok()") < inject_fn.index(
+        "_linux_cpython_tarball(fetch=True)"
+    )
+    assert "if check.return_code == 0" in inject_fn
+    assert "_linux_cpython_tarball(fetch=True)" in text
+    assert "/opt/steerable-python" in text
+    assert "import ssl, zlib, sys" in text
+    assert "_musl_uv_binary(fetch=True)" in text
+    assert text.index("await self._ensure_python_310") < text.index(
+        "py_tag = await self._python_tag"
+    )
+    assert 'rm -f /usr/local/bin/python3' in text
+    assert "trial python is still <3.10" in text
+    assert "trial python cp" in text
+    assert "/usr/local/bin/python3" in _PY310_BIN
+    assert _PY310_BIN in trial_python_ok()
+    assert _PY310_BIN in trial_python_tag()
+    venv_cmd = trial_python_venv("/installed-agent/steerable/venv")
+    assert "/usr/local/bin/uv" in venv_cmd
+    assert "venv --python" in venv_cmd
+    assert "--seed" in venv_cmd
+    assert "$p -m venv" in venv_cmd
+    assert "--without-pip" in venv_cmd
+    assert "rm -rf /installed-agent/steerable/venv" in venv_cmd
+    assert "/installed-agent/steerable/venv" in venv_cmd

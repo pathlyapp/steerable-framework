@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from evals.suite import (
+    EXCLUSIVE_PACK_TASKS,
     LIVE_AGENTS,
     PINNED_HARBOR_VERSION,
     PRODUCT_AGENT,
@@ -18,6 +19,7 @@ from evals.suite import (
     load_suite,
     missing_env,
     resolve_tasks,
+    shard_tasks,
 )
 
 CHEAP_12 = (
@@ -33,6 +35,40 @@ CHEAP_12 = (
     "password-recovery",
     "git-multibranch",
     "sqlite-with-gcov",
+)
+
+FAILED_PREV = (
+    "adaptive-rejection-sampler",
+    "build-pov-ray",
+    "caffe-cifar-10",
+    "circuit-fibsqrt",
+    "cobol-modernization",
+    "db-wal-recovery",
+    "dna-assembly",
+    "extract-moves-from-video",
+    "filter-js-from-html",
+    "gcode-to-text",
+    "gpt2-codegolf",
+    "headless-terminal",
+    "install-windows-3.11",
+    "largest-eigenval",
+    "make-doom-for-mips",
+    "make-mips-interpreter",
+    "mteb-retrieve",
+    "path-tracing",
+    "path-tracing-reverse",
+    "protein-assembly",
+    "qemu-startup",
+    "raman-fitting",
+    "regex-chess",
+    "rstan-to-pystan",
+    "sam-cell-seg",
+    "sanitize-git-repo",
+    "schemelike-metacircular-eval",
+    "torch-pipeline-parallelism",
+    "train-fasttext",
+    "video-processing",
+    "winning-avg-corewars",
 )
 
 
@@ -61,10 +97,25 @@ def test_catalog_is_89_unique_ids() -> None:
     assert len(suite.catalog_set) == 89
 
 
+def test_catalog_minutes_cover_every_catalog_id() -> None:
+    suite = load_suite()
+    assert set(suite.catalog_minutes) == suite.catalog_set
+    assert all(value >= 1 for value in suite.catalog_minutes.values())
+    assert suite.pack_floor_minutes == 180
+
+
 def test_cheap_12_is_pinned_subset() -> None:
     suite = load_suite()
     assert suite.splits["cheap-12"] == CHEAP_12
     assert set(CHEAP_12) <= suite.catalog_set
+
+
+def test_failed_prev_is_pinned_catalog_subset() -> None:
+    suite = load_suite()
+    assert suite.splits["failed-prev"] == FAILED_PREV
+    assert len(FAILED_PREV) == 31
+    assert set(FAILED_PREV) <= suite.catalog_set
+    assert FAILED_PREV == tuple(task for task in suite.catalog if task in set(FAILED_PREV))
 
 
 def test_oracle_canary_is_in_cheap_12() -> None:
@@ -107,7 +158,84 @@ def test_live_agents_include_product() -> None:
 
 def test_setup_harbor_action_matches_pin() -> None:
     action = Path(__file__).resolve().parents[2] / ".github" / "actions" / "setup-harbor" / "action.yml"
-    assert f'default: "{PINNED_HARBOR_VERSION}"' in action.read_text()
+    text = action.read_text()
+    assert f'default: "{PINNED_HARBOR_VERSION}"' in text
+    assert "uv-x86_64-unknown-linux-musl" in text
+    assert "uv-x86_64-unknown-linux-musl.tar.gz" in text
+    assert "find /tmp -name uv" not in text
+    assert 'find "$extract" -name uv' in text
+    assert "cpython-3.12-linux-x86_64-gnu.tgz" in text
+    assert "uv python install 3.12" in text
+
+
+def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
+    root = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    weekly = (root / "evals-weekly.yml").read_text()
+    oracle = (root / "evals-oracle.yml").read_text()
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in weekly
+    assert "STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}" in weekly
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in oracle
+    assert "STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}" in oracle
+    steerable_job = oracle.split("name: Harbor product canary", 1)[1]
+    assert "OPENAI_API_KEY" not in steerable_job.split("upload-artifact", 1)[0]
+    assert "set STEERABLE_API_KEY + STEERABLE_BASE_URL for the product agent" in weekly
+    assert "FEISHU_BOT_WEBHOOK" in weekly
+    assert "python3 -m evals.feishu" in weekly
+    assert "python3 -m evals.feishu" in oracle
+    assert "if: ${{ !cancelled() }}" in oracle
+    assert "if: ${{ !cancelled() }}" in weekly
+    assert "merge-multiple: true" not in oracle
+    assert "merge-multiple: true" not in weekly
+    assert "--n-concurrent 2" in weekly
+    assert "**/eval-status-*.txt" in weekly
+    assert "evals/jobs/steerable/*/*/result.json" in weekly
+    assert weekly.count("evals/jobs/steerable/*/*/result.json") == 2
+    assert "pull_request:" not in weekly
+    assert "--split catalog" in weekly
+    assert "--split failed-prev" in weekly
+    assert "--shards 16" not in weekly
+    assert weekly.count("--shards 24") == 1
+    assert "--shards 32" not in weekly
+    assert "--shards 36" not in weekly
+    assert "--shards 48" not in weekly
+    assert "--shards 49" in weekly
+    assert "--shards 8" not in weekly
+    assert "--shards 4 " not in weekly
+    assert "--shards 4\n" not in weekly
+    assert (
+        "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+        "16, 17, 18, 19, 20, 21, 22, 23]"
+    ) in weekly
+    assert weekly.count(
+        "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+        "16, 17, 18, 19, 20, 21, 22, 23]"
+    ) == 1
+    assert (
+        "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
+        "16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, "
+        "32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]"
+    ) in weekly
+    assert "timeout-minutes: 360" in weekly
+    assert weekly.count("--agent-timeout-multiplier 12") == 2
+    assert weekly.count("--verifier-timeout-multiplier 2") == 2
+    cheap_job = weekly.split("  failed-prev:", 1)[0]
+    assert "--agent-timeout-multiplier 3" in cheap_job
+    assert "--agent-timeout-multiplier 12" not in cheap_job
+    assert "--verifier-timeout-multiplier" not in cheap_job
+    assert "options:" in weekly
+    assert "- failed-prev" in weekly
+    assert "github.event.inputs.split == 'cheap-12'" in weekly
+    assert "github.event.inputs.split != 'catalog'" not in weekly
+    catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
+    assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
+    failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
+    assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
+    assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly
+    assert "OPENAI_API_KEY" not in failed_job.split("upload-artifact", 1)[0]
+    assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog_job
+    assert "agent/headless.log" in weekly
+    assert "verifier/test-stdout.txt" in weekly
+    assert "agent/headless.log" in oracle
 
 
 def test_harbor_task_name_prefixes_org() -> None:
@@ -166,6 +294,73 @@ def test_resolve_tasks_override_must_be_in_catalog() -> None:
         resolve_tasks(suite, "not-a-split")
 
 
+def test_shard_tasks_covers_catalog_without_overlap() -> None:
+    suite = load_suite()
+    shards = [
+        shard_tasks(suite.catalog, shard=i, shards=8, minutes=suite.catalog_minutes)
+        for i in range(8)
+    ]
+    flat = [task for shard in shards for task in shard]
+    assert len(flat) == 89
+    assert sorted(flat) == sorted(suite.catalog)
+    assert all(10 <= len(shard) <= 12 for shard in shards)
+    loads = [sum(suite.catalog_minutes[task] for task in shard) for shard in shards]
+    assert max(loads) - min(loads) <= 2
+    round_robin = [
+        shard_tasks(suite.catalog, shard=i, shards=8) for i in range(8)
+    ]
+    rr_loads = [sum(suite.catalog_minutes[task] for task in shard) for shard in round_robin]
+    assert max(loads) < max(rr_loads)
+    with pytest.raises(SuiteError, match="out of range"):
+        shard_tasks(suite.catalog, shard=8, shards=8)
+
+
+def test_pack_floor_keeps_catalog_shards_inside_gha_wall() -> None:
+    """Harbor ×12 wrap is 180 min. n-concurrent=2, 360-minute GHA cap.
+
+    24 catalog shards still pack 4 tasks (2×180 min waves = 360 min exact).
+    36 shards still pack 3 (one leftover 180-min wave = 360 min exact).
+    49 shards pack ≤2 after eight exclusive MIPS/QEMU/Windows/video/SQL/FastText tasks.
+    """
+    suite = load_suite()
+    catalog = [
+        shard_tasks(
+            suite.catalog,
+            shard=i,
+            shards=49,
+            minutes=suite.catalog_minutes,
+            pack_floor=suite.pack_floor_minutes,
+        )
+        for i in range(49)
+    ]
+    flat = [task for shard in catalog for task in shard]
+    assert len(flat) == 89
+    assert sorted(flat) == sorted(suite.catalog)
+    assert max(len(shard) for shard in catalog) <= 2
+    failed = [
+        shard_tasks(
+            suite.splits["failed-prev"],
+            shard=i,
+            shards=24,
+            minutes=suite.catalog_minutes,
+            pack_floor=suite.pack_floor_minutes,
+        )
+        for i in range(24)
+    ]
+    assert sum(len(shard) for shard in failed) == 31
+    assert max(len(shard) for shard in failed) <= 2
+    for packed in (catalog, failed):
+        for bucket in packed:
+            if EXCLUSIVE_PACK_TASKS.intersection(bucket):
+                assert len(bucket) == 1, bucket
+
+
+def test_shard_tasks_round_robin_without_minutes() -> None:
+    tasks = ("a", "b", "c", "d")
+    assert shard_tasks(tasks, shard=0, shards=2) == ("a", "c")
+    assert shard_tasks(tasks, shard=1, shards=2) == ("b", "d")
+
+
 def test_harbor_argv_oracle_omits_model() -> None:
     suite = load_suite()
     argv = harbor_argv(
@@ -211,6 +406,7 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
         agent_setup_timeout_multiplier=3,
         environment_build_timeout_multiplier=3,
         agent_timeout_multiplier=3,
+        verifier_timeout_multiplier=2,
     )
     assert argv[argv.index("--agent") + 1] == STEERABLE_IMPORT_PATH
     assert argv[argv.index("--model") + 1] == "openai/z-ai/glm-5.3-flash"
@@ -218,6 +414,7 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
     assert argv[argv.index("--agent-setup-timeout-multiplier") + 1] == "3"
     assert argv[argv.index("--environment-build-timeout-multiplier") + 1] == "3"
     assert argv[argv.index("--agent-timeout-multiplier") + 1] == "3"
+    assert argv[argv.index("--verifier-timeout-multiplier") + 1] == "2"
 
 
 def test_harbor_argv_rejects_dsh() -> None:

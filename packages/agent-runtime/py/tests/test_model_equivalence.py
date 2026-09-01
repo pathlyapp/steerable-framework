@@ -38,6 +38,20 @@ EQUIVALENCE_TABLE: tuple[tuple[str, str, str, str], ...] = (
         "serves 1,310,720 via openrouter",
     ),
     (
+        "glm-5",
+        "openrouter",
+        "z-ai/glm-5",
+        "legacy 1,048,576 described glm-5.3; the bare glm-5 deployment "
+        "serves 204,800 — the prefix over-claims for pre-5.3 ids",
+    ),
+    (
+        "glm",
+        "openrouter",
+        "z-ai/glm-4.6",
+        "legacy 1,048,576 blanket-covered the family after the 5.3 bump; "
+        "glm-4 era deployments serve 204,800",
+    ),
+    (
         "gpt-oss",
         "openai",
         "gpt-oss-120b",

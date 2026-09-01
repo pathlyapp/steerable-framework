@@ -22,10 +22,16 @@ from steerable_agent_protocol.generated import ToolResult
 from steerable_agent_runtime import ToolRouter
 
 from .file_edit import EditError, EditOp, apply_edits, content_version
-from .workspace_fs import LOCAL_FS, WorkspaceFs, WorkspaceFsError
+from .png_ascii import ascii_png_preview
+from .workspace_fs import LOCAL_FS, LocalFs, WorkspaceFs, WorkspaceFsError
 
-_MAX_OUTPUT = 32_768
-_BASH_TIMEOUT_SEC = 300
+_MAX_OUTPUT = 100_000
+# Catalog-89 bn-fit-modify: a no_artifact retry overwrote a 10k-row sample
+# with two write_file rows. Refuse shrinking an already-large file that far.
+_MIN_KEEP_BYTES = 8192
+# TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
+# does not kill a single bash at 300s. Harbor's long-task kill is ~180 min.
+_BASH_TIMEOUT_SEC = 3600
 
 #: One-shot bash execution behind the tool: (command, cwd) → result.
 #: The local default spawns a subprocess; the ACP terminal bridge runs the
@@ -38,9 +44,12 @@ _BASH_SCHEMA = {
         "command": {
             "type": "string",
             "description": (
-                "Shell command to run in the workspace. Do not wait with "
-                "`while pgrep -f ...` (pgrep matches the wait loop). "
-                "Background long jobs and `wait $!`, or poll a pidfile."
+                "Shell command to run in the workspace. Timeout is 3600s; do "
+                "not poll with `sleep 290`. Do not wrap compile, VM, or train "
+                "in `timeout N` with N under 300 — bash already caps at 3600s. "
+                "Do not wait with `while pgrep -f ...` (pgrep matches the "
+                "wait loop). Background long jobs and `wait $!`, or poll a "
+                "pidfile."
             ),
         },
     },
@@ -56,6 +65,32 @@ _PGREP_WAIT_ERROR = (
     "exits. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`, or poll "
     "a pidfile."
 )
+# Catalog-89 mteb-leaderboard: `sleep 290; cat log` under the old 300s bash
+# cap. Bash now waits 3600s — `wait $!` instead of a long sleep-then-cat.
+_SLEEP_POLL = re.compile(
+    r"\bsleep\s+(\d+)\s*(?:;|&&|\n)\s*(?:cat|tail|ls|head)\b",
+    re.IGNORECASE,
+)
+_SLEEP_POLL_MIN_SEC = 120
+_SLEEP_POLL_ERROR = (
+    "Refusing a long `sleep N; cat/tail/ls` poll. Bash already waits up to "
+    "3600s. Background the job (`cmd & pid=$!`) and `wait \"$pid\"`."
+)
+# Catalog-89 make-doom-for-mips: `timeout 120 node vm.js` killed the VM
+# before /tmp/frame.bmp existed. qemu-startup: `timeout 10 qemu-system`
+# dies before the verifier can telnet the login prompt. Bash already
+# caps at 3600s.
+_SHORT_TIMEOUT = re.compile(
+    r"\btimeout\s+(?:--signal=\S+\s+|-[A-Za-z]\s+\S+\s+)*(\d+)\s+"
+    r"(?=[^;\n]{0,80}\b(?:node|make|gcc|g\+\+|rustc|clang\+\+|clang|"
+    r"qemu-system)\b)",
+    re.IGNORECASE,
+)
+_SHORT_TIMEOUT_MAX_SEC = 299
+_SHORT_TIMEOUT_ERROR = (
+    "Refusing `timeout N` around compile/VM with N under 300s. Bash already "
+    "caps at 3600s. Drop the timeout wrapper so the job can finish."
+)
 _READ_SCHEMA = {
     "type": "object",
     "properties": {
@@ -67,7 +102,13 @@ _WRITE_SCHEMA = {
     "type": "object",
     "properties": {
         "path": {"type": "string", "description": "File path relative to the workspace"},
-        "content": {"type": "string", "description": "Full file contents to write"},
+        "content": {
+            "type": "string",
+            "description": (
+                "Full file contents to write. Do not replace an existing "
+                "complete output with a truncated body."
+            ),
+        },
         "expectedVersion": {
             "type": "string",
             "description": (
@@ -211,6 +252,12 @@ _WRITE_STDIN_SCHEMA = {
 }
 
 
+# Harbor/headless already runs inside the trial container. Keep host-killing
+# rules (rm -rf /, fork bomb, chmod -R 777 /). Allow TB disk-image work:
+# password-recovery and qemu tasks use ``dd if=`` / mkfs as ordinary steps.
+_JAILED_DISABLED_SAFETY = ("sudo", "dd_if", "dd", "mkfs")
+
+
 def workspace_tools_for_cwd(
     cwd: str | Path,
     *,
@@ -221,8 +268,10 @@ def workspace_tools_for_cwd(
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
     ``jailed=True`` is for Harbor/headless: the process already runs inside
-    the trial container, so ``sudo`` is a normal TB agent step, not a host
-    privilege escalation. ``rm -rf /`` stays critical.
+    the trial container, so ``sudo`` and ``dd if=`` are normal TB agent steps,
+    not host privilege escalation. ``rm -rf /`` stays critical. File tools
+    may write anywhere in the container (hidden tests name ``/tmp`` and
+    ``/app``); non-jailed ACP sessions stay cwd-scoped.
 
     ``fs`` is the file-content channel (3.4.3.1) and ``run_command`` the
     one-shot bash execution (3.4.3.2); both default to local disk and a
@@ -230,7 +279,9 @@ def workspace_tools_for_cwd(
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
-        CommandSafetyConfig(disabled_pattern_ids=["sudo"]) if jailed else None
+        CommandSafetyConfig(disabled_pattern_ids=list(_JAILED_DISABLED_SAFETY))
+        if jailed
+        else None
     )
     router = ToolRouter(shell_safety=safety)
     # Per-path serialisation for read-modify-write, so concurrent edits to the
@@ -262,9 +313,11 @@ def workspace_tools_for_cwd(
             )
         return None
 
-    async def _run_local(command: str, cwd: Path) -> ToolResult:
+    def _run_bash(command: str, cwd: Path) -> ToolResult:
+        # Shells reset SIGHUP on exec; trap so background qemu-system
+        # survives this tool returning (session-leader HUP).
         proc = subprocess.Popen(
-            command,
+            "trap '' HUP; " + command,
             shell=True,
             cwd=cwd,
             stdout=subprocess.PIPE,
@@ -298,6 +351,10 @@ def workspace_tools_for_cwd(
             needsFollowup=proc.returncode != 0,
         )
 
+    async def _run_local(command: str, cwd: Path) -> ToolResult:
+        # Off the event loop so CoreLoop parallel_tools can overlap bash.
+        return await asyncio.to_thread(_run_bash, command, cwd)
+
     run = run_command or _run_local
 
     async def bash(command: str = "", cmd: str = "", script: str = "") -> ToolResult:
@@ -308,14 +365,37 @@ def workspace_tools_for_cwd(
             return ToolResult(
                 success=False, error=_PGREP_WAIT_ERROR, needsFollowup=True
             )
+        if sleep_poll(command):
+            return ToolResult(
+                success=False, error=_SLEEP_POLL_ERROR, needsFollowup=True
+            )
+        if short_timeout_wrap(command):
+            return ToolResult(
+                success=False, error=_SHORT_TIMEOUT_ERROR, needsFollowup=True
+            )
         return await run(command, root)
 
     async def read_file(path: str) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
-            text = await fs.read_text(target)
-        except (OSError, ValueError, WorkspaceFsError) as exc:
+            target = _resolve_under(root, path, jailed=jailed)
+        except ValueError as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
+        if isinstance(fs, LocalFs):
+            # Byte path: binary files get an ASCII preview instead of a
+            # decode failure (Harbor image/PNG tasks).
+            try:
+                raw = target.read_bytes()
+            except (OSError, ValueError) as exc:
+                return ToolResult(success=False, error=str(exc), needsFollowup=True)
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return _binary_read_result(target, raw)
+        else:
+            try:
+                text = await fs.read_text(target)
+            except (OSError, ValueError, WorkspaceFsError) as exc:
+                return ToolResult(success=False, error=str(exc), needsFollowup=True)
         clipped = _clip(text)
         return ToolResult(
             success=True,
@@ -328,11 +408,12 @@ def workspace_tools_for_cwd(
             },
         )
 
+
     async def write_file(
         path: str, content: str, expectedVersion: str | None = None
     ) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
+            target = _resolve_under(root, path, jailed=jailed)
         except ValueError as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         async with _lock_for(target):
@@ -343,6 +424,14 @@ def workspace_tools_for_cwd(
                         return ToolResult(
                             success=False, error=conflict, needsFollowup=True
                         )
+                if isinstance(fs, LocalFs):
+                    shrink = _truncated_overwrite_error(target, content)
+                    if shrink:
+                        return ToolResult(
+                            success=False, error=shrink, needsFollowup=True
+                        )
+                # LocalFs.write_text is write-then-rename: a crash mid-write
+                # never leaves a truncated file, and parents are created.
                 await fs.write_text(target, content)
             except (OSError, ValueError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
@@ -359,7 +448,7 @@ def workspace_tools_for_cwd(
         path: str, edits: list[dict], expectedVersion: str | None = None
     ) -> ToolResult:
         try:
-            target = _resolve_under(root, path)
+            target = _resolve_under(root, path, jailed=jailed)
         except ValueError as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         ops = [
@@ -642,17 +731,94 @@ def workspace_tools_for_cwd(
     return router
 
 
+def refuse_truncated_overwrite(existing_bytes: int, new_bytes: int) -> bool:
+    """True when replacing a large file with a much smaller body."""
+    if existing_bytes < _MIN_KEEP_BYTES:
+        return False
+    return new_bytes < max(512, existing_bytes // 4)
+
+
+def _binary_read_result(target: Path, raw: bytes) -> ToolResult:
+    """Tool result for a non-UTF-8 file: ASCII preview when the image format
+    is known, otherwise a decode instruction (never a guessed content)."""
+    preview = ascii_png_preview(raw)
+    if preview is not None:
+        return ToolResult(
+            success=True,
+            data={
+                "path": str(target),
+                "content": preview,
+                "kind": (
+                    "jpeg_ascii"
+                    if preview.startswith("JPEG ")
+                    else "bmp_ascii"
+                    if preview.startswith("BMP ")
+                    else "png_ascii"
+                ),
+            },
+        )
+    kind = (
+        "PNG"
+        if raw.startswith(b"\x89PNG")
+        else "JPEG"
+        if raw[:2] == b"\xff\xd8"
+        else "BMP"
+        if raw[:2] == b"BM"
+        else "binary"
+    )
+    return ToolResult(
+        success=False,
+        error=(
+            f"{target} is {kind} ({len(raw)} bytes), not UTF-8 text. "
+            "Decode it with Python (PIL/numpy) or `file`; do not guess "
+            "contents from the filename."
+        ),
+        needsFollowup=True,
+    )
+
+
+def _truncated_overwrite_error(target: Path, content: str) -> str | None:
+    try:
+        existing = target.stat().st_size
+    except OSError:
+        return None
+    new_len = len(content.encode("utf-8"))
+    if not refuse_truncated_overwrite(existing, new_len):
+        return None
+    return (
+        f"Refusing to overwrite {existing}-byte {target} with {new_len} bytes. "
+        "The existing file is already complete. Use edit_file for a patch, or "
+        "bash to replace it after reading the current contents."
+    )
+
+
 def pgrep_self_wait(command: str) -> bool:
     """True when ``command`` is a ``while pgrep -f`` wait that matches itself."""
     return bool(_PGREP_SELF_WAIT.search(command or ""))
 
 
-def _resolve_under(root: Path, path: str) -> Path:
+def sleep_poll(command: str) -> bool:
+    """True when ``command`` is a long sleep followed by cat/tail/ls/head."""
+    for match in _SLEEP_POLL.finditer(command or ""):
+        if int(match.group(1)) >= _SLEEP_POLL_MIN_SEC:
+            return True
+    return False
+
+
+def short_timeout_wrap(command: str) -> bool:
+    """True when ``command`` wraps compile/VM in ``timeout N`` with N under 300s."""
+    for match in _SHORT_TIMEOUT.finditer(command or ""):
+        if int(match.group(1)) <= _SHORT_TIMEOUT_MAX_SEC:
+            return True
+    return False
+
+
+def _resolve_under(root: Path, path: str, *, jailed: bool = False) -> Path:
     if not path or not str(path).strip():
         raise ValueError("path is empty")
     raw = Path(path)
     target = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
-    if target != root and root not in target.parents:
+    if not jailed and target != root and root not in target.parents:
         raise ValueError(f"path escapes workspace: {path}")
     return target
 
@@ -672,6 +838,16 @@ def _kill_process_group(pid: int) -> None:
 
 
 def _clip(text: str) -> str:
+    """Bound tool output without dropping the tail.
+
+    Catalog-89 train/compile logs put the accuracy line, linker error, or
+    qemu boot banner at the end. A prefix-only clip (then spill of that
+    prefix) hid those lines, so the model stopped on a truncated success
+    or never saw the failure.
+    """
     if len(text) <= _MAX_OUTPUT:
         return text
-    return text[:_MAX_OUTPUT] + "\n...[truncated]..."
+    head = _MAX_OUTPUT // 5
+    tail = _MAX_OUTPUT - head
+    omitted = len(text) - head - tail
+    return f"{text[:head]}\n...[{omitted} chars truncated]...\n{text[-tail:]}"

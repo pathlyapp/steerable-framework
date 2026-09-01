@@ -9,7 +9,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | Agent | Harbor `-a` | Default model | Keys |
 | ----- | ------------ | ------------- | ---- |
 | `oracle` | `oracle` | none | none |
-| `steerable` | `evals.harbor_steerable:SteerableHarborAgent` | `openai/z-ai/glm-5.3-flash` | `STEERABLE_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
+| `steerable` | `evals.harbor_steerable:SteerableHarborAgent` | `openai/z-ai/glm-5.3-flash` | GHA: `STEERABLE_API_KEY` + `STEERABLE_BASE_URL`. Local also accepts `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | `claude-code` | `claude-code` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
@@ -35,14 +35,14 @@ python -m evals.run --agent claude-code --split cheap-12
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
-`--split cheap-12` is the live weekly gate (12 ids). `--split catalog` is all 89 and is not a CI job.
+`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards).
 
 ## Layers
 
 | Layer | When | What |
 | ----- | ---- | ---- |
 | L0 | every PR | `evals/tests` via `uv run pytest` (no Harbor, no Docker) |
-| Oracle smoke | PR when `evals/**` changes | Harbor `-a oracle` on `fix-git` (Mean 1.0). Product canary (`steerable` × `fix-git`) when an API key secret is set |
-| L2 weekly | schedule + `workflow_dispatch` | cheap-12 × `steerable` / `claude-code` / `codex` / `pi`. Not a required merge check. |
+| Oracle smoke | PR when `evals/**` changes | Harbor `-a oracle` on `fix-git` (Mean 1.0). Product canary (`steerable` × `fix-git`) when `STEERABLE_API_KEY` is set |
+| L2 weekly | schedule + `workflow_dispatch` | cheap-12 × `steerable` (gateway) / `claude-code` / `codex` / `pi` (official keys, skip if unset). Not a required merge check. |
 
-Job outputs land in `evals/jobs/` (gitignored).
+Job outputs land in `evals/jobs/` (gitignored). GitHub Actions posts a Feishu card when `FEISHU_BOT_WEBHOOK` is set; the card title starts with 成功 or 失败. Weekly GHA passes `--n-concurrent 2`. Feishu posting is best-effort.

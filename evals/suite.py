@@ -17,6 +17,24 @@ REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
+# QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
+# speed tests, and FastText training need the whole 4-vCPU runner.
+# n-concurrent=2 otherwise shares the box; keyboard screenshots stall,
+# qemu boot stalls, the ELF never appears, extract-moves OCR takes
+# minutes per frame, query-optimize's median SQL time misses the
+# 1.05× golden bound, and train-fasttext P@1 drops (0.556 vs ≥0.62).
+EXCLUSIVE_PACK_TASKS = frozenset(
+    {
+        "install-windows-3.11",
+        "qemu-startup",
+        "qemu-alpine-ssh",
+        "make-doom-for-mips",
+        "make-mips-interpreter",
+        "extract-moves-from-video",
+        "query-optimize",
+        "train-fasttext",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +71,8 @@ class Suite:
     n_concurrent: int
     jobs_dir: str
     harbor_version: str
+    catalog_minutes: dict[str, int]
+    pack_floor_minutes: int
     agents: dict[str, AgentSpec]
     harnesses: dict[str, HarnessSpec]
 
@@ -109,6 +129,83 @@ def resolve_tasks(
     return selected
 
 
+def shard_tasks(
+    tasks: Sequence[str],
+    *,
+    shard: int,
+    shards: int,
+    minutes: Mapping[str, int] | None = None,
+    pack_floor: int | None = None,
+) -> tuple[str, ...]:
+    """Split ``tasks`` into ``shards`` slices for GHA catalog jobs.
+
+    With ``minutes``, pack longest-first onto the current lightest shard so
+    wall-clock stays even. ``pack_floor`` raises each weight so a 170-minute
+    wrap cannot stack six "short" recorded tasks onto one 360-minute job.
+    Without minutes, round-robin by catalog order.
+    """
+    if shards < 1:
+        raise SuiteError("shards must be >= 1")
+    if shard < 0 or shard >= shards:
+        raise SuiteError(f"shard {shard} out of range 0..{shards - 1}")
+    if minutes:
+        return _pack_by_minutes(tasks, shards, minutes, pack_floor=pack_floor)[
+            shard
+        ]
+    return tuple(task for index, task in enumerate(tasks) if index % shards == shard)
+
+
+def _pack_by_minutes(
+    tasks: Sequence[str],
+    shards: int,
+    minutes: Mapping[str, int],
+    *,
+    pack_floor: int | None = None,
+) -> tuple[tuple[str, ...], ...]:
+    known = [int(minutes[task]) for task in tasks if task in minutes]
+    default = sorted(known)[len(known) // 2] if known else 15
+    floor = pack_floor if pack_floor and pack_floor > 0 else 0
+
+    def weight(task: str) -> int:
+        return max(int(minutes.get(task, default)), floor)
+
+    loads = [0] * shards
+    bins: list[list[str]] = [[] for _ in range(shards)]
+    exclusive_ids = [task for task in tasks if task in EXCLUSIVE_PACK_TASKS]
+    rest_ids = [task for task in tasks if task not in EXCLUSIVE_PACK_TASKS]
+    remaining_shards = shards - len(exclusive_ids)
+    isolate = bool(
+        floor
+        and exclusive_ids
+        and remaining_shards >= 1
+        and (len(rest_ids) + remaining_shards - 1) // remaining_shards <= 4
+    )
+    exclusive = exclusive_ids if isolate else []
+    rest = rest_ids if isolate else list(tasks)
+    exclusive.sort(key=lambda task: (-weight(task), task))
+    rest.sort(key=lambda task: (-weight(task), task))
+
+    def lightest(candidates: Sequence[int]) -> int:
+        return min(candidates, key=lambda item: (loads[item], len(bins[item]), item))
+
+    exclusive_bins: set[int] = set()
+    for task in exclusive:
+        empty = [i for i in range(shards) if not bins[i]]
+        index = lightest(empty) if empty else lightest(range(shards))
+        bins[index].append(task)
+        loads[index] += weight(task)
+        exclusive_bins.add(index)
+    for task in rest:
+        open_bins = [i for i in range(shards) if i not in exclusive_bins]
+        index = lightest(open_bins if open_bins else range(shards))
+        bins[index].append(task)
+        loads[index] += weight(task)
+    catalog_order = {task: position for position, task in enumerate(tasks)}
+    for bucket in bins:
+        bucket.sort(key=lambda task: catalog_order[task])
+    return tuple(tuple(bucket) for bucket in bins)
+
+
 def dataset_org(dataset_name: str) -> str:
     """Return the Harbor org prefix from a `org/dataset` package name."""
     if "/" not in dataset_name:
@@ -142,6 +239,7 @@ def harbor_argv(
     environment_build_timeout_multiplier: float | None = None,
     agent_timeout_multiplier: float | None = None,
     harness: str | None = None,
+    verifier_timeout_multiplier: float | None = None,
     harbor_bin: str = "harbor",
 ) -> list[str]:
     spec = suite.agents.get(agent)
@@ -206,6 +304,13 @@ def harbor_argv(
             [
                 "--agent-timeout-multiplier",
                 str(agent_timeout_multiplier),
+            ]
+        )
+    if verifier_timeout_multiplier is not None:
+        argv.extend(
+            [
+                "--verifier-timeout-multiplier",
+                str(verifier_timeout_multiplier),
             ]
         )
     for key, value in spec.kwargs:
@@ -310,6 +415,12 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         raise SuiteError(
             f"{source}: run.harbor_version must be {PINNED_HARBOR_VERSION!r}"
         )
+    catalog_minutes = _catalog_minutes(run.get("catalog_minutes"), catalog, source)
+    pack_floor_minutes = _require_int(
+        run.get("pack_floor_minutes"), "run.pack_floor_minutes", source
+    )
+    if pack_floor_minutes < 1:
+        raise SuiteError(f"{source}: run.pack_floor_minutes must be >= 1")
 
     return Suite(
         dataset_name=dataset_name,
@@ -321,9 +432,30 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         n_concurrent=_require_int(run.get("n_concurrent"), "run.n_concurrent", source),
         jobs_dir=_require_str(run.get("jobs_dir"), "run.jobs_dir", source),
         harbor_version=harbor_version,
+        catalog_minutes=catalog_minutes,
+        pack_floor_minutes=pack_floor_minutes,
         agents=agents,
         harnesses=harnesses,
     )
+
+
+def _catalog_minutes(value: object, catalog: tuple[str, ...], source: Path) -> dict[str, int]:
+    if not isinstance(value, dict) or not value:
+        raise SuiteError(f"{source}: run.catalog_minutes must be a mapping of catalog ids")
+    catalog_set = frozenset(catalog)
+    minutes: dict[str, int] = {}
+    for key, raw in value.items():
+        if key not in catalog_set:
+            raise SuiteError(f"{source}: run.catalog_minutes unknown id {key}")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            raise SuiteError(f"{source}: run.catalog_minutes.{key} must be a positive integer")
+        minutes[str(key)] = raw
+    missing = [task for task in catalog if task not in minutes]
+    if missing:
+        raise SuiteError(
+            f"{source}: run.catalog_minutes missing {', '.join(missing)}"
+        )
+    return minutes
 
 
 def _require_str(value: object, field: str, source: Path) -> str:
