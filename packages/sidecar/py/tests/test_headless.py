@@ -190,6 +190,31 @@ def test_cut_budgets_default_to_the_calibrated_values(
     assert _cut_budget("STEERABLE_IDLE_STREAM_TIMEOUT_MS", 600_000) == 600_000
 
 
+def test_stream_cuts_are_off_by_default() -> None:
+    """Every cut budget defaults to 0, which ``_cut_budget`` turns into ``None``.
+
+    Turning one back on is a decision to be argued, not a value to be nudged:
+    a paired A/B with the cuts as the only difference (run 33481095845) had 15
+    of 74 trials end at five or fewer tool calls with them on against 5 of 73
+    with them off, and two tasks took the same small number of calls on every
+    attempt and failed all of them. Re-enabling one silently would reproduce
+    that, and the pass rate alone would not show it — the sign test on that
+    same A/B came back at p=0.55.
+    """
+    import inspect
+    import re
+
+    src = inspect.getsource(headless_mod._run)
+    for name in (
+        "STEERABLE_IDLE_STREAM_TIMEOUT_MS",
+        "STEERABLE_IDLE_STREAM_MAX_CHARS",
+        "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS",
+    ):
+        found = re.search(rf'"{name}",\s*([\d_]+)', src)
+        assert found, f"{name} is no longer read as a cut budget"
+        assert found.group(1) == "0", f"{name} defaults to {found.group(1)}, not 0"
+
+
 def test_headless_wrap_up_keeps_tools() -> None:
     import inspect
 

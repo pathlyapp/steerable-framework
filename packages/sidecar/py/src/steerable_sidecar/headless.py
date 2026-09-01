@@ -268,35 +268,34 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # after the 150 min soft timeout ate Harbor's remaining 30 min.
             wrap_up_tool_timeout_ms=120_000,
             wrap_up_hard_cap_ms=10_500_000,
-            # dna-assembly / steal.py / gcode: hours of reasoning after the
-            # first inspect, zero writes. 10 min of *active* tokens (GLM 48
-            # min SSE gaps do not count) cuts the stream so delivery can
-            # name the missing file. First cut retries a write; a second
-            # cut starts wrap-up (Z.AI ignores tool_choice=required, so
-            # retries otherwise Hmm for another 10 min each).
+            # All three cuts are off. They were added to rescue trials that
+            # reasoned for an hour without calling a tool, and each was
+            # calibrated against the trials it was meant to rescue, which is
+            # the measurement that cannot see the trials it harms. A paired
+            # A/B over 25 tasks at three attempts, cuts the only difference
+            # (run 33481095845), found they starve far more than they rescue:
+            # 15 of 74 trials ended at five or fewer tool calls with the cuts
+            # on against 5 of 73 with them off. write-compressor took exactly
+            # two calls on all three attempts and scored none, then 21, 31 and
+            # 31 calls and scored all three; feal-linear-cryptanalysis went
+            # 0/3 to 3/3 and feal-differential-cryptanalysis 1/3 to 3/3, the
+            # latter having spent one attempt at 5435 calls, which is the cut
+            # and the retry live-locking. Net +2.33 tasks of 25.
+            #
+            # The paired sign test does not clear 0.05 (p=0.55, 7 tasks better
+            # against 4), and at this sample size it would not for an effect
+            # this size — the design resolves +0.09 per task about a third of
+            # the time. What decides it is that the starvation reproduces
+            # exactly: two tasks took the same small number of calls on every
+            # attempt and lost every one, which no amount of sampling noise
+            # produces. The budgets stay reachable through the environment so
+            # a later arm can re-test rather than re-derive them.
             idle_stream_timeout_ms=_cut_budget(
-                "STEERABLE_IDLE_STREAM_TIMEOUT_MS", 600_000
+                "STEERABLE_IDLE_STREAM_TIMEOUT_MS", 0
             ),
-            # circuit-fibsqrt / regex-chess: 392 KB and 356 KB of reasoning
-            # in a single round, 75 and 110 min, zero tool calls. Silent-think
-            # gaps keep the active wall under the cap and a dense stream keeps
-            # every chunk inside the wrap-up per-chunk wait, so volume is the
-            # only trigger that fires. Well above a normal reasoning burst.
-            idle_stream_max_chars=_cut_budget(
-                "STEERABLE_IDLE_STREAM_MAX_CHARS", 200_000
-            ),
-            # The per-round caps above barely separate spirals from long but
-            # productive trials — fix-ocaml-gc reasoned 1.79 M chars across
-            # the run and still scored, because it kept writing. Reasoning
-            # that delivered nothing is the discriminator. Replaying this rule
-            # over catalog-89 with DeliveryHooks.tool_made_progress deciding
-            # the resets: 150 K fires on 14 of 31 failures against 6 of 58
-            # passes, 200 K on 10 against 1, 250 K on 6 against none. 150 K
-            # takes the widest reach because a false positive costs one
-            # interruption (no passing trial crossed the cap twice) on a
-            # trial that is already writing files.
+            idle_stream_max_chars=_cut_budget("STEERABLE_IDLE_STREAM_MAX_CHARS", 0),
             reasoning_without_progress_chars=_cut_budget(
-                "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS", 150_000
+                "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS", 0
             ),
         ),
         hooks=ChainHooks(
