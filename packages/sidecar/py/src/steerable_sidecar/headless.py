@@ -254,6 +254,19 @@ def _max_tokens() -> int | None:
     return None if value <= 0 else value
 
 
+def _cut_budget(name: str, default: int) -> int | None:
+    """Env override for one stream-cut budget; ``0`` disables that cut.
+
+    The three cut budgets are the tunables under active calibration, and
+    catalog runs cost hours, so a single dispatch has to compare arms that
+    differ only in these values. Baking them into the commit would make each
+    arm a separate build and lose the shared task set the comparison needs.
+    """
+    raw = os.environ.get(name)
+    value = default if raw is None or not str(raw).strip() else int(raw)
+    return None if value <= 0 else value
+
+
 async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
     params = _env_provider_params()
     if not params.get("model"):
@@ -287,13 +300,17 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # name the missing file. First cut retries a write; a second
             # cut starts wrap-up (Z.AI ignores tool_choice=required, so
             # retries otherwise Hmm for another 10 min each).
-            idle_stream_timeout_ms=600_000,
+            idle_stream_timeout_ms=_cut_budget(
+                "STEERABLE_IDLE_STREAM_TIMEOUT_MS", 600_000
+            ),
             # circuit-fibsqrt / regex-chess: 392 KB and 356 KB of reasoning
             # in a single round, 75 and 110 min, zero tool calls. Silent-think
             # gaps keep the active wall under the cap and a dense stream keeps
             # every chunk inside the wrap-up per-chunk wait, so volume is the
             # only trigger that fires. Well above a normal reasoning burst.
-            idle_stream_max_chars=200_000,
+            idle_stream_max_chars=_cut_budget(
+                "STEERABLE_IDLE_STREAM_MAX_CHARS", 200_000
+            ),
             # The per-round caps above barely separate spirals from long but
             # productive trials — fix-ocaml-gc reasoned 1.79 M chars across
             # the run and still scored, because it kept writing. Reasoning
@@ -304,7 +321,9 @@ async def _run(instruction: str, *, cwd: str, max_rounds: int) -> None:
             # takes the widest reach because a false positive costs one
             # interruption (no passing trial crossed the cap twice) on a
             # trial that is already writing files.
-            reasoning_without_progress_chars=150_000,
+            reasoning_without_progress_chars=_cut_budget(
+                "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS", 150_000
+            ),
         ),
         hooks=ChainHooks(
             # Compact first so a same-round write nudge is folded onto the

@@ -61,6 +61,16 @@ _CREDENTIAL_KEYS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
 )
+#: Loop tunables an A/B dispatch may override per arm. Forwarded before the
+#: ``setdefault`` block below, so a host value wins over the run defaults and
+#: an unset key leaves ``headless.py`` in charge. Only calibration knobs
+#: belong here: a catalog run costs hours, so arms have to differ by env
+#: rather than by commit to share one task set.
+_TUNING_KEYS = (
+    "STEERABLE_IDLE_STREAM_TIMEOUT_MS",
+    "STEERABLE_IDLE_STREAM_MAX_CHARS",
+    "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS",
+)
 _PROXY_KEYS = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -443,7 +453,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await environment.upload_file(local, _INSTRUCTION_REMOTE)
         provider = (self._parsed_model_provider or "openai").strip().lower()
         kind = "anthropic" if provider in {"anthropic", "claude"} else "openai_compat"
-        env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS))
+        env = self._forwarded_env((*_CREDENTIAL_KEYS, *_PROXY_KEYS, *_TUNING_KEYS))
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = self._parsed_model_name or ""
         env["PYTHONUNBUFFERED"] = "1"

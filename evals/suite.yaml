@@ -245,6 +245,44 @@ splits:
     - train-fasttext
     - video-processing
     - winning-avg-corewars
+  # Harness-change A/B set. Two full catalog runs at different commits agreed
+  # on 50 greens and 22 reds and disagreed on these 17, so the flappers carry
+  # every point a harness change can win or lose; fixing them alone reaches
+  # 0.753. The 12 controls are stable greens whose trials took a stream cut —
+  # feal-differential and write-compressor regressed from 21 and 14 tool calls
+  # to 2 and 1 without a control set to catch it. Run with n-attempts 3: at
+  # one attempt a flapper's outcome is a coin toss and the mean carries a
+  # ±0.19 band, wide enough to swallow any real effect.
+  flaky:
+    - bn-fit-modify
+    - build-pov-ray
+    - caffe-cifar-10
+    - custom-memory-heap-crash
+    - db-wal-recovery
+    - distribution-search
+    - dna-insert
+    - feal-differential-cryptanalysis
+    - headless-terminal
+    - make-mips-interpreter
+    - model-extraction-relu-logits
+    - qemu-startup
+    - rstan-to-pystan
+    - sam-cell-seg
+    - sanitize-git-repo
+    - torch-tensor-parallelism
+    - write-compressor
+    - chess-best-move
+    - extract-elf
+    - feal-linear-cryptanalysis
+    - large-scale-text-editing
+    - llm-inference-batching-scheduler
+    - mailman
+    - mteb-leaderboard
+    - openssl-selfsigned-cert
+    - query-optimize
+    - regex-log
+    - reshard-c4-data
+    - sparql-university
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert
