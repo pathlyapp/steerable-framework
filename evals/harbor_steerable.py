@@ -70,6 +70,16 @@ _TUNING_KEYS = (
     "STEERABLE_IDLE_STREAM_TIMEOUT_MS",
     "STEERABLE_IDLE_STREAM_MAX_CHARS",
     "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS",
+    # Sampling, for the same reason: 17 of 89 tasks flip outcome between runs
+    # of the same commit, and the same task has run 10 and 48 tool calls on
+    # two runs, so trajectory spread is what the flapping is made of. The
+    # 1.0 below came from Claude Code's Terminal-Bench setup; pi, codex, and
+    # deepseek-harness all leave temperature to the provider instead, and
+    # GLM's server default is lower. Reasoning effort is here because `max`
+    # is what produces the 450 KB-to-1.3 MB single-round reasoning that
+    # starves the spiral tasks.
+    "STEERABLE_TEMPERATURE",
+    "STEERABLE_REASONING_EFFORT",
 )
 _PROXY_KEYS = (
     "HTTP_PROXY",

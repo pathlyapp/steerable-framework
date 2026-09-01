@@ -181,6 +181,28 @@ def test_merge_trial_path_adds_sbin_and_uv() -> None:
     assert already.split(":").count("/usr/sbin") == 1
 
 
+def test_calibration_knobs_can_be_overridden_per_arm() -> None:
+    """A `setdefault` default is unreachable unless its key is forwarded.
+
+    `_forwarded_env` builds the dict from the listed keys and the `setdefault`
+    block then fills the gaps, so a key absent from `_TUNING_KEYS` is pinned
+    to its default no matter what the dispatch sets. Temperature sat in that
+    state while trajectory spread was the thing under investigation.
+    """
+    src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
+    text = src.read_text()
+    block = text[text.index("_TUNING_KEYS = (") : text.index("_PROXY_KEYS = (")]
+    forwarded = {
+        line.strip().strip(',"')
+        for line in block.splitlines()
+        if not line.strip().startswith("#")
+    }
+    assert "STEERABLE_TEMPERATURE" in forwarded
+    assert "STEERABLE_REASONING_EFFORT" in forwarded
+    run_body = text[text.index("    async def run(") :]
+    assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
+
+
 def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
     text = src.read_text()
