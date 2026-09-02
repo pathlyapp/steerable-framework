@@ -274,8 +274,9 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "evals/jobs/steerable/*/*/result.json" in weekly
     # A sharded job that forgets the per-trial path uploads only its status
     # file, so its tasks read as absent instead of failed and the mean is
-    # computed over a smaller set without saying so.
-    assert weekly.count("evals/jobs/steerable/*/*/result.json") == weekly.count(
+    # computed over a smaller set without saying so. Counted without the agent
+    # directory because the catalog job takes its agent from the dispatch.
+    assert weekly.count("*/*/result.json") == weekly.count(
         '--shard "${{ matrix.shard }}"'
     )
     assert "pull_request:" not in weekly

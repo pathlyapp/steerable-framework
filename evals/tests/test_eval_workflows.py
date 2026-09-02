@@ -44,6 +44,27 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     assert "**/agent/headless.log" in workflow
 
 
+def test_catalog_dispatch_offers_both_harnesses() -> None:
+    """The catalog split is the only run that produces a reportable Mean, so
+    the same-model pi comparison has to be dispatchable there."""
+    assert "- pi-glm" in WEEKLY
+    assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
+
+
+def test_catalog_feishu_label_names_the_agent() -> None:
+    """A catalog Mean posted without its agent reads as the product score."""
+    assert 'label="GHA catalog 89 × $EVAL_AGENT"' in WEEKLY
+
+
+def test_catalog_concurrency_separates_the_agents() -> None:
+    """The group holds one running plus one pending run. Sharing it across
+    agents makes a second dispatch cancel the first's pending run."""
+    assert (
+        "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
+        "${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+    )
+
+
 def test_weekly_uploads_the_pi_transcript() -> None:
     """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
     token counts alone, and the first pi-glm run had to infer a runaway first
