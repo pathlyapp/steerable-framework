@@ -515,6 +515,27 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 约束：artifact 只有 `pi.txt`，没有 `models.json` 也没有 session 目录，所以请求体只能从 token 形态反推，不能直接读。要直接验证得让 Harbor 的 Pi 把 `models.json` 也上传。
 
+### 对齐后的全量对照：9 道稳定红裂成 3 + 6，靶子随之改变
+
+`pi-glm` 全量 89 道 [33593245247](https://github.com/pathlyapp/steerable-framework/actions/runs/33593245247)：**67/89 = 0.7528**。对照 `steerable` 四样本 0.8006 ± 0.0232。
+
+**这个差读不出 harness 优劣。** 单次样本比四样本均值，差距约 2 个标准差，而单题翻面率 12.6%。而且差是均匀摊开的（全绿组 51/60、翻面组 13/20、稳定红组 3/9），不集中在任何一类题上——噪声就长这样。**均值在这里没有信息量，逐题名单才有。**
+
+| `steerable` 分档 | 道数 | `pi-glm` 过 |
+| --- | --- | --- |
+| 4/4 全绿 | 60 | 51 |
+| 0/4 稳定红 | 9 | 3 |
+| 翻面 | 20 | 13 |
+
+**9 道稳定红裂成两组，这是本轮的主要产出：**
+
+- **harness 损耗 3 道**（同模型同参数，pi 过、我们 4/4 全挂）：`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`
+- **能力墙候选 6 道**（两边都稳定挂）：`extract-moves-from-video`、`filter-js-from-html`、`make-doom-for-mips`、`regex-chess`、`sanitize-git-repo`、`winning-avg-corewars`
+
+**反方向 9 道：`steerable` 4/4 全绿而 pi 挂** —— `adaptive-rejection-sampler`、`caffe-cifar-10`、`dna-insert`、`feal-linear-cryptanalysis`、`headless-terminal`、`polyglot-rust-c`、`pytorch-model-recovery`、`query-optimize`、`torch-pipeline-parallelism`。**这份名单是回归风险清单**：我们的 harness 已经在 9 道题上赢过 pi，照 pi 的做法盲改会踩掉这些。
+
+**靶子改了。** 之前定的"提分空间在 20 道翻面题"要修正：翻面题是配对 A/B 的**测试集**，不是靶子。**最确定的靶子是上面那 3 道 harness 损耗题** —— 它们不是概率问题，是同一个模型在我们这儿做不成、在 pi 那儿做成了，机制可查、可单题验收，不需要靠均值分辨。
+
 - [x] **2.5.1** cuts A/B 完成
 - [x] **2.5.2** 切流默认关闭（保留 env 覆盖）
 - [x] **2.5.5** 命名输出检测补上检查清单措辞（6/6，假阳性 3）—— **实为空操作**，89 道题上检测结果零差异，见上节
@@ -526,7 +547,9 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 - [x] **2.5.9** 查那 6 道"文件缺失"红题的真实结束方式 —— 已查明：分类过期（只剩 1 道真缺文件），门禁触发过但无效，真约束是墙上时钟。见上两节
 - [ ] **2.5.10** 收工窗口活锁检测：连续 N 轮 `tool_choice=required` 且零工具调用就换策略，不再原地重问。`regex-chess` 在 20 分钟窗口里被 16 次无效重试吃光。**理由是机制的算术错了，不是它值几题**，不要拿单题结果验收
 - [ ] **2.5.11** 压每步文本量（红题 3.3 min/次调用 vs 绿题 0.8）。切流式"打断"已证伪。**`max_tokens` 往两个方向都已证伪**：16384 时 `polyglot-c-py` 截断即失败，65536 时 `filter-js-from-html` 一轮烧光照样失败——上限只决定撞哪面墙。要改的是文本产生方式（提示词、工具调用时机）
-- [ ] **2.5.14** 逐题拿 `pi-glm` 对照那 9 道稳定红，判定哪几道真是 GLM 能力墙、哪几道是我们 harness 的问题。已对齐（2.5.15）后的 catalog 在跑，85/89 时 0.7529。目前唯一确认属 harness 损耗的是 **`pytorch-model-cli`**（pi 过，steerable 0/4）。`sanitize-git-repo` **不算**：pi 1/3、steerable 0/5，两边都大多做不成。**归因需要 pi 侧多个样本**，单次通过只能证明"不是能力墙"，证不出"是我们的问题"
+- [x] **2.5.14** 9 道稳定红已裂成 **harness 损耗 3 道**（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）+ **能力墙候选 6 道**，见上节。同时产出 9 道反向名单（我们赢 pi）作为回归风险清单
+- [ ] **2.5.16** 逐题读那 3 道 harness 损耗题的 pi 与 steerable 轨迹，定位差在哪。**单题可验收，不必靠均值** —— 这是当前最确定的靶子。注意 3 道都只有 pi 的 1 个样本，先确认 pi 那次不是侥幸（必要时单跑这 3 道 ×3）
+- [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 定稿为上节那 20 道
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
