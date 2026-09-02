@@ -444,7 +444,7 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 **9 道稳定红是唯一可以按"这道题为什么失败"归因的集合**，其余 20 道只能按"那一个 trial 里发生了什么"讲。注意 4 次样本判"稳定"仍带 1/16 的单题误判率，20 道里预期有 1–2 道其实是低通过率而非真稳定。
 
-### 同模型换 harness（`pi-glm`）：均值持平，但错的题不一样，且 `max_tokens` 就此证伪
+### 同模型换 harness（`pi-glm`）第一版：配置没对齐，均值不可读
 
 新增 `pi-glm` agent——Harbor 自带的 Pi 装在容器里，指向**同一个模型、同一个网关**，所以与 `steerable` 相比只差 harness 一个变量。首跑 `cheap-12`（12 道）[33583927705](https://github.com/pathlyapp/steerable-framework/actions/runs/33583927705)：
 
@@ -463,12 +463,36 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 这正是我们在 steerable 上追的"推理跑飞"，换个 harness、同一个模型照样发作——**说明这个病至少有一部分在模型侧，不是我们 harness 独有的缺陷**。
 
-**并且它直接把 2.5.11 的 `max_tokens` 方案证伪了，不用再 A/B：**pi 就是设了 16384 硬上限，结果是"截断即失败"而不是"截断后收敛"；steerable 设的是 65536，这两道题 4/4 全过。**硬截断不解决跑飞，只是把跑飞换成截断。**要压的是每步文本量的产生方式，不是给它一把铡刀。
+**关于 `max_tokens`：方向是反的，不是"证伪"。** pi 的 16384 不是谁挑的方案，是 Pi 对"自己没有元数据的模型"的兜底默认值。它证明的是**上限压太小会把跑飞变成截断即失败**，所以 2.5.11 不该往收紧 `max_tokens` 的方向走——但这跟"限制单步文本量无效"是两句不同的话，别把前者当成后者的结论。
 
-两个已知限制：
+**对照 agent 今天拿不到官方基线。** 仓库 secrets 只有 `STEERABLE_API_KEY` / `STEERABLE_BASE_URL` / `FEISHU_BOT_WEBHOOK` / `NPM_TOKEN` / `PYPI_API_TOKEN`，没有 `ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY`，所以 `claude-code` / `codex` / `pi`（Claude）三格都 skip。
 
-1. **reasoning effort 没对齐。** steerable 用 `reasoning_effort=max`；pi 走 Harbor 写的 `models.json` 自定义 provider，那个模型条目没有 OpenRouter 的 `compat` 块，`thinking: xhigh` 可能到不了请求。所以"均值持平"这个结论的强度有限，但**逐题差异（谁过谁挂）不受这个影响**，那是本节的主要产出。
-2. **对照 agent today 拿不到官方基线。** 仓库 secrets 只有 `STEERABLE_API_KEY` / `STEERABLE_BASE_URL` / `FEISHU_BOT_WEBHOOK` / `NPM_TOKEN` / `PYPI_API_TOKEN`，没有 `ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY`，所以 `claude-code` / `codex` / `pi`（Claude）三格都 skip。
+#### 全量 54 道打出来才看清：上面那个"均值持平"是 cheap-12 的假象
+
+把同一配置放到全量 catalog [33587641909](https://github.com/pathlyapp/steerable-framework/actions/runs/33587641909)，跑到 26/49 分片（54 道）时取消：
+
+| 同这 54 道 | 过 |
+| --- | --- |
+| `pi-glm` | 18/54 = 0.333 |
+| `steerable`（4 样本期望） | 44.25/54 = 0.82 |
+
+**差 26 道。** 分组看更清楚：steerable 四次全绿的 40 道里 pi-glm 只过 17，四次全红的 6 道里 pi-glm 过 0。cheap-12 那 12 道太容易，GLM 在 16384 以内就能答完，所以掩盖了问题。
+
+**三个参数全错，而且都不是 harness：** Harbor 的 Pi 适配器把模型条目写成 `{"id": …}`，其余全交给 Pi 兜底，而那些兜底值描述的不是 GLM-5.3：
+
+| | Pi 兜底 | GLM-5.3 实际 / steerable 用的 |
+| --- | --- | --- |
+| `contextWindow` | 128000 | **1048576**（`steerable_agent_runtime.model_info` 是权威表） |
+| `maxTokens` | 16384 | **65536**（`STEERABLE_MAX_TOKENS`） |
+| `reasoning` | `false` | GLM 支持 `low`/`high`/`max`，steerable 用 `max` |
+
+`reasoning: false` 的后果最隐蔽：Pi 会认为这个模型只支持 `["off"]` 这一档，把 `--thinking xhigh` 直接夹成 `off`，请求里**一个 reasoning 字段都不发**。所以 `suite.yaml` 里写的 `thinking: xhigh` 从来没生效过。窗口小 8 倍还会让 `clampMaxTokensToContext` 提前把输出预算削掉。
+
+证据在 `pi.txt` 里：某个 trial 记着 `"reasoning": 16314`，正顶着 16384 上限——GLM 一轮思考烧光全部预算，剩 70 个 token 什么也写不出，工具都没调。全量 54 个 trial 里 22 个输出量 ≥16000。
+
+**修法（2.5.15 完成）：** `evals/harbor_pi_glm.py` 里子类化 Harbor 的 Pi，覆盖 `_build_custom_models_json`，补上真实窗口、65536 上限、`reasoning_effort: max`、temperature 1.0、以及 `provider.order=[z-ai]` 路由钉死。`suite.py` 现在**拒绝** `pi-glm` 写 `harbor: pi`，理由写在报错里。agent 名字改成 `pi-glm`：原来 `result.json` 里写的是 `pi`，看不出这条腿跑的是 Claude 还是 GLM。
+
+**哪些结论还站得住：** `sanitize-git-repo` 那条**仍然成立**。pi 是在更差的配置下过的这道题，而 steerable 4/4 全挂；一道题在更差配置下能过，就证明它不是 GLM 的能力墙。反过来 pi-glm 挂掉的题现在一律不能归因，得等对齐后重跑。
 
 - [x] **2.5.1** cuts A/B 完成
 - [x] **2.5.2** 切流默认关闭（保留 env 覆盖）
@@ -480,9 +504,9 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 - [ ] **2.5.8** 持久性指令 + 门禁判据打包成一个 arm 测。单次全量分辨不了这个量级，按本文档自己的功效表要走配对 A/B，子集用上节定稿的 20 道翻面题 ×3 次
 - [x] **2.5.9** 查那 6 道"文件缺失"红题的真实结束方式 —— 已查明：分类过期（只剩 1 道真缺文件），门禁触发过但无效，真约束是墙上时钟。见上两节
 - [ ] **2.5.10** 收工窗口活锁检测：连续 N 轮 `tool_choice=required` 且零工具调用就换策略，不再原地重问。`regex-chess` 在 20 分钟窗口里被 16 次无效重试吃光。**理由是机制的算术错了，不是它值几题**，不要拿单题结果验收
-- [ ] **2.5.11** 压每步文本量（红题 3.3 min/次调用 vs 绿题 0.8）。切流式"打断"已证伪；**`max_tokens` 也已证伪**，不必再 A/B——`pi-glm` 的 16384 硬上限把跑飞变成截断即失败，见上节。要改的是文本产生方式（提示词、工具调用时机），不是加铡刀
-- [ ] **2.5.14** 逐题拿 `pi-glm` 对照那 9 道稳定红，判定哪几道真是 GLM 能力墙、哪几道是我们 harness 的问题。`sanitize-git-repo` 已确认属后者。这是当前唯一能把"能力上限"和"harness 损耗"分开的手段
-- [ ] **2.5.15** `pi-glm` 的 reasoning effort 与 steerable 对齐（Harbor 写的 `models.json` 缺 OpenRouter `compat` 块）。要么在我们仓库里子类化 Harbor 的 Pi 补上 compat，要么改用内置 `openrouter` provider（前提是网关就是 openrouter.ai）。不对齐时只能读逐题差异，不能读均值差
+- [ ] **2.5.11** 压每步文本量（红题 3.3 min/次调用 vs 绿题 0.8）。切流式"打断"已证伪。**收紧 `max_tokens` 是反方向**——`pi-glm` 的 16384 兜底把跑飞变成截断即失败，见上节；这不等于"限制单步文本量无效"。要改的是文本产生方式（提示词、工具调用时机）
+- [ ] **2.5.14** 逐题拿 `pi-glm` 对照那 9 道稳定红，判定哪几道真是 GLM 能力墙、哪几道是我们 harness 的问题。`sanitize-git-repo` 已确认属后者。**前置条件是 2.5.15**：第一版全量跑出的 18/54 归因不了，参数不对齐时逐题差异也读不了
+- [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 定稿为上节那 20 道
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
 
