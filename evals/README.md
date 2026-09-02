@@ -13,7 +13,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | `claude-code` | `claude-code` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
-| `pi-glm` | `pi` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
+| `pi-glm` | `evals.harbor_pi_glm:PiGlmHarborAgent` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
 | `dsh` | — | — | skipped (no Harbor adapter) |
 
 `steerable` is the product agent: headless CoreLoop with in-process `bash` / `read_file` / `write_file` jailed to the trial cwd. It is not Electron and not Harbor's first-party CLI agents.
@@ -22,7 +22,11 @@ Pi is Harbor's first-party installed agent (`-a pi`), which installs [`@earendil
 
 Claude Code and Pi share a model so the cheap-12 job compares harnesses. Codex defaults to `openai/gpt-5.5`. The product agent defaults to OpenRouter `z-ai/glm-5.3-flash` (`--model openai/z-ai/glm-5.3-flash`); pass `--model openai/gpt-5.5` to match Codex's tier.
 
-`pi-glm` is the same Harbor Pi agent pointed at the product model and the product gateway, so the harness is the only difference from a `steerable` run. When `OPENROUTER_BASE_URL` is set, Harbor writes a `models.json` naming a custom provider at that endpoint, and `model_api` (declared in `suite.yaml`) tells it the endpoint speaks OpenAI chat completions; the `pi` baseline must stay free of that kwarg, because Harbor rejects `model_api` when no base URL is configured. **Reasoning-effort parity is not established**: a `models.json` model carries no OpenRouter `compat` block, so `thinking: xhigh` may never reach the request. Compare token counts against the steerable leg before reading a `pi-glm` gap as a harness result.
+`pi-glm` is Harbor's Pi install pointed at the product model and the product gateway, so the harness is the only difference from a `steerable` run. When `OPENROUTER_BASE_URL` is set, Harbor writes a `models.json` naming a custom provider at that endpoint, and `model_api` (declared in `suite.yaml`) tells it the endpoint speaks OpenAI chat completions; the `pi` baseline must stay free of that kwarg, because Harbor rejects `model_api` when no base URL is configured.
+
+It runs through `evals.harbor_pi_glm:PiGlmHarborAgent`, not stock `pi`, because Harbor writes that model entry as `{"id": …}` and lets Pi default everything else. Those defaults describe a model Pi ships metadata for, not GLM-5.3: 128000 context against GLM's 1048576, 16384 output against the steerable leg's 65536, and `reasoning` false, which makes Pi clamp `--thinking` to `off` and send no effort at all. The subclass restores the window, the output cap, `reasoning_effort: max`, temperature 1.0, and the Z.AI route pin, so the two legs issue the same request and differ only in harness.
+
+Catalog run 33587641909 is why: stock `pi` scored 18/54 where steerable averages 44/54 on the same tasks, and one `pi.txt` logged `"reasoning": 16314` against the 16384 cap on a trial that then made no tool call. A score from stock `pi` on GLM measures Pi's defaults, not Pi's harness.
 
 ## Commands
 

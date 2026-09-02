@@ -15,6 +15,7 @@ PRODUCT_AGENT = "steerable"
 LIVE_AGENTS = (*BASELINE_AGENTS, PRODUCT_AGENT)
 REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "pi-glm", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
+PI_GLM_IMPORT_PATH = "evals.harbor_pi_glm:PiGlmHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
 # QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
@@ -399,12 +400,17 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
     dsh = agents["dsh"]
     if not dsh.skipped:
         raise SuiteError(f"{source}: agents.dsh must be skipped until a Harbor adapter exists")
-    for pi_agent in ("pi", "pi-glm"):
-        if agents[pi_agent].harbor != "pi":
-            raise SuiteError(
-                f"{source}: agents.{pi_agent}.harbor must be 'pi' "
-                "(Harbor first-party agent)"
-            )
+    if agents["pi"].harbor != "pi":
+        raise SuiteError(f"{source}: agents.pi.harbor must be 'pi' (Harbor first-party agent)")
+    # Stock `harbor: pi` writes a models.json model of `{"id": …}` and lets
+    # Pi default the rest to 128000 context / 16384 output / no reasoning.
+    # Catalog 33587641909 ran that way and returned 18/54 where steerable
+    # averages 44/54, so the leg measured Pi's defaults, not Pi's harness.
+    if agents["pi-glm"].harbor != PI_GLM_IMPORT_PATH:
+        raise SuiteError(
+            f"{source}: agents.pi-glm.harbor must be {PI_GLM_IMPORT_PATH!r} — "
+            "stock 'pi' would run GLM at Pi's default request parameters"
+        )
     # pi-glm answers "same model, different harness", so it has to hold the
     # product agent's model. A drift here turns the comparison into two
     # variables at once and the run reads as a harness result either way.

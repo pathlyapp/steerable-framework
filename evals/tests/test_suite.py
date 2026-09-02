@@ -9,6 +9,7 @@ from evals.suite import (
     LIVE_AGENTS,
     PINNED_HARBOR_VERSION,
     PRODUCT_AGENT,
+    PI_GLM_IMPORT_PATH,
     STEERABLE_IMPORT_PATH,
     SUITE_PATH,
     SuiteError,
@@ -180,7 +181,7 @@ def test_pi_glm_runs_the_product_model_on_pis_harness() -> None:
     suite = load_suite()
     pi_glm = suite.agents["pi-glm"]
     assert pi_glm.skipped is False
-    assert pi_glm.harbor == "pi"
+    assert pi_glm.harbor == PI_GLM_IMPORT_PATH
     assert pi_glm.model == "openrouter/z-ai/glm-5.3-flash"
     assert pi_glm.env_any == ("OPENROUTER_API_KEY",)
     assert pi_glm.accepts_harness is False
@@ -218,7 +219,7 @@ def test_pi_glm_argv_passes_the_gateway_protocol_to_harbor() -> None:
         tasks=("fix-git",),
         jobs_dir=Path("/tmp/jobs"),
     )
-    assert "--agent" in argv and argv[argv.index("--agent") + 1] == "pi"
+    assert "--agent" in argv and argv[argv.index("--agent") + 1] == PI_GLM_IMPORT_PATH
     assert argv[argv.index("--model") + 1] == "openrouter/z-ai/glm-5.3-flash"
     assert "--agent-kwarg" in argv
     kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}

@@ -356,13 +356,15 @@ agents:
   # the gateway is openrouter.ai or the 万界 proxy, and it pins pi to the exact
   # endpoint the product agent uses.
   #
-  # Reasoning-effort parity with the steerable leg (`reasoning_effort=max`) is
-  # NOT established: a models.json model carries no OpenRouter `compat` block,
-  # so `thinking` may not reach the request at all. Read a pi-glm score as
-  # "pi at whatever effort the gateway defaults to" until token counts confirm
-  # otherwise.
+  # Stock `harbor: pi` cannot be that leg. It writes `{"id": …}` and Pi fills
+  # 128000 context / 16384 output / reasoning false, none of which describe
+  # GLM-5.3. Catalog 33587641909 ran that way and scored 18/54 against
+  # steerable's 44/54 average on the same tasks, with `"reasoning": 16314`
+  # logged against the 16384 cap — a parameter mismatch wearing a harness
+  # verdict's clothes. `PiGlmHarborAgent` restores the product's own window,
+  # output cap, effort, and Z.AI route.
   pi-glm:
-    harbor: pi
+    harbor: evals.harbor_pi_glm:PiGlmHarborAgent
     model: openrouter/z-ai/glm-5.3-flash
     kwargs:
       version: 0.84.4
