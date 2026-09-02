@@ -13,6 +13,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | `claude-code` | `claude-code` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
+| `pi-glm` | `pi` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
 | `dsh` | — | — | skipped (no Harbor adapter) |
 
 `steerable` is the product agent: headless CoreLoop with in-process `bash` / `read_file` / `write_file` jailed to the trial cwd. It is not Electron and not Harbor's first-party CLI agents.
@@ -20,6 +21,8 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 Pi is Harbor's first-party installed agent (`-a pi`), which installs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) inside the trial container. Do not use a third-party Harbor import path.
 
 Claude Code and Pi share a model so the cheap-12 job compares harnesses. Codex defaults to `openai/gpt-5.5`. The product agent defaults to OpenRouter `z-ai/glm-5.3-flash` (`--model openai/z-ai/glm-5.3-flash`); pass `--model openai/gpt-5.5` to match Codex's tier.
+
+`pi-glm` is the same Harbor Pi agent pointed at the product model and the product gateway, so the harness is the only difference from a `steerable` run. When `OPENROUTER_BASE_URL` is set, Harbor writes a `models.json` naming a custom provider at that endpoint, and `model_api` (declared in `suite.yaml`) tells it the endpoint speaks OpenAI chat completions; the `pi` baseline must stay free of that kwarg, because Harbor rejects `model_api` when no base URL is configured. **Reasoning-effort parity is not established**: a `models.json` model carries no OpenRouter `compat` block, so `thinking: xhigh` may never reach the request. Compare token counts against the steerable leg before reading a `pi-glm` gap as a harness result.
 
 ## Commands
 

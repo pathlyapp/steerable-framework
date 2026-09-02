@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [steerable, claude-code, codex, pi]
+        agent: [steerable, claude-code, codex, pi, pi-glm]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -60,6 +60,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          # pi-glm runs pi against the product gateway so the harness is the
+          # only difference from the steerable leg. Same reason the gateway is
+          # kept out of OPENAI_*: only the leg that should reach it gets it,
+          # and `pi` on Claude must not pick up an OpenRouter endpoint.
+          OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
           uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3

@@ -87,7 +87,7 @@ def test_steerable_is_the_harness_aware_agent() -> None:
     suite = load_suite()
     assert suite.agents["steerable"].accepts_harness is True
     # Baselines run as shipped: varying their harness is not our variable.
-    for name in ("oracle", "claude-code", "codex", "pi"):
+    for name in ("oracle", "claude-code", "codex", "pi", "pi-glm"):
         assert suite.agents[name].accepts_harness is False
 
 
@@ -174,9 +174,51 @@ def test_pi_is_first_party_harbor_agent() -> None:
     assert pi.env_any == ("ANTHROPIC_API_KEY",)
 
 
+def test_pi_glm_runs_the_product_model_on_pis_harness() -> None:
+    """The whole point of this agent is that only the harness differs from the
+    steerable leg. A model or harbor drift makes the run unreadable."""
+    suite = load_suite()
+    pi_glm = suite.agents["pi-glm"]
+    assert pi_glm.skipped is False
+    assert pi_glm.harbor == "pi"
+    assert pi_glm.model == "openrouter/z-ai/glm-5.3-flash"
+    assert pi_glm.env_any == ("OPENROUTER_API_KEY",)
+    assert pi_glm.accepts_harness is False
+    assert suite.agents[PRODUCT_AGENT].model.split("/", 1)[1] == pi_glm.model.split("/", 1)[1]
+
+
+def test_pi_glm_declares_the_wire_protocol_of_the_gateway() -> None:
+    """Harbor's Pi agent raises unless `model_api` names the protocol spoken by
+    OPENROUTER_BASE_URL, so a missing kwarg fails every trial at setup."""
+    suite = load_suite()
+    assert dict(suite.agents["pi-glm"].kwargs)["model_api"] == "openai-completions"
+
+
+def test_pi_baseline_carries_no_kwargs() -> None:
+    """`model_api` without a configured base URL is a hard error in Harbor's Pi
+    agent, so the Claude leg must not inherit pi-glm's kwargs."""
+    suite = load_suite()
+    assert suite.agents["pi"].kwargs == ()
+
+
+def test_pi_glm_argv_passes_the_gateway_protocol_to_harbor() -> None:
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="pi-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    assert "--agent" in argv and argv[argv.index("--agent") + 1] == "pi"
+    assert argv[argv.index("--model") + 1] == "openrouter/z-ai/glm-5.3-flash"
+    assert "--agent-kwarg" in argv
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "model_api=openai-completions" in kwargs
+
+
 def test_live_agents_include_product() -> None:
     suite = load_suite()
-    assert LIVE_AGENTS == ("claude-code", "codex", "pi", PRODUCT_AGENT)
+    assert LIVE_AGENTS == ("claude-code", "codex", "pi", "pi-glm", PRODUCT_AGENT)
     for name in ("claude-code", "codex", "pi"):
         spec = suite.agents[name]
         assert spec.skipped is False

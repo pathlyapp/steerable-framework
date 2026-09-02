@@ -341,6 +341,30 @@ agents:
     env_any:
       - ANTHROPIC_API_KEY
     skipped: false
+  # Same model, same gateway, different harness: the only way to tell how much
+  # of the product score is GLM's ceiling and how much is our harness. `pi`
+  # above stays on Claude so its baseline is not lost.
+  #
+  # Harbor's Pi agent writes a `models.json` naming a custom provider at
+  # OPENROUTER_BASE_URL when that variable is set, and it requires `model_api`
+  # to say which wire protocol that endpoint speaks. That path works whether
+  # the gateway is openrouter.ai or the 万界 proxy, and it pins pi to the exact
+  # endpoint the product agent uses.
+  #
+  # Reasoning-effort parity with the steerable leg (`reasoning_effort=max`) is
+  # NOT established: a models.json model carries no OpenRouter `compat` block,
+  # so `thinking` may not reach the request at all. Read a pi-glm score as
+  # "pi at whatever effort the gateway defaults to" until token counts confirm
+  # otherwise.
+  pi-glm:
+    harbor: pi
+    model: openrouter/z-ai/glm-5.3-flash
+    kwargs:
+      model_api: openai-completions
+      thinking: xhigh
+    env_any:
+      - OPENROUTER_API_KEY
+    skipped: false
   dsh:
     harbor: null
     model: null
