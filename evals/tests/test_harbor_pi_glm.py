@@ -138,6 +138,84 @@ def test_model_id_survives_the_patch(model: dict[str, Any]) -> None:
     assert model["id"] == _MODEL_ID
 
 
+#: Fields ``ModelDefinitionSchema`` accepts (pi 0.84.4,
+#: ``packages/coding-agent/src/core/model-config.ts``). Pi validates
+#: models.json with TypeBox objects that permit unknown keys, so a
+#: misspelled field is dropped in silence rather than rejected — the trial
+#: then runs on a default nobody chose and the score looks like a harness
+#: result. pi is not a dependency here, so this list is the guard.
+_MODEL_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "api",
+        "baseUrl",
+        "reasoning",
+        "thinkingLevelMap",
+        "input",
+        "cost",
+        "contextWindow",
+        "maxTokens",
+        "samplingParams",
+        "headers",
+        "compat",
+    }
+)
+#: Same, for ``OpenAICompletionsCompatSchema``, limited to the keys this
+#: agent sets.
+_COMPAT_FIELDS = frozenset(
+    {
+        "thinkingFormat",
+        "supportsReasoningEffort",
+        "maxTokensField",
+        "openRouterRouting",
+    }
+)
+#: ``ThinkingLevelMapSchema`` keys.
+_THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max"})
+
+
+def test_every_field_is_one_pi_reads(model: dict[str, Any]) -> None:
+    assert set(model) <= _MODEL_FIELDS
+    assert set(model["compat"]) <= _COMPAT_FIELDS
+    assert set(model["thinkingLevelMap"]) <= _THINKING_LEVELS
+    assert set(model["compat"]["openRouterRouting"]) <= {
+        "allow_fallbacks",
+        "require_parameters",
+        "data_collection",
+        "zdr",
+        "enforce_distillable_text",
+        "order",
+        "only",
+        "ignore",
+        "quantizations",
+        "sort",
+        "max_price",
+        "preferred_min_throughput",
+        "preferred_max_latency",
+    }
+
+
+def test_enumerated_values_are_ones_pi_accepts(model: dict[str, Any]) -> None:
+    """`thinkingFormat` and `maxTokensField` are literal unions; an
+    unlisted string fails validation and takes the whole file with it."""
+    assert model["compat"]["thinkingFormat"] in {
+        "openai",
+        "openrouter",
+        "together",
+        "baseten",
+        "deepseek",
+        "zai",
+        "qwen",
+        "chat-template",
+        "qwen-chat-template",
+        "string-thinking",
+        "ant-ling",
+    }
+    assert model["compat"]["maxTokensField"] in {"max_tokens", "max_completion_tokens"}
+    assert set(model["thinkingLevelMap"].values()) <= {"low", "high", "max"}
+
+
 def test_no_endpoint_means_no_generated_model() -> None:
     """Without a configured base URL there is no custom provider entry to
     correct, and Pi falls back to its own catalog."""
