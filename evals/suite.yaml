@@ -338,6 +338,11 @@ agents:
   pi:
     harbor: pi
     model: anthropic/claude-sonnet-4-5
+    # Harbor installs `@earendil-works/pi-coding-agent@latest` unless a version
+    # is pinned, so an upstream release silently moves the baseline and no
+    # artifact afterwards can separate "our harness changed" from "pi changed".
+    kwargs:
+      version: 0.84.4
     env_any:
       - ANTHROPIC_API_KEY
     skipped: false
@@ -360,6 +365,7 @@ agents:
     harbor: pi
     model: openrouter/z-ai/glm-5.3-flash
     kwargs:
+      version: 0.84.4
       model_api: openai-completions
       thinking: xhigh
     env_any:

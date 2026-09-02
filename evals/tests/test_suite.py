@@ -194,11 +194,20 @@ def test_pi_glm_declares_the_wire_protocol_of_the_gateway() -> None:
     assert dict(suite.agents["pi-glm"].kwargs)["model_api"] == "openai-completions"
 
 
-def test_pi_baseline_carries_no_kwargs() -> None:
+def test_pi_baseline_carries_no_gateway_kwargs() -> None:
     """`model_api` without a configured base URL is a hard error in Harbor's Pi
-    agent, so the Claude leg must not inherit pi-glm's kwargs."""
+    agent, so the Claude leg must not inherit pi-glm's endpoint kwargs."""
     suite = load_suite()
-    assert suite.agents["pi"].kwargs == ()
+    assert "model_api" not in dict(suite.agents["pi"].kwargs)
+
+
+def test_both_pi_legs_pin_the_npm_version() -> None:
+    """An unpinned install resolves `@latest`, so an upstream pi release moves
+    the baseline between runs and no artifact can attribute the change."""
+    suite = load_suite()
+    for name in ("pi", "pi-glm"):
+        pinned = dict(suite.agents[name].kwargs).get("version")
+        assert pinned == "0.84.4", f"agents.{name} does not pin the pi version"
 
 
 def test_pi_glm_argv_passes_the_gateway_protocol_to_harbor() -> None:
