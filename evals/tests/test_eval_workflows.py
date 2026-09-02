@@ -44,6 +44,13 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     assert "**/agent/headless.log" in workflow
 
 
+def test_weekly_uploads_the_pi_transcript() -> None:
+    """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
+    token counts alone, and the first pi-glm run had to infer a runaway first
+    turn from `n_output_tokens` sitting exactly on the cap."""
+    assert "**/agent/pi.txt" in WEEKLY
+
+
 def test_weekly_gives_the_gateway_only_to_the_pi_glm_leg() -> None:
     """An unconditional OPENROUTER_BASE_URL would point the Claude `pi` leg at
     the product gateway, which answers with an unknown-model error rather than

@@ -91,6 +91,9 @@ jobs:
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/**/result.json
             evals/jobs/${{ matrix.agent }}/**/agent/headless.log
+            # Harbor's Pi agent logs to agent/pi.txt, so a headless.log-only
+            # glob leaves the pi legs with token counts and no transcript.
+            evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
           if-no-files-found: ignore
