@@ -76,6 +76,10 @@ each tier is independently adoptable.
   product concerns. If you want batteries-included orchestration, LangGraph
   or the Agents SDK will get you there faster.
 
+## Terminal-Bench 2.1
+
+The score of record is **Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog (four-run mean; see [Evals](evals.md)). That is a Flash-cost model in the same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%) on the [public 2.1 board](https://snorkel.ai/leaderboard/terminal-bench-2-1/). Z.AI's own Claude Code run of GLM-5.3-Flash is 84.3% under a 6-hour timeout — we are behind that vendor protocol, and still in the usable band.
+
 ## Choosing
 
 **Reach for Steerable when** you need a typed cross-language contract

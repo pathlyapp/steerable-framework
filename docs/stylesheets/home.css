@@ -81,6 +81,76 @@
   display: block;
 }
 
+/* ---- TB 2.1 score strip ------------------------------------------------ */
+
+.sf-score-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  max-width: 46rem;
+  margin: 0 auto 1.8rem;
+}
+
+.sf-score {
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.55rem;
+  padding: 0.85rem 0.7rem 0.75rem;
+  text-align: center;
+  background: var(--md-default-bg-color);
+}
+
+.sf-score--ours {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 0.35rem 1rem rgba(92, 107, 192, 0.12);
+}
+
+.sf-score-value {
+  display: block;
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--md-default-fg-color);
+}
+
+.sf-score--ours .sf-score-value {
+  background: linear-gradient(120deg, #5c6bc0 0%, #7e57c2 55%, #26a69a 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.sf-score-label {
+  display: block;
+  margin-top: 0.28rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--md-default-fg-color);
+}
+
+.sf-score-meta {
+  display: block;
+  margin-top: 0.12rem;
+  font-size: 0.68rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.sf-bench {
+  max-width: 48rem;
+  margin: 0 auto 1.4rem;
+  font-size: 0.82rem;
+}
+
+.sf-bench th,
+.sf-bench td {
+  padding: 0.38rem 0.55rem;
+}
+
+.sf-bench tbody tr:first-child td {
+  font-weight: 600;
+  background: rgba(92, 107, 192, 0.08);
+}
+
 /* ---- feature grid ------------------------------------------------------- */
 
 .sf-grid {
@@ -160,5 +230,9 @@
 @media screen and (max-width: 44.9375em) {
   .sf-hero h1 {
     font-size: 1.9rem;
+  }
+
+  .sf-score-strip {
+    grid-template-columns: 1fr;
   }
 }

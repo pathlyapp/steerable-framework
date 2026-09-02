@@ -34,6 +34,24 @@ Pick any subset, skip the rest — every layer ships on its own.
 
 </div>
 
+<div class="sf-score-strip" markdown>
+<div class="sf-score sf-score--ours" markdown>
+<span class="sf-score-value">80%</span>
+<span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
+<span class="sf-score-meta">Terminal-Bench 2.1 · 4-run mean</span>
+</div>
+<div class="sf-score" markdown>
+<span class="sf-score-value">78.9%</span>
+<span class="sf-score-label">Claude Code + Opus 4.8</span>
+<span class="sf-score-meta">vendor-submitted · tbench.ai</span>
+</div>
+<div class="sf-score" markdown>
+<span class="sf-score-value">83.1%</span>
+<span class="sf-score-label">Codex CLI + GPT-5.5</span>
+<span class="sf-score-meta">vendor-submitted · tbench.ai</span>
+</div>
+</div>
+
 <h2 class="sf-section">Why Steerable</h2>
 
 <p class="sf-lede" markdown>
@@ -67,6 +85,32 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 5 components + 3 hooks + Tailwind preset. Every state covered by Storybook, axe a11y, and visual-regression baselines locked in CI.
 </div>
 </div>
+
+<h2 class="sf-section">Terminal-Bench 2.1</h2>
+
+<p class="sf-lede" markdown>
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
+</p>
+
+<div class="sf-bench" markdown>
+
+| Agent | Model | TB 2.1 | Source |
+| ----- | ----- | ------ | ------ |
+| **Steerable** | **GLM-5.3-Flash** | **80%** | this repo, 4× catalog-89 |
+| Claude Code | Claude 5 Fable | 83.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Codex CLI | GPT-5.5 | 83.1% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Terminus 2 | Claude 5 Fable | 80.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | GLM-5.3-Flash | 84.3% | [Z.AI](https://z.ai/blog/glm-5.3-flash), Claude Code 2.1.207, 6h |
+
+</div>
+
+<p class="sf-lede" markdown>
+Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout). Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
+</p>
 
 <h2 class="sf-section">Quickstart — pick your path</h2>
 
@@ -199,6 +243,7 @@ The framework was extracted from this codebase and is dogfooded back into it on 
 
 <div class="sf-links" markdown>
 [Full walkthrough](getting-started.md){ .md-button }
+[Evals](evals.md){ .md-button }
 [Wire spec](spec/overview.md){ .md-button }
 [Architecture](spec/architecture.md){ .md-button }
 [Events](spec/events.md){ .md-button }

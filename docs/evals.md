@@ -4,6 +4,36 @@ Public **capability** evals for coding agents, not Steerable unit tests and not 
 
 The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-bench-2-1) through [Harbor](https://www.harborframework.com/docs/run-jobs/run-evals). Task ids, the Harbor dataset name, and the git SHA used to enumerate the catalog live in `evals/suite.yaml`. Scoring is the tasks' hidden pytest; there is no LLM judge.
 
+## Score of record
+
+**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution).
+
+| Sample | GitHub Actions | Mean |
+| ------ | -------------- | ---- |
+| 1 | [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) | 0.8202 (73/89) |
+| 2 | [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570) | 0.7865 (70/89) |
+| 3 | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202 (73/89) |
+| 4 | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753 (69/89) |
+
+cheap-12 (12 ids) is a weekly smoke. Catalog 89 is the number we quote.
+
+### Public agent + model pairs
+
+Vendor-submitted Terminal-Bench 2.1 scores from the [Snorkel / tbench.ai board](https://snorkel.ai/leaderboard/terminal-bench-2-1/) (archived 2.1 leaderboard). These are different harnesses, timeouts, and models — they show which band 80% sits in, not a controlled A/B.
+
+| Agent | Model | TB 2.1 |
+| ----- | ----- | ------ |
+| **Steerable** | **GLM-5.3-Flash** | **80%** |
+| Claude Code | Claude 5 Fable | 83.8% ±1.2 |
+| Codex CLI | GPT-5.5 | 83.1% ±1.1 |
+| Terminus 2 | Claude 5 Fable | 80.4% ±1.2 |
+| Claude Code | Claude Opus 4.8 | 78.9% ±1.3 |
+| Codex CLI | GPT-5.6 Terra | 78.4% ±1.3 |
+| Claude Code | Claude Sonnet 5 | 74.6% ±1.6 |
+| Gemini CLI | Gemini 3.1 Pro | 65.8% ±1.7 |
+
+Same model, different harness: [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout). That protocol is not ours (we wrap at 170 minutes). The ~4-point gap is the honest harness difference, not a claim that the two numbers are interchangeable.
+
 ## What runs
 
 | Layer | Trigger | Agents | Tasks |

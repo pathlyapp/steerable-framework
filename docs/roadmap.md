@@ -499,7 +499,7 @@ cache-friendly from day one.
    reviewed like a snapshot update. The division of labor: the crosslang
    fixtures gate the *reducer* (including hand-authored and fuzzed
    robustness cases); the golden gate pins the trajectory the *loop
-   itself* emits. Public capability evals (Terminal-Bench 2.1 cheap-12 via
+   itself* emits. Public capability evals (Terminal-Bench 2.1 catalog-89 via
    Harbor `claude-code` / `codex` / `pi`) live in `evals/` and are a
    scheduled job, not a required merge check.
 
@@ -604,7 +604,7 @@ part of this work rather than as part of a freeze.
 
 ## Related
 
-- [Evals](evals.md) — Terminal-Bench 2.1 cheap-12 via Harbor
+- [Evals](evals.md) — Terminal-Bench 2.1 catalog-89 score of record (80% on GLM-5.3-Flash)
 - [Framework Comparison](comparison.md) — where Steerable sits against the field
 - [CoreLoop spec](spec/core-loop.md) — the loop and its event taxonomy
 - [Safety spec](spec/safety.md) — the two-layer model this page critiques

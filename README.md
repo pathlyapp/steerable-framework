@@ -24,6 +24,8 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 
 [Docs](https://steerableframework.com/) · [Storybook](https://steerableframework.com/storybook/) · [Live demo](https://steerableframework.com/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable-framework/releases) · [Discussions](https://github.com/pathlyapp/steerable-framework/discussions)
 
+> **80% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, four-run mean. [Numbers and protocol](#terminal-bench-21).
+
 > **Want to see it running before reading anything?**
 > `git clone … && pnpm install && pnpm shell:dev` (or open the [hosted live demo](https://steerableframework.com/demo/)).
 > Zero external services required — the default mock transport replays the 14 rich chat cards out of the box.
@@ -35,6 +37,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 ## Table of contents
 
 - [Why Steerable](#why-steerable)
+- [Terminal-Bench 2.1](#terminal-bench-21)
 - [Quickstart — pick your path (5 minutes)](#quickstart--pick-your-path-5-minutes)
 - [Architecture](#architecture)
 - [What's in the box](#whats-in-the-box)
@@ -63,6 +66,26 @@ Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, q
 | **Chat UI that doesn't look like 2003** | `@steerable/agent-ui`: 5 headless React components + 3 hooks + Tailwind preset. Every component has Storybook + a11y (axe) + visual-regression baselines locked in CI. |
 
 Every layer is independently published. Use just the protocol types, just the UI, just the sidecar — there is no monolith to swallow.
+
+---
+
+## Terminal-Bench 2.1
+
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
+
+| Agent | Model | TB 2.1 | Source |
+| ----- | ----- | ------ | ------ |
+| **Steerable** | **GLM-5.3-Flash** | **80%** | this repo, 4× catalog-89 |
+| Claude Code | Claude 5 Fable | 83.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Codex CLI | GPT-5.5 | 83.1% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Terminus 2 | Claude 5 Fable | 80.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Claude Code | GLM-5.3-Flash | 84.3% | [Z.AI](https://z.ai/blog/glm-5.3-flash), Claude Code 2.1.207, 6h |
+
+Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout). Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
 
 ---
 
@@ -281,7 +304,7 @@ Full open-follow-up list: [`TODO.md`](./TODO.md). Pre-1.0 contract: minor (`0.X`
 ## Documentation
 
 - **[Getting Started](./docs/getting-started.md)** — full walkthrough, ~5 minutes
-- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 cheap-12 via Harbor (`claude-code` / `codex` / `pi`)
+- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 catalog-89 score of record (Steerable + GLM-5.3-Flash **80%**) plus Harbor cheap-12 (`claude-code` / `codex` / `pi`)
 - **[Specs](./docs/spec/)** — wire-level reference for every event/envelope shape
 - **[Examples](./examples)** — 3 runnable end-to-end smoke tests:
   - [`py-minimal`](./examples/py-minimal) — protocol + harness + tool dispatch
