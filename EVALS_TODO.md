@@ -536,6 +536,75 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 **靶子改了。** 之前定的"提分空间在 20 道翻面题"要修正：翻面题是配对 A/B 的**测试集**，不是靶子。**最确定的靶子是上面那 3 道 harness 损耗题** —— 它们不是概率问题，是同一个模型在我们这儿做不成、在 pi 那儿做成了，机制可查、可单题验收，不需要靠均值分辨。
 
+### `pi-glm` 复现跑：两组样本不重叠，差 4–8 道
+
+为把 `pi-glm` 从 1 个样本补到 3 个，在 `ci/evals-pi-glm` 上又派了两次全量（[33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301)、[33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232)，串行）。Run A 出到 84/89 时 **60/84**，剩 5 道无论怎么走最终都落在 60–65 之间。
+
+| | 通过题数（满分 89） |
+| --- | --- |
+| `steerable` | 69, 70, 73, 73 |
+| `pi-glm` | 67, ≤65（run A） |
+
+**两组不重叠。** 这比比均值稳健——不依赖标准差估计，也不依赖"约 4.3 道"那个外推（偏乐观了，实际 **4–8 道**）。
+
+**但这不等于"pi 的 harness 更差"。** 只对齐了模型请求参数（`maxTokens`、`contextWindow`、`reasoning_effort`、路由、temperature），**没对齐超时预算、提示词、工具集**。这是两个 harness 在各自默认配置下的差，不是 harness 质量的差。均值也仍然不是本轮主产出——3 道 harness 损耗题才是。
+
+### 耗时与 token：两个 harness 的失败方式完全不同形状
+
+`result.json` 单题粒度一直带着 `agent_execution` 起止时间和 `agent_result.n_*_tokens`，之前只取了 reward，这两项白扔了。补统计的口径：每题取 reward 最高的那次 attempt，`secs` 取 `agent_execution` 而非 trial 全长（不含建环境和 verifier）。提取脚本 `/tmp/trial_stats.py`。
+
+| run | 绿题中位 | 红题中位 | 红题撞满 | agent 总时 |
+| --- | --- | --- | --- | --- |
+| `steerable` base 0.8202 | 25.4 min | 159.8 min | 8/16 = 50% | 84.8 h / 89 |
+| `steerable` r1 0.7865 | 35.0 min | 155.0 min | 8/19 = 42% | 103.0 h / 89 |
+| `steerable` r2 0.8202 | 28.5 min | 126.9 min | 4/16 = 25% | 82.0 h / 89 |
+| `steerable` r3 0.7753 | 19.3 min | 160.2 min | 8/20 = 40% | 85.4 h / 89 |
+| `pi-glm` runA（84 道） | 10.4 min | 32.1 min | 2/24 = 8% | 38.9 h / 84 |
+
+"撞满"= agent 执行 ≥165 min。`steerable` 四个样本的红题最长值都精确是 **170.0 min**，即我们自己的硬超时；`pi` 没有这套机制，跑到 Harbor 的 180.0 min。
+
+**两点，都不是均值能告出来的：**
+
+**一、`steerable` 的红题有 25–50% 是把时间预算烧光的，`pi` 只有 8%。** 每题平均耗时 `steerable` 0.92–1.16 h、`pi` 0.46 h，只用了我们一半。所以 `pi` 那 4–8 道的差距**不是超时导致的** —— 它是提前收工，不是跑不完。反过来说，我们输给 pi 的那 3 道也不能默认归因到超时，得逐题看（2.5.16）。
+
+**二、`pi` 的红题输出 token 中位数恰好是 65536，正好是对齐时设的 `maxTokens`。** 绿题中位 19114，红题是它的 3.4 倍。其中 5 道的签名尤其干净——输出 ≈65536 而**输入只有 1.5k–10k**，意味着**第一个请求就把整个输出上限烧光，trial 直接结束**，一次工具调用都没发生：
+
+| 题 | 输出 token | 输入 token |
+| --- | --- | --- |
+| `polyglot-rust-c` | 65,536 | 1,521 |
+| `regex-chess` | 65,536 | 1,890 |
+| `feal-linear-cryptanalysis` | 65,612 | 5,656 |
+| `dna-assembly` | 65,571 | 7,459 |
+| `torch-pipeline-parallelism` | 65,777 | 9,800 |
+
+这 5 道里 4 道正是"反方向 9 道"（我们赢 pi）中的成员。**所以那 9 道里至少有 4 道不是我们的 harness 强，而是 pi 撞了输出上限** —— 回归风险清单要相应缩小，别拿它们当我们的既有优势。
+
+另有 2 道走到 180 min 超时：`model-extraction-relu-logits`（输入 9.8 M）和 `gcode-to-text`（输入 **53.2 M**）。`gcode-to-text` 恰好是 3 道 harness 损耗题之一，pi 在它上面烧了 53 M 输入 token 才过——**pi 过这道是靠蛮力，不是靠某个我们缺的机制**，2.5.16 读轨迹时要按这个预期去核。
+
+`pytorch-model-recovery` 是 0.0 min / 0 token，即 trial 起来就错了，不该算作失败样本。
+
+**约束：`steerable` 的 artifact 里 89/89 道都没有 token 字段** —— `harbor_steerable` 从没填过 `agent_result.n_input_tokens` / `n_cache_tokens` / `n_output_tokens`。所以上面 token 一侧的结论**只对 pi 成立，跨 harness 比不了**。本文档此前"红题 3.3 min/次调用 vs 绿题 0.8"那类结论是从日志正文数出来的，不是这个字段。补齐见 2.5.18。
+
+### 两个迭代 split 都按两次 run 选的，四样本到手后一直没改
+
+`15c8d82`。这是"结论只写进文档、代码没跟上"的一次实例，和 2.5.5 的空操作同类。
+
+**`flaky`**（判据：结果是抛硬币的题，因为只有这些题 harness 改动才赢得到或输得掉）原有 25 道，与四样本实测的 20 道只重合 7 道：18 道实际不翻面（含 `sanitize-git-repo`、`dna-insert` 这些其实是稳定红或稳定绿的），13 道真翻面的不在名单里。**照旧名单跑 2.5.8 的配对 A/B，测的绝大部分是稳定题。**
+
+**`spiral-red`**（判据：0-for-N 的题，问"改动能不能让它过得了"，单次通过即算发现）原有 7 道，4 道已不成立：
+
+| 题 | 四样本 | 处置 |
+| --- | --- | --- |
+| `gpt2-codegolf` | 4/4 全过 | 删 |
+| `schemelike-metacircular-eval` | 4/4 全过 | 删 |
+| `dna-assembly` | 2/4 | 移入 `flaky` |
+| `circuit-fibsqrt` | 1/4 | 移入 `flaky` |
+| `extract-moves-from-video` / `regex-chess` / `winning-avg-corewars` | 0/4 | 留 |
+
+**留着前两道会直接白送两个假阳性** —— 判据是"单次通过即算发现"，而它们的基线从来就不是零。这条会污染 2.5.10 的验收。
+
+两个 split 的注释里现在都写了判据、每题的四样本通过数，以及"样本数增加时要重算、不要按单跑加题"。同步改了 workflow 的 `--shards`（20 / 3）和矩阵——`test_sharded_jobs_shard_over_their_whole_split` 卡着这个必须一致，否则尾部 id 静默不派发。删掉两道翻面题后 `flaky` 与 `spiral-red` 的重合也消失了，此前那条禁止重合的测试之所以过，是因为它比的是两份都过期的名单。
+
 - [x] **2.5.1** cuts A/B 完成
 - [x] **2.5.2** 切流默认关闭（保留 env 覆盖）
 - [x] **2.5.5** 命名输出检测补上检查清单措辞（6/6，假阳性 3）—— **实为空操作**，89 道题上检测结果零差异，见上节
@@ -550,8 +619,10 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 - [x] **2.5.14** 9 道稳定红已裂成 **harness 损耗 3 道**（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）+ **能力墙候选 6 道**，见上节。同时产出 9 道反向名单（我们赢 pi）作为回归风险清单
 - [ ] **2.5.16** 逐题读那 3 道 harness 损耗题的 pi 与 steerable 轨迹，定位差在哪。**单题可验收，不必靠均值** —— 这是当前最确定的靶子。注意 3 道都只有 pi 的 1 个样本，先确认 pi 那次不是侥幸（必要时单跑这 3 道 ×3）
 - [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
+- [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
+- [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
-- [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 定稿为上节那 20 道
+- [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
 
 ---
