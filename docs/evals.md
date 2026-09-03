@@ -15,6 +15,16 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 | 3 | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202 (73/89) |
 | 4 | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753 (69/89) |
 
+**Pi + GLM-5.3-Flash = 73%** across three catalog runs, mean **0.7336**, SD **0.0222**:
+
+| Sample | GitHub Actions | Mean |
+| ------ | -------------- | ---- |
+| 1 | [33593245247](https://github.com/pathlyapp/steerable-framework/actions/runs/33593245247) | 0.7528 (67/89) |
+| 2 | [33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301) | 0.7093 (61/86) |
+| 3 | [33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232) | 0.7386 (65/88) |
+
+Samples 2 and 3 exclude three and one tasks respectively because the 360-minute GitHub Actions job timeout cancelled their shards before those trials produced results. Missing infrastructure results are excluded from each denominator rather than scored as Pi failures.
+
 cheap-12 (12 ids) is a weekly smoke. Catalog 89 is the number we quote.
 
 ### Public agent + model pairs
@@ -30,9 +40,12 @@ Vendor-submitted Terminal-Bench 2.1 scores from the [Snorkel / tbench.ai board](
 | Claude Code | Claude Opus 4.8 | 78.9% ±1.3 |
 | Codex CLI | GPT-5.6 Terra | 78.4% ±1.3 |
 | Claude Code | Claude Sonnet 5 | 74.6% ±1.6 |
+| Pi | GLM-5.3-Flash | 73% |
 | Gemini CLI | Gemini 3.1 Pro | 65.8% ±1.7 |
 
 Same model, different harness: [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout). That protocol is not ours (we wrap at 170 minutes). The ~4-point gap is the honest harness difference, not a claim that the two numbers are interchangeable.
+
+The Pi result is our own Harbor run rather than a vendor-submitted leaderboard score. Its model request parameters match the Steerable leg, subject to the protocol differences documented below.
 
 ## What runs
 

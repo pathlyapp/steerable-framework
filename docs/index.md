@@ -103,13 +103,14 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 | Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
+| Pi | GLM-5.3-Flash | 73% | this repo, 3 catalog runs |
 | Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Claude Code | GLM-5.3-Flash | 84.3% | [Z.AI](https://z.ai/blog/glm-5.3-flash), Claude Code 2.1.207, 6h |
 
 </div>
 
 <p class="sf-lede" markdown>
-Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout). Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
+Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout); our same-model Pi result is 73% across three catalog runs. Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
 </p>
 
 <h2 class="sf-section">Quickstart — pick your path</h2>
