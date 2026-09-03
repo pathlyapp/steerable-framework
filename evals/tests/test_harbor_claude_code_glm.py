@@ -54,7 +54,12 @@ try:  # Real Harbor in CI exercises the actual parent implementation.
 except ImportError:
     _install_harbor_stub()
 
-from evals.harbor_claude_code_glm import ClaudeCodeGlmHarborAgent  # noqa: E402
+from harbor.agents.installed.claude_code import ClaudeCode  # noqa: E402
+
+from evals.harbor_claude_code_glm import (  # noqa: E402
+    ClaudeCodeGlmHarborAgent,
+    anthropic_api_root,
+)
 
 
 class _Leg(ClaudeCodeGlmHarborAgent):
@@ -88,3 +93,67 @@ def test_a_missing_base_url_fails_instead_of_reaching_anthropic() -> None:
     never pointed at the gateway."""
     with pytest.raises(ValueError, match="ANTHROPIC_BASE_URL"):
         _Leg(None)._resolved_model_name()
+
+
+def _auth_env(monkeypatch: pytest.MonkeyPatch, **parent_env: str) -> dict[str, str]:
+    """Run the override over exactly what the parent is pinned to contribute."""
+    monkeypatch.setattr(
+        ClaudeCode,
+        "_resolve_auth_env",
+        lambda self: dict(parent_env),
+        raising=False,
+    )
+    return _Leg(_GATEWAY)._resolve_auth_env()
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("https://openrouter.ai/api/v1", "https://openrouter.ai/api"),
+        ("https://openrouter.ai/api/v1/", "https://openrouter.ai/api"),
+        ("https://openrouter.ai/api", "https://openrouter.ai/api"),
+    ],
+)
+def test_the_cli_receives_the_api_root_it_appends_v1_messages_to(
+    configured: str, expected: str
+) -> None:
+    """The gateway URL the OpenAI-dialect legs share ends in `/v1`, and the
+    Claude CLI appends `/v1/messages` to whatever it is given, so forwarding
+    that URL verbatim requests `/api/v1/v1/messages` and draws a 404 that is
+    indistinguishable from the gateway lacking the Anthropic endpoint."""
+    assert anthropic_api_root(configured) == expected
+
+
+def test_the_gateway_key_moves_off_the_variable_that_selects_anthropic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-empty ANTHROPIC_API_KEY makes the CLI authenticate against
+    Anthropic even with the base URL pointed elsewhere, so the key has to
+    arrive as ANTHROPIC_AUTH_TOKEN and the key variable has to stay empty
+    rather than merely absent."""
+    env = _auth_env(
+        monkeypatch, ANTHROPIC_API_KEY="gateway-key", ANTHROPIC_BASE_URL=_GATEWAY
+    )
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "gateway-key"
+    assert env["ANTHROPIC_API_KEY"] == ""
+
+
+def test_model_discovery_is_enabled_so_the_cli_stops_rejecting_glm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this the CLI refuses any model id outside its built-in list
+    before dialing out, and reports it as a synthetic `model_not_found` turn
+    with `duration_api_ms: 0` on every trial."""
+    env = _auth_env(
+        monkeypatch, ANTHROPIC_API_KEY="gateway-key", ANTHROPIC_BASE_URL=_GATEWAY
+    )
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+
+
+def test_a_bedrock_style_env_without_a_base_url_is_left_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The parent omits ANTHROPIC_BASE_URL on the Bedrock path, where none of
+    the three OpenRouter conventions apply."""
+    parent_env = {"CLAUDE_CODE_USE_BEDROCK": "1"}
+    assert _auth_env(monkeypatch, **parent_env) == parent_env
