@@ -16,11 +16,13 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness, which bounds how much of the product score is the model's ceiling."
+        description: "Agent for the catalog split. The `-glm` legs run the same model and gateway on someone else's harness, which bounds how much of the product score is the model's ceiling."
         type: choice
         options:
           - steerable
           - pi-glm
+          - claude-code-glm
+          - codex-glm
         default: steerable
       arm_b_env:
         description: "flaky arm B overrides, `KEY=VALUE` per line. Arm A always runs the committed defaults."
@@ -49,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [steerable, claude-code, codex, pi, pi-glm]
+        agent: [steerable, claude-code, codex, pi, pi-glm, claude-code-glm, codex-glm]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -66,14 +68,24 @@ jobs:
           # it to api.openai.com.
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
-          # Baseline agents: official vendor keys, skipped when unset.
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Baseline agents: official vendor keys, skipped when unset. Each
+          # `-glm` leg takes the gateway pair in its own vendor's variables
+          # instead, because that is where its adapter looks. The condition is
+          # what keeps the two apart: an unconditional gateway key in
+          # ANTHROPIC_API_KEY or OPENAI_API_KEY would send it to
+          # api.anthropic.com or api.openai.com on the baseline legs.
+          ANTHROPIC_API_KEY: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ matrix.agent == 'codex-glm' && secrets.STEERABLE_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ matrix.agent == 'codex-glm' && secrets.STEERABLE_BASE_URL || '' }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          # Claude Code reads its output ceiling only from the environment, so
+          # this is the one place the 65536 cap the other legs carry can be
+          # matched. Codex exposes no equivalent key at all.
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ matrix.agent == 'claude-code-glm' && '65536' || '' }}
           # pi-glm runs pi against the product gateway so the harness is the
-          # only difference from the steerable leg. Same reason the gateway is
-          # kept out of OPENAI_*: only the leg that should reach it gets it,
-          # and `pi` on Claude must not pick up an OpenRouter endpoint.
+          # only difference from the steerable leg. Same conditional reason as
+          # above: `pi` on Claude must not pick up an OpenRouter endpoint.
           OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
           OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
@@ -101,9 +113,12 @@ jobs:
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/**/result.json
             evals/jobs/${{ matrix.agent }}/**/agent/headless.log
-            # Harbor's Pi agent logs to agent/pi.txt, so a headless.log-only
-            # glob leaves the pi legs with token counts and no transcript.
+            # Each harness names its own transcript, so a headless.log-only
+            # glob leaves every non-steerable leg with token counts and no
+            # way to see what the model actually sent.
             evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/agent/codex.txt
+            evals/jobs/${{ matrix.agent }}/**/*claude-code.txt
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
           if-no-files-found: ignore
@@ -177,11 +192,17 @@ jobs:
           AGENT: ${{ github.event.inputs.agent }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
-          # Same gateway as the product leg, so pi differs from steerable only
-          # by harness. Withheld from the steerable dispatch for the reason the
-          # cheap-12 job withholds it: only the leg that needs it gets it.
+          # Same gateway as the product leg, so each `-glm` leg differs from
+          # steerable only by harness. Handed to one leg at a time for the
+          # reason the cheap-12 job does it: only the leg that needs the
+          # gateway gets it, in the variables its own adapter reads.
           OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
           OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
+          ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ github.event.inputs.agent == 'claude-code-glm' && '65536' || '' }}
+          OPENAI_API_KEY: ${{ github.event.inputs.agent == 'codex-glm' && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'codex-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
           uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
@@ -209,6 +230,8 @@ jobs:
             evals/jobs/${{ github.event.inputs.agent }}/*/*/result.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/headless.log
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/pi.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/codex.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/*claude-code.txt
             evals/jobs/${{ github.event.inputs.agent }}/*/*/verifier/test-stdout.txt
             evals/jobs/${{ github.event.inputs.agent }}/*/*/exception.txt
           if-no-files-found: ignore

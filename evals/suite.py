@@ -10,12 +10,28 @@ from typing import Mapping, Sequence
 import yaml
 
 SUITE_PATH = Path(__file__).resolve().parent / "suite.yaml"
-BASELINE_AGENTS = ("claude-code", "codex", "pi", "pi-glm")
+BASELINE_AGENTS = (
+    "claude-code",
+    "codex",
+    "pi",
+    "pi-glm",
+    "claude-code-glm",
+    "codex-glm",
+)
 PRODUCT_AGENT = "steerable"
 LIVE_AGENTS = (*BASELINE_AGENTS, PRODUCT_AGENT)
-REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "pi-glm", "dsh", PRODUCT_AGENT)
+REQUIRED_AGENTS = ("oracle", *BASELINE_AGENTS, "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PI_GLM_IMPORT_PATH = "evals.harbor_pi_glm:PiGlmHarborAgent"
+#: Legs that run the product model on someone else's harness. Each needs a
+#: subclass rather than the first-party name: the stock adapters report the
+#: baseline's own agent name, which would make a result.json unable to say
+#: which leg produced it.
+GLM_LEG_IMPORT_PATHS = {
+    "pi-glm": PI_GLM_IMPORT_PATH,
+    "claude-code-glm": "evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent",
+    "codex-glm": "evals.harbor_codex_glm:CodexGlmHarborAgent",
+}
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
 # QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
@@ -406,23 +422,38 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
     # Pi default the rest to 128000 context / 16384 output / no reasoning.
     # Catalog 33587641909 ran that way and returned 18/54 where steerable
     # averages 44/54, so the leg measured Pi's defaults, not Pi's harness.
-    if agents["pi-glm"].harbor != PI_GLM_IMPORT_PATH:
-        raise SuiteError(
-            f"{source}: agents.pi-glm.harbor must be {PI_GLM_IMPORT_PATH!r} — "
-            "stock 'pi' would run GLM at Pi's default request parameters"
-        )
-    # pi-glm answers "same model, different harness", so it has to hold the
-    # product agent's model. A drift here turns the comparison into two
+    # The other two stock adapters mislead more quietly: they report their
+    # baseline's agent name, leaving a result.json unable to say which of the
+    # two legs sharing that harness wrote it.
+    for leg, import_path in GLM_LEG_IMPORT_PATHS.items():
+        if agents[leg].harbor != import_path:
+            raise SuiteError(
+                f"{source}: agents.{leg}.harbor must be {import_path!r} — a "
+                "stock adapter would run GLM at its own default request "
+                "parameters and under the baseline's name"
+            )
+    # These legs answer "same model, different harness", so each has to hold
+    # the product agent's model. A drift here turns the comparison into two
     # variables at once and the run reads as a harness result either way.
-    pi_glm_model = agents["pi-glm"].model
     steerable_model = agents[PRODUCT_AGENT].model
-    if pi_glm_model is None or steerable_model is None:
-        raise SuiteError(f"{source}: agents.pi-glm and agents.{PRODUCT_AGENT} need a model")
-    if pi_glm_model.split("/", 1)[1:] != steerable_model.split("/", 1)[1:]:
+    if steerable_model is None or "/" not in steerable_model:
         raise SuiteError(
-            f"{source}: agents.pi-glm.model {pi_glm_model!r} must name the same model as "
-            f"agents.{PRODUCT_AGENT}.model {steerable_model!r} (the provider prefix may differ)"
+            f"{source}: agents.{PRODUCT_AGENT}.model must name a provider and a model"
         )
+    gateway_model = steerable_model.split("/", 1)[1]
+    for leg in GLM_LEG_IMPORT_PATHS:
+        leg_model = agents[leg].model
+        if leg_model is None:
+            raise SuiteError(f"{source}: agents.{leg} needs a model")
+        # The routing prefix is optional. Pi resolves its endpoint from
+        # OPENROUTER_*, so its leg carries `openrouter/`; the other two
+        # resolve credentials from their vendor's own provider and forward
+        # the rest of the string to the gateway untouched.
+        if leg_model != gateway_model and leg_model.split("/", 1)[-1] != gateway_model:
+            raise SuiteError(
+                f"{source}: agents.{leg}.model {leg_model!r} must name the same model as "
+                f"agents.{PRODUCT_AGENT}.model {steerable_model!r} (the provider prefix may differ)"
+            )
     steerable = agents[PRODUCT_AGENT]
     if steerable.skipped:
         raise SuiteError(f"{source}: agents.{PRODUCT_AGENT} must not be skipped")

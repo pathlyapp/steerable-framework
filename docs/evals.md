@@ -53,9 +53,9 @@ The Pi result is our own Harbor run rather than a vendor-submitted leaderboard s
 | ----- | ------- | ------ | ----- |
 | L0 | every PR (`uv run pytest`) | none | suite YAML invariants |
 | Oracle smoke | PR / push when `evals/**` changes, plus `workflow_dispatch` | Harbor `oracle` (Mean 1.0); product `steerable` canary when a key is set | `oracle-canary` (`fix-git`) |
-| L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi`, `pi-glm` | `cheap-12` (1 attempt) |
+| L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi`, `pi-glm`, `claude-code-glm`, `codex-glm` | `cheap-12` (1 attempt) |
 | L2 failed-prev | `workflow_dispatch` on `Evals weekly` with split `failed-prev` | `steerable` | remaining catalog-89 zeros after run 33369888461 (31 ids, 24 shards) |
-| L2 catalog | `workflow_dispatch` on `Evals weekly` with split `catalog` | `steerable` | full `catalog` (89 ids, 49 shards) |
+| L2 catalog | `workflow_dispatch` on `Evals weekly` with split `catalog` | `steerable`, `pi-glm`, `claude-code-glm`, `codex-glm` | full `catalog` (89 ids, 49 shards) |
 
 L2 is **not** a required merge check. A matrix cell whose API key secret is empty is skipped. The product cell needs `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (the same OpenAI-compatible gateway used locally). Baseline cells need official Anthropic / OpenAI keys. The workflow fails if every live agent was skipped. Weekly Harbor uses `--n-concurrent 2` (local suite default stays 1). Feishu is best-effort: a webhook failure does not fail the eval. Mean is appended to the GitHub job summary when `GITHUB_STEP_SUMMARY` is set.
 
@@ -70,6 +70,10 @@ Pi installs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@e
 `pi-glm` is the same Pi install on the product model and gateway. The weekly job hands `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell alone: an unconditional base URL would point the Claude `pi` cell at the product gateway.
 
 It runs through `evals.harbor_pi_glm:PiGlmHarborAgent` so the request matches the steerable leg — 1048576 context, 65536 output, `reasoning_effort: max`, temperature 1.0, Z.AI route pinned. Stock `harbor: pi` leaves Pi's own defaults in place (128000 / 16384 / no reasoning) and scored 18/54 against steerable's 44/54 average on the same tasks; `suite.py` rejects that configuration. See `evals/README.md`.
+
+`claude-code-glm` (`evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent`) and `codex-glm` (`evals.harbor_codex_glm:CodexGlmHarborAgent`) put the same model on two more harnesses, so a red task can be attributed to the model rather than to one other harness's limits. Each takes the gateway pair in the variables its own adapter reads — `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` and `OPENAI_BASE_URL` / `OPENAI_API_KEY` — and only on its own cell, because an unconditional gateway key in either would send our credential to Anthropic or OpenAI. `suite.py` requires the subclass for all three legs: the stock adapters report their baseline's agent name, leaving a `result.json` unable to say which of the two cells sharing that harness produced it.
+
+These two legs speak protocols the product agent does not. Claude Code sends Anthropic Messages requests to `/v1/messages` and Codex sends Responses API requests to `/v1/responses`, while `steerable` and `pi-glm` use chat completions, so a gateway that serves only chat completions fails both on the first request. Parity is partial by construction: effort is `max` on all four legs, but Codex accepts no output-token ceiling in `config.toml`, so the 65536 cap the others carry has no counterpart there.
 
 This aligns model request parameters, not the full evaluation protocol. Pi and Steerable retain their own prompts, tools, loop behavior, and timeout handling; Steerable has also been tuned through repeated Terminal-Bench runs while Pi uses its default harness behavior. The result compares those configured systems, not harness quality in isolation. The 65536 output cap is also consequential: at least five Pi failures consumed approximately the entire cap on their first request without making a tool call.
 
@@ -107,6 +111,8 @@ Wrapper flags map onto Harbor: `--dataset terminal-bench/terminal-bench-2-1`, `-
 | `steerable` | `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (OpenRouter / 万界; same pair as local glm) |
 | `claude-code`, `pi` | `ANTHROPIC_API_KEY` (official; optional, cell skips) |
 | `pi-glm` | reuses `STEERABLE_API_KEY` / `STEERABLE_BASE_URL`, forwarded as `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell only |
+| `claude-code-glm` | the same pair, forwarded as `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` to that cell only |
+| `codex-glm` | the same pair, forwarded as `OPENAI_API_KEY` / `OPENAI_BASE_URL` to that cell only |
 | `codex` | `OPENAI_API_KEY` or `CODEX_API_KEY` (official; optional, cell skips) |
 | `oracle` | none |
 | Feishu 结果通知 | `FEISHU_BOT_WEBHOOK`（自定义机器人 webhook，标题为「成功」或「失败」） |

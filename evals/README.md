@@ -14,6 +14,8 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `pi-glm` | `evals.harbor_pi_glm:PiGlmHarborAgent` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
+| `claude-code-glm` | `evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent` | `z-ai/glm-5.3-flash` | `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` |
+| `codex-glm` | `evals.harbor_codex_glm:CodexGlmHarborAgent` | `z-ai/glm-5.3-flash` | `OPENAI_BASE_URL` + `OPENAI_API_KEY` |
 | `dsh` | — | — | skipped (no Harbor adapter) |
 
 `steerable` is the product agent: headless CoreLoop with in-process `bash` / `read_file` / `write_file` jailed to the trial cwd. It is not Electron and not Harbor's first-party CLI agents.
@@ -27,6 +29,12 @@ Claude Code and Pi share a model so the cheap-12 job compares harnesses. Codex d
 It runs through `evals.harbor_pi_glm:PiGlmHarborAgent`, not stock `pi`, because Harbor writes that model entry as `{"id": …}` and lets Pi default everything else. Those defaults describe a model Pi ships metadata for, not GLM-5.3: 128000 context against GLM's 1048576, 16384 output against the steerable leg's 65536, and `reasoning` false, which makes Pi clamp `--thinking` to `off` and send no effort at all. The subclass restores the window, the output cap, `reasoning_effort: max`, temperature 1.0, and the Z.AI route pin, so the two legs issue the same request and differ only in harness.
 
 Catalog run 33587641909 is why: stock `pi` scored 18/54 where steerable averages 44/54 on the same tasks, and one `pi.txt` logged `"reasoning": 16314` against the 16384 cap on a trial that then made no tool call. A score from stock `pi` on GLM measures Pi's defaults, not Pi's harness.
+
+`claude-code-glm` and `codex-glm` extend that comparison to two more harnesses, so a task no `-glm` leg passes can be told apart from one only `steerable` passes. Both reach the gateway on a protocol `steerable` does not use — Claude Code speaks Anthropic Messages at `/v1/messages`, Codex speaks the Responses API at `/v1/responses` — so a gateway serving chat completions alone fails these legs on their first request rather than scoring them low. Neither model string carries a provider prefix: each adapter resolves credentials from its own vendor's default provider and forwards the remainder to the gateway verbatim.
+
+`ClaudeCodeGlmHarborAgent` adds only a name and a guard. Harbor's Claude Code already forwards the full model id and pins the sonnet, opus, haiku, and subagent aliases to it once `ANTHROPIC_BASE_URL` is set, and it writes no window or output metadata of its own; the guard refuses to run without that base URL, because the parent would otherwise cut the id to `glm-5.3-flash` and send it to `api.anthropic.com`. The output cap is matched through `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, which the CLI reads only from the environment.
+
+`CodexGlmHarborAgent` repairs more. Harbor writes `openai_base_url` into `config.toml` and nothing else, so `model_context_window` and `model_reasoning_effort` are set here to GLM's 1048576 and the steerable leg's `max`; a supplied `--agent-kwarg config=…` still wins over both. It also restores the model id on the assembled `codex exec` command, because `Codex.run` truncates it to the last path segment with no seam to override, and raises if that truncation ever stops happening rather than scoring an unknown model. Codex exposes no output-token ceiling in `config.toml`, so the 65536 cap the other three legs carry has no counterpart on this one.
 
 ## Commands
 

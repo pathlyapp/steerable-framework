@@ -44,10 +44,11 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     assert "**/agent/headless.log" in workflow
 
 
-def test_catalog_dispatch_offers_both_harnesses() -> None:
+def test_catalog_dispatch_offers_every_same_model_harness() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
-    the same-model pi comparison has to be dispatchable there."""
-    assert "- pi-glm" in WEEKLY
+    every same-model comparison has to be dispatchable there."""
+    for leg in ("pi-glm", "claude-code-glm", "codex-glm"):
+        assert f"- {leg}" in WEEKLY, f"catalog cannot be dispatched for {leg}"
     assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
 
 
@@ -65,24 +66,52 @@ def test_catalog_concurrency_separates_the_agents() -> None:
     )
 
 
-def test_weekly_uploads_the_pi_transcript() -> None:
-    """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
+def test_weekly_uploads_every_harness_transcript() -> None:
+    """Each harness names its own transcript. Without them a failure arrives as
     token counts alone, and the first pi-glm run had to infer a runaway first
     turn from `n_output_tokens` sitting exactly on the cap."""
-    assert "**/agent/pi.txt" in WEEKLY
+    for transcript in ("**/agent/pi.txt", "**/agent/codex.txt", "**/*claude-code.txt"):
+        assert transcript in WEEKLY, f"weekly does not upload {transcript}"
 
 
-def test_weekly_gives_the_gateway_only_to_the_pi_glm_leg() -> None:
-    """An unconditional OPENROUTER_BASE_URL would point the Claude `pi` leg at
-    the product gateway, which answers with an unknown-model error rather than
-    failing loudly, and it would publish the gateway URL to every baseline."""
+def test_weekly_gives_the_gateway_only_to_the_leg_that_needs_it() -> None:
+    """An unconditional base URL would point a baseline leg at the product
+    gateway, which answers with an unknown-model error rather than failing
+    loudly, and it would publish the gateway URL to every baseline. Worse for
+    the vendor keys: an unconditional gateway key in ANTHROPIC_API_KEY or
+    OPENAI_API_KEY sends our credential to Anthropic or OpenAI."""
+    for variable, leg, secret in (
+        ("OPENROUTER_API_KEY", "pi-glm", "STEERABLE_API_KEY"),
+        ("OPENROUTER_BASE_URL", "pi-glm", "STEERABLE_BASE_URL"),
+        ("ANTHROPIC_BASE_URL", "claude-code-glm", "STEERABLE_BASE_URL"),
+        ("OPENAI_BASE_URL", "codex-glm", "STEERABLE_BASE_URL"),
+    ):
+        assert (
+            f"{variable}: ${{{{ matrix.agent == '{leg}' "
+            f"&& secrets.{secret} || '' }}}}" in WEEKLY
+        ), f"{variable} is not conditional on the {leg} leg"
+
+
+def test_weekly_keeps_the_official_keys_on_the_baseline_legs() -> None:
+    """The gateway key replaces the vendor key only on its own leg. Dropping
+    the fallback would silently retire the claude-code and codex baselines the
+    moment either official secret is configured."""
     assert (
-        "OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' "
-        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+        "ANTHROPIC_API_KEY: ${{ matrix.agent == 'claude-code-glm' "
+        "&& secrets.STEERABLE_API_KEY || secrets.ANTHROPIC_API_KEY }}" in WEEKLY
     )
     assert (
-        "OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' "
-        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+        "OPENAI_API_KEY: ${{ matrix.agent == 'codex-glm' "
+        "&& secrets.STEERABLE_API_KEY || secrets.OPENAI_API_KEY }}" in WEEKLY
+    )
+
+
+def test_claude_code_glm_gets_the_output_cap_the_other_legs_carry() -> None:
+    """Claude Code reads its ceiling only from the environment, so this is the
+    one place the 65536 cap steerable and pi-glm both send can be matched."""
+    assert (
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS: ${{ matrix.agent == 'claude-code-glm' "
+        "&& '65536' || '' }}" in WEEKLY
     )
 
 

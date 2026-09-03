@@ -6,6 +6,7 @@ import pytest
 
 from evals.suite import (
     EXCLUSIVE_PACK_TASKS,
+    GLM_LEG_IMPORT_PATHS,
     LIVE_AGENTS,
     PINNED_HARBOR_VERSION,
     PRODUCT_AGENT,
@@ -226,9 +227,73 @@ def test_pi_glm_argv_passes_the_gateway_protocol_to_harbor() -> None:
     assert "model_api=openai-completions" in kwargs
 
 
+def test_the_glm_legs_run_the_product_model_on_someone_elses_harness() -> None:
+    """Each of these answers "same model, different harness", so a model or
+    harbor drift makes the run unreadable the way pi-glm's first one was."""
+    suite = load_suite()
+    gateway_model = suite.agents[PRODUCT_AGENT].model.split("/", 1)[1]
+    for name, base_url_env in (
+        ("claude-code-glm", "ANTHROPIC_BASE_URL"),
+        ("codex-glm", "OPENAI_BASE_URL"),
+    ):
+        spec = suite.agents[name]
+        assert spec.skipped is False
+        assert spec.harbor == GLM_LEG_IMPORT_PATHS[name]
+        # No provider prefix: both adapters forward whatever survives their
+        # own credential lookup, so the string has to be the gateway's id.
+        assert spec.model == gateway_model
+        # Readiness keys on the base URL rather than the key, because the
+        # base URL is what distinguishes the leg from its own baseline.
+        assert spec.env_any == (base_url_env,)
+        assert spec.accepts_harness is False
+
+
+def test_the_glm_legs_pin_their_cli_version() -> None:
+    """An unpinned install resolves `@latest`, so an upstream release moves
+    the baseline between runs and no artifact can attribute the change."""
+    suite = load_suite()
+    for name in ("claude-code-glm", "codex-glm"):
+        pinned = dict(suite.agents[name].kwargs).get("version")
+        assert pinned, f"agents.{name} does not pin its CLI version"
+
+
+def test_claude_code_glm_sends_the_same_effort_as_the_product_leg() -> None:
+    """Claude Code's `--effort` accepts `max`, which is what
+    STEERABLE_REASONING_EFFORT sends, so effort is not one of the
+    differences this leg measures. Unset, the CLI picks its own default."""
+    suite = load_suite()
+    assert dict(suite.agents["claude-code-glm"].kwargs)["reasoning_effort"] == "max"
+
+
+def test_the_baseline_legs_carry_no_gateway_kwargs() -> None:
+    """claude-code and codex exist to score their vendors' own models; a
+    kwarg leaking from a `-glm` leg would change what they measure."""
+    suite = load_suite()
+    for name in ("claude-code", "codex"):
+        assert "reasoning_effort" not in dict(suite.agents[name].kwargs)
+
+
+def test_glm_leg_argv_passes_the_full_gateway_slug() -> None:
+    """Harbor's Codex adapter truncates on the last `/`, so the argv has to
+    carry the vendor segment for `restore_model_slug` to put back."""
+    suite = load_suite()
+    for name in ("claude-code-glm", "codex-glm"):
+        argv = harbor_argv(suite, agent=name, tasks=("fix-git",), jobs_dir=Path("/tmp/jobs"))
+        assert argv[argv.index("--agent") + 1] == GLM_LEG_IMPORT_PATHS[name]
+        assert argv[argv.index("--model") + 1] == "z-ai/glm-5.3-flash"
+
+
 def test_live_agents_include_product() -> None:
     suite = load_suite()
-    assert LIVE_AGENTS == ("claude-code", "codex", "pi", "pi-glm", PRODUCT_AGENT)
+    assert LIVE_AGENTS == (
+        "claude-code",
+        "codex",
+        "pi",
+        "pi-glm",
+        "claude-code-glm",
+        "codex-glm",
+        PRODUCT_AGENT,
+    )
     for name in ("claude-code", "codex", "pi"):
         spec = suite.agents[name]
         assert spec.skipped is False
@@ -319,8 +384,12 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "- failed-prev" in weekly
     assert "github.event.inputs.split == 'cheap-12'" in weekly
     assert "github.event.inputs.split != 'catalog'" not in weekly
+    # The gateway key is only safe in OPENAI_API_KEY when OPENAI_BASE_URL
+    # travels with it, which is exactly the codex-glm leg. Unpaired, Codex
+    # sends our credential to api.openai.com.
     catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
-    assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
+    catalog_env = catalog_job.split("upload-artifact", 1)[0]
+    assert catalog_env.count("OPENAI_API_KEY") == catalog_env.count("OPENAI_BASE_URL")
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
     assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly

@@ -379,6 +379,44 @@ agents:
     env_any:
       - OPENROUTER_API_KEY
     skipped: false
+  # Two more same-model legs, so "how much of the product score is GLM's
+  # ceiling" stops resting on one other harness's answer. pi-glm alone left
+  # every task where pi lost ambiguous between a pi limitation and a model
+  # limitation; three legs let a task that only steerable passes be told
+  # apart from one no harness passes.
+  #
+  # Both talk to the gateway over a protocol steerable does not use: Claude
+  # Code speaks Anthropic Messages and Codex speaks the Responses API, while
+  # steerable and pi-glm speak chat completions. Whether the gateway serves
+  # those paths is a property of the gateway; a leg that cannot reach it
+  # fails on its first request rather than scoring low.
+  #
+  # Both models carry the gateway's own id with no provider prefix. Each
+  # adapter resolves credentials from its vendor's default provider, so a
+  # prefix would not route anything — it would only be forwarded verbatim to
+  # a gateway that has never heard of it.
+  claude-code-glm:
+    harbor: evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent
+    model: z-ai/glm-5.3-flash
+    kwargs:
+      # Same reason `pi` pins its version: Harbor installs @latest otherwise
+      # and an upstream release moves the baseline with no artifact able to
+      # separate "our harness changed" from "claude code changed".
+      version: 2.1.259
+      # `--effort max` is the same value STEERABLE_REASONING_EFFORT sends,
+      # so effort is not one of the differences being measured.
+      reasoning_effort: max
+    env_any:
+      - ANTHROPIC_BASE_URL
+    skipped: false
+  codex-glm:
+    harbor: evals.harbor_codex_glm:CodexGlmHarborAgent
+    model: z-ai/glm-5.3-flash
+    kwargs:
+      version: 0.153.0
+    env_any:
+      - OPENAI_BASE_URL
+    skipped: false
   dsh:
     harbor: null
     model: null
