@@ -245,57 +245,63 @@ splits:
     - train-fasttext
     - video-processing
     - winning-avg-corewars
-  # Harness-change A/B set, sized to the 50 jobs GHA has been observed to run
-  # at once so both arms finish in one wave. Two full catalog runs at
-  # different commits agreed on 50 greens and 22 reds and disagreed on these
-  # 17, so the flappers carry every point a harness change can win or lose;
-  # fixing them alone reaches 0.753. The 8 controls are stable greens whose
-  # trials took a stream cut, ordered by how many — feal-differential and
-  # write-compressor regressed from 21 and 14 tool calls to 2 and 1 with no
-  # control set to catch it. Run with n-attempts 3: at one attempt a
-  # flapper's outcome is a coin toss and the mean carries a ±0.19 band, wide
-  # enough to swallow any real effect.
+  # Harness-change A/B set: the tasks whose outcome is actually a coin toss,
+  # because those are the only ones a harness change can win or lose. Four
+  # full runs of the same commit (`27d521a`) agreed on 60 greens and 9 reds
+  # and disagreed on these 20. Comment records the pass count out of 4 so a
+  # later run can tell drift from noise.
+  #
+  # The previous list came from two runs and survived into a period when four
+  # were available: 18 of its 25 ids do not flip under four samples and 13
+  # that do were missing, so a paired A/B on it would have measured mostly
+  # stable tasks. Rebuild this list when the sample count grows; do not add
+  # ids from a single run.
+  #
+  # Run with n-attempts 3: at one attempt a flapper's outcome is a coin toss
+  # and the mean carries a ±0.19 band, wide enough to swallow any real effect.
   flaky:
+    # 1/4
+    - circuit-fibsqrt
+    - make-mips-interpreter
+    - path-tracing-reverse
+    - video-processing
+    # 2/4
+    - code-from-image
+    - dna-assembly
+    - extract-elf
+    - install-windows-3.11
+    - model-extraction-relu-logits
+    - mteb-retrieve
+    - protein-assembly
+    # 3/4
     - bn-fit-modify
     - build-pov-ray
-    - caffe-cifar-10
-    - custom-memory-heap-crash
-    - db-wal-recovery
-    - distribution-search
-    - dna-insert
-    - feal-differential-cryptanalysis
-    - headless-terminal
-    - make-mips-interpreter
-    - model-extraction-relu-logits
-    - qemu-startup
-    - rstan-to-pystan
-    - sam-cell-seg
-    - sanitize-git-repo
-    - torch-tensor-parallelism
-    - write-compressor
     - chess-best-move
-    - feal-linear-cryptanalysis
-    - large-scale-text-editing
-    - mailman
-    - openssl-selfsigned-cert
-    - regex-log
-    - reshard-c4-data
-    - sparql-university
-  # The seven stable reds that lose their trial to unbounded reasoning: both
-  # catalog runs produced >=50 KB of reasoning per tool call, a regime that
-  # passes at 0.071 against 0.889 below 3 KB. They are absent from `flaky`
-  # because that set is paired arms over tasks whose baseline is a coin toss,
-  # and these have no coin to toss — two runs, zero passes. So this set runs
-  # one arm and asks a different question: does the change make any of them
-  # passable at all? Against a 0-for-2 baseline a single pass is the finding,
-  # which needs no second arm and no paired test.
+    - largest-eigenval
+    - modernize-scientific-stack
+    - path-tracing
+    - sam-cell-seg
+    - torch-tensor-parallelism
+    - train-fasttext
+  # Stable reds that lose their trial to unbounded reasoning: catalog runs
+  # produced >=50 KB of reasoning per tool call, a regime that passes at
+  # 0.071 against 0.889 below 3 KB. They are absent from `flaky` because that
+  # set is paired arms over tasks whose baseline is a coin toss, and these
+  # have no coin to toss — four runs, zero passes. So this set runs one arm
+  # and asks a different question: does the change make any of them passable
+  # at all? Against a 0-for-4 baseline a single pass is the finding, which
+  # needs no second arm and no paired test.
+  #
+  # That design only holds while every id here really is 0-for-N. The list
+  # was picked on two runs and four dropped out once four were available:
+  # gpt2-codegolf and schemelike-metacircular-eval now pass 4/4, and
+  # dna-assembly and circuit-fibsqrt flip (2/4 and 1/4), so they belong to
+  # `flaky`. Leaving them would have handed the next run two guaranteed
+  # "passes" against a baseline that was never zero. Re-audit this list
+  # whenever the stable-red set is recomputed.
   spiral-red:
-    - circuit-fibsqrt
-    - dna-assembly
     - extract-moves-from-video
-    - gpt2-codegolf
     - regex-chess
-    - schemelike-metacircular-eval
     - winning-avg-corewars
   cheap-12:
     - fix-git
@@ -338,8 +344,40 @@ agents:
   pi:
     harbor: pi
     model: anthropic/claude-sonnet-4-5
+    # Harbor installs `@earendil-works/pi-coding-agent@latest` unless a version
+    # is pinned, so an upstream release silently moves the baseline and no
+    # artifact afterwards can separate "our harness changed" from "pi changed".
+    kwargs:
+      version: 0.84.4
     env_any:
       - ANTHROPIC_API_KEY
+    skipped: false
+  # Same model, same gateway, different harness: the only way to tell how much
+  # of the product score is GLM's ceiling and how much is our harness. `pi`
+  # above stays on Claude so its baseline is not lost.
+  #
+  # Harbor's Pi agent writes a `models.json` naming a custom provider at
+  # OPENROUTER_BASE_URL when that variable is set, and it requires `model_api`
+  # to say which wire protocol that endpoint speaks. That path works whether
+  # the gateway is openrouter.ai or the 万界 proxy, and it pins pi to the exact
+  # endpoint the product agent uses.
+  #
+  # Stock `harbor: pi` cannot be that leg. It writes `{"id": …}` and Pi fills
+  # 128000 context / 16384 output / reasoning false, none of which describe
+  # GLM-5.3. Catalog 33587641909 ran that way and scored 18/54 against
+  # steerable's 44/54 average on the same tasks, with `"reasoning": 16314`
+  # logged against the 16384 cap — a parameter mismatch wearing a harness
+  # verdict's clothes. `PiGlmHarborAgent` restores the product's own window,
+  # output cap, effort, and Z.AI route.
+  pi-glm:
+    harbor: evals.harbor_pi_glm:PiGlmHarborAgent
+    model: openrouter/z-ai/glm-5.3-flash
+    kwargs:
+      version: 0.84.4
+      model_api: openai-completions
+      thinking: xhigh
+    env_any:
+      - OPENROUTER_API_KEY
     skipped: false
   dsh:
     harbor: null

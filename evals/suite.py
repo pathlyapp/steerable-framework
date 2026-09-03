@@ -10,11 +10,12 @@ from typing import Mapping, Sequence
 import yaml
 
 SUITE_PATH = Path(__file__).resolve().parent / "suite.yaml"
-BASELINE_AGENTS = ("claude-code", "codex", "pi")
+BASELINE_AGENTS = ("claude-code", "codex", "pi", "pi-glm")
 PRODUCT_AGENT = "steerable"
 LIVE_AGENTS = (*BASELINE_AGENTS, PRODUCT_AGENT)
-REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "dsh", PRODUCT_AGENT)
+REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "pi-glm", "dsh", PRODUCT_AGENT)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
+PI_GLM_IMPORT_PATH = "evals.harbor_pi_glm:PiGlmHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
 # QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
@@ -401,6 +402,27 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
         raise SuiteError(f"{source}: agents.dsh must be skipped until a Harbor adapter exists")
     if agents["pi"].harbor != "pi":
         raise SuiteError(f"{source}: agents.pi.harbor must be 'pi' (Harbor first-party agent)")
+    # Stock `harbor: pi` writes a models.json model of `{"id": …}` and lets
+    # Pi default the rest to 128000 context / 16384 output / no reasoning.
+    # Catalog 33587641909 ran that way and returned 18/54 where steerable
+    # averages 44/54, so the leg measured Pi's defaults, not Pi's harness.
+    if agents["pi-glm"].harbor != PI_GLM_IMPORT_PATH:
+        raise SuiteError(
+            f"{source}: agents.pi-glm.harbor must be {PI_GLM_IMPORT_PATH!r} — "
+            "stock 'pi' would run GLM at Pi's default request parameters"
+        )
+    # pi-glm answers "same model, different harness", so it has to hold the
+    # product agent's model. A drift here turns the comparison into two
+    # variables at once and the run reads as a harness result either way.
+    pi_glm_model = agents["pi-glm"].model
+    steerable_model = agents[PRODUCT_AGENT].model
+    if pi_glm_model is None or steerable_model is None:
+        raise SuiteError(f"{source}: agents.pi-glm and agents.{PRODUCT_AGENT} need a model")
+    if pi_glm_model.split("/", 1)[1:] != steerable_model.split("/", 1)[1:]:
+        raise SuiteError(
+            f"{source}: agents.pi-glm.model {pi_glm_model!r} must name the same model as "
+            f"agents.{PRODUCT_AGENT}.model {steerable_model!r} (the provider prefix may differ)"
+        )
     steerable = agents[PRODUCT_AGENT]
     if steerable.skipped:
         raise SuiteError(f"{source}: agents.{PRODUCT_AGENT} must not be skipped")

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from evals.suite import load_suite
+from evals.suite import LIVE_AGENTS, load_suite
 
 ROOT = Path(__file__).resolve().parents[2]
 ARMS = (ROOT / ".github/workflows/evals-arms.yml").read_text(encoding="utf-8")
@@ -42,6 +42,55 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     """The W1.4.3.3 efficiency table reads STEERABLE_RUN_SUMMARY from each
     trial's agent/headless.log; without the glob the columns render n/a."""
     assert "**/agent/headless.log" in workflow
+
+
+def test_catalog_dispatch_offers_both_harnesses() -> None:
+    """The catalog split is the only run that produces a reportable Mean, so
+    the same-model pi comparison has to be dispatchable there."""
+    assert "- pi-glm" in WEEKLY
+    assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
+
+
+def test_catalog_feishu_label_names_the_agent() -> None:
+    """A catalog Mean posted without its agent reads as the product score."""
+    assert 'label="GHA catalog 89 × $EVAL_AGENT"' in WEEKLY
+
+
+def test_catalog_concurrency_separates_the_agents() -> None:
+    """The group holds one running plus one pending run. Sharing it across
+    agents makes a second dispatch cancel the first's pending run."""
+    assert (
+        "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
+        "${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+    )
+
+
+def test_weekly_uploads_the_pi_transcript() -> None:
+    """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
+    token counts alone, and the first pi-glm run had to infer a runaway first
+    turn from `n_output_tokens` sitting exactly on the cap."""
+    assert "**/agent/pi.txt" in WEEKLY
+
+
+def test_weekly_gives_the_gateway_only_to_the_pi_glm_leg() -> None:
+    """An unconditional OPENROUTER_BASE_URL would point the Claude `pi` leg at
+    the product gateway, which answers with an unknown-model error rather than
+    failing loudly, and it would publish the gateway URL to every baseline."""
+    assert (
+        "OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+    )
+    assert (
+        "OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' "
+        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+    )
+
+
+def test_weekly_cheap_12_matrix_runs_every_live_agent() -> None:
+    """A live agent absent from the matrix is never measured, and nothing else
+    in the repo notices."""
+    for agent in LIVE_AGENTS:
+        assert agent in WEEKLY, f"cheap-12 matrix does not run {agent}"
 
 
 def test_arms_matrix_references_registered_harnesses() -> None:

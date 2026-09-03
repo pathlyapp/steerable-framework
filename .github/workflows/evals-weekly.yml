@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke, flaky A/B (25 ids × 2 arms × 3 attempts), spiral-red unblock check (7 ids × 1 arm × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
+        description: cheap-12 smoke, flaky A/B (20 ids × 2 arms × 3 attempts), spiral-red unblock check (3 ids × 1 arm × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12
@@ -15,6 +15,13 @@ on:
           - failed-prev
           - catalog
         default: cheap-12
+      agent:
+        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness, which bounds how much of the product score is the model's ceiling."
+        type: choice
+        options:
+          - steerable
+          - pi-glm
+        default: steerable
       arm_b_env:
         description: "flaky arm B overrides, `KEY=VALUE` per line. Arm A always runs the committed defaults."
         type: string
@@ -27,7 +34,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: evals-${{ github.event.inputs.split || 'cheap-12' }}
+  # The agent is part of the group so a pi-glm catalog and a steerable catalog
+  # are separate queues: the group holds one running plus one pending run, and
+  # sharing it would make a second dispatch cancel the pending one.
+  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}
   cancel-in-progress: false
 
 jobs:
@@ -39,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [steerable, claude-code, codex, pi]
+        agent: [steerable, claude-code, codex, pi, pi-glm]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -60,6 +70,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+          # pi-glm runs pi against the product gateway so the harness is the
+          # only difference from the steerable leg. Same reason the gateway is
+          # kept out of OPENAI_*: only the leg that should reach it gets it,
+          # and `pi` on Claude must not pick up an OpenRouter endpoint.
+          OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
           uv run python -m evals.run --agent "${{ matrix.agent }}" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3
@@ -85,6 +101,9 @@ jobs:
             eval-status-${{ matrix.agent }}.txt
             evals/jobs/${{ matrix.agent }}/**/result.json
             evals/jobs/${{ matrix.agent }}/**/agent/headless.log
+            # Harbor's Pi agent logs to agent/pi.txt, so a headless.log-only
+            # glob leaves the pi legs with token counts and no transcript.
+            evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
           if-no-files-found: ignore
@@ -139,7 +158,7 @@ jobs:
           if-no-files-found: ignore
 
   catalog:
-    name: TB 2.1 catalog × steerable shard ${{ matrix.shard }}/49
+    name: TB 2.1 catalog × ${{ github.event.inputs.agent }} shard ${{ matrix.shard }}/49
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -155,36 +174,43 @@ jobs:
       - run: docker info
       - name: Harbor catalog shard
         env:
+          AGENT: ${{ github.event.inputs.agent }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+          # Same gateway as the product leg, so pi differs from steerable only
+          # by harness. Withheld from the steerable dispatch for the reason the
+          # cheap-12 job withholds it: only the leg that needs it gets it.
+          OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
-            echo skipped > eval-status-steerable.txt
+            echo skipped > "eval-status-$AGENT.txt"
             echo "shard ${{ matrix.shard }}: skipped" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [ "$code" -eq 0 ]; then
-            echo ran > eval-status-steerable.txt
+            echo ran > "eval-status-$AGENT.txt"
             echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo failed > eval-status-steerable.txt
+          echo failed > "eval-status-$AGENT.txt"
           echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
           exit "$code"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: eval-steerable-${{ matrix.shard }}
+          name: eval-${{ github.event.inputs.agent }}-${{ matrix.shard }}
           path: |
-            eval-status-steerable.txt
-            evals/jobs/steerable/*/result.json
-            evals/jobs/steerable/*/*/result.json
-            evals/jobs/steerable/*/*/agent/headless.log
-            evals/jobs/steerable/*/*/verifier/test-stdout.txt
-            evals/jobs/steerable/*/*/exception.txt
+            eval-status-${{ github.event.inputs.agent }}.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/result.json
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/result.json
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/headless.log
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/pi.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/verifier/test-stdout.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/exception.txt
           if-no-files-found: ignore
 
   # Pre-catalog gate for harness changes. One task per shard with its three
@@ -194,7 +220,7 @@ jobs:
   # only in the forwarded tunables, which keeps the task set, the model, and
   # the sampling identical between them.
   flaky:
-    name: TB 2.1 flaky arm ${{ matrix.arm }} shard ${{ matrix.shard }}/25
+    name: TB 2.1 flaky arm ${{ matrix.arm }} shard ${{ matrix.shard }}/20
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'flaky' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -202,7 +228,7 @@ jobs:
       fail-fast: false
       matrix:
         arm: [a, b]
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -243,7 +269,7 @@ jobs:
           STEERABLE_HARD_TIMEOUT_SEC: "5100"
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split flaky --shard "${{ matrix.shard }}" --shards 25 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent steerable --split flaky --shard "${{ matrix.shard }}" --shards 20 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt
@@ -276,14 +302,14 @@ jobs:
   # 50-job wave free for a `flaky` dispatch to run beside it. `arm_b_env`
   # applies unconditionally here: there is no arm A to keep on the defaults.
   spiral:
-    name: TB 2.1 spiral-red shard ${{ matrix.shard }}/7
+    name: TB 2.1 spiral-red shard ${{ matrix.shard }}/3
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'spiral-red' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6]
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -313,7 +339,7 @@ jobs:
           STEERABLE_HARD_TIMEOUT_SEC: "5100"
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split spiral-red --shard "${{ matrix.shard }}" --shards 7 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent steerable --split spiral-red --shard "${{ matrix.shard }}" --shards 3 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt
@@ -402,10 +428,13 @@ jobs:
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
+          EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
         run: |
           label="GHA cheap-12"
           if [ "$EVAL_SPLIT" = "catalog" ]; then
-            label="GHA catalog 89"
+            # Naming the agent keeps a pi-glm catalog Mean from being read as
+            # the product score.
+            label="GHA catalog 89 × $EVAL_AGENT"
           elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
             label="GHA failed-prev"
           elif [ "$EVAL_SPLIT" = "flaky" ]; then

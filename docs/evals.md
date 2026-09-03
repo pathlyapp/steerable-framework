@@ -40,7 +40,7 @@ Same model, different harness: [Z.AI](https://z.ai/blog/glm-5.3-flash) reports G
 | ----- | ------- | ------ | ----- |
 | L0 | every PR (`uv run pytest`) | none | suite YAML invariants |
 | Oracle smoke | PR / push when `evals/**` changes, plus `workflow_dispatch` | Harbor `oracle` (Mean 1.0); product `steerable` canary when a key is set | `oracle-canary` (`fix-git`) |
-| L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi` | `cheap-12` (1 attempt) |
+| L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi`, `pi-glm` | `cheap-12` (1 attempt) |
 | L2 failed-prev | `workflow_dispatch` on `Evals weekly` with split `failed-prev` | `steerable` | remaining catalog-89 zeros after run 33369888461 (31 ids, 24 shards) |
 | L2 catalog | `workflow_dispatch` on `Evals weekly` with split `catalog` | `steerable` | full `catalog` (89 ids, 49 shards) |
 
@@ -50,9 +50,13 @@ DeepSeek Harness is listed in `suite.yaml` as skipped: it has no Harbor `BaseIns
 
 ## Agents
 
-Harbor first-party names: `oracle`, `claude-code`, `codex`, `pi`. Product agent: `steerable` (`evals.harbor_steerable:SteerableHarborAgent`), headless CoreLoop with workspace bash/file tools.
+Harbor first-party names: `oracle`, `claude-code`, `codex`, `pi`. Product agent: `steerable` (`evals.harbor_steerable:SteerableHarborAgent`), headless CoreLoop with workspace bash/file tools. `pi-glm` (`evals.harbor_pi_glm:PiGlmHarborAgent`) subclasses Harbor's Pi to carry the product model's request parameters.
 
 Pi installs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in the trial container (`harbor run -a pi`). Claude Code and Pi default to `anthropic/claude-sonnet-4-5` so cheap-12 compares harness behavior. Codex uses `openai/gpt-5.5`. The product agent defaults to `openai/z-ai/glm-5.3-flash` (OpenRouter GLM-5.3-Flash). Override with `python -m evals.run --model …`.
+
+`pi-glm` is the same Pi install on the product model and gateway, which isolates the harness as the one difference from a `steerable` run and bounds how much of the product score is the model's ceiling. The weekly job hands `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell alone: an unconditional base URL would point the Claude `pi` cell at the product gateway.
+
+It runs through `evals.harbor_pi_glm:PiGlmHarborAgent` so the request matches the steerable leg — 1048576 context, 65536 output, `reasoning_effort: max`, temperature 1.0, Z.AI route pinned. Stock `harbor: pi` leaves Pi's own defaults in place (128000 / 16384 / no reasoning) and scored 18/54 against steerable's 44/54 average on the same tasks; `suite.py` rejects that configuration. See `evals/README.md`.
 
 ## cheap-12
 
@@ -87,6 +91,7 @@ Wrapper flags map onto Harbor: `--dataset terminal-bench/terminal-bench-2-1`, `-
 | ----- | --------------------- |
 | `steerable` | `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (OpenRouter / 万界; same pair as local glm) |
 | `claude-code`, `pi` | `ANTHROPIC_API_KEY` (official; optional, cell skips) |
+| `pi-glm` | reuses `STEERABLE_API_KEY` / `STEERABLE_BASE_URL`, forwarded as `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell only |
 | `codex` | `OPENAI_API_KEY` or `CODEX_API_KEY` (official; optional, cell skips) |
 | `oracle` | none |
 | Feishu 结果通知 | `FEISHU_BOT_WEBHOOK`（自定义机器人 webhook，标题为「成功」或「失败」） |
