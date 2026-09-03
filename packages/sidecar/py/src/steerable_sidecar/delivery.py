@@ -70,6 +70,27 @@ _BASH_MUTATE_FILE = re.compile(
     r"|Path\([^)]*\)\.write"
     r"|\.write_text\("
 )
+# Command words that move bytes around without running the work: viewing,
+# hashing, searching, and in-place text edits. ``_unverified_retry`` asks
+# whether anything has run since the output last changed, and an unknown
+# word counts as having run, so this list can only make that gate stand
+# down, never make it fire on a trial that did execute something. That
+# inversion is why a word list is usable here where a list of checks would
+# not be: the set of ways to look at a file is closed, the set of ways to
+# check one is not. ``sed`` belongs here for the same reason ``cat`` does —
+# a blind in-place edit leaves the output no more verified than before.
+_BASH_NO_RUN = frozenset(
+    {
+        "awk", "base64", "basename", "cat", "cd", "cksum", "cmp", "column",
+        "cut", "diff", "dirname", "du", "echo", "egrep", "false", "fgrep",
+        "file", "find", "grep", "head", "hexdump", "jq", "less", "ln", "ls",
+        "md5sum", "more", "nl", "od", "printf", "pwd", "readlink", "realpath",
+        "rev", "rg", "sed", "sha1sum", "sha256sum", "sort", "stat", "strings",
+        "tail", "tr", "tree", "true", "uniq", "wc", "which", "xxd",
+    }
+)
+_SHELL_SPLIT = re.compile(r"\|\||&&|[;|&\n]")
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 _COMPACT_MARKER = "[context compacted: earlier conversation summarized]"
 _EXPLORE_NUDGE = (
@@ -188,10 +209,10 @@ _EMPTY_ROUND_RETRY = (
     "Do not stop until the required output files exist."
 )
 _UNVERIFIED_RETRY = (
-    "The turn is ending on the write itself — nothing has run against the "
-    "output since it was produced, so nothing would have caught it being "
-    "wrong. Run one check now and fix what it reports: the program the "
-    "instruction says hidden tests will execute, on the examples the "
+    "The turn is ending with nothing having run against the output since it "
+    "was last written — viewing it does not count — so nothing would have "
+    "caught it being wrong. Run one check now and fix what it reports: the "
+    "program the instruction says hidden tests will execute, on the examples the "
     "instruction gives; the scoring CLI, eval command, or helper script it "
     "names; or a small check of the thresholds it states. Reading the file "
     "back is not a check. If the check passes, say so and stop."
@@ -199,13 +220,15 @@ _UNVERIFIED_RETRY = (
 # One retry, because the gain is in going from no check to a check, not in
 # checking more. Measured over catalog-89 run 33369888461 by how many tool
 # calls followed the last write, classified by ``_bash_writes`` — the same
-# detector the gate itself uses, since most TB tasks deliver through bash
-# rather than write_file: stopping on the write passes at 0.6875 (n=32),
-# one or two calls after it at 0.7429 (n=35), three to five at 0.7273
-# (n=11), and eleven or more at 0.0000 (n=4). So one extra round is worth
-# about five points and further rounds are not, but note that the tail
-# carrying "further rounds are harmful" is seven trials, which sets the cap
-# by the shape of the curve rather than by a well-measured cliff.
+# detector the write side of the gate uses, since most TB tasks deliver
+# through bash rather than write_file: stopping on the write passes at
+# 0.6875 (n=32), one or two calls after it at 0.7429 (n=35), three to five
+# at 0.7273 (n=11), and eleven or more at 0.0000 (n=4). So one extra round
+# is worth about five points and further rounds are not, but note that the
+# tail carrying "further rounds are harmful" is seven trials, which sets the
+# cap by the shape of the curve rather than by a well-measured cliff. Those
+# counts predate the gate reading "ran" rather than "wrote last", which
+# widens who it fires on without changing what one more round buys them.
 _MAX_UNVERIFIED_RETRIES = 1
 # Match CoreLoop ``_MAX_COMPLETION_REDOS`` (32). A lower cap accepted a
 # text-only stop while primers.fasta / steal.py / out.txt were still
@@ -471,6 +494,7 @@ class DeliveryHooks(NoopHooks):
         self._delivered = 0
         self.writes = 0
         self.consecutive_explore = 0
+        self.ran_since_write = False
         self.nudges = 0
         self.completion_retries = 0
         self.empty_round_retries = 0
@@ -698,11 +722,21 @@ class DeliveryHooks(NoopHooks):
     ) -> ToolResult:
         self._force_tool = False
         name = call.name
+        # Ordered before the write branches so a call that both runs and
+        # delivers — `python3 gen.py`, `make` — ends up unverified: what it
+        # produced is exactly what nothing has been run against yet.
+        if (
+            name == "bash"
+            and result.success
+            and _bash_runs_something(_bash_command(call))
+        ):
+            self.ran_since_write = True
         if self._required:
             delivered = sum(1 for p in self._required if _file_ready(p))
             if delivered > self._delivered:
                 self.writes += delivered - self._delivered
                 self.consecutive_explore = 0
+                self.ran_since_write = False
             elif name in _EXPLORE or name in _MUTATING:
                 self.consecutive_explore += 1
             self._delivered = delivered
@@ -711,21 +745,31 @@ class DeliveryHooks(NoopHooks):
         ):
             self.writes += 1
             self.consecutive_explore = 0
+            self.ran_since_write = False
         elif name in _EXPLORE:
             self.consecutive_explore += 1
         return result
 
     def _unverified_retry(self) -> CompletionAction | None:
-        """Refuse one completion that stops on the write itself.
+        """Refuse one completion where nothing ran against the output.
 
-        ``consecutive_explore`` is zeroed by every landed write and raised by
-        every inspect call, so zero here means the write was the last thing
-        that happened: whatever is on disk has had nothing run against it.
-        That is the one unchecked state the loop can identify without reading
-        tool arguments, which is why the gate is this and not a pattern over
-        bash commands — the prompt asks for a check on every task, and a
-        regex over command text would only recognise the checks it was
-        written for.
+        ``ran_since_write`` is cleared by every landed write and set by every
+        bash call that runs anything, so a false here means the delivery on
+        disk has had nothing executed against it — whether the turn stopped
+        on the write or spent its last calls looking at what it wrote.
+
+        The looking case is the larger one. Over catalog-89 run 33369888461,
+        56 trials ended on a non-writing bash: those whose last command ran a
+        program passed at 0.727 against 0.533 for the 15 that only viewed the
+        output, a gap four times the 0.688-to-0.743 one between stopping on
+        the write and taking one more call.
+
+        Classifying commands is what the earlier judgment avoided, on the
+        grounds that a pattern would only recognise the checks it was written
+        for. ``_BASH_NO_RUN`` escapes that by recognising looking instead of
+        checking and treating every unknown word as a run, so the classifier
+        errs into standing down rather than into demanding a check of a trial
+        that already ran one.
 
         Reached only after the named-output and cap retries above have
         accepted, so the files exist and satisfy every constraint stated in
@@ -735,7 +779,7 @@ class DeliveryHooks(NoopHooks):
         """
         if self._wrapping or self._verify_retries >= _MAX_UNVERIFIED_RETRIES:
             return None
-        if self.writes == 0 or self.consecutive_explore != 0:
+        if self.writes == 0 or self.ran_since_write:
             return None
         self._verify_retries += 1
         self._force_tool = True
@@ -2009,6 +2053,32 @@ def _bash_command(call: ToolCall) -> str:
 
 def _bash_writes(call: ToolCall) -> bool:
     return bool(_BASH_WRITES.search(_bash_command(call)))
+
+
+def _bash_runs_something(command: str) -> bool:
+    """True unless every segment of the command is drawn from ``_BASH_NO_RUN``.
+
+    Segments are split on the shell's sequencing and pipe operators, leading
+    environment assignments are dropped, and command substitution anywhere in
+    a segment counts as running because the substituted command is the one
+    that would execute. Splitting ignores quoting, so a quoted operator
+    yields a fragment whose first word is unrecognised — running, which is
+    the direction that silences the caller's gate rather than tripping it.
+    """
+    for segment in _SHELL_SPLIT.split(command):
+        segment = segment.strip().lstrip("({")
+        if not segment:
+            continue
+        if "$(" in segment or "`" in segment:
+            return True
+        words = segment.split()
+        while words and _ENV_ASSIGN.match(words[0]):
+            words.pop(0)
+        if not words:
+            continue
+        if words[0].strip("'\"") not in _BASH_NO_RUN:
+            return True
+    return False
 
 
 def _bash_delivers_required(

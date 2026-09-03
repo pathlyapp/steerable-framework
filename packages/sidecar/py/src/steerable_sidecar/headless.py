@@ -51,10 +51,24 @@ __version__ = "0.2.5"
 #: had run a check against 30% of trials that delivered a wrong answer. Every
 #: earlier form of the rule needed the model to first recognise its situation
 #: in a conditional, and 55% of even the passing trials never checked.
+#:
+#: The persistence clause is the one instruction the three Harbor baselines
+#: have that this prompt lacked: codex carries it, claude-code and pi do not,
+#: and the parameter comparison found no other asymmetry that favours them —
+#: our per-command and idle-stream timeouts are the widest of the four. It is
+#: aimed at stopping short rather than at running out of time: the median
+#: winning trial finishes in 12 of its 150 minutes, so a turn that ends on a
+#: partial fix is almost never ending because the budget ran out.
 _SYSTEM = (
     "You are a coding agent in a Linux workspace. Complete the user's task "
     "with bash, read_file, write_file, and edit_file. Prefer edit_file for "
     "in-place edits. Do not wait for confirmation.\n"
+    "Keep going until the task is completely resolved before you end your "
+    "turn. Do not stop at analysis, at a plan, or at a partial fix: carry it "
+    "through to the files on disk and the check that clears them. Persevere "
+    "when a command fails — a failure is a result to act on, not a reason to "
+    "hand back. Only stop when you are sure the task is solved, and do not "
+    "guess an answer you could have computed.\n"
     "\n"
     "# Verify before you finish\n"
     "Producing the required files is half the task. The other half is "

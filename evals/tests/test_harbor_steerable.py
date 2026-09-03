@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from evals.suite import load_suite
+
 from evals.harbor_helpers import (
     _APT_PYTHON_INSTALL,
     _ENSURE_PYTHON_310,
@@ -10,6 +12,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy,
+    is_zai_glm,
     merge_trial_path,
     pip_install_command,
     rewrite_forwarded_env_value,
@@ -225,6 +228,31 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     assert "STEERABLE_REASONING_EFFORT" in forwarded
     run_body = text[text.index("    async def run(") :]
     assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
+
+
+def test_zai_defaults_do_not_follow_a_model_switch() -> None:
+    """`reasoning_effort=max` and the z-ai endpoint pin are GLM-only.
+
+    Sending either to another vendor breaks every trial rather than one:
+    the effort value is rejected, and asking OpenRouter for a non-GLM model
+    on the z-ai provider with fallbacks off answers "No endpoints found".
+    """
+    assert is_zai_glm("z-ai/glm-5.3-flash")
+    assert is_zai_glm("Z-AI/GLM-5.3")
+    assert not is_zai_glm("openai/gpt-5.5")
+    assert not is_zai_glm("anthropic/claude-sonnet-4-5")
+    assert not is_zai_glm("")
+
+
+def test_committed_steerable_model_still_takes_the_zai_path() -> None:
+    """The 0.8202 baseline depends on those defaults being applied.
+
+    They are reached through the model id now, so changing the committed
+    model silently drops `reasoning_effort=max` along with the endpoint pin.
+    """
+    model = load_suite().agents["steerable"].model or ""
+    _, _, name = model.partition("/")
+    assert is_zai_glm(name), model
 
 
 def test_harbor_run_matches_claude_code_tb_knobs() -> None:

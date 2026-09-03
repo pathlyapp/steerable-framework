@@ -4,7 +4,7 @@
 > 顺序：**先 Terminal-Bench 2.1 跑通，再上全量 SWE-bench Verified。**
 > 跑分器是 [Harbor](https://www.harborframework.com/docs/run-jobs/run-evals)，隐藏测试打分，不用 LLM judge，不自制 prompt 当门禁。
 >
-> 套件钉死在 [`evals/suite.yaml`](./evals/suite.yaml)。当前能力说明：[`docs/evals.md`](./docs/evals.md)。
+> 套件钉死在 `[evals/suite.yaml](./evals/suite.yaml)`。当前能力说明：`[docs/evals.md](./docs/evals.md)`。
 
 **评测对象**：无头 CoreLoop + 能改文件、跑 shell 的工具面（sidecar ACP）。
 不是 Electron 窗口，也不是 Harbor 自带的 `claude-code` / `codex` / `pi`（那些只做同题对照）。
@@ -32,8 +32,8 @@
 
 - [x] **0.1** `harbor_argv` 把 `--include-task-name` 写成 `terminal-bench/<短 id>`（否则过滤为空）
 - [x] **0.2** Harbor 安装：composite action 钉 `harbor==0.22.0`，`~/.local/bin` 进 `PATH`
-- [x] **0.3** oracle workflow：`evals/**` 变更 + `workflow_dispatch`；Mean ≠ 1.0 或安装异常 → 红；上传 `result.json`
-- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；产品走 `STEERABLE_*`，对照走官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
+- [x] **0.3** oracle workflow：`evals/`\*\* 变更 + `workflow_dispatch`；Mean ≠ 1.0 或安装异常 → 红；上传 `result.json`
+- [x] **0.4** weekly：cheap-12 × `steerable` / `claude-code` / `codex` / `pi`；产品走 `STEERABLE_`\*，对照走官方 key；缺 key skip，全 skip 失败；artifact + Mean 摘要
 - [x] **0.5** 仓库 secrets：`STEERABLE_API_KEY` + `STEERABLE_BASE_URL`（本机同一网关，产品分必填）。`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` 仅对照基线，可选
 - [x] **0.6** 安装失败当红（`n_errored_trials > 0`）；题没做对只记 Mean（0 是成绩）
 
@@ -81,16 +81,26 @@
 
 ## Phase 2.5 · catalog-89 冲 0.75
 
-分数记录：`b929af1` / [33464114983](https://github.com/pathlyapp/steerable-framework/actions/runs/33464114983) **Mean 0.6629**（59/89），基线 0.6517。两次跑的同题对照：**50 稳定绿 / 17 翻面 / 22 稳定红**——翻面题全转绿也只到 67/89 = 0.753，所以稳定红里必须出题。
+**目标已达成：`27d521a` Mean 0.8006 ± 0.0232（四次全量实测，见文末"四个完整样本"一节），对基线 0.6517 净 +13 题。**首跑 [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) 是 0.8202（73/89），但那是分布上沿；**报数和后续对照都用 0.8006，不要用 0.8202**。这一跑合入三项改动：切流三个预算全部默认关掉、验证门禁、提示词精简 35%。奖励只有 0.0/1.0 两值，无部分分。
 
-单次全量的测量噪声：SD ±0.0232，95% 带 ±0.0454。**`n_attempts=1` 的单次 A/B 无意义**，故新增 `flaky` split（17 翻面 + 8 受切流影响的稳定绿作对照，共 25 题）× `n_attempts=3` × 双臂 = 50 job，配对符号检验 + bootstrap CI 见 [`evals/flaky_score.py`](./evals/flaky_score.py)。每 trial 加 85 分钟绝对帽（两次全量里只有 4/117 个获胜 trial 超过 90 分钟）。实测一轮约 1.75 h，对比全量 89 的约 6 h。
+下面 2.5 各节里的逐题归因（转绿/转红名单、"仍失败 16 道"）都出自首跑那**单个**样本。四次样本下只有 9 道是稳定红，20 道会翻面——**读这些名单时按"那一次 trial 里发生了什么"理解，不要当成"这道题的能力边界"**。
+
+净 +15 的构成：18 道转绿，3 道转红（`extract-elf`、`pytorch-model-cli`、`torch-tensor-parallelism`）。转绿里有 7 道原属 22 道稳定红，其中 `torch-pipeline-parallelism` 正是"交付程序自身崩溃"（`UnboundLocalError`）那一类——**切流关闭后模型自行发现并修好了崩溃**，不需要原计划的"收工前跑一遍"门禁。这也说明先前"删切流只值 +2 题"的估计低估了：当时只按"轨迹极短"一个特征计数被切流害死的 trial，漏掉了没被切死但交出半成品的那一类。
+
+仍失败 16 道：`build-pov-ray`、`circuit-fibsqrt`、`dna-assembly`、`extract-elf`、`extract-moves-from-video`、`filter-js-from-html`、`gcode-to-text`、`make-doom-for-mips`、`path-tracing`、`path-tracing-reverse`、`pytorch-model-cli`、`raman-fitting`、`regex-chess`、`sanitize-git-repo`、`torch-tensor-parallelism`、`winning-avg-corewars`。
+
+已落地但**这一跑未测量**：命名输出检测修复（`8acc022`），针对 6 道"必需文件缺失"的红题。
+
+以下为达成 0.75 之前的分析记录。分数记录：`b929af1` / [33464114983](https://github.com/pathlyapp/steerable-framework/actions/runs/33464114983) **Mean 0.6629**（59/89），基线 0.6517。两次跑的同题对照：**50 稳定绿 / 17 翻面 / 22 稳定红**——翻面题全转绿也只到 67/89 = 0.753，所以稳定红里必须出题。
+
+单次全量的测量噪声：SD ±0.0232，95% 带 ±0.0454。`**n_attempts=1` 的单次 A/B 无意义\*\*，故新增 `flaky` split（17 翻面 + 8 受切流影响的稳定绿作对照，共 25 题）× `n_attempts=3` × 双臂 = 50 job，配对符号检验 + bootstrap CI 见 `[evals/flaky_score.py](./evals/flaky_score.py)`。每 trial 加 85 分钟绝对帽（两次全量里只有 4/117 个获胜 trial 超过 90 分钟）。实测一轮约 1.75 h，对比全量 89 的约 6 h。
 
 **功效（模拟，翻面题按 50/50、对照按 0.85 建模）**：
 
 | 真实每题效应 | +0.05 | +0.10 | +0.15 | +0.20 | +0.30 |
-|---|---|---|---|---|---|
-| 功效（n=3） | 0.11 | 0.30 | 0.59 | 0.74 | 0.95 |
-| 功效（n=5） | 0.15 | 0.43 | 0.80 | 0.92 | 1.00 |
+| ------------ | ----- | ----- | ----- | ----- | ----- |
+| 功效（n=3）  | 0.11  | 0.30  | 0.59  | 0.74  | 0.95  |
+| 功效（n=5）  | 0.15  | 0.43  | 0.80  | 0.92  | 1.00  |
 
 假阳性率 0.025。bootstrap CI 只比符号检验高 1–3 个点（+0.10 时 0.33 vs 0.31），**瓶颈是数据量而非检验方法**。含义：这套循环**不能逐个验证 +0.05~+0.10 的小赢**（+0.10 有 70% 概率被判为无差异），但 0.663 → 0.75 需要 +7.7 题、若全来自 17 道翻面题则每题 +0.45，那个量级功效接近 1.00。**所以改动要打包成一个 arm 测，不要一条一条试。**
 
@@ -98,18 +108,18 @@
 
 ### 对照 pi / dsh / codex：参数与循环逻辑
 
-| | Steerable | pi | dsh | codex |
-|---|---|---|---|---|
-| 单命令超时 | 1 h | 无（按需传参） | 120 s（沙箱 60 s） | 10 s 默认 / 用户 shell 1 h |
-| 会话软超时 | 150 min（Harbor ×12 → 180 min 硬杀） | 无 | 无 | 无 |
-| 最大轮次 | 250 | 无 | 无 | 无 |
-| 压缩阈值 | **0.8** | ctx − 16384（≈0.87–0.92） | 0.8 | **0.9**（有效窗口 95%） |
-| 压缩保留 | 6 条消息 / 2 工具结果 | 20 000 tokens | retain 0.16 | — |
-| 流空闲超时 | 170 min（GLM 静默思考可达 48 min） | 300 s | 300 s | 300 s |
-| 只推理即切流 | **有** | 无 | 无 | 无 |
-| `tool_choice` 强制 | **有**（约 18 处） | 无 | 无 | 无（auto） |
-| 运行时验证门禁 | **有** | 无 | 无 | 无（仅提示词） |
-| 持久性提示词 | 无 | 无 | 无 | **有** |
+|                    | Steerable                            | pi                        | dsh                | codex                      |
+| ------------------ | ------------------------------------ | ------------------------- | ------------------ | -------------------------- |
+| 单命令超时         | 1 h                                  | 无（按需传参）            | 120 s（沙箱 60 s） | 10 s 默认 / 用户 shell 1 h |
+| 会话软超时         | 150 min（Harbor ×12 → 180 min 硬杀） | 无                        | 无                 | 无                         |
+| 最大轮次           | 250                                  | 无                        | 无                 | 无                         |
+| 压缩阈值           | **0.8**                              | ctx − 16384（≈0.87–0.92） | 0.8                | **0.9**（有效窗口 95%）    |
+| 压缩保留           | 6 条消息 / 2 工具结果                | 20 000 tokens             | retain 0.16        | —                          |
+| 流空闲超时         | 170 min（GLM 静默思考可达 48 min）   | 300 s                     | 300 s              | 300 s                      |
+| 只推理即切流       | **有**                               | 无                        | 无                 | 无                         |
+| `tool_choice` 强制 | **有**（约 18 处）                   | 无                        | 无                 | 无（auto）                 |
+| 运行时验证门禁     | **有**                               | 无                        | 无                 | 无（仅提示词）             |
+| 持久性提示词       | 无                                   | 无                        | 无                 | **有**                     |
 
 结论：**"竞品分高是因为超时更宽"不成立**——我们的单命令超时和流空闲超时都是四家里最宽的，会话软超时和轮次上限也没有任何一家更紧。三家的高分不来自参数余量。真正的差异是：三家都**没有**切流、轮次上限、`tool_choice` 强制这些机制，而 codex 有一句我们缺的持久性指令。
 
@@ -119,7 +129,7 @@
 
 **一个主导失败模式：模型进入无界推理状态后，忽略 harness 的全部强制手段。**
 
-- 推理量 / 工具调用次数是最强预测量，单调：0–3 KB **0.889** / 3–10 KB 0.804 / 10–50 KB 0.426 / ≥50 KB **0.071**。灾难区 12 题（7 恒红、4 翻面、1 恒绿）。
+- 推理量 / 工具调用次数是最强预测量，单调：0–3 KB **0.889** / 3–10 KB 0.804 / 10–50 KB 0.426 / ≥50 KB **0.071**。灾难区 12 题（7 恒红、4 翻面、1 恒绿）。**⚠️ 这条只对切流开着时成立。**切流关掉后重测，梯度不再单调，最高推理量桶从 0.071 抬到 0.615——见下文 2.5.9 一节。
 - `tool_choice=required` 实测 **1667 次强制轮里仅 61.9% 真的产生工具调用**；违背的 635 次中位数吐 12.9 KB 文本（最大 135 KB），其中 480 次之后循环又设一次 `required`、模型继续不理。故 `delivery.py` 里约 18 处 `_force_tool` 上限只有 62% 效力。合规率 <40% 的 24 个 trial 通过 0.167，>80% 的 122 个通过 0.746。
 - **切流自己造出了它要防的死循环**：cut 在长推理的自然终点**之前**反复打断，模型每次从 `staleChars` 上限（147 KB）重新烧满，轮次永不前进。`schemelike-metacircular-eval` 26 次调用 / 2 cut → **2 次调用 / 9 cut / hard_timeout**，`gpt2-codegolf` 18 → 4 次调用。**不是失忆**：相邻推理段 8-gram 重叠仅 0.2–4.7%，模型每次都想新内容；通知文本明确写了"立刻调工具"，模型只听"不要重推"那半。
 
@@ -128,7 +138,6 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 已证伪、不要再试：
 
 - 收紧单命令超时（我们 1 h vs codex 10 s / dsh 120 s）——全量里"时间耗在长命令"只造成 **1** 次失败，改它换不到分。
-
 - dsh 式重复调用提醒——178 个 trial 的最长连续相同调用都是 1，我们没这个问题（`tool_dedup=False` 无害）。
 - "先写一个能跑的版本"提示词——通过与失败的首次落盘**都在第 1 次调用**，首写位置与结果无关（0.649 / 0.644 / 0.706）。agent 本来就立刻动手，这条会是空指令。
 - 轮次上限——两次全量 runaway guard 从未触发，250 不是瓶颈。
@@ -139,23 +148,23 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 两臂唯一差别是三个切流预算（b 臂全设 0），已从 job log 核实无其它变量。
 
-| | arm a 切流开 | arm b 切流关 |
-|---|---|---|
-| 通过率 | 51/74 = 0.689 | 59/73 = 0.808 |
-| ≤5 次工具调用就结束的 trial | **15/74** | 5/73 |
-| 其中通过 | 4 | 3 |
-| 每题通过率均值变化 | — | **+0.0933**（净 +2.33 题 / 25） |
-| 符号检验 | — | 7 胜 4 负，**p=0.55（不显著）** |
+|                             | arm a 切流开  | arm b 切流关                    |
+| --------------------------- | ------------- | ------------------------------- |
+| 通过率                      | 51/74 = 0.689 | 59/73 = 0.808                   |
+| ≤5 次工具调用就结束的 trial | **15/74**     | 5/73                            |
+| 其中通过                    | 4             | 3                               |
+| 每题通过率均值变化          | —             | **+0.0933**（净 +2.33 题 / 25） |
+| 符号检验                    | —             | 7 胜 4 负，**p=0.55（不显著）** |
 
 **判决依据不是通过率，是可复现的饿死。** 通过率的配对检验没过 0.05，而且按功效模拟这个量级的效应本来就只有约三成概率被测出来，所以它既不能支持也不能否定。决定性的是饿死信号完全可复现：
 
-| 题 | arm a 工具调用数 | arm a | arm b 工具调用数 | arm b |
-|---|---|---|---|---|
-| write-compressor | **[2, 2, 2]** | 0/3 | [21, 31, 31] | **3/3** |
-| feal-linear-cryptanalysis | [2, 4, 13] | 0/3 | [6, 14, 17] | **3/3** |
-| feal-differential-cryptanalysis | [2, 3, **5435**] | 1/3 | [13, 20, 26] | **3/3** |
-| model-extraction-relu-logits | **[3, 3, 3]** | 0/3 | [0, 3]（job 失败） | 0/2 |
-| regex-log | [0, 3, 4] | 2/3 | [6, 9, 10] | **3/3** |
+| 题                              | arm a 工具调用数 | arm a | arm b 工具调用数   | arm b   |
+| ------------------------------- | ---------------- | ----- | ------------------ | ------- |
+| write-compressor                | **[2, 2, 2]**    | 0/3   | [21, 31, 31]       | **3/3** |
+| feal-linear-cryptanalysis       | [2, 4, 13]       | 0/3   | [6, 14, 17]        | **3/3** |
+| feal-differential-cryptanalysis | [2, 3, **5435**] | 1/3   | [13, 20, 26]       | **3/3** |
+| model-extraction-relu-logits    | **[3, 3, 3]**    | 0/3   | [0, 3]（job 失败） | 0/2     |
+| regex-log                       | [0, 3, 4]        | 2/3   | [6, 9, 10]         | **3/3** |
 
 `[2,2,2]` 和 `[3,3,3]` 这种零方差不是采样噪声能产生的，是机制在稳定复现同一个失败。`5435` 那次是切流与重试活锁。目标陈述里独立点名的两道被饿死的题（feal-differential 21→2、write-compressor 14→1）**全部恢复**。
 
@@ -167,11 +176,11 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 31 个失败按"干了多少活"拆开，结论是**剩下的缺口不是时间/轮次不够，是产出错误**：
 
-| 形态 | 题数 | 能靠什么补 |
-|---|---|---|
-| 什么都没产出（≤5 次调用，被切流卡住） | 4 | 切流关闭（已落地） |
-| 跑了 10 次调用仍无产出 | 1 | 未知 |
-| **产出了但产出是错的** | **26** | 交付前验证 |
+| 形态                                  | 题数   | 能靠什么补         |
+| ------------------------------------- | ------ | ------------------ |
+| 什么都没产出（≤5 次调用，被切流卡住） | 4      | 切流关闭（已落地） |
+| 跑了 10 次调用仍无产出                | 1      | 未知               |
+| **产出了但产出是错的**                | **26** | 交付前验证         |
 
 对照组信号很干净：**58 个通过的 trial 里，产出为空的是 0 个**；≤5 次调用结束的 trial 也是 0 个通过。所以"停在 5 次调用以内"= 必败，"什么都没产出"= 必败，两者都已被切流关闭覆盖。
 
@@ -185,58 +194,73 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 但原注释引用的依据（0.647 → 0.775）是用 `write_file`/`edit_file` 这个窄定义算的，用门禁自己那套判定重算后幅度小得多：
 
-| 写完之后又跑了几次调用 | n | 通过率 |
-|---|---|---|
-| 0（写完就收工） | 32 | 0.6875 |
-| 1–2 | 35 | **0.7429** |
-| 3–5 | 11 | 0.7273 |
-| 6–10 | 3 | 0.6667 |
-| 11+ | 4 | **0.0000** |
+| 写完之后又跑了几次调用 | n   | 通过率     |
+| ---------------------- | --- | ---------- |
+| 0（写完就收工）        | 32  | 0.6875     |
+| 1–2                    | 35  | **0.7429** |
+| 3–5                    | 11  | 0.7273     |
+| 6–10                   | 3   | 0.6667     |
+| 11+                    | 4   | **0.0000** |
 
 方向不变（多跑一轮值约 5 个百分点、再多就是瞎折腾），但"再多就有害"这一侧只有 7 个样本。注释已改成按这个口径陈述并写明样本量，避免以后拿它当"放宽预算"的依据。
 
-### 门禁覆盖不到的收尾形态（下一个靶子，等全量结果后再动手）
+### 门禁判据已放宽，但"覆盖面 36% → 53%"这个依据是错的
 
-门禁看不见的 56 个 trial（收尾是非写入 bash），按最后一条命令实际做了什么拆开（`cd X &&` 前缀已剥离，整条流水线判定）：
+判据已按原计划改成**自上次落盘以来有没有任何东西被执行过**（`ran_since_write`），设计上的矛盾用**反转分类方向**解决：`_BASH_NO_RUN` 枚举的是"看"（cat/head/wc/ls/grep/sed/awk…），任何不认识的词一律算"跑过了"。所以分类器只会让门禁**闭嘴**，不会让它对一个真跑过检查的 trial 乱叫——"看文件的方式"是闭集，"检查文件的方式"不是，这正是原 docstring 反对正则的理由，反转之后就不成立了。
 
-| 最后一条 bash | n | 通过率 |
+但把这套判据拿回两次全量的日志上重放，**原来估的收益不成立**。重放脚本先用旧判据复现出 `32/89（36%）、通过率 0.688`，与本文档先前记录逐位吻合，所以口径是对的；在此基础上：
+
+| 口径 | run 33369888461（0.6517） | run 33497477757（0.8202） |
 |---|---|---|
-| 跑了程序 | 22 | 0.7273 |
-| **只看了一眼产出** | **15** | **0.5333** |
-| `sed`（盲改） | 4 | 0.0000 |
-| 跑了测试或评分器 | 2 | 0.5000 |
+| 旧判据「最后一个动作是写」 | 32（36%） | 36（40%） |
+| 新判据「落盘后什么都没跑」 | 37（42%） | 40（45%） |
+| **新增覆盖** | **5（3 个失败）** | **4（0 个失败）** |
 
-**空档是那 15 个"只看了一眼"的，7 个失败**，与"跑了程序"差 20 个百分点——比门禁自身 0.6875 → 0.7429 那 5 个百分点强得多。样例：circuit-fibsqrt 收尾 `cat gates.txt | head -50; wc -l`（只数自己产出的行数，从未送进电路求值器）；extract-moves-from-video `wc -l solution.txt; head -5; tail -3`；regex-chess 收尾是 `ls -la /`。
+不是 47/89（53%）。差在原来那 15 道的口径是"**最后一条命令**只看了一眼"，而实现的判据是"**落盘之后**什么都没跑"——一个先跑了测试、再 `cat` 一眼产出的 trial 属于前者但不属于后者，本来就不该再逼它跑一轮。按实现的判据重切，0.6517 那跑收尾是"看"的只有 7 个，其中 4 个确实没跑过检查；0.8202 那跑 5 个里 3 个，且**三个全过**。
 
-覆盖面若扩到这一类，从 32/89（36%）到 47/89（53%）。
+**更要紧的是：36% 从来不是触发率，是"处于该状态"的比例。** 数 0.8202 那跑日志里的 `hook_action … unverified_output`，全量 89 个 trial **实际只触发了 8 次**。差距来自实现：`writes` 在 `self._required` 非空时数的是"指令命名的输出文件由缺变全"，不是 `_bash_writes`；重放用后者当然宽得多。这 8 次里 7 次通过（0.875，全局 0.8202），其中 `largest-eigenval` 正是"交付的程序自己崩了"那 4 道之一，这一跑过了——n=1，只算方向一致。
 
-**设计上有个必须先解决的矛盾**：`_unverified_retry` 的 docstring 明确论证过"不用命令文本正则，因为正则只认得写它时想到的那几种检查"。而识别"只看了一眼"必然需要某种命令分类。可用的既有概念是 `_BASH_VIEW_FILE`（已存在，用途正是"这条 bash 其实等于 read_file"），但它只匹配单条命令，真实案例都是 `cat x | head; echo ---; wc -l x` 这种复合形式。所以正确的方向可能不是扩大正则，而是**改门禁的判据**：从"最后一个动作是不是写"改成"自上次落盘以来有没有任何东西被执行过"，这样两类都覆盖，且只需判断"是否执行"而非"是否是某种检查"。
+**结论：这个改动方向对、风险低（上限仍是 1 次重试），但单独测不出来。** 实际触发率会从 8/89 升到大约 9–11/89，远在单次全量 ±4 题的噪声带以内。它必须和别的改动打包成一个 arm，不能指望自己出分。
 
-不在全量跑完前实现：这一跑第一次测量现行门禁的真实效果，改了就分不清是哪版的功劳。
+另外：16 道红题里，门禁实测只对 `extract-elf` 触发过一次。**剩下的缺口基本不在这个门禁的射程内**，下一个靶子要另找。
 
 ### 22 道稳定红按 verifier 实际报错分类（不是"模型能力不够"）
 
 按 `verifier/test-stdout.txt` 的真实断言分类，而不是靠日志启发式：
 
-| 形态 | 题数 | 题目 |
-|---|---|---|
-| **要求的文件根本不存在** | **6** | adaptive-rejection-sampler `ars.R`、cobol-modernization `TRANSACTIONS.DAT`、dna-assembly `primers.fasta`、path-tracing `image.c`、regex-chess `re.json`、winning-avg-corewars `my_warrior.red` |
-| **交付的程序自己崩了** | **4** | largest-eigenval（matmul 维度不匹配）、torch-pipeline-parallelism（`UnboundLocalError: mb_idx`）、video-processing（`KeyError: 0`）、make-doom-for-mips（等 frame.bmp 超时） |
-| 数值差一点 | 3 | extract-moves-from-video 84.03% 差 90%、path-tracing-reverse 0.930 差 0.995、train-fasttext 0.562 差 0.62 |
-| 实质性错误 | 8 | raman-fitting（拟合值 x0=19196 应为 1580）、gcode-to-text（交了 `PROVISIONAL`）、mteb-retrieve、protein-assembly、schemelike-metacircular-eval、filter-js-from-html、install-windows-3.11、gpt2-codegolf |
+| 形态                     | 题数  | 题目                                                                                                                                                                                                     |
+| ------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **要求的文件根本不存在** | **6** | adaptive-rejection-sampler `ars.R`、cobol-modernization `TRANSACTIONS.DAT`、dna-assembly `primers.fasta`、path-tracing `image.c`、regex-chess `re.json`、winning-avg-corewars `my_warrior.red`           |
+| **交付的程序自己崩了**   | **4** | largest-eigenval（matmul 维度不匹配）、torch-pipeline-parallelism（`UnboundLocalError: mb_idx`）、video-processing（`KeyError: 0`）、make-doom-for-mips（等 frame.bmp 超时）                             |
+| 数值差一点               | 3     | extract-moves-from-video 84.03% 差 90%、path-tracing-reverse 0.930 差 0.995、train-fasttext 0.562 差 0.62                                                                                                |
+| 实质性错误               | 8     | raman-fitting（拟合值 x0=19196 应为 1580）、gcode-to-text（交了 `PROVISIONAL`）、mteb-retrieve、protein-assembly、schemelike-metacircular-eval、filter-js-from-html、install-windows-3.11、gpt2-codegolf |
 
 **前 10 道是 harness 能碰到的**（文件没交 + 交了但程序崩），值 +0.11。第二类正是验证门禁的目标：跑一次自己的程序就会看到崩溃。
 
-### 命名输出检测漏掉 6 道红题的路径（已修）
+### 命名输出检测：`8acc022` 是空操作，整跑测了个寂寞
 
-`DeliveryHooks` 本来会在指令命名的输出缺失时拒绝完成（最多 32 次重试），所以文件缺失只有两种解释：被切流杀掉，或者**检测器从没把那个路径当成输出**。实测这 6 道，检测器全部漏掉（其中 3 道同时也被切流卡住）。
+**把 `8acc022^` 拉成 worktree、两个版本并排跑完整的 89 份指令：检测结果有差异的题 = 0 道。** 包括它自己的 6 道目标题。
+
+新正则本身是对的，单独喂提交信息引用的那几句都能命中（`` `image.c` must exist `` → `/app/image.c`，`` output files (`ACCOUNTS.DAT`, …) `` → 三个全中，旧版这几句全部返回空）。但放回完整指令，**旧代码早就通过同一份指令中别处的措辞找到了同样的路径**。所以这几个模式是冗余的，不是新增的。
+
+由此：
+
+- **catalog-89 [33514869908](https://github.com/pathlyapp/steerable-framework/actions/runs/33514869908) 是纯空对照**，跑的行为和 0.8202 那跑逐位相同。**已在 54/89 处取消**，不值得为一个空对照烧完剩下的两小时。
+- 取消前的翻面**全部是跑间波动**，和代码无关。取消后把 artifact 拉全（67 道完成），逐题配对见下节"同配置重跑"：**均值只差 1 题（0.9254 / 0.9104），但逐题不一致 9/67**。取消当时按 54 道算出的"净 −3"是采样不足，均值口径上 SD ±0.0232 的旧估计没问题；真正被低估的是**逐题稳定性**，不是均值。
+- `torch-pipeline-parallelism` 这次绿→红特别要紧：0.8202 那跑它是"切流关闭后模型自行发现并修好 `UnboundLocalError`"的招牌案例，还被当成"不需要收工前跑一遍门禁"的依据。它一跑就掉，说明**那个结论只建立在单次 trial 上，不能再拿来否决验证门禁**。
+
+**方法论教训：验证一个修复"命中目标"不等于验证它"改变了行为"。上机前必须和改动前的 commit 并排比，不能只跑新版本看命中。**
+
+**6 道文件缺失的真实原因已查明，见下一节。** 原推断"检测器漏了路径"已被证伪——路径一直都检测得到，`_required` 一直包含它们，门禁本该拒绝完成（最多 32 次重试）。
+
+以下为证伪前的分析记录。`DeliveryHooks` 本来会在指令命名的输出缺失时拒绝完成（最多 32 次重试），所以文件缺失只有两种解释：被切流杀掉，或者**检测器从没把那个路径当成输出**。当时只在新版本上实测这 6 道全部命中，误判为"检测器全部漏掉"。
 
 原因：现有 5 个模式各锚定一种动词措辞（`write a file X`、`named X`、`a new file X`……），而这几道把要求写成**检查清单**：
 
-- `1. **File Existence**: \`image.c\` must exist`
-- `2. **Warrior Exists**: Confirms \`my_warrior.red\` was created`
-- `` 1. `primers.fasta` exists and contains exactly 8 primer pairs ``
-- `` - The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) must match byte-for-byte ``
+- `1. **File Existence**: \`image.c must exist`
+- `2. **Warrior Exists**: Confirms \`my_warrior.red was created`
+- `1. `primers.fasta` exists and contains exactly 8 primer pairs`
+- `- The output files (`ACCOUNTS.DAT`, `BOOKS.DAT`, `TRANSACTIONS.DAT`) must match byte-for-byte`
 
 **通用规则"反引号裸文件名都算输出"已被实测否决**：跨 89 份指令会给 58 道通过题里的 49 道加上共 105 个假需求，包括 `test_outputs.py`（隐藏测试本身）和 `np.float64`（根本不是文件）。所以短语锚定是承重的，不是堆积。
 
@@ -244,11 +268,362 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 新增 3 个测试，含一个反向测试锁住选择性（断言 `test_outputs.py` / `np.float64` / `chess_board.png` 不被当成输出）。
 
+### 2.5.9 结论："6 道文件缺失"这个靶子在 0.8202 那跑只剩 1 道，且不是门禁问题
+
+那份分类出自 0.6517 / 0.6629（切流还开着）。回到 0.8202 的 `result.json` + `verifier/test-stdout.txt` 逐题看，六道题的真实状态是：
+
+| 题                        | 0.8202 结果 | 实际断言                                              |
+| ------------------------- | ----------- | ----------------------------------------------------- |
+| adaptive-rejection-sampler | **绿**      | reward 1.0，65 min                                    |
+| cobol-modernization        | **绿**      | reward 1.0，撞满 170 min 仍过——**靠收工窗口救回来的** |
+| path-tracing               | 红          | `test_image_c_exists` **PASS**，编译运行都过，图像相似度 0.9626 差 0.99 |
+| winning-avg-corewars       | 红          | `test_warrior_exists` **PASS**，胜率 31% 差 75%、20% 差 33% |
+| dna-assembly               | 红          | `primers.fasta` 存在，正向引物 Tm 73.64 超上限 72     |
+| **regex-chess**            | 红          | `/app/re.json` 真的不存在                             |
+
+**只剩 1 道真的文件缺失。** 另外三道文件都交了，是内容不达标；`dna-assembly` 差 1.64 °C，是"差一点"而不是"没干"。
+
+**门禁从未被绕过，它触发了。** 日志里 `retry missing_named_output`：regex-chess **5** 次、winning-avg-corewars 2 次、path-tracing 1 次、cobol-modernization 1 次。软超时也每道都在 150 分钟准点发出（`elapsedMs` 9000001 / `softTimeoutMs` 9000000），收工模式确实进了。**拒绝完成并不能让模型把文件写出来**——这是这次调查最该记住的一句。
+
+`cobol-modernization` 是反面证据，说明收工窗口本身是有效的：软超时后它在窗口里做了 13 次调用（含 `write_file` / `edit_file`），从而转绿。
+
+### 真正的约束是墙上时钟，判别量是"每步吐多少字"而不是"走了多少步"
+
+16 道红题按结束方式重分（`/tmp/reclass.py`）：
+
+| 结束方式                       | 题数   | 题目                                                                                     |
+| ------------------------------ | ------ | ---------------------------------------------------------------------------------------- |
+| 撞 170 min 硬杀                | **6**  | dna-assembly、gcode-to-text、regex-chess、path-tracing、circuit-fibsqrt、winning-avg-corewars |
+| 过了 150 min 软超时、自己收了尾 | **4**  | path-tracing-reverse、extract-moves-from-video、make-doom-for-mips、filter-js-from-html   |
+| 没碰到任何超时，早早交了错答案  | 6      | raman-fitting、build-pov-ray、torch-tensor-parallelism、extract-elf、pytorch-model-cli、sanitize-git-repo |
+
+**10/16 用完了 150 分钟的软超时预算；73 道绿题里只有 5 道碰到软超时。** 硬杀都是 10201 s = 170.02 min，即 `_hard_run_timeout_sec()` 的 10_200。
+
+**但"撞钟"是它们的结束方式，不是失败原因，别把这 10 道当成"给够时间就能拿到"。**逐题看判据：
+
+| 题                      | 结束        | 判据差距                    | 多给时间有戏？ |
+| ----------------------- | ----------- | --------------------------- | -------------- |
+| dna-assembly            | 硬杀        | Tm 73.64 差 ≤72             | **有**         |
+| path-tracing            | 硬杀        | 相似度 0.9626 差 0.99       | **有**         |
+| winning-avg-corewars    | 硬杀        | 胜率 31% 差 75%             | 差太远         |
+| gcode-to-text           | 硬杀        | 交出 `nseg 26…` 而非 flag   | 答案是错的     |
+| regex-chess             | 硬杀        | 无产出，170 min 未找到思路  | 没找到方法     |
+| circuit-fibsqrt         | 硬杀        | 最后两次调用还是 `ls /app`  | 从未开工       |
+| path-tracing-reverse    | 自己收尾    | 相似度 0.464 差 0.995       | 差太远         |
+| extract-moves-from-video | 自己收尾    | 63.2% 差 90%                | 差太远         |
+| make-doom-for-mips      | 自己收尾    | 0.745 差 0.95               | 差太远         |
+| filter-js-from-html     | 自己收尾    | XSS 过滤断言 False          | 答案是错的     |
+
+**放宽时钟能指望的只有 2 道，不是 10 道。**后 4 道尤其说明问题：它们有完整 150 分钟 + 收工窗口、自己主动收了尾，交出来的东西离判据很远。时间不是它们的瓶颈。
+
+中位数对照（`/tmp/where_time_goes.py`）：
+
+|      | 时长       | 日志       | 工具调用 | 每次调用耗时  |
+| ---- | ---------- | ---------- | -------- | ------------- |
+| 绿   | **25 min** | 135 KB     | 26       | **0.8 min**   |
+| 红   | **160 min** | 1391 KB    | 32       | **3.3 min**   |
+
+**调用次数几乎一样（26 vs 32），时长差 6.4 倍。**时间不是花在干活上，是花在每一步的文本生成上。极端例子：`circuit-fibsqrt` 170 分钟只做了 2 次调用（85 min/次），`regex-chess` 4 次（42.5 min/次）。
+
+**顺带证伪一条旧结论：推理量的单调梯度在切流关掉之后不成立了。**原记录是 ≥50 KB 通过率 0.071，现在按日志推理字节分桶：
+
+| 推理量     | n   | 通过率    | 中位时长 |
+| ---------- | --- | --------- | -------- |
+| 0–100 KB   | 35  | 0.943     | 6 min    |
+| 100–300 KB | 18  | 0.778     | 29 min   |
+| 300–700 KB | 12  | 0.917     | 74 min   |
+| 700–1500 KB | 11  | 0.636     | 124 min  |
+| 1500+ KB   | 13  | **0.615** | 89 min   |
+
+不单调，且高推理量桶从 0.071 抬到 0.615。**"推理多就要死"是切流造出来的相关性，不是模型的性质。**推理多只是慢，慢到撞钟才死。
+
+### regex-chess：收工窗口被 16 次无效重试烧干（唯一一道真缺文件）
+
+150 分钟内 4 次调用、1210 KB 文本，全在纸上设计一个用 `re.sub` 实现的走子生成器。软超时后的 20 分钟窗口里：**0 次工具调用、138 KB 文本、`tool_choice=required` 连设 10 次、`round` 始终停在 2**。模型自己写下"given time pressure, I need to write something"，然后继续设计到被硬杀。
+
+轮次不前进是因为这条路走的是 `completion_redos`（上限 `_MAX_COMPLETION_REDOS = 32`）和 `wrap_up_tool_rounds_used`（上限 `wrap_up_max_tool_rounds = 16`），不是 `round_index`，所以 `max_rounds=250` 拦不住。`loop.py` 那段注释本来就点名了这道题（"regex-chess summarized instead of writing /app/re.json"），设计意图是"文本收尾在保留工具的收工模式里不算终态，再给几轮"。**意图对，结果是：16 次机会 × 每次约 2 分钟生成 = 32 分钟 > 剩下的 20 分钟，整个窗口被无效重试吃光。**
+
+这是"`tool_choice=required` 只有 62% 效力"的终局形态：强制不生效时，循环没有任何别的手段，只会原地再问一次。
+
+下一步候选（都还没测）：
+
+1. **活锁检测**：连续 N 轮强制且零工具调用就停止重问，改做别的（缩短提示、截断历史、或直接放弃这道题省下时钟给别的分片）。这是唯一一处明确坏掉的地方，可测、有界。**但要先承认它的上限：`regex-chess` 和 `circuit-fibsqrt` 是 170 分钟没找到解法，把窗口还给它们未必换到分。**修它的理由是机制坏了，不是它值 2 题。
+2. **压每步文本量**而不是打断它。切流是"打断"，已证伪；`max_tokens` 目前没设，是"按 token 截断"，同样会截在思路中间，必须 A/B。
+3. **别再往命名输出检测和门禁上加东西**——这条线的靶子只剩 1 道题，而且那道题的门禁已经触发过 5 次。
+
+### 同配置重跑：逐题 pass/fail 的翻面率是 13.4%，"16 道红题"这份名单不能当靶子
+
+**这件事仓库里早有记录**：`harbor_steerable.py` 的 `_TUNING_KEYS` 注释写着"17 of 89 tasks flip outcome between runs of the same commit"（19%），本文档前面也记着"50 稳定绿 / 17 翻面 / 22 稳定红"。下面只是用同配置的第二个样本复现了它，**不是新发现**；新的只是由它反推出的功效表。
+
+被取消那跑（`33514869908`）和 0.8202 行为逐位相同，所以两者配对就是**纯噪声测量**。把已完成分片的 artifact 拉全，67 道有配对（`/tmp/stability.py`）：
+
+|                | 0.8202 | 同配置重跑 |
+| -------------- | ------ | ---------- |
+| 这 67 道的均值 | 0.9254 | 0.9104     |
+| 逐题不一致     | —      | **9 / 67 = 13.4%** |
+
+- 红→绿 4 道：`build-pov-ray`、`extract-elf`、`pytorch-model-cli`、`torch-tensor-parallelism`
+- 绿→红 5 道：`chess-best-move`、`dna-insert`、`mteb-retrieve`、`protein-assembly`、`torch-pipeline-parallelism`
+
+**16 道红题里只有 5 道拿到了同配置的第二个样本，其中 4 道变绿。**（拿到第二样本的恰好是跑得最快的 5 道，因为慢的分片在取消前没跑完——这是选择性,不是随机抽样，但方向足够清楚。）稳定红的完整名单要看下面三个完整样本那节，不是这里的 67 道子集。
+
+**结论：均值比逐题稳定得多**，因为翻面双向抵消（丢 5 得 4，净 −1）。所以：
+
+- 用均值衡量改动是可以的，SD ±0.0232 那套仍然成立。
+- **用"哪几道是红的"当靶子是不行的。**13.4% 的翻面率意味着 16 道红题里大约有 9 道分量是掷硬币。今天做的全部逐题归因，成立的口径是"那一个 trial 里发生了什么"，**不是"这道题为什么失败"**。
+
+这条也把上一节"12/16 是答案实质错误、harness 碰不到"打掉了一半：那 6 道早收工的红题里，5 道有第二样本，4 道直接变绿。它们不是能力墙。
+
+**唯一不受这条影响的发现是收工窗口活锁**：16 次重试 × 每次约 2 分钟 > 剩余 20 分钟是算术，不是抽样。机制坏了就是坏了，与那道题这一跑红不红无关。
+
+### 由实测翻面率反推：单次全量只能分辨 ≥10 题的改动
+
+两次同配置跑在 67 道上不一致 9 道。某道题真实通过率为 p 时两跑不一致的概率是 2p(1−p)，所以这个比率直接给出全套的平均逐题方差，不需要知道每道题的 p（`/tmp/power.py`）：
+
+| 量                     | 值                        |
+| ---------------------- | ------------------------- |
+| 逐题不一致率           | 0.134                     |
+| 反推平均 p(1−p)        | 0.0672                    |
+| 单跑均值的 SD          | **0.0275（2.4 题）**      |
+| 单跑对单跑差值的 SD    | **0.0388（3.5 题）**      |
+
+**独立路径反推出的 0.0275 和文档里原有的 SD ±0.0232 基本吻合**，两个估计互相印证，所以这套噪声口径可以信。
+
+单臂单跑、双侧 0.05、功效 0.8 所需的全量次数：
+
+| 真实效应 | 每臂全量次数 | 每臂机时（按 3 h） |
+| -------- | ------------ | ------------------ |
+| 1 题     | 94           | 282 h              |
+| 2 题     | 24           | 72 h               |
+| 3 题     | 11           | 33 h               |
+| 5 题     | 4            | 12 h               |
+| **10 题** | **1**        | **3 h**            |
+
+25 题子集 × n 次的最小可分辨效应：n=1 → 5.1 题，n=3 → 3.0 题，n=5 → 2.3 题，n=10 → 1.6 题。
+
+**操作规则：单次全量只能用来验收 ≥10 题的改动。**手上所有候选（活锁检测、`max_tokens`、持久性指令、门禁判据）单个都值 1–3 题，**没有一个能用全量验收**。要么打包成一个 ≥10 题的 arm，要么走 25 题 ×3 的配对子集，要么按机制正确性验收、根本不上全量。
+
+### `27d521a` 四个完整样本：均值 0.8006 ± 0.0232，0.8202 是分布上沿而非定点
+
+2.5.13 的三次复现跑全部收齐。四个样本都是 89 道全量、同一个 commit `27d521a`、同一份配置，**唯一变量是随机性**：
+
+| 样本 | run | Mean |
+| ---- | --- | ---- |
+| 基线 | [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) | 0.8202（73/89） |
+| 第二 | [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570) | 0.7865（70/89） |
+| 第三 | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202（73/89） |
+| 第四 | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753（69/89） |
+
+**均值 0.8006，SD 0.0232（2.1 题），极差 4 题（0.7753–0.8202）。**
+
+这个 0.0232 和文档前面早就记着的 SD ±0.0232 完全吻合，也和由翻面率反推的 0.0275 吻合。**三条互相独立的路径给出同一个噪声量级，这套口径可以当定论用。**
+
+**对外报数应当用 0.80，不是 0.82。**0.8202 在四次里出现两次，是分布上沿；把它当基线会让后续任何改动都平白背上 −2 题的起点。
+
+两两逐题翻面率：16.9%、13.5%、11.2%、10.1%、12.4%、11.2%，平均 12.6%。和之前 67 道配对测出的 13.4% 一致。
+
+四次样本下 89 道分三档：
+
+- **稳定绿 60 道**（4/4 通过）
+- **稳定红 9 道**（0/4）：`extract-moves-from-video`、`filter-js-from-html`、`gcode-to-text`、`make-doom-for-mips`、`pytorch-model-cli`、`raman-fitting`、`regex-chess`、`sanitize-git-repo`、`winning-avg-corewars`
+- **翻面 20 道**，按通过次数排（G=过，顺序为基线/第二/第三/第四）：
+
+| 4 次里过 1 次 | 4 次里过 2 次 | 4 次里过 3 次 |
+| ------------- | ------------- | ------------- |
+| `circuit-fibsqrt` RRGR | `code-from-image` GRGR | `bn-fit-modify` GGRG |
+| `make-mips-interpreter` GRRR | `dna-assembly` RGGR | `build-pov-ray` RGGG |
+| `path-tracing-reverse` RGRR | `extract-elf` RGGR | `chess-best-move` GRGG |
+| `video-processing` GRRR | `install-windows-3.11` GRRG | `largest-eigenval` GGGR |
+| | `model-extraction-relu-logits` GRGR | `modernize-scientific-stack` GRGG |
+| | `mteb-retrieve` GRRG | `path-tracing` RGGG |
+| | `protein-assembly` GGRR | `sam-cell-seg` GRGG |
+| | | `torch-tensor-parallelism` RGGG |
+| | | `train-fasttext` GGGR |
+
+**这 20 道是 2.5.12 要的 `flaky` split 的定稿底稿**，比按切流那轮翻面集选的旧 25 题可信：来自四个纯同配置样本，不掺代码差异。**配对 A/B 只在这 20 道上跑**——60 道稳定绿和 9 道稳定红提供不了信号，只烧机时。20 道 ×3 次的最小可分辨效应约 3.3 题，是单次全量 10 题门槛的三分之一，机时只要 1/5。
+
+**9 道稳定红是唯一可以按"这道题为什么失败"归因的集合**，其余 20 道只能按"那一个 trial 里发生了什么"讲。注意 4 次样本判"稳定"仍带 1/16 的单题误判率，20 道里预期有 1–2 道其实是低通过率而非真稳定。
+
+### 同模型换 harness（`pi-glm`）第一版：配置没对齐，均值不可读
+
+新增 `pi-glm` agent——Harbor 自带的 Pi 装在容器里，指向**同一个模型、同一个网关**，所以与 `steerable` 相比只差 harness 一个变量。首跑 `cheap-12`（12 道）[33583927705](https://github.com/pathlyapp/steerable-framework/actions/runs/33583927705)：
+
+| | 这 12 道 |
+| --- | --- |
+| `pi-glm` | 10/12 = 0.833 |
+| `steerable`（4 样本期望） | 10/12 = 0.833（10 道 4/4，2 道 0/4，无翻面题） |
+
+均值持平，**但失败的题不重合**，这才是有信息量的部分：
+
+- **`sanitize-git-repo`：pi 过了，steerable 4/4 全挂。** 这道题在上节 9 道稳定红里，而上节刚说过那 9 道是"唯一可以按能力归因的集合"。**证伪的是"稳定红 = 能力上限"**：GLM 至少有一次做成了这道题，所以它不是能力墙。当时据此还推了一步"是我们 harness 的问题"，那步是错的，只有 1 个样本；后续 pi 自己也 2/3 挂在这道题上，见下文对齐后一节。
+- **`polyglot-c-py`：steerable 4/4 过，pi 挂。**
+- `filter-js-from-html`：两边都挂（steerable 也是 0/4）。
+
+**pi 的两道失败是同一个机制，而且机制清楚**：`out` 恰好等于 16384（pi 的输出上限），`in` 只有约 1500（且 1344 是缓存），说明**整个 trial 只发出过一个请求，模型在第一轮就跑飞、被截断，一个工具都没调**，verifier 报的是目标文件根本不存在。`polyglot-c-py` 为此烧了 8 分钟。
+
+这正是我们在 steerable 上追的"推理跑飞"，换个 harness、同一个模型照样发作——**说明这个病至少有一部分在模型侧，不是我们 harness 独有的缺陷**。
+
+**关于 `max_tokens`：方向是反的，不是"证伪"。** pi 的 16384 不是谁挑的方案，是 Pi 对"自己没有元数据的模型"的兜底默认值。它证明的是**上限压太小会把跑飞变成截断即失败**，所以 2.5.11 不该往收紧 `max_tokens` 的方向走——但这跟"限制单步文本量无效"是两句不同的话，别把前者当成后者的结论。
+
+**对照 agent 今天拿不到官方基线。** 仓库 secrets 只有 `STEERABLE_API_KEY` / `STEERABLE_BASE_URL` / `FEISHU_BOT_WEBHOOK` / `NPM_TOKEN` / `PYPI_API_TOKEN`，没有 `ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY`，所以 `claude-code` / `codex` / `pi`（Claude）三格都 skip。
+
+#### 全量 54 道打出来才看清：上面那个"均值持平"是 cheap-12 的假象
+
+把同一配置放到全量 catalog [33587641909](https://github.com/pathlyapp/steerable-framework/actions/runs/33587641909)，跑到 26/49 分片（54 道）时取消：
+
+| 同这 54 道 | 过 |
+| --- | --- |
+| `pi-glm` | 18/54 = 0.333 |
+| `steerable`（4 样本期望） | 44.25/54 = 0.82 |
+
+**差 26 道。** 分组看更清楚：steerable 四次全绿的 40 道里 pi-glm 只过 17，四次全红的 6 道里 pi-glm 过 0。cheap-12 那 12 道太容易，GLM 在 16384 以内就能答完，所以掩盖了问题。
+
+**三个参数全错，而且都不是 harness：** Harbor 的 Pi 适配器把模型条目写成 `{"id": …}`，其余全交给 Pi 兜底，而那些兜底值描述的不是 GLM-5.3：
+
+| | Pi 兜底 | GLM-5.3 实际 / steerable 用的 |
+| --- | --- | --- |
+| `contextWindow` | 128000 | **1048576**（`steerable_agent_runtime.model_info` 是权威表） |
+| `maxTokens` | 16384 | **65536**（`STEERABLE_MAX_TOKENS`） |
+| `reasoning` | `false` | GLM 支持 `low`/`high`/`max`，steerable 用 `max` |
+
+`reasoning: false` 的后果最隐蔽：Pi 会认为这个模型只支持 `["off"]` 这一档，把 `--thinking xhigh` 直接夹成 `off`，请求里**一个 reasoning 字段都不发**。所以 `suite.yaml` 里写的 `thinking: xhigh` 从来没生效过。窗口小 8 倍还会让 `clampMaxTokensToContext` 提前把输出预算削掉。
+
+证据在 `pi.txt` 里：某个 trial 记着 `"reasoning": 16314`，正顶着 16384 上限——GLM 一轮思考烧光全部预算，剩 70 个 token 什么也写不出，工具都没调。全量 54 个 trial 里 22 个输出量 ≥16000。
+
+**修法（2.5.15 完成）：** `evals/harbor_pi_glm.py` 里子类化 Harbor 的 Pi，覆盖 `_build_custom_models_json`，补上真实窗口、65536 上限、`reasoning_effort: max`、temperature 1.0、以及 `provider.order=[z-ai]` 路由钉死。`suite.py` 现在**拒绝** `pi-glm` 写 `harbor: pi`，理由写在报错里。agent 名字改成 `pi-glm`：原来 `result.json` 里写的是 `pi`，看不出这条腿跑的是 Claude 还是 GLM。
+
+**哪些结论还站得住：** 只有"`sanitize-git-repo` 不是 GLM 的能力墙"这半句。pi 是在更差的配置下过的，一道题在更差配置下能过就说明模型做得到。**"所以是我们 harness 的问题"那半句不成立**，那是从 1 个样本推的。反过来 pi-glm 挂掉的题一律不能归因，得等对齐后重跑。
+
+#### 对齐后验证：改动确实落到请求里了，同时撞出 2.5.11 的直接反例
+
+对齐后重跑 `cheap-12` [33589729056](https://github.com/pathlyapp/steerable-framework/actions/runs/33589729056)，那一格 53 分钟（坏配置 35 分钟）。均值仍是 10/12 —— 预期之内，这 12 道在坏配置下就已经 10/12，分数在这里没有信息量。**要看的是 `pi.txt` 的逐条消息 token**：
+
+| 题 | 轮数 | 最大单轮输出 | 最大单轮推理 | 变化 |
+| --- | --- | --- | --- | --- |
+| `polyglot-c-py` | 8 | 24638 | 24059 | 上轮红 → **绿** |
+| `openssl-selfsigned-cert` | 4 | 18189 | 16195 | 绿 |
+| `filter-js-from-html` | 1 | **65536** | 65159 | 红（两边都挂） |
+| `sanitize-git-repo` | 24 | 2810 | 2623 | 上轮绿 → 红 |
+
+**单轮输出突破 16384 就是改动生效的判据**，坏配置下这在物理上不可能。`polyglot-c-py` 正是上轮顶着 16384 被截断、零工具调用、烧掉 8 分钟那道，现在 8 轮迭代后过了。
+
+**`filter-js-from-html` 给 2.5.11 补上了直接反例：它一轮烧光全部 65536 然后结束**，与上轮顶着 16384 死掉是同一个病，只是墙挪远了 4 倍。这道题 `steerable` 也是 0/4。所以**上限往哪个方向调都不解决跑飞，只决定它撞哪面墙**；上一节说"收紧是反方向"只对了一半，放宽同样不解决。
+
+`sanitize-git-repo` 这次翻红（24 轮、无截断，失败原因与上限无关），随后的 catalog 也红。**逐题记录：pi 1/3，steerable 0/5**（4 次全量 + 这次 cheap-12）。所以它是**两个 harness 都大多做不成的难题**，"不是 GLM 能力墙"仍成立（过过一次就够），但不能算作 harness 损耗的例子。
+
+**`filter-js-from-html` 是跨 harness 的同一个病，两边撞不同的墙。** 同一轮 cheap-12 里 steerable 也红，抛的是 `AgentTimeoutError`（2h11m 跑满）；pi 是一轮烧光 65536。两个 harness、同一模型、同样的输出上限，都栽在"一直生成不干活"上——pi 先撞 token 上限，我们的软超时 150 分钟比它晚到，所以撞的是墙上时钟。工作流对 errored trial 主动失败（退出码 2），这个行为是对的：不让超时混进正常的 0 分里。
+
+约束：artifact 只有 `pi.txt`，没有 `models.json` 也没有 session 目录，所以请求体只能从 token 形态反推，不能直接读。要直接验证得让 Harbor 的 Pi 把 `models.json` 也上传。
+
+### 对齐后的全量对照：9 道稳定红裂成 3 + 6，靶子随之改变
+
+`pi-glm` 全量 89 道 [33593245247](https://github.com/pathlyapp/steerable-framework/actions/runs/33593245247)：**67/89 = 0.7528**。对照 `steerable` 四样本 0.8006 ± 0.0232。
+
+**这个差读不出 harness 优劣。** 单次样本比四样本均值，差距约 2 个标准差，而单题翻面率 12.6%。而且差是均匀摊开的（全绿组 51/60、翻面组 13/20、稳定红组 3/9），不集中在任何一类题上——噪声就长这样。**均值在这里没有信息量，逐题名单才有。**
+
+| `steerable` 分档 | 道数 | `pi-glm` 过 |
+| --- | --- | --- |
+| 4/4 全绿 | 60 | 51 |
+| 0/4 稳定红 | 9 | 3 |
+| 翻面 | 20 | 13 |
+
+**9 道稳定红裂成两组，这是本轮的主要产出：**
+
+- **harness 损耗 3 道**（同模型同参数，pi 过、我们 4/4 全挂）：`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`
+- **能力墙候选 6 道**（两边都稳定挂）：`extract-moves-from-video`、`filter-js-from-html`、`make-doom-for-mips`、`regex-chess`、`sanitize-git-repo`、`winning-avg-corewars`
+
+**反方向 9 道：`steerable` 4/4 全绿而 pi 挂** —— `adaptive-rejection-sampler`、`caffe-cifar-10`、`dna-insert`、`feal-linear-cryptanalysis`、`headless-terminal`、`polyglot-rust-c`、`pytorch-model-recovery`、`query-optimize`、`torch-pipeline-parallelism`。**这份名单是回归风险清单**：我们的 harness 已经在 9 道题上赢过 pi，照 pi 的做法盲改会踩掉这些。
+
+**靶子改了。** 之前定的"提分空间在 20 道翻面题"要修正：翻面题是配对 A/B 的**测试集**，不是靶子。**最确定的靶子是上面那 3 道 harness 损耗题** —— 它们不是概率问题，是同一个模型在我们这儿做不成、在 pi 那儿做成了，机制可查、可单题验收，不需要靠均值分辨。
+
+### `pi-glm` 复现跑：两组样本不重叠，差 4–8 道
+
+为把 `pi-glm` 从 1 个样本补到 3 个，在 `ci/evals-pi-glm` 上又派了两次全量（[33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301)、[33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232)，串行）。Run A 出到 84/89 时 **60/84**，剩 5 道无论怎么走最终都落在 60–65 之间。
+
+| | 通过题数（满分 89） |
+| --- | --- |
+| `steerable` | 69, 70, 73, 73 |
+| `pi-glm` | 67, ≤65（run A） |
+
+**两组不重叠。** 这比比均值稳健——不依赖标准差估计，也不依赖"约 4.3 道"那个外推（偏乐观了，实际 **4–8 道**）。
+
+**但这不等于"pi 的 harness 更差"。** 只对齐了模型请求参数（`maxTokens`、`contextWindow`、`reasoning_effort`、路由、temperature），**没对齐超时预算、提示词、工具集**。这是两个 harness 在各自默认配置下的差，不是 harness 质量的差。均值也仍然不是本轮主产出——3 道 harness 损耗题才是。
+
+### 耗时与 token：两个 harness 的失败方式完全不同形状
+
+`result.json` 单题粒度一直带着 `agent_execution` 起止时间和 `agent_result.n_*_tokens`，之前只取了 reward，这两项白扔了。补统计的口径：每题取 reward 最高的那次 attempt，`secs` 取 `agent_execution` 而非 trial 全长（不含建环境和 verifier）。提取脚本 `/tmp/trial_stats.py`。
+
+| run | 绿题中位 | 红题中位 | 红题撞满 | agent 总时 |
+| --- | --- | --- | --- | --- |
+| `steerable` base 0.8202 | 25.4 min | 159.8 min | 8/16 = 50% | 84.8 h / 89 |
+| `steerable` r1 0.7865 | 35.0 min | 155.0 min | 8/19 = 42% | 103.0 h / 89 |
+| `steerable` r2 0.8202 | 28.5 min | 126.9 min | 4/16 = 25% | 82.0 h / 89 |
+| `steerable` r3 0.7753 | 19.3 min | 160.2 min | 8/20 = 40% | 85.4 h / 89 |
+| `pi-glm` runA（84 道） | 10.4 min | 32.1 min | 2/24 = 8% | 38.9 h / 84 |
+
+"撞满"= agent 执行 ≥165 min。`steerable` 四个样本的红题最长值都精确是 **170.0 min**，即我们自己的硬超时；`pi` 没有这套机制，跑到 Harbor 的 180.0 min。
+
+**两点，都不是均值能告出来的：**
+
+**一、`steerable` 的红题有 25–50% 是把时间预算烧光的，`pi` 只有 8%。** 每题平均耗时 `steerable` 0.92–1.16 h、`pi` 0.46 h，只用了我们一半。所以 `pi` 那 4–8 道的差距**不是超时导致的** —— 它是提前收工，不是跑不完。反过来说，我们输给 pi 的那 3 道也不能默认归因到超时，得逐题看（2.5.16）。
+
+**二、`pi` 的红题输出 token 中位数恰好是 65536，正好是对齐时设的 `maxTokens`。** 绿题中位 19114，红题是它的 3.4 倍。其中 5 道的签名尤其干净——输出 ≈65536 而**输入只有 1.5k–10k**，意味着**第一个请求就把整个输出上限烧光，trial 直接结束**，一次工具调用都没发生：
+
+| 题 | 输出 token | 输入 token |
+| --- | --- | --- |
+| `polyglot-rust-c` | 65,536 | 1,521 |
+| `regex-chess` | 65,536 | 1,890 |
+| `feal-linear-cryptanalysis` | 65,612 | 5,656 |
+| `dna-assembly` | 65,571 | 7,459 |
+| `torch-pipeline-parallelism` | 65,777 | 9,800 |
+
+这 5 道里 4 道正是"反方向 9 道"（我们赢 pi）中的成员。**所以那 9 道里至少有 4 道不是我们的 harness 强，而是 pi 撞了输出上限** —— 回归风险清单要相应缩小，别拿它们当我们的既有优势。
+
+另有 2 道走到 180 min 超时：`model-extraction-relu-logits`（输入 9.8 M）和 `gcode-to-text`（输入 **53.2 M**）。`gcode-to-text` 恰好是 3 道 harness 损耗题之一，pi 在它上面烧了 53 M 输入 token 才过——**pi 过这道是靠蛮力，不是靠某个我们缺的机制**，2.5.16 读轨迹时要按这个预期去核。
+
+`pytorch-model-recovery` 是 0.0 min / 0 token，即 trial 起来就错了，不该算作失败样本。
+
+**约束：`steerable` 的 artifact 里 89/89 道都没有 token 字段** —— `harbor_steerable` 从没填过 `agent_result.n_input_tokens` / `n_cache_tokens` / `n_output_tokens`。所以上面 token 一侧的结论**只对 pi 成立，跨 harness 比不了**。本文档此前"红题 3.3 min/次调用 vs 绿题 0.8"那类结论是从日志正文数出来的，不是这个字段。补齐见 2.5.18。
+
+### 两个迭代 split 都按两次 run 选的，四样本到手后一直没改
+
+`15c8d82`。这是"结论只写进文档、代码没跟上"的一次实例，和 2.5.5 的空操作同类。
+
+**`flaky`**（判据：结果是抛硬币的题，因为只有这些题 harness 改动才赢得到或输得掉）原有 25 道，与四样本实测的 20 道只重合 7 道：18 道实际不翻面（含 `sanitize-git-repo`、`dna-insert` 这些其实是稳定红或稳定绿的），13 道真翻面的不在名单里。**照旧名单跑 2.5.8 的配对 A/B，测的绝大部分是稳定题。**
+
+**`spiral-red`**（判据：0-for-N 的题，问"改动能不能让它过得了"，单次通过即算发现）原有 7 道，4 道已不成立：
+
+| 题 | 四样本 | 处置 |
+| --- | --- | --- |
+| `gpt2-codegolf` | 4/4 全过 | 删 |
+| `schemelike-metacircular-eval` | 4/4 全过 | 删 |
+| `dna-assembly` | 2/4 | 移入 `flaky` |
+| `circuit-fibsqrt` | 1/4 | 移入 `flaky` |
+| `extract-moves-from-video` / `regex-chess` / `winning-avg-corewars` | 0/4 | 留 |
+
+**留着前两道会直接白送两个假阳性** —— 判据是"单次通过即算发现"，而它们的基线从来就不是零。这条会污染 2.5.10 的验收。
+
+两个 split 的注释里现在都写了判据、每题的四样本通过数，以及"样本数增加时要重算、不要按单跑加题"。同步改了 workflow 的 `--shards`（20 / 3）和矩阵——`test_sharded_jobs_shard_over_their_whole_split` 卡着这个必须一致，否则尾部 id 静默不派发。删掉两道翻面题后 `flaky` 与 `spiral-red` 的重合也消失了，此前那条禁止重合的测试之所以过，是因为它比的是两份都过期的名单。
+
 - [x] **2.5.1** cuts A/B 完成
 - [x] **2.5.2** 切流默认关闭（保留 env 覆盖）
-- [x] **2.5.5** 命名输出检测补上检查清单措辞（6/6，假阳性 3）
-- [ ] **2.5.3** 加 codex 式持久性指令（绿 trial 中位数只用掉 150 分钟里的 12 分钟）
-- [ ] **2.5.4** 全量 89 记录 Mean ≥ 0.75
+- [x] **2.5.5** 命名输出检测补上检查清单措辞（6/6，假阳性 3）—— **实为空操作**，89 道题上检测结果零差异，见上节
+- [x] **2.5.3** 加 codex 式持久性指令（绿 trial 中位数只用掉 150 分钟里的 12 分钟）。codex 是三家对照里唯一带这条的，参数对照也没找到别的对我们不利的不对称
+- [x] **2.5.6** 门禁判据改成 `ran_since_write`（见上节；方向对但单独测不出来）
+- [x] **2.5.4** 全量 89 记录 Mean ≥ 0.75 —— `27d521a` 0.8202
+- [x] **2.5.7** 测 `8acc022`：[33514869908](https://github.com/pathlyapp/steerable-framework/actions/runs/33514869908) 已证实是空对照，改动本身不改变任何一道题的行为。这一跑改用途，只当第三个噪声样本
+- [ ] **2.5.8** 持久性指令 + 门禁判据打包成一个 arm 测。单次全量分辨不了这个量级，按本文档自己的功效表要走配对 A/B，子集用上节定稿的 20 道翻面题 ×3 次
+- [x] **2.5.9** 查那 6 道"文件缺失"红题的真实结束方式 —— 已查明：分类过期（只剩 1 道真缺文件），门禁触发过但无效，真约束是墙上时钟。见上两节
+- [ ] **2.5.10** 收工窗口活锁检测：连续 N 轮 `tool_choice=required` 且零工具调用就换策略，不再原地重问。`regex-chess` 在 20 分钟窗口里被 16 次无效重试吃光。**理由是机制的算术错了，不是它值几题**，不要拿单题结果验收
+- [ ] **2.5.11** 压每步文本量（红题 3.3 min/次调用 vs 绿题 0.8）。切流式"打断"已证伪。**`max_tokens` 往两个方向都已证伪**：16384 时 `polyglot-c-py` 截断即失败，65536 时 `filter-js-from-html` 一轮烧光照样失败——上限只决定撞哪面墙。要改的是文本产生方式（提示词、工具调用时机）
+- [x] **2.5.14** 9 道稳定红已裂成 **harness 损耗 3 道**（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）+ **能力墙候选 6 道**，见上节。同时产出 9 道反向名单（我们赢 pi）作为回归风险清单
+- [ ] **2.5.16** 逐题读那 3 道 harness 损耗题的 pi 与 steerable 轨迹，定位差在哪。**单题可验收，不必靠均值** —— 这是当前最确定的靶子。注意 3 道都只有 pi 的 1 个样本，先确认 pi 那次不是侥幸（必要时单跑这 3 道 ×3）
+- [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
+- [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
+- [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
+- [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
+- [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
+- [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
 
 ---
 

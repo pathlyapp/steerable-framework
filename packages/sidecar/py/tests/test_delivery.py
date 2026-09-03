@@ -365,6 +365,122 @@ async def test_unverified_gate_stands_down_during_wrap_up() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unverified_gate_refuses_a_turn_that_only_looked_at_its_output() -> None:
+    """Viewing the output does not stand the gate down, however compound.
+
+    This is the case the gate missed while it asked whether the write was the
+    last action: circuit-fibsqrt ended on `cat gates.txt | head -50; wc -l`,
+    counting the lines of a file it never sent to the circuit evaluator. Of
+    the 56 catalog-89 trials that ended on a non-writing bash, the 15 that
+    only viewed passed at 0.533 against 0.727 for those that ran a program.
+    """
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "cd /app && cat gates.txt | head -50; wc -l gates.txt"},
+        ),
+        ctx,
+    )
+    action = await hooks.before_completion(_draft(tools=2), ctx)
+    assert action.kind == "retry"
+    assert action.reason == "unverified_output"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_treats_a_blind_sed_as_no_check() -> None:
+    """An in-place edit leaves the output no more verified than before it."""
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    await hooks.post_tool_result(
+        ok,
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "sed -i 's/0.93/0.995/' results.json"},
+        ),
+        ctx,
+    )
+    action = await hooks.before_completion(_draft(tools=2), ctx)
+    assert action.reason == "unverified_output"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "./solver --self-check",
+        "cd /app && ./sim gates.txt",
+        "echo score=$(./score --report)",
+        "cat input.txt | ./filter",
+        "uv run pytest tests/",
+    ],
+)
+async def test_unverified_gate_stands_down_once_anything_ran(command: str) -> None:
+    """Any word outside the viewing list counts as a run, known or not.
+
+    The gate can only be wrong by staying quiet, which is why an unrecognised
+    command is read as a run: a list of the ways to check an output would go
+    stale, while the ways to look at one are a closed set.
+    """
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    await hooks.post_tool_result(
+        ok, ToolCall(id="t", name="bash", arguments={"command": command}), ctx
+    )
+    assert (await hooks.before_completion(_draft(tools=2), ctx)).kind == "accept"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    ["cat input.txt | ./filter > out.txt", "python3 score.py"],
+)
+async def test_unverified_gate_holds_a_command_that_ran_and_also_wrote(
+    command: str,
+) -> None:
+    """Delivering while running leaves the delivery itself unchecked.
+
+    Whatever such a command executed, it ran before the bytes it produced
+    existed, so those bytes are in the state the gate exists to refuse. This
+    is also why ``_bash_writes`` counting `python3 x.py` as a write does not
+    need to distinguish a generator from a scorer here.
+    """
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(
+        ok, ToolCall(id="t", name="bash", arguments={"command": command}), ctx
+    )
+    action = await hooks.before_completion(_draft(tools=1), ctx)
+    assert action.reason == "unverified_output"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_reopens_when_the_fix_lands_after_the_check() -> None:
+    """Running, then editing, is as unverified as never running at all."""
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    await hooks.post_tool_result(
+        ok, ToolCall(id="t", name="bash", arguments={"command": "pytest -q"}), ctx
+    )
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    action = await hooks.before_completion(_draft(tools=3), ctx)
+    assert action.reason == "unverified_output"
+
+
+@pytest.mark.asyncio
 async def test_unverified_gate_stays_out_of_a_trial_with_no_write() -> None:
     """An inspect-only turn is the no_artifact retry's business, not this gate."""
     hooks = DeliveryHooks()

@@ -401,6 +401,20 @@ def rewrite_forwarded_env_value(key: str, value: str) -> str:
     return value
 
 
+def is_zai_glm(model: str) -> bool:
+    """Whether Z.AI's own routing and effort defaults apply to this model.
+
+    ``reasoning_effort=max`` and the ``z-ai`` endpoint pin are specific to
+    GLM: other vendors reject that effort value, and asking OpenRouter for a
+    non-GLM model on the ``z-ai`` provider with fallbacks off answers
+    "No endpoints found" for every trial rather than degrading.
+
+    :param model: OpenRouter model id, without the Harbor provider prefix.
+    :returns: True for Z.AI GLM ids.
+    """
+    return model.strip().lower().startswith("z-ai/glm")
+
+
 def ensure_github_no_proxy(env: dict[str, str]) -> None:
     """Clash GET of the GitHub uv tarball often stalls; apt still uses the proxy.
 
