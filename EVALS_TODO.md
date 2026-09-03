@@ -585,6 +585,14 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 **约束：`steerable` 的 artifact 里 89/89 道都没有 token 字段** —— `harbor_steerable` 从没填过 `agent_result.n_input_tokens` / `n_cache_tokens` / `n_output_tokens`。所以上面 token 一侧的结论**只对 pi 成立，跨 harness 比不了**。本文档此前"红题 3.3 min/次调用 vs 绿题 0.8"那类结论是从日志正文数出来的，不是这个字段。补齐见 2.5.18。
 
+### catalog 的 job 超时短于最慢 trial，完整结果靠运气
+
+Run A 的 shard 1 / 7 / 37 都在 GitHub Actions 的 360 分钟 job 上限被取消。题目自身的 agent 预算也最高可到 360 分钟，但 job 还要负责建环境、安装 Pi 和跑 verifier，二者设成相同值意味着合法的长尾 trial 也没有收尾余量。`actions/upload-artifact` 带 `if: always()`，所以被取消前已经落盘的 86 道结果保住了；另 3 道没有结果，不是模型判负。
+
+Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`、`schemelike-metacircular-eval`、`train-fasttext`。公开聚合排除这 3 道基础设施缺失，不把它们记作 Pi 的失败。
+
+同一轮的 `eval-pi-glm-7` artifact 达 **406 MB**，而其他分片大多只有几十 KB 到十几 MB。体积来自完整 `pi.txt`；一次诊断下载超过 20 分钟，且异常文本生成会同时放大 artifact 存储和分析成本。分数只需要 `result.json`，完整 transcript 应单独限长或作为按需 artifact。
+
 ### 两个迭代 split 都按两次 run 选的，四样本到手后一直没改
 
 `15c8d82`。这是"结论只写进文档、代码没跟上"的一次实例，和 2.5.5 的空操作同类。
@@ -621,6 +629,8 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 - [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
 - [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
 - [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
+- [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计
+- [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h

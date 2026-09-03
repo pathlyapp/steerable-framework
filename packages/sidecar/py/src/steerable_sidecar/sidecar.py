@@ -702,7 +702,21 @@ class Sidecar:
             )
 
         transport = self._transport
-        if _use_coreloop(params):
+        use_coreloop = _use_coreloop(params)
+        content_mode = params.get("contentMode", "all")
+        if content_mode not in ("all", "final"):
+            raise JsonRpcError(
+                "contentMode must be 'all' or 'final'",
+                code=-32602,
+                kind="invalid_params",
+            )
+        if content_mode == "final" and not use_coreloop:
+            raise JsonRpcError(
+                "contentMode 'final' requires useCoreLoop",
+                code=-32602,
+                kind="invalid_params",
+            )
+        if use_coreloop:
             task = asyncio.create_task(
                 self._run_chat_stream_coreloop(
                     provider, messages, params, stream_id, transport
@@ -1099,6 +1113,12 @@ class Sidecar:
         new protocol to opt in: content/reasoning deltas and tool progress
         arrive as ``stream.chunk``; the terminal completion arrives as
         ``stream.done`` with the loop's status/reason attached.
+
+        ``contentMode: "final"`` buffers each provider call's display text
+        until its outcome is known. A new request replaces a rejected retry
+        draft, and a tool call discards that request's narration. Only the
+        terminal tool-free response reaches the host; the durable record and
+        trace still retain every intermediate assistant turn.
         """
 
         hooks: LoopHooks = (
@@ -1362,6 +1382,8 @@ class Sidecar:
         # via trace.fetch (and so a future resume projection has the events).
         recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
         self._coreloops[stream_id] = loop
+        final_content_only = params.get("contentMode") == "final"
+        pending_content: list[str] = []
         try:
             async for event in recorder.tee(
                 loop.run(
@@ -1370,6 +1392,28 @@ class Sidecar:
                     chat_id=params.get("chatId"),
                 )
             ):
+                if final_content_only:
+                    if event.kind == "llm_request":
+                        pending_content.clear()
+                    elif event.kind == "content_delta":
+                        pending_content.append(str(event.data.get("delta") or ""))
+                        continue
+                    elif event.kind == "tool_call_start":
+                        pending_content.clear()
+                    elif event.kind == "error":
+                        pending_content.clear()
+                    elif event.kind == "completion":
+                        if event.data.get("status") == "executing":
+                            pending_content.clear()
+                        elif pending_content:
+                            await transport.emit_notification(
+                                "stream.chunk",
+                                {
+                                    "streamId": stream_id,
+                                    "delta": "".join(pending_content),
+                                },
+                            )
+                            pending_content.clear()
                 await self._emit_loop_event(
                     transport,
                     stream_id,

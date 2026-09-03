@@ -118,6 +118,13 @@ Notifications emitted by the sidecar:
 The sidecar replies with `{"streamId":"s_42"}` immediately, then pushes
 `stream.chunk` notifications until `stream.done`.
 
+CoreLoop streams accept `contentMode: "all" | "final"` (default `"all"`).
+`"all"` streams assistant text from every model request. `"final"` buffers
+display text until each request's outcome is known, discards tool-round
+narration and rejected retry drafts, and emits only the terminal tool-free
+response. Tool progress notifications, the durable record, and the trace are
+unchanged. `"final"` requires `useCoreLoop: true`.
+
 CoreLoop tunables accepted in `params` (all optional): `maxRounds`,
 `maxToolErrors`, `budgetTokens`, `softTimeoutMs`, `toolTimeoutMs`.
 `toolTimeoutMs` is the per-tool-execution backstop: a tool that produces

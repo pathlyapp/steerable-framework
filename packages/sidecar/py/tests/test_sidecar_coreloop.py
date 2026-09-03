@@ -16,9 +16,15 @@ class _ScriptedProvider:
     name = "scripted"
     model = "scripted-model"
 
-    def __init__(self, script: list[list[LLMStreamChunk]], fail_on: set[int] | None = None):
+    def __init__(
+        self,
+        script: list[list[LLMStreamChunk]],
+        fail_on: set[int] | None = None,
+        fail_after_content_on: set[int] | None = None,
+    ):
         self._script = script
         self._fail_on = fail_on or set()
+        self._fail_after_content_on = fail_after_content_on or set()
         self.attempts = 0
         self._round = 0
         self.stream_kwargs: list[dict] = []
@@ -41,6 +47,8 @@ class _ScriptedProvider:
             self._round += 1
             for chunk in chunks:
                 yield chunk
+                if attempt in self._fail_after_content_on and chunk.content_delta:
+                    raise RuntimeError("upstream disconnected after partial content")
 
         return _gen()
 
@@ -157,6 +165,113 @@ async def test_coreloop_path_executes_tool_round() -> None:
     assert any(c.get("delta") == "sum is 3" for c in chunks)
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_final_content_mode_omits_tool_round_narration() -> None:
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="I will inspect. "),
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(
+                        id="c1", name="add", arguments={"a": 1, "b": 2}
+                    )
+                ),
+                LLMStreamChunk(finish_reason="tool_calls"),
+            ],
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "add", "parameters": {}},
+                }
+            ],
+            "useCoreLoop": True,
+            "contentMode": "final",
+        },
+    )
+
+    deltas = [
+        p["delta"]
+        for method, p in events
+        if method == "stream.chunk" and "delta" in p
+    ]
+    assert deltas == ["sum is 3"]
+    assert any(
+        method == "stream.chunk" and "toolResult" in payload
+        for method, payload in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_content_mode_replaces_partial_request_before_retry() -> None:
+    provider = _ScriptedProvider(
+        [_text_round("partial draft"), _text_round("recovered answer")],
+        fail_after_content_on={1},
+    )
+    sidecar = _make_sidecar(provider)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "contentMode": "final",
+        },
+    )
+
+    deltas = [
+        p["delta"]
+        for method, p in events
+        if method == "stream.chunk" and "delta" in p
+    ]
+    assert provider.attempts == 2
+    assert deltas == ["recovered answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"useCoreLoop": True, "contentMode": "unknown"},
+        {"contentMode": "final"},
+    ],
+)
+async def test_content_mode_rejects_invalid_combinations(params: dict) -> None:
+    provider = _ScriptedProvider([_text_round("unused")])
+    sidecar = _make_sidecar(provider)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "hi"}],
+                **params,
+            },
+        )
+    )
+
+    assert response["error"]["kind"] == "invalid_params"
 
 
 @pytest.mark.asyncio

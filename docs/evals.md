@@ -6,7 +6,7 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 
 ## Score of record
 
-**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution).
+**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution). Current `main` also contains the persistence prompt and post-write verification gate from `20a854d`; those changes are newer than the measured commit and are not included in the 80% score.
 
 | Sample | GitHub Actions | Mean |
 | ------ | -------------- | ---- |
@@ -54,9 +54,11 @@ Harbor first-party names: `oracle`, `claude-code`, `codex`, `pi`. Product agent:
 
 Pi installs [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) in the trial container (`harbor run -a pi`). Claude Code and Pi default to `anthropic/claude-sonnet-4-5` so cheap-12 compares harness behavior. Codex uses `openai/gpt-5.5`. The product agent defaults to `openai/z-ai/glm-5.3-flash` (OpenRouter GLM-5.3-Flash). Override with `python -m evals.run --model …`.
 
-`pi-glm` is the same Pi install on the product model and gateway, which isolates the harness as the one difference from a `steerable` run and bounds how much of the product score is the model's ceiling. The weekly job hands `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell alone: an unconditional base URL would point the Claude `pi` cell at the product gateway.
+`pi-glm` is the same Pi install on the product model and gateway. The weekly job hands `OPENROUTER_API_KEY` / `OPENROUTER_BASE_URL` to that cell alone: an unconditional base URL would point the Claude `pi` cell at the product gateway.
 
 It runs through `evals.harbor_pi_glm:PiGlmHarborAgent` so the request matches the steerable leg — 1048576 context, 65536 output, `reasoning_effort: max`, temperature 1.0, Z.AI route pinned. Stock `harbor: pi` leaves Pi's own defaults in place (128000 / 16384 / no reasoning) and scored 18/54 against steerable's 44/54 average on the same tasks; `suite.py` rejects that configuration. See `evals/README.md`.
+
+This aligns model request parameters, not the full evaluation protocol. Pi and Steerable retain their own prompts, tools, loop behavior, and timeout handling; Steerable has also been tuned through repeated Terminal-Bench runs while Pi uses its default harness behavior. The result compares those configured systems, not harness quality in isolation. The 65536 output cap is also consequential: at least five Pi failures consumed approximately the entire cap on their first request without making a tool call.
 
 ## cheap-12
 
