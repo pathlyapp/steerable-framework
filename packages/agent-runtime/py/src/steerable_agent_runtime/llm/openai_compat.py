@@ -492,7 +492,13 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
     if message.reasoning_details:
         out["reasoning_details"] = message.reasoning_details
     elif message.reasoning:
+        # DeepSeek thinking models require the previous turn's chain of
+        # thought to be echoed back under `reasoning_content` (they reject
+        # the follow-up request otherwise); other OpenAI-compat endpoints
+        # simply ignore the extra key. Keep the generic `reasoning` field
+        # too for providers that read it (e.g. OpenRouter fallback path).
         out["reasoning"] = message.reasoning
+        out["reasoning_content"] = message.reasoning
     return out
 
 
