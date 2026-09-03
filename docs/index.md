@@ -38,16 +38,16 @@ Pick any subset, skip the rest — every layer ships on its own.
 <div class="sf-score sf-score--ours" markdown>
 <span class="sf-score-value">80%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">Terminal-Bench 2.1 · 4-run mean</span>
+<span class="sf-score-meta">TB 2.1 · 4-run mean · this repo</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">78.9%</span>
-<span class="sf-score-label">Claude Code + Opus 4.8</span>
-<span class="sf-score-meta">vendor-submitted · tbench.ai</span>
+<span class="sf-score-value">+7</span>
+<span class="sf-score-label">vs Pi on the same Flash model</span>
+<span class="sf-score-meta">Pi + GLM-5.3-Flash · 73%</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">83.1%</span>
-<span class="sf-score-label">Codex CLI + GPT-5.5</span>
+<span class="sf-score-value">79–84%</span>
+<span class="sf-score-label">Native frontier CLI band</span>
 <span class="sf-score-meta">vendor-submitted · tbench.ai</span>
 </div>
 </div>
@@ -92,25 +92,134 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
-<div class="sf-bench" markdown>
+<div class="sf-bench">
 
-| Agent | Model | TB 2.1 | Source |
-| ----- | ----- | ------ | ------ |
-| **Steerable** | **GLM-5.3-Flash** | **80%** | this repo, 4× catalog-89 |
-| Claude Code | Claude 5 Fable | 83.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Codex CLI | GPT-5.5 | 83.1% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Terminus 2 | Claude 5 Fable | 80.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Pi | GLM-5.3-Flash | 73% | this repo, 3 catalog runs |
-| Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | GLM-5.3-Flash | 84.3% | [Z.AI](https://z.ai/blog/glm-5.3-flash), Claude Code 2.1.207, 6h |
+<div class="sf-bench-group sf-bench-group--focus">
+<div class="sf-bench-kicker">Same model · GLM-5.3-Flash</div>
+<p class="sf-bench-blurb">The comparison that matters: identical cheap model, different harness.</p>
+
+<div class="sf-bench-row sf-bench-row--ours">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Steerable <span class="sf-bench-badge">ours</span></span>
+<span class="sf-bench-model">GLM-5.3-Flash</span>
+</div>
+<span class="sf-bench-pct">80%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-delta">+7 vs Pi · in the frontier band</span>
+<span class="sf-bench-src">this repo, 4× catalog-89</span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Pi</span>
+<span class="sf-bench-model">GLM-5.3-Flash</span>
+</div>
+<span class="sf-bench-pct">73%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:73%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-note">same model, default harness</span>
+<span class="sf-bench-src">this repo, 3 catalog runs</span>
+</div>
+</div>
+
+<p class="sf-bench-foot">Same Flash model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3% (Z.AI)</a>, 6-hour timeout — a different protocol, not this comparison.</p>
+</div>
+
+<div class="sf-bench-group">
+<div class="sf-bench-kicker">Frontier CLIs · public board</div>
+<p class="sf-bench-blurb">Different models and harnesses. Shows the band 80% sits in, not a controlled A/B.</p>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Claude Code</span>
+<span class="sf-bench-model">Claude 5 Fable</span>
+</div>
+<span class="sf-bench-pct">83.8%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:83.8%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Codex CLI</span>
+<span class="sf-bench-model">GPT-5.5</span>
+</div>
+<span class="sf-bench-pct">83.1%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:83.1%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Terminus 2</span>
+<span class="sf-bench-model">Claude 5 Fable</span>
+</div>
+<span class="sf-bench-pct">80.4%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80.4%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Claude Code</span>
+<span class="sf-bench-model">Claude Opus 4.8</span>
+</div>
+<span class="sf-bench-pct">78.9%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:78.9%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Codex CLI</span>
+<span class="sf-bench-model">GPT-5.6 Terra</span>
+</div>
+<span class="sf-bench-pct">78.4%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:78.4%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Claude Code</span>
+<span class="sf-bench-model">Claude Sonnet 5</span>
+</div>
+<span class="sf-bench-pct">74.6%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:74.6%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Gemini CLI</span>
+<span class="sf-bench-model">Gemini 3.1 Pro</span>
+</div>
+<span class="sf-bench-pct">65.8%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:65.8%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-src"><a href="https://snorkel.ai/leaderboard/terminal-bench-2-1/">Snorkel / tbench.ai</a></span>
+</div>
+</div>
+</div>
 
 </div>
 
 <p class="sf-lede" markdown>
-Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout); our same-model Pi result is 73% across three catalog runs. Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
+Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — usable as a coding agent, not a demo loop.
 </p>
 
 <h2 class="sf-section">Quickstart — pick your path</h2>

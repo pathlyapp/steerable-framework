@@ -73,20 +73,28 @@ Every layer is independently published. Use just the protocol types, just the UI
 
 A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
 
+**Same model · GLM-5.3-Flash** — identical cheap model, different harness:
+
+| Agent | TB 2.1 | Notes |
+| ----- | ------ | ----- |
+| **Steerable** | **80%** | this repo, 4× catalog-89 · **+7 vs Pi**, in the frontier band |
+| Pi | 73% | this repo, 3 catalog runs · same model, default harness |
+
+Same Flash model on Claude Code is 84.3% under [Z.AI](https://z.ai/blog/glm-5.3-flash)'s 6-hour protocol (Claude Code 2.1.207) — a different protocol, not this comparison.
+
+**Frontier CLIs · public board** — different models and harnesses; shows the band 80% sits in:
+
 | Agent | Model | TB 2.1 | Source |
 | ----- | ----- | ------ | ------ |
-| **Steerable** | **GLM-5.3-Flash** | **80%** | this repo, 4× catalog-89 |
 | Claude Code | Claude 5 Fable | 83.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Codex CLI | GPT-5.5 | 83.1% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Terminus 2 | Claude 5 Fable | 80.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
 | Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Pi | GLM-5.3-Flash | 73% | this repo, 3 catalog runs |
 | Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | GLM-5.3-Flash | 84.3% | [Z.AI](https://z.ai/blog/glm-5.3-flash), Claude Code 2.1.207, 6h |
 
-Same model on Claude Code is 84.3% under Z.AI's protocol (6-hour timeout); our same-model Pi result is 73% across three catalog runs. Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash model — usable as a coding agent, not a demo loop.
+Claude Code's 84.3% on the same Flash model uses Z.AI's 6-hour protocol; we wrap at 170 minutes. Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — usable as a coding agent, not a demo loop.
 
 ---
 
