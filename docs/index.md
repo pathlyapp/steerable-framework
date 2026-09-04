@@ -89,14 +89,14 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <h2 class="sf-section">Terminal-Bench 2.1</h2>
 
 <p class="sf-lede" markdown>
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80%**, Pi 73%, Codex 57% — the harness alone moves the score 26 points. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
 <div class="sf-bench">
 
 <div class="sf-bench-group sf-bench-group--focus">
-<div class="sf-bench-kicker">Same model · GLM-5.3-Flash</div>
-<p class="sf-bench-blurb">The comparison that matters: identical cheap model, different harness.</p>
+<div class="sf-bench-kicker">Same model · same gateway · four harnesses</div>
+<p class="sf-bench-blurb">The comparison that matters: identical GLM-5.3-Flash, identical OpenRouter gateway. The harness is the multiplier.</p>
 
 <div class="sf-bench-row sf-bench-row--ours">
 <div class="sf-bench-who">
@@ -106,8 +106,21 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <span class="sf-bench-pct">80%</span>
 <span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80%"></span></span>
 <div class="sf-bench-meta">
-<span class="sf-bench-delta">+7 vs Pi · in the frontier band</span>
+<span class="sf-bench-delta">ties Claude Code within noise · ⅓ less $ per solve</span>
 <span class="sf-bench-src">this repo, 4× catalog-89</span>
+</div>
+</div>
+
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Claude Code</span>
+<span class="sf-bench-model">GLM-5.3-Flash</span>
+</div>
+<span class="sf-bench-pct">83%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:83%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-note">single run, same gateway</span>
+<span class="sf-bench-src">this repo, catalog-89</span>
 </div>
 </div>
 
@@ -124,7 +137,20 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 </div>
 
-<p class="sf-bench-foot">Same Flash model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3% (Z.AI)</a>, 6-hour timeout — a different protocol, not this comparison.</p>
+<div class="sf-bench-row">
+<div class="sf-bench-who">
+<span class="sf-bench-agent">Codex CLI</span>
+<span class="sf-bench-model">GLM-5.3-Flash</span>
+</div>
+<span class="sf-bench-pct">57%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:57%"></span></span>
+<div class="sf-bench-meta">
+<span class="sf-bench-note">protocol-bound lower bound · 7× $ per solve</span>
+<span class="sf-bench-src">this repo, catalog-89</span>
+</div>
+</div>
+
+<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.11 · Claude Code $0.16 · Codex $0.77. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
 </div>
 
 <div class="sf-bench-group">
@@ -219,7 +245,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 
 <p class="sf-lede" markdown>
-Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — usable as a coding agent, not a demo loop.
+Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — about **$7.50 per full 89-task run** — usable as a coding agent, not a demo loop.
 </p>
 
 <h2 class="sf-section">Quickstart — pick your path</h2>

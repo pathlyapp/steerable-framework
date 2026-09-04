@@ -43,7 +43,16 @@ Vendor-submitted Terminal-Bench 2.1 scores from the [Snorkel / tbench.ai board](
 | Pi | GLM-5.3-Flash | 73% |
 | Gemini CLI | Gemini 3.1 Pro | 65.8% ±1.7 |
 
-Same model, different harness: [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout). That protocol is not ours (we wrap at 170 minutes). The ~4-point gap is the honest harness difference, not a claim that the two numbers are interchangeable.
+Same model, different harness — measured on this repo's protocol, not vendor pages. All four rows run `z-ai/glm-5.3-flash` through the same OpenRouter account on the Harbor catalog-89 protocol:
+
+| Harness | TB 2.1 | Runs | Input tokens / run | Cost / run | Cost / solved task |
+| ------- | ------ | ---- | ------------------ | ---------- | ------------------ |
+| Claude Code | 83.0% (73/88) | 1 | 289.8 M | $11.32 | $0.155 |
+| **Steerable** | **80.1% ±2.3** | 4 | ~194 M (gateway estimate) | ~$7.50 | ~$0.105 |
+| Pi | 73.4% ±2.2 | 3 | 138.9 M | ~$3.90 | $0.061 |
+| Codex CLI | 57.3% (47/82) | 1 | 696.4 M | $36.35 | $0.773 |
+
+Codex CLI is a protocol lower bound, not a model reading: OpenRouter's Responses API translation layer rejected long-conversation payloads (13,525 zero-token failed requests in one catalog), and errored trials score 0 without the model being wrong. Steerable's per-run tokens come from OpenRouter analytics because the four scored runs predate our token telemetry (±15%, calibrated against Pi's exact records); every other number is from per-trial `result.json`. For reference, [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout) — consistent with our own 83% Claude Code measurement on the 170-minute protocol.
 
 The Pi result is our own Harbor run rather than a vendor-submitted leaderboard score. Its model request parameters match the Steerable leg, subject to the protocol differences documented below.
 
