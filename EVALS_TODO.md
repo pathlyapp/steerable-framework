@@ -536,6 +536,45 @@ hard_timeout 归因：178 个 trial 共 6 次，**5 次是推理螺旋**（日�
 
 **靶子改了。** 之前定的"提分空间在 20 道翻面题"要修正：翻面题是配对 A/B 的**测试集**，不是靶子。**最确定的靶子是上面那 3 道 harness 损耗题** —— 它们不是概率问题，是同一个模型在我们这儿做不成、在 pi 那儿做成了，机制可查、可单题验收，不需要靠均值分辨。
 
+### 同模型换 harness 之二、三：`codex-glm` 与 `claude-code-glm`
+
+`ci/evals-glm-harnesses`（`72e5058`）。两个新腿都子类化 Harbor 自带 adapter、指向**同一个模型、同一个网关**，与 `steerable` 相比只差 harness。`codex-glm` 要恢复被 Harbor 截断的完整模型 slug、补 `model_context_window=1048576` 和 `model_reasoning_effort=max`；`claude-code-glm` 要满足 OpenRouter Anthropic 端点的三条约定（base URL 去掉 `/v1`、key 走 `ANTHROPIC_AUTH_TOKEN` 且 `ANTHROPIC_API_KEY` 置空、`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`），缺任何一条都会在发请求前被 CLI 本地白名单拒掉。
+
+cheap-12 两轮（12 道，同模型）：
+
+| harness | 第一轮 | 第二轮 | 输入 token（二轮） | 输出 token（二轮） |
+| --- | --- | --- | --- | --- |
+| `pi-glm` | 10/12 | 11/12 | 1.18 M | 149 k |
+| `codex-glm` | 9/12 | 7/12 | 19.25 M | 109 k |
+| `claude-code-glm` | 配置失败 | 8/12 | 5.10 M | 154 k |
+
+cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能下结论。
+
+全量 catalog 单样本（`n_attempts=1`），按实际产出结果的 trial 计分，job 超时缺失的题不计为模型失败：
+
+| harness | 通过 | 分数 | 缺失（job 取消） | 异常 | 输入 token | 输出 token | agent 总时 | 单题中位 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `claude-code-glm` [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303) | 73/88 | **0.8295** | 1（`train-fasttext`） | 6（4×断流、1×限流、1×超时） | 289.8 M | 5.37 M | 39.4 h / 88 | 11.8 min |
+| `codex-glm` [33787435198](https://github.com/pathlyapp/steerable-framework/actions/runs/33787435198) | 47/82 | **0.5732** | 7 | 9（7×进程崩、1×超时、1×网关拒包） | 696.4 M | 1.54 M | 38.6 h / 82 | 7.4 min |
+
+对照已完成的全量：`steerable` 四样本均值 **0.8006 ± 0.0232**（69/70/73/73），`pi-glm` 三样本均值 **0.7336 ± 0.0222**（67/61/65）。
+
+**`claude-code-glm` 的 0.8295 落在 `steerable` 四样本区间（0.7753–0.8202）的上沿之外，是五个 harness 里单样本最高的。** 但它是 1 个样本对 4 个样本，差 0.029 约 1.2 个标准差，读不出"Claude Code 的 harness 比 steerable 强"。能下的结论是：**GLM 在这套题上的天花板不低于 0.83，steerable 的 0.80 不是模型能力上限。**
+
+**`codex-glm` 的 0.5732 是下界，不是 Codex 的真实水平。** 9 道异常里 7 道是 `NonZeroAgentExitCodeError`（Codex 进程在长对话里被 OpenRouter 的 Responses API 转译层拒掉，报 `Invalid input: expected string, received undefined`），1 道是 `protein-assembly` 的 `NetworkConnectionError`（同一个 shim 拒包），1 道超时。这些在计分上算 0 分，但都不是模型答错。Codex 的输入 token 696 M 是 `pi-glm` 全量的 5 倍以上，输出只有 1.5 M——它在长对话里反复重读上下文，且每 4.5 个输入 token 只有 1 个走缓存（`pi-glm` 是 1.2:1）。
+
+逐题对照（同模型、同题、同网关）：
+
+| | `claude-code-glm` | `codex-glm` |
+| --- | --- | --- |
+| 9 道 steerable 稳定红里通过 | 4（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`、`sanitize-git-repo`、`winning-avg-corewars` 中过 4，缺 1） | 3（`extract-moves-from-video`、`pytorch-model-cli`、`sanitize-git-repo`） |
+| 3 道 harness 损耗题（pi 过、steerable 0/4） | **3/3 全过** | 1/3（`pytorch-model-cli`） |
+| 反方向 9 道（steerable 4/4、pi 挂） | 8/9 | 5/8（缺 1） |
+
+**3 道 harness 损耗题 Claude Code 全过了。** 这 3 道（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）是"同一个模型在 pi 那儿做成、在 steerable 这儿 4/4 全挂"的靶子，现在第二个 harness 也做成了——**它们是 steerable 的 harness 损耗，不是模型天花板**，2.5.16 的优先级不变。
+
+两个 harness 在 81 道共同题上只一致 48 道，33 道分叉。Claude Code 独过 27 道，Codex 独过 6 道。这个分叉度本身就是噪声量级的直接证据：同一模型、同一题，两个 harness 各跑一遍，40% 的题结果不同。
+
 ### `pi-glm` 复现跑：三样本 0.7336 ± 0.0222
 
 为把 `pi-glm` 从 1 个样本补到 3 个，在 `ci/evals-pi-glm` 上又派了两次全量（[33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301)、[33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232)，串行）。按实际产出结果的 trial 计分，不把 job 超时造成的缺失记成模型失败：
@@ -637,8 +676,9 @@ Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`�
 - [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
 - [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
 - [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
-- [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计
+- [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计。**codex-glm 这次更糟：5 个 shard 被取消、7 道题没有结果**，其中 `install-windows-3.11`、`make-mips-interpreter`、`train-fasttext` 都是独占 shard 的重题，单题预算 360 分钟和 job 上限相同，没有任何余量
 - [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
+- [ ] **2.5.22** `codex-glm` 的 7 道 `NonZeroAgentExitCodeError` 和 1 道 `NetworkConnectionError` 是 OpenRouter Responses API 转译层拒包（`Invalid input: expected string, received undefined`），不是模型答错。要么给 Codex 换 wire API，要么在 gateway 侧修这个 shim，否则 codex-glm 的分数永远是下界
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
