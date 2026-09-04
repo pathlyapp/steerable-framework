@@ -555,7 +555,9 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 | harness | 通过 | 分数 | 缺失（job 取消） | 异常 | 输入 token | 输出 token | agent 总时 | 单题中位 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `claude-code-glm` [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303) | 73/88 | **0.8295** | 1（`train-fasttext`） | 6（4×断流、1×限流、1×超时） | 289.8 M | 5.37 M | 39.4 h / 88 | 11.8 min |
-| `codex-glm` [33787435198](https://github.com/pathlyapp/steerable-framework/actions/runs/33787435198) | 47/82 | **0.5732** | 7 | 9（7×进程崩、1×超时、1×网关拒包） | 696.4 M | 1.54 M | 38.6 h / 82 | 7.4 min |
+| `codex-glm` [33787435198](https://github.com/pathlyapp/steerable-framework/actions/runs/33787435198) + 补缺 [33833485414](https://github.com/pathlyapp/steerable-framework/actions/runs/33833485414) | 52/89 | **0.5843** | 0 | 9（7×进程崩、1×超时、1×网关拒包） | 888.5 M | 2.14 M | 47.7 h / 89 | 7.4 min（补缺 7 题中位 87.7） |
+
+补缺 7 题结果：`install-windows-3.11`、`feal-linear-cryptanalysis`、`llm-inference-batching-scheduler`、`reshard-c4-data`、`write-compressor` 过；`make-mips-interpreter`、`path-tracing` 0 分（结果正常落盘，harbor 以 exit code 2 上报导致 shard 标红，非 infra 故障）。补缺轮网关侧 $5.97 / 237.7 M，放大 1.23×——协议崩题集中在第一轮。
 
 四个 harness 的时间与 token 全量对照（steerable / pi-glm 为多样本逐轮列出；token 取自 `result.json` 的 `agent_result`，时间取 `agent_execution` 起止）：
 
@@ -585,22 +587,22 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 | `claude-code-glm` | 1 | **0.8295**（73/88） | 289.8 M | 5.37 M | 1.05× | $11.32 | 11.8 min | 4.0 M | $0.155 |
 | `steerable` | 4 | **0.8006 ± 0.0232** | ~194 M ✳ | ~15 M ✳ | —（无自报对照） | ~$7.5 ✳ | 36 min | ~2.9 M | ~$0.105 |
 | `pi-glm` | 3 | **0.7336 ± 0.0222** | 138.9 M | 3.9 M | 1.07× | ~$3.9 | 20 min | 2.2 M | $0.061 |
-| `codex-glm` | 1 | **0.5732**（47/82，下界） | 696.4 M | 1.54 M | 1.93× | $36.35 | 7.4 min | 14.9 M | $0.773 |
+| `codex-glm` | 1+补缺 | **0.5843**（52/89，仍受协议问题压制） | 888.5 M | 2.14 M | 1.78× | $42.32 | 7.4 min | 17.1 M | $0.814 |
 
 读法：
 
-- **分数**：claude-code-glm 单样本最高（0.8295），steerable 四样本均值 0.8006 第二，pi-glm 0.7336 第三，codex-glm 0.5732 垫底且是协议问题压出来的下界（2.5.22）。
-- **效率（token/过题）**：pi-glm 2.2 M 最省，steerable ~2.9 M 次之，claude-code-glm 4.0 M，codex-glm 14.9 M 是 pi 的 7 倍——分数最低，烧得最多。
-- **成本/过题**：pi-glm $0.061 < steerable ~$0.105 < claude-code-glm $0.155 < codex-glm $0.773。codex 单轮 $36.35 里有将近一半烧在 13 525 个被转译层拒掉的请求上。
+- **分数**：claude-code-glm 单样本最高（0.8295），steerable 四样本均值 0.8006 第二，pi-glm 0.7336 第三，codex-glm 0.5843 垫底且仍被协议问题压着（2.5.22）。
+- **效率（token/过题）**：pi-glm 2.2 M 最省，steerable ~2.9 M 次之，claude-code-glm 4.0 M，codex-glm 17.1 M 是 pi 的 8 倍——分数最低，烧得最多。
+- **成本/过题**：pi-glm $0.061 < steerable ~$0.105 < claude-code-glm $0.155 < codex-glm $0.814。codex 两轮 $42.32 里有将近一半烧在 15 522 个被转译层拒掉的请求上（第一轮 13 525 + 补缺 1 997）。
 - **时间**：codex 单题最快（7.4 min）但那是"早死"——大量题在协议错误上提前终止；claude-code-glm 的 11.8 min 是健康的最快；steerable 的 36 min 主要耗在跑飞题撞软超时。
 - **网关放大** = 网关侧 token ÷ harness 自报，即重试/拒包成本。claude 1.05× 和 pi 1.07× 是健康水平，codex 1.93× 是 2.5.22 的直接量化。
-- claude-code-glm 与 codex-glm 各缺 1/7 题（job 超时），补缺 run 进行中；steerable 的 token 是 OpenRouter Analytics 网关侧估值（±15%，方法见上节 ✳）。
+- codex-glm 补缺已完成（7 题过 5，52/89 收官）；claude-code-glm 仍缺 `train-fasttext` 1 题（补缺 run 进行中）；steerable 的 token 是 OpenRouter Analytics 网关侧估值（±15%，方法见上节 ✳）。
 
 对照均值：`steerable` 四样本 **0.8006 ± 0.0232**（69/70/73/73），`pi-glm` 三样本 **0.7336 ± 0.0222**（67/61/65）。
 
 **`claude-code-glm` 的 0.8295 落在 `steerable` 四样本区间（0.7753–0.8202）的上沿之外，是五个 harness 里单样本最高的。** 但它是 1 个样本对 4 个样本，差 0.029 约 1.2 个标准差，读不出"Claude Code 的 harness 比 steerable 强"。能下的结论是：**GLM 在这套题上的天花板不低于 0.83，steerable 的 0.80 不是模型能力上限。**
 
-**`codex-glm` 的 0.5732 是下界，不是 Codex 的真实水平。** 9 道异常里 7 道是 `NonZeroAgentExitCodeError`（Codex 进程在长对话里被 OpenRouter 的 Responses API 转译层拒掉，报 `Invalid input: expected string, received undefined`），1 道是 `protein-assembly` 的 `NetworkConnectionError`（同一个 shim 拒包），1 道超时。这些在计分上算 0 分，但都不是模型答错。Codex 的输入 token 696 M 是 `pi-glm` 全量的 5 倍以上，输出只有 1.5 M——它在长对话里反复重读上下文，且每 4.5 个输入 token 只有 1 个走缓存（`pi-glm` 是 1.2:1）。
+**`codex-glm` 的 0.5843（52/89 完整 catalog）仍不是 Codex 的真实水平。** 9 道异常里 7 道是 `NonZeroAgentExitCodeError`（Codex 进程在长对话里被 OpenRouter 的 Responses API 转译层拒掉，报 `Invalid input: expected string, received undefined`），1 道是 `protein-assembly` 的 `NetworkConnectionError`（同一个 shim 拒包），1 道超时。这些在计分上算 0 分，但都不是模型答错。Codex 两轮输入 token 合计 888.5 M 是 `pi-glm` 单轮的 6 倍以上，输出只有 2.1 M——它在长对话里反复重读上下文，且每 4.5 个输入 token 只有 1 个走缓存（`pi-glm` 是 1.2:1）。
 
 逐题对照（同模型、同题、同网关）：
 
