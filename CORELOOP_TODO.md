@@ -1813,6 +1813,33 @@ regen 走 fork、用量面板、遥测隐私档位、分层技能、`spill` 在�
       成功的 steer 也写进桌面 store：record 本来就记了，但重开会话渲染的是
       store，缺这一步用户会回到一个没有问题的答案。
 
+#### R12 追平（2026-09-05）
+
+对照 canvas `steerable-r12-four-framework-review` 的 P0–P2（明确不做插件
+运行时、Provider 广度、会话树 UI）：
+
+- [x] **P0 沙箱收容否则拒启动** — Layer-2 产品路径是 `requireBackend`
+      （只拒 `enforcement == none`）。不要设 `requireFull: true`：桌面恒发
+      `network: true`，Seatbelt / bwrap / Landlock 都报 `partial`，`requireFull`
+      会在 macOS 上也拒绝全部 shell。Layer-1 Linux 用已有
+      bwrap→Landlock 包住整个 `python -m steerable_sidecar`（
+      `python -m steerable_sidecar.sandbox linux-wrap`），Windows 用
+      `win-spawn-helper --passthrough`；失败拒 spawn。Harbor / headless
+      评测容器本身是边界，不套 Layer-1 拒跑。唯一裸跑口是显式
+      `STEERABLE_SIDECAR_SANDBOX=0`。
+- [x] **P1 `run_code`** — 模型一轮里用程序调多个工具。子进程 + JSON IPC，
+      走现有审批与 Layer-2 后端；禁止在持 API key 的 sidecar 里 `exec`
+      模型 Python。默认关（`STEERABLE_RUN_CODE=1` 才注册）。Harbor 不像
+      web 工具那样默认关掉。
+- [x] **P2a web_search 产品可打开** — 设置页录入 Tavily 钥，spawn 时注入
+      `STEERABLE_WEB_SEARCH_API_KEY`。OpenAI（`api.openai.com`）无钥时注入
+      `STEERABLE_WEB_SEARCH_PROVIDER=host`，由 Electron 用已有聊天凭证执行
+      托管搜索。不爬 DuckDuckGo HTML。空钥仍不注册。Harbor `--no-web-tools`。
+- [x] **P2b 会话跨进程写租约** — sidecar `sessions.db` 旁 `sessions.lock`
+      （POSIX `fcntl.flock` / Windows 命名互斥）；桌面 `deeppath-agent.lock`
+      + `app.requestSingleInstanceLock()`。争用 `StoreAlreadyOwnedError` /
+      第二实例退出。无 TTL 抢锁；锁文件不删；进程死则内核释放。
+
 **评测口径的一处仓库卫生问题**：`evals/jobs/steerable/OVERNIGHT.md` 是 8/30
 的本地过夜作业（77 个 id 只跑分 13 个、均值 0.385），**不是**记分口径
 （记分是 `docs/evals.md` 里那四条 GHA run，均值 0.8006 / SD 0.023），但文件

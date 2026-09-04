@@ -84,6 +84,22 @@ has a relevance floor: a document containing no query term scores zero and
 is dropped, so an off-vocabulary query returns an empty result rather than
 irrelevant tools.
 
+## `run_code` (programmatic tool calls)
+
+Opt-in (`STEERABLE_RUN_CODE=1`). The model still sees native tools; `run_code`
+is an extra tool whose arguments are `{code, description}`. `code` is the
+body of a Python function. The program runs in a **child** interpreter
+under the same layer-2 backend as bash (Seatbelt / bwrap / Landlock). The
+sidecar process that holds the API key does not `exec` model Python.
+
+The child talks JSON-over-stdio (`tools.call(name, **kwargs)` /
+`tools.<name>(...)`). Nested calls go through the live executor (approval,
+sandbox rewrite, host `tool.invoke`). Nested `run_code` is refused.
+`import os` / `subprocess` / `socket` fail. No backend →
+`error: sandbox_unavailable`. Default off; Harbor does not force it off
+the way `--no-web-tools` omits fetch — leave the env unset unless the trial
+wants it.
+
 The `progressive` harness strategy (`harness.py`) builds on the tiers: the
 offered list is the direct tier plus the `tool_search` descriptor. It needs
 the run's `ToolRouter` — the entrypoint calls
@@ -129,13 +145,20 @@ not inherit the read posture).
 `web_search` goes through the `WebSearchProvider` protocol — the same grain
 as `LLMProvider`: a protocol, a default factory
 (`default_web_search_provider`), and explicit injection at registration, so
-the backend changes without touching the tool. The shipped backend is
-Tavily (`POST {base_url}/search`, bearer key from
+the backend changes without touching the tool. The shipped in-process
+backend is Tavily (`POST {base_url}/search`, bearer key from
 `STEERABLE_WEB_SEARCH_API_KEY` or `TAVILY_API_KEY` — never the brokered LLM
 key: under credential-broker mode the sidecar must not hold the real chat
-key, so search carries its own credential). An unconfigured backend leaves
-`web_search` **unregistered** rather than available-but-broken; an unknown
-provider name raises at resolve time.
+key, so search carries its own credential). The desktop settings page
+persists that key in userData and injects it at sidecar spawn; an empty
+key still leaves `web_search` **unregistered**.
+
+`STEERABLE_WEB_SEARCH_PROVIDER=host` registers without a sidecar key so the
+Electron host can execute hosted search with the existing chat credential
+(OpenAI `api.openai.com` only). GLM, OpenRouter, and DeepSeek have no hosted
+search here — they need the Tavily settings key. There is no DuckDuckGo
+HTML scrape. Harbor keeps `--no-web-tools`. An unknown provider name
+raises at resolve time.
 
 ### Bounds
 

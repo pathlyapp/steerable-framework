@@ -1459,6 +1459,7 @@ async def test_storage_path_config_selects_sqlite(tmp_path) -> None:
         _frame("agent.session.create", {"sessionId": "s_durable", "chatId": "c1"})
     )
     assert "error" not in response, response
+    sidecar.storage.close()
 
     # simulate restart: a new Sidecar on the same path sees the session
     restarted = Sidecar(config=SidecarConfig(storage_path=db))
@@ -1467,6 +1468,7 @@ async def test_storage_path_config_selects_sqlite(tmp_path) -> None:
     )
     assert "error" not in fetched, fetched
     assert fetched["result"]["sessionId"] == "s_durable"
+    restarted.storage.close()
 
 
 @pytest.mark.asyncio

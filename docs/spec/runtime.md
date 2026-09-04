@@ -175,7 +175,12 @@ prefix.
 `SqliteStorage` keeps every entity's full pydantic JSON in a `data` column
 and duplicates the filter/order fields (ids, `chat_id`, `seq`,
 `created_at`) as indexed columns, so session enumeration and the resume
-tail-scan are indexed lookups. `search_sessions(query)` (an
+tail-scan are indexed lookups. A sibling ``*.lock`` file
+(``fcntl.flock`` / Windows named mutex) makes the writer process-exclusive:
+a second process opening the same ``--storage-path`` fails loud
+(``StoreAlreadyOwnedError``). Process death releases the kernel lock; there
+is no TTL steal; the lock file is never deleted. WAL remains so offline
+maintenance can read without taking the write lease. `search_sessions(query)` (an
 implementation-specific extension beyond the protocol) finds sessions by
 message content via SQL. Offline maintenance lives in
 `steerable_agent_runtime.maintenance` (`check` / `compact` / `archive` /

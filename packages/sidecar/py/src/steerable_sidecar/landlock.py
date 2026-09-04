@@ -309,12 +309,19 @@ class LandlockExecBackend:
         """Full sandboxed argv through the launcher (also used by the
         availability probe, so the probe exercises the real entry path)."""
 
-        argv = [self._executable, "-m", "steerable_sidecar.landlock_run"]
+        return self.argv_for_exec([self._shell, "-c", command])
+
+    def argv_for_exec(self, argv: Sequence[str]) -> list[str]:
+        """Wrap an argv (not a shell string) for layer-1 process confinement."""
+
+        if not argv:
+            raise ValueError("linux-wrap command argv is empty")
+        wrapped = [self._executable, "-m", "steerable_sidecar.landlock_run"]
         for root in self._roots:
-            argv += ["--root", root]
+            wrapped += ["--root", root]
         if self._network:
-            argv.append("--network")
-        return [*argv, "--", self._shell, "-c", command]
+            wrapped.append("--network")
+        return [*wrapped, "--", *argv]
 
     def wrap_command(self, command: str) -> str:
         return " ".join(shlex.quote(part) for part in self.argv_for(command))

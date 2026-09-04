@@ -50,6 +50,7 @@ docs/spec/safety.md.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import re
@@ -347,6 +348,14 @@ class SeatbeltExecBackend:
         argv = seatbelt_argv(self._profile, [self._shell, "-c", command])
         return " ".join(shlex.quote(part) for part in argv)
 
+    def argv_for_exec(self, argv: Sequence[str]) -> list[str]:
+        """Wrap an argv (not a shell string) — used by ``run_code`` to
+        confine the driver process without going through ``sh -c``."""
+
+        if not argv:
+            raise ValueError("run_code command argv is empty")
+        return seatbelt_argv(self._profile, list(argv))
+
 
 # ---------------------------------------------------------------------------
 # Linux: bubblewrap per-exec backend
@@ -439,7 +448,15 @@ class BwrapExecBackend:
         """Full sandboxed argv (also used by the availability probe, so the
         probe exercises the same profile builder as real wraps)."""
 
-        return [self._executable, *self._profile_args(), "--", self._shell, "-c", command]
+        return self.argv_for_exec([self._shell, "-c", command])
+
+    def argv_for_exec(self, argv: Sequence[str]) -> list[str]:
+        """Wrap an argv (not a shell string) — used to confine the sidecar
+        process itself (layer 1) without going through ``sh -c``."""
+
+        if not argv:
+            raise ValueError("linux-wrap command argv is empty")
+        return [self._executable, *self._profile_args(), "--", *argv]
 
     def wrap_command(self, command: str) -> str:
         return " ".join(shlex.quote(part) for part in self.argv_for(command))
@@ -535,6 +552,50 @@ def select_exec_backend(
     return None
 
 
+def linux_process_wrap(
+    argv: Sequence[str],
+    *,
+    writable_roots: Sequence[str] | None = None,
+    network: bool = True,
+) -> dict[str, object]:
+    """Build argv that confines a long-lived process (layer 1) on Linux.
+
+    Same ladder as per-exec: bwrap first, Landlock if bwrap cannot run.
+    Network stays on (the sidecar must reach the LLM). Enforcement is
+    therefore ``partial``, matching Seatbelt's honest port-only story.
+    Raises ``RuntimeError`` when neither backend probes usable — hosts
+    must refuse spawn, not fall back unsandboxed.
+    """
+
+    if not argv:
+        raise ValueError("linux-wrap command argv is empty")
+    path = bwrap_path()
+    if path is not None:
+        backend = BwrapExecBackend(
+            writable_roots=writable_roots,
+            network=network,
+            executable=path,
+        )
+        return {
+            "argv": backend.argv_for_exec(list(argv)),
+            "backend": "bwrap",
+            "enforcement": backend.enforcement,
+        }
+    if landlock_available():
+        backend = LandlockExecBackend(
+            writable_roots=writable_roots,
+            network=network,
+        )
+        return {
+            "argv": backend.argv_for_exec(list(argv)),
+            "backend": "landlock",
+            "enforcement": backend.enforcement,
+        }
+    raise RuntimeError(
+        "no Linux process sandbox (bwrap and Landlock both unavailable)"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="steerable-sidecar-sandbox",
@@ -576,6 +637,27 @@ def main() -> int:
             "are offered; without it every fetch fails name resolution."
         ),
     )
+    wrap_cmd = sub.add_parser(
+        "linux-wrap",
+        help="Print JSON argv that confines a Linux process (bwrap then Landlock).",
+    )
+    wrap_cmd.add_argument(
+        "--writable-root",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Directory the process may write into (repeatable).",
+    )
+    wrap_cmd.add_argument(
+        "--no-network",
+        action="store_true",
+        help="Unshare/deny network (sidecar layer-1 must not pass this).",
+    )
+    wrap_cmd.add_argument(
+        "argv",
+        nargs=argparse.REMAINDER,
+        help="Command argv after -- (the process to confine).",
+    )
     args = parser.parse_args()
 
     if args.command == "profile":
@@ -587,6 +669,22 @@ def main() -> int:
                 web_egress=args.allow_web_egress,
             )
         )
+        return 0
+    if args.command == "linux-wrap":
+        command = list(args.argv)
+        if command and command[0] == "--":
+            command = command[1:]
+        try:
+            plan = linux_process_wrap(
+                command,
+                writable_roots=list(args.writable_root),
+                network=not args.no_network,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        sys.stdout.write(json.dumps(plan, separators=(",", ":")))
+        sys.stdout.write("\n")
         return 0
     raise AssertionError(f"unreachable command {args.command}")
 

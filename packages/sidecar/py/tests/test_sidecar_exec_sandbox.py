@@ -221,6 +221,56 @@ async def test_require_full_denies_when_no_backend(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_require_backend_denies_when_no_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("steerable_sidecar.sidecar.select_exec_backend", lambda **_: None)
+    received: list[str] = []
+    provider = _ScriptedProvider(
+        [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
+         _text_round("denied, stopping")]
+    )
+    sidecar = _sidecar_with_bash(received, provider)
+
+    await _run_stream(
+        sidecar, _base_params(execSandbox={"enabled": True, "requireBackend": True})
+    )
+
+    assert received == []
+    payload = (await _tool_payloads(sidecar))[0]
+    assert payload["success"] is False
+    assert payload["error"] == "sandbox_unavailable"
+    assert payload["data"]["_sandbox"]["enforcement"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_require_backend_allows_partial_landlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steerable_sidecar.landlock import LandlockExecBackend
+
+    monkeypatch.setattr(
+        "steerable_sidecar.sidecar.select_exec_backend",
+        lambda **_: LandlockExecBackend(abi=3),
+    )
+    received: list[str] = []
+    provider = _ScriptedProvider(
+        [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
+         _text_round("done")]
+    )
+    sidecar = _sidecar_with_bash(received, provider)
+
+    await _run_stream(
+        sidecar, _base_params(execSandbox={"enabled": True, "requireBackend": True})
+    )
+
+    assert received  # wrapped command ran
+    payload = (await _tool_payloads(sidecar))[0]
+    assert payload["success"] is True
+    assert payload["data"]["_sandbox"]["enforcement"] == "partial"
+
+
+@pytest.mark.asyncio
 async def test_require_full_denies_when_landlock_partial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

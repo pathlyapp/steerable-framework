@@ -27,7 +27,9 @@ from steerable_agent_runtime.approval import (
 from steerable_agent_runtime.loop import LoopContext
 
 from steerable_sidecar.web_tools import (
+    HostDelegatedSearchProvider,
     TavilySearchProvider,
+    WebSearchBackendError,
     WebSearchHit,
     WebToolsConfig,
     _assert_public_address,
@@ -436,6 +438,30 @@ def test_unconfigured_backend_leaves_web_search_unregistered() -> None:
     assert registered == ["web_fetch"]
     assert router.get("web_search") is None
     assert router.get("web_fetch") is not None
+
+
+def test_host_provider_registers_without_a_key() -> None:
+    router = ToolRouter()
+    registered = register_web_tools(
+        router, config=WebToolsConfig(search_provider="host"), environ={}
+    )
+    assert "web_search" in registered
+    assert router.get("web_search") is not None
+    provider = default_web_search_provider(WebToolsConfig(search_provider="host"))
+    assert isinstance(provider, HostDelegatedSearchProvider)
+
+
+async def test_host_provider_refuses_in_process_search() -> None:
+    provider = HostDelegatedSearchProvider()
+    with pytest.raises(WebSearchBackendError, match="Electron parent"):
+        await provider.search("q", max_results=5)
+
+
+def test_host_provider_with_a_key_uses_tavily() -> None:
+    provider = default_web_search_provider(
+        WebToolsConfig(search_provider="host", search_api_key="tvly-k")
+    )
+    assert isinstance(provider, TavilySearchProvider)
 
 
 def test_unknown_provider_name_fails_loud() -> None:

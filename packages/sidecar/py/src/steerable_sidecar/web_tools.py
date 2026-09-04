@@ -61,6 +61,7 @@ from steerable_agent_runtime import ToolRouter
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "HostDelegatedSearchProvider",
     "TavilySearchProvider",
     "WebSearchHit",
     "WebSearchProvider",
@@ -302,17 +303,46 @@ class WebSearchBackendError(Exception):
     which keeps the tool unregistered)."""
 
 
+class HostDelegatedSearchProvider:
+    """Placeholder so ``web_search`` registers without a sidecar search key.
+
+    Desktop injects ``STEERABLE_WEB_SEARCH_PROVIDER=host`` when the LLM
+    vendor has hosted search (OpenAI) and no Tavily key is set. Execution
+    happens in the Electron host with the chat credential; this class
+    exists so ``tool.list`` advertises the tool. In-process invoke is a
+    programming error under ``toolsViaHost``.
+    """
+
+    async def search(self, query: str, *, max_results: int) -> list[WebSearchHit]:
+        raise WebSearchBackendError(
+            "web_search provider 'host' is executed by the Electron parent "
+            "with the chat credential; this sidecar process does not hold "
+            "that key. Set STEERABLE_WEB_SEARCH_API_KEY for in-process Tavily."
+        )
+
+
 def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | None:
     """Resolve the configured search backend; ``None`` when unconfigured.
 
     ``None`` keeps ``web_search`` unregistered — an unconfigured backend must
     not surface as an available-but-broken tool. An unknown provider name is
     misconfiguration and raises.
+
+    ``host`` registers without a sidecar key so the Electron parent can
+    execute hosted search. A Tavily key always wins over ``host``.
     """
     name = config.search_provider
+    if name == "host":
+        if config.search_api_key:
+            return TavilySearchProvider(
+                api_key=config.search_api_key,
+                base_url=config.search_base_url,
+                timeout_ms=config.search_timeout_ms,
+            )
+        return HostDelegatedSearchProvider()
     if name != "tavily":
         raise ValueError(
-            f"unknown web search provider {name!r} (available: 'tavily')"
+            f"unknown web search provider {name!r} (available: 'tavily', 'host')"
         )
     if not config.search_api_key:
         return None
@@ -799,6 +829,7 @@ def register_web_tools(
     else:
         logger.info(
             "web_search not registered: no search backend configured "
-            "(set STEERABLE_WEB_SEARCH_API_KEY or TAVILY_API_KEY)"
+            "(set STEERABLE_WEB_SEARCH_API_KEY / TAVILY_API_KEY, or "
+            "STEERABLE_WEB_SEARCH_PROVIDER=host for Electron hosted search)"
         )
     return registered
