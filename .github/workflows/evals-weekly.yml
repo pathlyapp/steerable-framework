@@ -31,6 +31,10 @@ on:
           STEERABLE_IDLE_STREAM_TIMEOUT_MS=0
           STEERABLE_IDLE_STREAM_MAX_CHARS=0
           STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS=0
+      tasks:
+        description: "catalog only: comma-separated task ids to rerun instead of all 89 (e.g. after a job-level cancel). One shard per task."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -172,15 +176,41 @@ jobs:
             evals/jobs/steerable/*/*/exception.txt
           if-no-files-found: ignore
 
-  catalog:
-    name: TB 2.1 catalog × ${{ github.event.inputs.agent }} shard ${{ matrix.shard }}/49
+  catalog-plan:
+    name: Plan catalog shards
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - id: plan
+        env:
+          TASKS: ${{ github.event.inputs.tasks }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TASKS" ]; then
+            # One shard per task: these reruns exist because a 360-minute job
+            # died holding a long task, so repacking two onto one runner would
+            # recreate the cancel.
+            count=$(echo "$TASKS" | tr ',' '\n' | sed '/^$/d' | wc -l | tr -d ' ')
+          else
+            count=49
+          fi
+          shards=$(seq 0 $((count - 1)) | jq -R . | jq -cs 'map(tonumber)')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+
+  catalog:
+    name: TB 2.1 catalog × ${{ github.event.inputs.agent }} shard ${{ matrix.shard }}/${{ needs.catalog-plan.outputs.count }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
+    needs: catalog-plan
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
+        shard: ${{ fromJSON(needs.catalog-plan.outputs.shards) }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -190,6 +220,8 @@ jobs:
       - name: Harbor catalog shard
         env:
           AGENT: ${{ github.event.inputs.agent }}
+          TASKS: ${{ github.event.inputs.tasks }}
+          SHARDS: ${{ needs.catalog-plan.outputs.count }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           # Same gateway as the product leg, so each `-glm` leg differs from
@@ -205,7 +237,14 @@ jobs:
           OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'codex-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
-          uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          if [ -n "$TASKS" ]; then
+            # shellcheck disable=SC2086
+            split_arg="--tasks $(echo "$TASKS" | tr ',' ' ')"
+          else
+            split_arg="--split catalog"
+          fi
+          # shellcheck disable=SC2086
+          uv run python -m evals.run --agent "$AGENT" $split_arg --shard "${{ matrix.shard }}" --shards "$SHARDS" --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-$AGENT.txt"

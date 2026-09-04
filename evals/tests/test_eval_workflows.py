@@ -49,7 +49,8 @@ def test_catalog_dispatch_offers_every_same_model_harness() -> None:
     every same-model comparison has to be dispatchable there."""
     for leg in ("pi-glm", "claude-code-glm", "codex-glm"):
         assert f"- {leg}" in WEEKLY, f"catalog cannot be dispatched for {leg}"
-    assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
+    assert 'uv run python -m evals.run --agent "$AGENT" $split_arg' in WEEKLY
+    assert 'split_arg="--split catalog"' in WEEKLY
 
 
 def test_catalog_feishu_label_names_the_agent() -> None:

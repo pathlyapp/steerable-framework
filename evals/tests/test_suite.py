@@ -353,7 +353,12 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "--shards 32" not in weekly
     assert "--shards 36" not in weekly
     assert "--shards 48" not in weekly
-    assert "--shards 49" in weekly
+    # The catalog shard count comes from the plan job: 49 for a full run, one
+    # shard per task for a `tasks` rerun. A hardcoded count here would either
+    # break the rerun or silently shrink the full run.
+    assert "--shards 49" not in weekly
+    assert '--shards "$SHARDS"' in weekly
+    assert "count=49" in weekly
     assert "--shards 8" not in weekly
     assert "--shards 4 " not in weekly
     assert "--shards 4\n" not in weekly
@@ -365,11 +370,9 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
         "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
         "16, 17, 18, 19, 20, 21, 22, 23]"
     ) == 1
-    assert (
-        "shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, "
-        "16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, "
-        "32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]"
-    ) in weekly
+    # Catalog shards are planned dynamically so a `tasks` rerun does not
+    # launch 41 empty jobs that fail on "selected no tasks".
+    assert "shard: ${{ fromJSON(needs.catalog-plan.outputs.shards) }}" in weekly
     assert "timeout-minutes: 360" in weekly
     # The sharded splits run the long catalog tasks and need the generous
     # multipliers; cheap-12 stays at ×3 so a smoke run stays a smoke run.
@@ -392,7 +395,8 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert catalog_env.count("OPENAI_API_KEY") == catalog_env.count("OPENAI_BASE_URL")
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
-    assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly
+    assert 'split_arg="--split catalog"' in weekly
+    assert 'split_arg="--tasks $(echo "$TASKS" | tr \',\' \' \')"' in weekly
     assert "OPENAI_API_KEY" not in failed_job.split("upload-artifact", 1)[0]
     assert "STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}" in catalog_job
     assert "agent/headless.log" in weekly
