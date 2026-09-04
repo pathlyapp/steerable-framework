@@ -102,9 +102,12 @@ desktop-spawned sidecar registers them on the RPC router at boot and the
 host delegates execution over `tool.invoke` (the host router carries
 schemas only, gated by a `tool.list` handshake so an unconfigured
 deployment never advertises a broken tool). Single implementation → they
-are deliberately **not** in `tool_contract.json`, which exists to keep the
-two independent `bash`/`read_file`/`write_file`/`edit_file` implementations
-from diverging.
+are deliberately **not** in `tool_contract.json`, which exists to keep
+independently implemented capabilities from diverging: the
+`bash`/`read_file`/`write_file`/`edit_file` pairs, and `tool_search`'s
+ranking (`toolSearch`, scored against a fixed inventory — the desktop ports
+BM25 in `tool-search-rank.ts` rather than delegating, since deferred tools
+are registered host-side).
 
 A caller whose task contract is offline declares that:
 `workspace_tools_for_cwd(..., web_tools=False)`, surfaced as headless's

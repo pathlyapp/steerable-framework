@@ -100,3 +100,42 @@ async def test_version_token_protocol_rejects_stale_write(tmp_path: Path) -> Non
     assert stale.success is False
     reread = await _call(router, "read_file", {"path": "a.txt"})
     assert reread.data["content"] == "v2"
+
+
+def test_tool_search_constants_match_the_contract() -> None:
+    """`tool_search` has two implementations (this one and the desktop host's),
+    which is what the contract exists to hold together."""
+    from steerable_agent_runtime import tool_search
+
+    section = CONTRACT["toolSearch"]
+    assert section["bm25"] == {
+        "k1": tool_search._BM25_K1,
+        "b": tool_search._BM25_B,
+        "nameWeight": tool_search._NAME_WEIGHT,
+    }
+    assert section["defaultMaxResults"] == tool_search.DEFAULT_MAX_RESULTS
+    assert section["maxResultsCeiling"] == tool_search.MAX_RESULTS_CEILING
+
+
+def test_tool_search_reproduces_the_contract_score_vectors() -> None:
+    """Scores, not just ranks: a drift in k1, b, the name weight or the idf
+    form can leave the order intact on a given inventory."""
+    from types import SimpleNamespace
+
+    from steerable_agent_runtime.tool_search import _rank
+
+    section = CONTRACT["toolSearch"]
+    inventory = [
+        SimpleNamespace(name=tool["name"], description=tool["description"])
+        for tool in section["inventory"]
+    ]
+    tolerance = section["scoreTolerance"]
+    for vector in section["scoreVectors"]:
+        ranked = _rank(inventory, vector["query"])
+        assert [tool.name for _, tool in ranked] == [
+            match["name"] for match in vector["ranked"]
+        ], f"ranking drifted for query {vector['query']!r}"
+        for (score, _), match in zip(ranked, vector["ranked"], strict=True):
+            assert abs(score - match["score"]) < tolerance, (
+                f"score drifted for query {vector['query']!r}"
+            )
