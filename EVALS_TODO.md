@@ -616,6 +616,59 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 
 两个 harness 在 81 道共同题上只一致 48 道，33 道分叉。Claude Code 独过 27 道，Codex 独过 6 道。这个分叉度本身就是噪声量级的直接证据：同一模型、同一题，两个 harness 各跑一遍，40% 的题结果不同。
 
+### 0.8295 vs 0.8006 的分差拆解：3 道决定性题，全部指向"钻牛角尖"而非预算不足
+
+把 `claude-code-glm` 单样本与 `steerable` 四样本逐题配对（`steerable` 记 0–4 次通过，`claude` 记单次结果），88 道共同题分五档：
+
+| 档 | 题数 | 说明 |
+| --- | --- | --- |
+| 双方都过（steerable ≥3/4） | 62 | 基本盘相同 |
+| 双方都挂（steerable ≤1/4） | 5 | 能力墙 |
+| **Claude 独过**（steerable ≤1/4） | **8** | 5 道属 9 道稳定红 |
+| **我们独过**（steerable ≥3/4） | **6** | 其中 1 道是 Claude 侧 `ApiRateLimitError`，不算能力差 |
+| 翻面区（steerable 2–3/4） | 14 | Claude 在此 9/13，手气偏上 |
+
+**净决定性差 = 8 − 5 = 3 道 ≈ 0.034**，与观测到的 0.029 分差一致。翻面区贡献的是噪声，不是差距。
+
+**耗时形状是最强的机制信号（超时配置已确认对等：两边 `agent_timeout_multiplier = 12.0`，无 override）：**
+
+| | steerable（4 轮 356 trial） | claude-code-glm（88 trial） |
+| --- | --- | --- |
+| 62 道双方都过的题，通过耗时中位 | 26.6 min | **10.9 min**（快 2.4×） |
+| 失败 trial 耗时中位 | **156 min** | 12.8 min |
+| 耗时 >150 min 的 trial | 65 / 356 = 18% | 2 / 88 = 2% |
+| 精确停在 170 min 的 trial | **30** | 0（最大 180.0） |
+
+那 30 个 170.0 min 是**我们自己的上限**：`harbor_steerable.py` 设 `STEERABLE_SOFT_TIMEOUT_MS=9000000`（150 min），收工阶段再吃约 20 min。Harbor 的实际天花板是 180 min（Claude 的 `make-doom-for-mips` 恰好停在 180.0）。**`winning-avg-corewars` 是这个自设上限的直接代价：Claude 用 171.6 min 做成了这道题，我们在 170.0 min 自杀，差 1.6 分钟。**
+
+**8 道 Claude 独过题按我们的死法分两类，修法完全不同：**
+
+| 类 | 题 | 我们失败 trial 耗时中位 | Claude 通过耗时 |
+| --- | --- | --- | --- |
+| **烧光预算**（5 道） | `circuit-fibsqrt` / `make-mips-interpreter` / `winning-avg-corewars` | 170.0 min（撞顶） | 52.5 / 67.6 / 171.6 min |
+| | `gcode-to-text` / `raman-fitting` | 156 / 123 min | 23.6 / 26.3 min |
+| **快速答错**（3 道） | `pytorch-model-cli` / `sanitize-git-repo` / `video-processing` | 15.6 / 12.7 / 65.4 min | 9.2 / **2.2** / 34.5 min |
+
+**加时间预算不是解法，这条要写死。** 我们有 16 道题撞过 170 上限，其中 12 道被 pi 或 Claude 做出来过——看着像"再给点时间就能过"。但 Claude 在这 12 道上的通过耗时**中位只有 60.9 min，只有 1 道需要 >168 min**。所以撞顶不是预算不够，是**前 60 分钟就走进了死胡同，剩下 110 分钟在里面打转**。把软超时从 150 提到 175 最多回收 `winning-avg-corewars` 一道，同时让每题成本继续上涨。
+
+**我们独过的 6 道是"耐心红利"，机制清楚且值得保护**（Claude 的失败方式从 `verifier/test-stdout.txt` 逐题核过）：
+
+| 题 | 我们 | Claude 怎么挂的 |
+| --- | --- | --- |
+| `mailman` | 4/4，129 min | 28 min 交卷，`ModuleNotFoundError: No module named 'rgplugin'`（插件根本没装） |
+| `chess-best-move` | 3/4，81 min | 10 min 交卷，只给 1 步 `c3e4`，题目要 `e2e4`+`g2g4` 两步 |
+| `caffe-cifar-10` | 4/4，90 min | 40 min 交卷，solver 配置缺 `solver_mode:CPU` 与 `max_iter:500` |
+| `pypi-server` | 4/4 | `vectorops` 包导入失败 |
+| `bn-fit-modify` | 3/4 | 断言失败 |
+| `financial-document-processor` | 4/4 | `ApiRateLimitError`——**基础设施失败，不计入能力差** |
+
+**结论：Claude Code 赢在 loop 早期不走偏（同题快 2.4×、红题 12.8 min 就止损），我们赢在长任务不提前交半成品。** 分差不是模型能力，是 5 道 Claude 独过的稳定红——其中 4 道（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`、`sanitize-git-repo`）pi 也做出来过，属确认的 harness 损耗（2.5.14 / 2.5.16）。这些题修好，均值就落在 0.82–0.83。
+
+**对之前两处判断的修正：**
+
+1. "我们赢在持久性 +6 题"应为 **+5**，`financial-document-processor` 是 Claude 侧限流，不是能力差。
+2. "撞满 170 min 说明预算不够"是**错的**。撞顶题里 11/12 被 Claude 在 60 min 量级做完，预算不是约束；`STEERABLE_SOFT_TIMEOUT_MS` 只值 1 道题（2.5.23）。
+
 ### `pi-glm` 复现跑：三样本 0.7336 ± 0.0222
 
 为把 `pi-glm` 从 1 个样本补到 3 个，在 `ci/evals-pi-glm` 上又派了两次全量（[33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301)、[33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232)，串行）。按实际产出结果的 trial 计分，不把 job 超时造成的缺失记成模型失败：
@@ -713,13 +766,16 @@ Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`�
 - [ ] **2.5.10** 收工窗口活锁检测：连续 N 轮 `tool_choice=required` 且零工具调用就换策略，不再原地重问。`regex-chess` 在 20 分钟窗口里被 16 次无效重试吃光。**理由是机制的算术错了，不是它值几题**，不要拿单题结果验收
 - [ ] **2.5.11** 压每步文本量（红题 3.3 min/次调用 vs 绿题 0.8）。切流式"打断"已证伪。**`max_tokens` 往两个方向都已证伪**：16384 时 `polyglot-c-py` 截断即失败，65536 时 `filter-js-from-html` 一轮烧光照样失败——上限只决定撞哪面墙。要改的是文本产生方式（提示词、工具调用时机）
 - [x] **2.5.14** 9 道稳定红已裂成 **harness 损耗 3 道**（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）+ **能力墙候选 6 道**，见上节。同时产出 9 道反向名单（我们赢 pi）作为回归风险清单
-- [ ] **2.5.16** 逐题读那 3 道 harness 损耗题的 pi 与 steerable 轨迹，定位差在哪。**单题可验收，不必靠均值** —— 这是当前最确定的靶子。注意 3 道都只有 pi 的 1 个样本，先确认 pi 那次不是侥幸（必要时单跑这 3 道 ×3）
+- [ ] **2.5.16** 逐题读那 3 道 harness 损耗题的 pi 与 steerable 轨迹，定位差在哪。**单题可验收，不必靠均值** —— 这是当前最确定的靶子。注意 3 道都只有 pi 的 1 个样本，先确认 pi 那次不是侥幸（必要时单跑这 3 道 ×3）。**Claude Code 的样本把靶子从 3 道扩到 4 道**：`sanitize-git-repo` 也是 pi 与 Claude 都过、我们 0/4，且 Claude 只用 2.2 分钟。读轨迹时优先读它——耗时差 6 倍最容易看出我们在哪一步走岔
 - [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
 - [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
 - [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
 - [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计。**codex-glm 这次更糟：5 个 shard 被取消、7 道题没有结果**，其中 `install-windows-3.11`、`make-mips-interpreter`、`train-fasttext` 都是独占 shard 的重题，单题预算 360 分钟和 job 上限相同，没有任何余量
 - [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
 - [ ] **2.5.22** `codex-glm` 的 7 道 `NonZeroAgentExitCodeError` 和 1 道 `NetworkConnectionError` 是 OpenRouter Responses API 转译层拒包（`Invalid input: expected string, received undefined`），不是模型答错。要么给 Codex 换 wire API，要么在 gateway 侧修这个 shim，否则 codex-glm 的分数永远是下界
+- [ ] **2.5.23** 收工窗口审计：30 个 trial 精确停在 170.0 min，说明软超时 150 min 之后的收工阶段吃了约 20 分钟。Harbor 天花板是 180，`wrap_up_hard_cap_ms` 注释也写着 headless 用 175。**先量收工阶段到底在做什么**——如果只是写文件，20 min 太长，把软阈值提到 165；如果收工阶段还在做实质工作，那 150 这个阈值本身设早了。验收靠 `winning-avg-corewars` 单题（Claude 171.6 min 过，我们 170.0 自杀）。**这是全套里唯一一道能靠改预算拿回来的题，别指望第二道**
+- [ ] **2.5.24** 早期偏航检测（本条替代"加时间预算"的直觉，理由见上节）。红题耗时中位 156 min vs Claude 12.8 min，而 Claude 在我们撞顶的 12 道题上通过耗时中位只有 60.9 min——问题在**前 60 分钟就走进死胡同**。要的不是硬超时，是"连续 N 轮没有可验证进展就强制换方案"。与 2.5.10（收工窗口活锁）是同一族但不同阶段：2.5.10 管最后 20 分钟，本条管前 60 分钟。**先做观测**：在 20 道翻面题上打点"每轮是否产生了新的可验证事实"，确认这个信号能把红绿分开，再谈干预策略
+- [ ] **2.5.25** 3 道"快速答错"题是最便宜的靶子：`sanitize-git-repo`（12.7 min 交错答案，Claude **2.2 min** 就做对）、`pytorch-model-cli`（15.6 min）、`video-processing`（65.4 min）。这些题时间充裕得离谱，失败是**第一次尝试就走错且交付前没有自检**。`raman-fitting` 的 `x0=19196`（应为 1580）是同一族——一个数量级离谱的拟合值，跑一次自检就能发现。检查现有验证门禁（2.5.6 的 `ran_since_write`）在这几道题上为什么没触发或触发了没用
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
