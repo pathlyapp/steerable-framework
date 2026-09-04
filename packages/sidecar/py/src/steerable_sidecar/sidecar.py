@@ -738,10 +738,17 @@ class Sidecar:
                 messages = messages[1:]
         # W2.8.2: the host's assembled system prompt arrives as a typed
         # fragment (token cap enforced at this boundary), not an opaque seed
-        # message. Supplying both is a host bug — fail loud.
+        # message. Supplying both seeds is a host bug — fail loud.
+        #
+        # Only the *leading* message counts as a competing seed. Later system
+        # messages are ordinary transcript content this sidecar itself injected
+        # — the skills catalog, `<world-state>`, reminders — and a resumed
+        # record replays them verbatim. Rejecting those would make resume
+        # impossible for every turn that carried a skill or world-state
+        # fragment.
         system_prompt = params.get("systemPrompt")
         if system_prompt is not None:
-            if any(m.role == "system" for m in messages):
+            if messages and messages[0].role == "system":
                 raise JsonRpcError(
                     "systemPrompt param and a system message in messages are "
                     "mutually exclusive",

@@ -1633,6 +1633,24 @@ async def test_chat_path_router_backed_tools_strategy_fails_loud(monkeypatch) ->
 # ---------------------------------------------------------------------------
 
 
+def _system_entry(seq: int, text: str) -> dict:
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    return entry_to_dict(
+        HistoryItem(
+            seq=seq,
+            kind=kind_for_role("system"),
+            message=LLMMessage.text_of("system", text),
+            token_estimate=3,
+        )
+    )
+
+
 def _user_entry(seq: int, text: str) -> dict:
     from steerable_agent_runtime.history import (
         HistoryItem,
@@ -1818,6 +1836,70 @@ async def test_resume_splices_the_fresh_system_prompt() -> None:
     assert resume_call[0].content_text == "prompt v2"
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_mid_transcript_system_fragments() -> None:
+    """A record carrying a system fragment past the seed still resumes.
+
+    The skills catalog, `<world-state>`, and reminders are all injected as
+    system-role transcript entries, so a real desktop turn's record holds
+    system messages at non-zero indices. Only the leading message competes
+    with the host's `systemPrompt`; treating any of them as a competing seed
+    made resume fail on every turn that carried a skill (found by driving the
+    desktop's crash-resume path against a live sidecar).
+    """
+    provider = _ScriptedProvider([_text_round("answer 1"), _text_round("answer 2")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v1",
+            "messages": [{"role": "user", "content": "question 1"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    # Record: system(0), user(1), assistant(2). The interrupted turn adds a
+    # skills fragment and its user message.
+    await sidecar.storage.append_history(
+        "chat_1",
+        [
+            _system_entry(3, "# Available skills (load on demand)"),
+            _user_entry(4, "question 2"),
+        ],
+    )
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v2",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+    resume_call = provider.seen_messages[-1]
+    assert [m.role for m in resume_call] == [
+        "system",
+        "user",
+        "assistant",
+        "system",
+        "user",
+    ]
+    # The host's fresh prompt seeds the turn; the record's own fragment stays
+    # where the record put it, so the seed is an exact extension.
+    assert resume_call[0].content_text == "prompt v2"
+    assert resume_call[3].content_text == "# Available skills (load on demand)"
 
 
 @pytest.mark.asyncio

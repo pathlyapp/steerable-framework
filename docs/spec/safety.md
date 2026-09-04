@@ -380,7 +380,13 @@ All three layers are **on by default** in the DeepPath desktop build:
   vars and, on macOS, the System Configuration proxy via `scutil`) —
   the sidecar's httpx stack honors ambient proxies, so a configured proxy
   is an effective egress point and must be allow-listed or every LLM call
-  is denied for proxy users (found by dogfooding, 2026-08-29). Explicit
+  is denied for proxy users (found by dogfooding, 2026-08-29). Provider
+  endpoints that the platform's own bypass list declares direct do not
+  route through an ambient proxy at all (`llm/system_proxy.py` restores
+  the macOS ExceptionsList that `urllib.getproxies()` drops, without
+  which a local Ollama's traffic reaches the system proxy and comes back
+  as its HTTP 502 rather than the model's reply). The allow-list still
+  unions both kinds of endpoint. Explicit
   override: `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`. The hostname
   limitation documented above applies: remote entries degrade to port-only
   enforcement, which still breaks reverse shells / beacons / DNS
