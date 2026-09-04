@@ -1718,6 +1718,28 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
             raise JsonRpcError(
                 f"invalid role: {role!r}", code=-32602, kind="invalid_params"
             )
+        # Host round-trip fields: an assistant message that triggered tool
+        # calls must carry them on the next request (OpenAI-strict providers
+        # reject orphan `tool` messages otherwise), and DeepSeek thinking
+        # models require `reasoning_content` to be echoed verbatim.
+        tool_calls = None
+        raw_tool_calls = entry.get("toolCalls")
+        if raw_tool_calls is not None:
+            if not isinstance(raw_tool_calls, list):
+                raise JsonRpcError(
+                    "toolCalls must be a list", code=-32602, kind="invalid_params"
+                )
+            tool_calls = [
+                ToolCall(
+                    id=str(c.get("id") or ""),
+                    name=str(c.get("name") or ""),
+                    arguments=dict(c.get("arguments") or {}),
+                )
+                for c in raw_tool_calls
+                if isinstance(c, dict)
+            ]
+        reasoning = entry.get("reasoningContent")
+        reasoning = str(reasoning) if reasoning else None
         wire_parts = entry.get("parts")
         if wire_parts is not None:
             if not isinstance(wire_parts, list):
@@ -1730,6 +1752,8 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                     content=[_coerce_part(p) for p in wire_parts],
                     name=entry.get("name"),
                     tool_call_id=entry.get("toolCallId"),
+                    tool_calls=tool_calls,
+                    reasoning=reasoning,
                 )
             )
             continue
@@ -1739,6 +1763,8 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                 str(entry.get("content", "")),
                 name=entry.get("name"),
                 tool_call_id=entry.get("toolCallId"),
+                tool_calls=tool_calls,
+                reasoning=reasoning,
             )
         )
     return out

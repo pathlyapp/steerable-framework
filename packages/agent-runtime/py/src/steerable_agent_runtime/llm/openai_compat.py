@@ -64,6 +64,19 @@ def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
     return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
 
 
+def _deepseek_thinking_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
+    """DeepSeek thinking models reject ``tool_choice=required`` with
+    ``Thinking mode does not support this tool_choice`` (400). Clamp to
+    ``auto`` for the thinking families (deepseek-reasoner / deepseek-v4-*)
+    on the DeepSeek host (live-verified 2026-09-03: flash-vision-exp)."""
+    host = (base_url or "").lower()
+    if "deepseek.com" not in host:
+        return False
+    lowered = (model or "").lower()
+    import re
+    return bool(re.search(r"reasoner|deepseek-v\d", lowered))
+
+
 def _env_flag(name: str) -> bool | None:
     raw = os.environ.get(name, "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
@@ -327,8 +340,9 @@ class OpenAICompatProvider:
         # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
         # Harbor still logs the hook; the wire must send auto or the trial
         # dies on round 0 (failed-prev 33335200327).
-        if body.get("tool_choice") == "required" and _z_ai_tool_choice_auto_only(
-            self.model, self.base_url
+        if body.get("tool_choice") == "required" and (
+            _z_ai_tool_choice_auto_only(self.model, self.base_url)
+            or _deepseek_thinking_tool_choice_auto_only(self.model, self.base_url)
         ):
             body["tool_choice"] = "auto"
         # W6-8: clamp the env-requested reasoning effort to a level the model
@@ -492,7 +506,13 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
     if message.reasoning_details:
         out["reasoning_details"] = message.reasoning_details
     elif message.reasoning:
+        # DeepSeek thinking models require the previous turn's chain of
+        # thought to be echoed back under `reasoning_content` (they reject
+        # the follow-up request otherwise); other OpenAI-compat endpoints
+        # simply ignore the extra key. Keep the generic `reasoning` field
+        # too for providers that read it (e.g. OpenRouter fallback path).
         out["reasoning"] = message.reasoning
+        out["reasoning_content"] = message.reasoning
     return out
 
 
