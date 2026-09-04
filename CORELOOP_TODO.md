@@ -1777,30 +1777,41 @@ regen 走 fork、用量面板、遥测隐私档位、分层技能、`spill` 在�
    `ext/web-search` + dsh `packages/web/tool-web` 且已改缺省暴露，我们
    **全栈零命中**）、**持久格式迁移**（pi v1→v2→v3 载入即迁移、codex 双轨
    + repair、dsh 刻意 fail-closed 不承诺、我们没做）、**崩溃恢复接线**。
+   三轴现已追齐：web 与崩溃恢复见下面的缺陷清单；持久格式走
+   `RECORD_FORMAT_VERSION = 2` + 载入即迁移（`upgrade_entry_dict`，v1→v2 只
+   补 `v` 键不动内容，磁盘旧行保持原样，新追加才带 v2）。读到更高版本时整条
+   拒绝而非静默截断，报错点名「升级 app 才能打开，记录未被修改」。
 
 **六个真实缺陷（自我不一致或没接线，非能力差距）**，按痛感：
-- [ ] **非 macOS 与沙箱失败时接近裸跑**：`supervisor.ts:427-431` 非 darwin
-      直接 `spawning unsandboxed`，叠加 `router.ts:2417` 刻意的
-      `requireFull: false`，命令带 `enforcement: "none"` 仍执行。这是本轮
-      唯一「叙述与事实不符且有真实风险」的项。两条路都行：补 Linux Landlock /
-      Windows 受限令牌的 supervisor 接线，或学 pi 明确告知未收容 + 给容器化
-      指引。不可接受的是现状：宣称站 codex/dsh 那侧、跑 pi 的姿势、又没有
-      pi 的说明。
-- [ ] **harness 声明的 loop 限额被入口绕过**：`default.harness.yaml` 的
-      `loop:` 段写 `max_rounds: 80` / `max_tool_errors: 16`，注释还明说
-      「入口读这里而不是硬编码」，但桌面链走 `sidecar.py:1928,1961` 的参数
-      默认 **32 / 3**。长任务会在第 3 次工具错误就熔断，与声明差 5 倍。
-- [ ] **`router.ts:2400-2402` 算了 `maxTurns` 却没下发**（`coreloop-stream.ts`
-      请求体无此字段）——纯死代码。要么接上要么删，留着会让下一轮复审再次
-      误判「我们有轮次控制」。
-- [ ] **web 搜索/抓取完全缺失**：四家里两家有且缺省暴露，实现成本远低于
-      插件运行时或 provider 广度，对真实编码任务影响直接。性价比最高的补齐。
-- [ ] **崩溃后无法续跑**：`resume.py:24-27` 会给悬空 tool_call 合成 unknown
-      结果，但 router 从不调用。durable trace 存着却转不成可继续的对话。
-      成本极低，建议与 web 工具一起做。
-- [ ] **steer 失败静默、follow-up 入口隐蔽**：流式中 Enter 是 steer，失败只
-      保留草稿、不自动转入 follow-up 队列（`ChatInput.tsx:946-959`）；
-      follow-up 要按 ⌘/Ctrl+Enter。用户「跑着又发一条」易以为已排队。
+- [x] **非 macOS 与沙箱失败时接近裸跑** → 走「明确告知」这条：sidecar 记录
+      并上报 posture（`platform_unsupported` / `seatbelt_missing` /
+      `profile_failed` / 手动关闭 / Seatbelt 部分强制），安全设置面板据此显示
+      未收容与 API key 暴露面，并给容器化指引；`docs/spec/safety.md` 与代码
+      同口径。Seatbelt 只能按端口限制远程主机这点也一并说明，不再宣称站
+      codex/dsh 那侧。
+- [x] **harness 声明的 loop 限额被入口绕过** → 三个入口（桌面聊天链、
+      headless、ACP）改走同一个 `loop_limits.resolve_loop_limits`：优先级为
+      调用方显式覆盖 > spec 的 `loop:` 段 > 基线 80/16/false，基线只答自定义
+      spec 省略的字段。此前三份副本各自实现，正是分歧的来源——headless 的
+      默认路径压根没读 spec，`max_tool_errors` 由字面量 32 作答，声明的 16
+      从未进过一次真实运行。`test_loop_limits.py` 钉住优先级与「基线等于
+      内置 spec」，`test_headless.py` 捕获默认路径真实产出的 `LoopConfig`。
+- [x] **`router.ts` 算了 `maxTurns` 却没下发** → 已删。轮次上限交给 sidecar
+      的 YAML，桌面只经 `maxRounds`/`maxToolErrors` 覆盖。
+- [x] **web 搜索/抓取完全缺失** → `web_tools.py` 单实现（字节上限、超时、
+      重定向上限、URL 长度、SSRF 全在那里），宿主只持 schema 并经
+      `tool.invoke` 前转，可用集以 `tool.list` 握手为真相源——未配搜索后端
+      时不广告 `web_search`。批准按 read 模式走，`url` 排在提示首列。出网被
+      收敛到代理时（`STEERABLE_EGRESS_CONFINED=1`）直接报错并给补救路径；
+      操作者可用 `STEERABLE_WEB_TOOLS=0` / `--no-web-tools` 整对关掉。
+- [x] **崩溃后无法续跑** → 以 `turn_active` 标记加末条消息角色判定中断，UI
+      给续跑入口，sidecar 关闭悬空 tool_call。用户主动取消不误报为中断。
+      resume 传 `systemPrompt` 时只与**首条**消息互斥，好让技能目录这类
+      转录中段的 system 片段能原样重放。
+- [x] **steer 失败静默、follow-up 入口隐蔽** → 失败降级为 follow-up 队列并
+      提示「本轮结束后自动发出」，排队条目可单条撤回，停止即丢弃（语义显式）。
+      成功的 steer 也写进桌面 store：record 本来就记了，但重开会话渲染的是
+      store，缺这一步用户会回到一个没有问题的答案。
 
 **评测口径的一处仓库卫生问题**：`evals/jobs/steerable/OVERNIGHT.md` 是 8/30
 的本地过夜作业（77 个 id 只跑分 13 个、均值 0.385），**不是**记分口径

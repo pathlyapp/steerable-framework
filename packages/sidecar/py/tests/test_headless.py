@@ -432,6 +432,88 @@ async def test_run_with_bash_tool(
 
 
 @pytest.mark.asyncio
+async def test_default_path_takes_loop_limits_from_the_bundled_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W3.4.2.4: with no ``--harness``, the limits still come from
+    `default.harness.yaml`. This path used to leave `limits` unset and answer
+    `max_tool_errors` from a literal 32, so the spec's 16 never reached a run.
+    """
+    from steerable_agent_runtime.harness_spec import load_harness_spec
+    from steerable_sidecar.sidecar import _DEFAULT_HARNESS_SPEC_PATH
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    seen: list[object] = []
+    real_loop = headless_mod.CoreLoop
+
+    def capture(*args, **kwargs):
+        seen.append(kwargs["config"])
+        return real_loop(*args, **kwargs)
+
+    monkeypatch.setattr(headless_mod, "CoreLoop", capture)
+
+    await _run("say done", cwd=str(tmp_path), harness_path=None)
+
+    pinned = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
+    assert len(seen) == 1
+    config = seen[0]
+    assert (config.max_rounds, config.max_tool_errors, config.tool_dedup) == (
+        pinned.max_rounds,
+        pinned.max_tool_errors,
+        bool(pinned.tool_dedup),
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_rounds_flag_overrides_the_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--max-rounds` outranks the spec; the other limits stay pinned to it."""
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    seen: list[object] = []
+    real_loop = headless_mod.CoreLoop
+
+    def capture(*args, **kwargs):
+        seen.append(kwargs["config"])
+        return real_loop(*args, **kwargs)
+
+    monkeypatch.setattr(headless_mod, "CoreLoop", capture)
+
+    await _run("say done", cwd=str(tmp_path), max_rounds=9)
+
+    assert seen[0].max_rounds == 9
+    assert seen[0].max_tool_errors == 16
+
+
+@pytest.mark.asyncio
 async def test_run_retries_transient_stream_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
 ) -> None:

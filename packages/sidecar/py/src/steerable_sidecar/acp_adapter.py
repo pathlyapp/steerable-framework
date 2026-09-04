@@ -86,6 +86,7 @@ from steerable_agent_runtime.approval import ApprovalKind
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
+from .loop_limits import resolve_loop_limits
 from .workspace_tools import workspace_tools_for_cwd
 
 logger = logging.getLogger(__name__)
@@ -248,9 +249,9 @@ def _env_provider_params() -> dict[str, Any]:
 def _default_loop_config() -> LoopConfig:
     """LoopConfig from the bundled default harness spec's ``loop:`` section.
 
-    Falls back to the historical constants when the spec pins nothing —
-    the spec declares what experiments vary; entrypoints keep owning the
-    baseline.
+    ACP has no per-request override channel, so this is the spec's values or
+    the shared baseline — resolved by the same rule the chat and headless
+    entrypoints use.
     """
     from .sidecar import _DEFAULT_HARNESS_SPEC_PATH
 
@@ -260,14 +261,11 @@ def _default_loop_config() -> LoopConfig:
         limits = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
     except Exception:  # spec unreadable — baseline constants still apply
         limits = None
+    resolved = resolve_loop_limits(limits)
     return LoopConfig(
-        max_rounds=(limits.max_rounds if limits else None) or 80,
-        max_tool_errors=(limits.max_tool_errors if limits else None) or 16,
-        tool_dedup=(
-            limits.tool_dedup
-            if limits is not None and limits.tool_dedup is not None
-            else False
-        ),
+        max_rounds=resolved.max_rounds,
+        max_tool_errors=resolved.max_tool_errors,
+        tool_dedup=resolved.tool_dedup,
     )
 
 

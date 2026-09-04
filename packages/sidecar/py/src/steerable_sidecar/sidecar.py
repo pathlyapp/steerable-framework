@@ -114,6 +114,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 
 from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostToolExecutor
+from .loop_limits import resolve_loop_limits
 from .sandbox import select_exec_backend
 
 logger = logging.getLogger("steerable_sidecar")
@@ -2030,20 +2031,21 @@ def _spill_directory() -> str:
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
     # Loop-limit precedence (W3.4.2.4): explicit request param > the bundled
-    # default spec's `loop:` section > this entrypoint's baseline. The spec
-    # is the single declarative source for the limits the harness pins —
-    # headless and ACP resolve them the same way.
-    limits = _default_harness_spec().loop
-    max_rounds = (
-        int(params["maxRounds"])
-        if params.get("maxRounds") is not None
-        else (limits.max_rounds if limits.max_rounds is not None else 32)
+    # default spec's `loop:` section > the baseline. `resolve_loop_limits` is
+    # that one rule, shared with headless and ACP.
+    resolved = resolve_loop_limits(
+        _default_harness_spec().loop,
+        max_rounds=(
+            int(params["maxRounds"]) if params.get("maxRounds") is not None else None
+        ),
+        max_tool_errors=(
+            int(params["maxToolErrors"])
+            if params.get("maxToolErrors") is not None
+            else None
+        ),
     )
-    max_tool_errors = (
-        int(params["maxToolErrors"])
-        if params.get("maxToolErrors") is not None
-        else (limits.max_tool_errors if limits.max_tool_errors is not None else 3)
-    )
+    max_rounds = resolved.max_rounds
+    max_tool_errors = resolved.max_tool_errors
     budget = None
     if (budget_tokens := params.get("budgetTokens")) is not None:
         budget = BudgetLimit(
@@ -2078,13 +2080,7 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         max_rounds=max_rounds,
         max_tool_errors=max_tool_errors,
         budget=budget,
-        # Same `loop:` section: a field the spec leaves absent keeps
-        # LoopConfig's own default as the baseline.
-        **(
-            {"tool_dedup": limits.tool_dedup}
-            if limits.tool_dedup is not None
-            else {}
-        ),
+        tool_dedup=resolved.tool_dedup,
         temperature=(
             float(params["temperature"])
             if params.get("temperature") is not None
