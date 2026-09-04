@@ -554,7 +554,7 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 
 | harness | 通过 | 分数 | 缺失（job 取消） | 异常 | 输入 token | 输出 token | agent 总时 | 单题中位 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code-glm` [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303) | 73/88 | **0.8295** | 1（`train-fasttext`） | 6（4×断流、1×限流、1×超时） | 289.8 M | 5.37 M | 39.4 h / 88 | 11.8 min |
+| `claude-code-glm` [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303) + 补缺 [33833495592](https://github.com/pathlyapp/steerable-framework/actions/runs/33833495592) | 74/89 | **0.8315** | 0 | 6（4×断流、1×限流、1×超时） | 299.2 M | 5.52 M | 43.1 h / 89 | 11.8 min |
 | `codex-glm` [33787435198](https://github.com/pathlyapp/steerable-framework/actions/runs/33787435198) + 补缺 [33833485414](https://github.com/pathlyapp/steerable-framework/actions/runs/33833485414) | 52/89 | **0.5843** | 0 | 9（7×进程崩、1×超时、1×网关拒包） | 888.5 M | 2.14 M | 47.7 h / 89 | 7.4 min（补缺 7 题中位 87.7） |
 
 补缺 7 题结果：`install-windows-3.11`、`feal-linear-cryptanalysis`、`llm-inference-batching-scheduler`、`reshard-c4-data`、`write-compressor` 过；`make-mips-interpreter`、`path-tracing` 0 分（结果正常落盘，harbor 以 exit code 2 上报导致 shard 标红，非 infra 故障）。补缺轮网关侧 $5.97 / 237.7 M，放大 1.23×——协议崩题集中在第一轮。
@@ -584,23 +584,23 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 
 | harness | 样本 | 分数 | 输入 token/轮 | 输出 token/轮 | 网关放大 | 单轮成本 | 单题中位 | token/过题 | 成本/过题 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `claude-code-glm` | 1 | **0.8295**（73/88） | 289.8 M | 5.37 M | 1.05× | $11.32 | 11.8 min | 4.0 M | $0.155 |
+| `claude-code-glm` | 1+补缺 | **0.8315**（74/89） | 299.2 M | 5.52 M | 1.04× | $11.96 | 11.8 min | 4.1 M | $0.162 |
 | `steerable` | 4 | **0.8006 ± 0.0232** | ~194 M ✳ | ~15 M ✳ | —（无自报对照） | ~$7.5 ✳ | 36 min | ~2.9 M | ~$0.105 |
 | `pi-glm` | 3 | **0.7336 ± 0.0222** | 138.9 M | 3.9 M | 1.07× | ~$3.9 | 20 min | 2.2 M | $0.061 |
 | `codex-glm` | 1+补缺 | **0.5843**（52/89，仍受协议问题压制） | 888.5 M | 2.14 M | 1.78× | $42.32 | 7.4 min | 17.1 M | $0.814 |
 
 读法：
 
-- **分数**：claude-code-glm 单样本最高（0.8295），steerable 四样本均值 0.8006 第二，pi-glm 0.7336 第三，codex-glm 0.5843 垫底且仍被协议问题压着（2.5.22）。
-- **效率（token/过题）**：pi-glm 2.2 M 最省，steerable ~2.9 M 次之，claude-code-glm 4.0 M，codex-glm 17.1 M 是 pi 的 8 倍——分数最低，烧得最多。
-- **成本/过题**：pi-glm $0.061 < steerable ~$0.105 < claude-code-glm $0.155 < codex-glm $0.814。codex 两轮 $42.32 里有将近一半烧在 15 522 个被转译层拒掉的请求上（第一轮 13 525 + 补缺 1 997）。
+- **分数**：claude-code-glm 单样本最高（0.8315），steerable 四样本均值 0.8006 第二，pi-glm 0.7336 第三，codex-glm 0.5843 垫底且仍被协议问题压着（2.5.22）。
+- **效率（token/过题）**：pi-glm 2.2 M 最省，steerable ~2.9 M 次之，claude-code-glm 4.1 M，codex-glm 17.1 M 是 pi 的 8 倍——分数最低，烧得最多。
+- **成本/过题**：pi-glm $0.061 < steerable ~$0.105 < claude-code-glm $0.162 < codex-glm $0.814。codex 两轮 $42.32 里有将近一半烧在 15 522 个被转译层拒掉的请求上（第一轮 13 525 + 补缺 1 997）。
 - **时间**：codex 单题最快（7.4 min）但那是"早死"——大量题在协议错误上提前终止；claude-code-glm 的 11.8 min 是健康的最快；steerable 的 36 min 主要耗在跑飞题撞软超时。
 - **网关放大** = 网关侧 token ÷ harness 自报，即重试/拒包成本。claude 1.05× 和 pi 1.07× 是健康水平，codex 1.93× 是 2.5.22 的直接量化。
-- codex-glm 补缺已完成（7 题过 5，52/89 收官）；claude-code-glm 仍缺 `train-fasttext` 1 题（补缺 run 进行中）；steerable 的 token 是 OpenRouter Analytics 网关侧估值（±15%，方法见上节 ✳）。
+- 两个 harness 的补缺 run 均已收官，都是 89/89 全量：codex-glm 7 题过 5（52/89），claude-code-glm 补的 `train-fasttext` 通过（74/89）。steerable 的 token 是 OpenRouter Analytics 网关侧估值（±15%，方法见上节 ✳）。
 
 对照均值：`steerable` 四样本 **0.8006 ± 0.0232**（69/70/73/73），`pi-glm` 三样本 **0.7336 ± 0.0222**（67/61/65）。
 
-**`claude-code-glm` 的 0.8295 落在 `steerable` 四样本区间（0.7753–0.8202）的上沿之外，是五个 harness 里单样本最高的。** 但它是 1 个样本对 4 个样本，差 0.029 约 1.2 个标准差，读不出"Claude Code 的 harness 比 steerable 强"。能下的结论是：**GLM 在这套题上的天花板不低于 0.83，steerable 的 0.80 不是模型能力上限。**
+**`claude-code-glm` 的 0.8315 落在 `steerable` 四样本区间（0.7753–0.8202）的上沿之外，是五个 harness 里单样本最高的。** 但它是 1 个样本对 4 个样本，差 0.031 约 1.3 个标准差，读不出"Claude Code 的 harness 比 steerable 强"。能下的结论是：**GLM 在这套题上的天花板不低于 0.83，steerable 的 0.80 不是模型能力上限。**
 
 **`codex-glm` 的 0.5843（52/89 完整 catalog）仍不是 Codex 的真实水平。** 9 道异常里 7 道是 `NonZeroAgentExitCodeError`（Codex 进程在长对话里被 OpenRouter 的 Responses API 转译层拒掉，报 `Invalid input: expected string, received undefined`），1 道是 `protein-assembly` 的 `NetworkConnectionError`（同一个 shim 拒包），1 道超时。这些在计分上算 0 分，但都不是模型答错。Codex 两轮输入 token 合计 888.5 M 是 `pi-glm` 单轮的 6 倍以上，输出只有 2.1 M——它在长对话里反复重读上下文，且每 4.5 个输入 token 只有 1 个走缓存（`pi-glm` 是 1.2:1）。
 
@@ -616,30 +616,35 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 
 两个 harness 在 81 道共同题上只一致 48 道，33 道分叉。Claude Code 独过 27 道，Codex 独过 6 道。这个分叉度本身就是噪声量级的直接证据：同一模型、同一题，两个 harness 各跑一遍，40% 的题结果不同。
 
-### 0.8295 vs 0.8006 的分差拆解：3 道决定性题，全部指向"钻牛角尖"而非预算不足
+### 0.8315 vs 0.8006 的分差拆解：3 道决定性题，全部指向"钻牛角尖"而非预算不足
 
 把 `claude-code-glm` 单样本与 `steerable` 四样本逐题配对（`steerable` 记 0–4 次通过，`claude` 记单次结果），88 道共同题分五档：
 
 | 档 | 题数 | 说明 |
 | --- | --- | --- |
-| 双方都过（steerable ≥3/4） | 62 | 基本盘相同 |
+| 双方都过（steerable ≥3/4） | 63 | 基本盘相同 |
 | 双方都挂（steerable ≤1/4） | 5 | 能力墙 |
 | **Claude 独过**（steerable ≤1/4） | **8** | 5 道属 9 道稳定红 |
 | **我们独过**（steerable ≥3/4） | **6** | 其中 1 道是 Claude 侧 `ApiRateLimitError`，不算能力差 |
-| 翻面区（steerable 2–3/4） | 14 | Claude 在此 9/13，手气偏上 |
+| 翻面区（steerable 2/4） | 7 | 纯噪声 |
 
-**净决定性差 = 8 − 5 = 3 道 ≈ 0.034**，与观测到的 0.029 分差一致。翻面区贡献的是噪声，不是差距。
+**净决定性差 = 8 − 5 = 3 道 ≈ 0.034**，与观测到的 0.031 分差一致。翻面区贡献的是噪声，不是差距。
 
 **耗时形状是最强的机制信号（超时配置已确认对等：两边 `agent_timeout_multiplier = 12.0`，无 override）：**
 
 | | steerable（4 轮 356 trial） | claude-code-glm（88 trial） |
 | --- | --- | --- |
-| 62 道双方都过的题，通过耗时中位 | 26.6 min | **10.9 min**（快 2.4×） |
+| 63 道双方都过的题，通过耗时中位 | 26.6 min | **10.9 min**（快 2.4×） |
 | 失败 trial 耗时中位 | **156 min** | 12.8 min |
 | 耗时 >150 min 的 trial | 65 / 356 = 18% | 2 / 88 = 2% |
-| 精确停在 170 min 的 trial | **30** | 0（最大 180.0） |
+| 精确停在 170 min 的 trial | **30** | 0（最长 221.1，见下） |
 
-那 30 个 170.0 min 是**我们自己的上限**：`harbor_steerable.py` 设 `STEERABLE_SOFT_TIMEOUT_MS=9000000`（150 min），收工阶段再吃约 20 min。Harbor 的实际天花板是 180 min（Claude 的 `make-doom-for-mips` 恰好停在 180.0）。**`winning-avg-corewars` 是这个自设上限的直接代价：Claude 用 171.6 min 做成了这道题，我们在 170.0 min 自杀，差 1.6 分钟。**
+那 30 个 170.0 min 是**我们自己的上限**：`harbor_steerable.py` 设 `STEERABLE_SOFT_TIMEOUT_MS=9000000`（150 min），收工阶段再吃约 20 min。**Harbor 的天花板是逐题算的，不是统一 180**——Claude 的 `make-doom-for-mips` 停在 180.0，但 `train-fasttext` 它跑了 **221.1 min** 才做完且计分有效。我们那个固定 170 上限因此在长预算题上损失最大。
+
+这个自设上限有两个直接代价：
+
+- `winning-avg-corewars`：Claude 用 171.6 min 做成，我们在 170.0 min 自杀，**差 1.6 分钟**。
+- `train-fasttext`：我们 3/4 通过（158.3 / 168.5 / 136.5 min），唯一失败的那次恰好停在 **170.0**；Claude 用 221.1 min 通过。这道题的翻面很可能就是撞我们自己的顶造成的。
 
 **8 道 Claude 独过题按我们的死法分两类，修法完全不同：**
 
@@ -649,7 +654,7 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 | | `gcode-to-text` / `raman-fitting` | 156 / 123 min | 23.6 / 26.3 min |
 | **快速答错**（3 道） | `pytorch-model-cli` / `sanitize-git-repo` / `video-processing` | 15.6 / 12.7 / 65.4 min | 9.2 / **2.2** / 34.5 min |
 
-**加时间预算不是解法，这条要写死。** 我们有 16 道题撞过 170 上限，其中 12 道被 pi 或 Claude 做出来过——看着像"再给点时间就能过"。但 Claude 在这 12 道上的通过耗时**中位只有 60.9 min，只有 1 道需要 >168 min**。所以撞顶不是预算不够，是**前 60 分钟就走进了死胡同，剩下 110 分钟在里面打转**。把软超时从 150 提到 175 最多回收 `winning-avg-corewars` 一道，同时让每题成本继续上涨。
+**加时间预算不是主解法。** 我们有 16 道题撞过 170 上限，其中 12 道被 pi 或 Claude 做出来过——看着像"再给点时间就能过"。但 Claude 在这 12 道上的通过耗时**中位只有 60.9 min，只有 2 道需要 >168 min**（`winning-avg-corewars` 171.6、`train-fasttext` 221.1）。所以撞顶主要不是预算不够，是**前 60 分钟就走进了死胡同，剩下 110 分钟在里面打转**。把固定 170 换成"跟随 Harbor 逐题预算"值 1–2 道题，是便宜的顺手改动（2.5.23）；剩下 10 道要靠 2.5.24 / 2.5.25。
 
 **我们独过的 6 道是"耐心红利"，机制清楚且值得保护**（Claude 的失败方式从 `verifier/test-stdout.txt` 逐题核过）：
 
@@ -667,7 +672,7 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 **对之前两处判断的修正：**
 
 1. "我们赢在持久性 +6 题"应为 **+5**，`financial-document-processor` 是 Claude 侧限流，不是能力差。
-2. "撞满 170 min 说明预算不够"是**错的**。撞顶题里 11/12 被 Claude 在 60 min 量级做完，预算不是约束；`STEERABLE_SOFT_TIMEOUT_MS` 只值 1 道题（2.5.23）。
+2. "撞满 170 min 说明预算不够"基本是**错的**，但不是完全无关。撞顶题里 10/12 被 Claude 在 60 min 量级做完，预算不是主约束；固定 170 值 1–2 道题（`winning-avg-corewars` + `train-fasttext` 的翻面），且**改法是跟随 Harbor 的逐题预算而不是统一抬高**——`train-fasttext` 的 Harbor 预算是 221 min 以上，统一抬到 175 一样吃不到（2.5.23）。
 
 ### `pi-glm` 复现跑：三样本 0.7336 ± 0.0222
 
@@ -773,7 +778,7 @@ Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`�
 - [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计。**codex-glm 这次更糟：5 个 shard 被取消、7 道题没有结果**，其中 `install-windows-3.11`、`make-mips-interpreter`、`train-fasttext` 都是独占 shard 的重题，单题预算 360 分钟和 job 上限相同，没有任何余量
 - [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
 - [ ] **2.5.22** `codex-glm` 的 7 道 `NonZeroAgentExitCodeError` 和 1 道 `NetworkConnectionError` 是 OpenRouter Responses API 转译层拒包（`Invalid input: expected string, received undefined`），不是模型答错。要么给 Codex 换 wire API，要么在 gateway 侧修这个 shim，否则 codex-glm 的分数永远是下界
-- [ ] **2.5.23** 收工窗口审计：30 个 trial 精确停在 170.0 min，说明软超时 150 min 之后的收工阶段吃了约 20 分钟。Harbor 天花板是 180，`wrap_up_hard_cap_ms` 注释也写着 headless 用 175。**先量收工阶段到底在做什么**——如果只是写文件，20 min 太长，把软阈值提到 165；如果收工阶段还在做实质工作，那 150 这个阈值本身设早了。验收靠 `winning-avg-corewars` 单题（Claude 171.6 min 过，我们 170.0 自杀）。**这是全套里唯一一道能靠改预算拿回来的题，别指望第二道**
+- [ ] **2.5.23** 软超时改成跟随 Harbor 的逐题预算，而不是固定 150 min。30 个 trial 精确停在 170.0（软超时 150 + 约 20 min 收工），而 **Harbor 的预算是逐题算的**：Claude 在 `train-fasttext` 上跑了 221.1 min 且计分有效。固定 170 的两个已知代价是 `winning-avg-corewars`（Claude 171.6 过，我们 170.0 自杀，差 1.6 min）和 `train-fasttext`（我们 3/4 过，唯一失败那次正好停在 170.0）。**统一抬到 175 吃不到 `train-fasttext`**，必须读 Harbor 传进来的单题预算再倒扣收工余量。顺带量清楚收工那 20 分钟在做什么——只是写文件就压到 5 min 内。**值 1–2 道题，是便宜的顺手改动，不是主解法**
 - [ ] **2.5.24** 早期偏航检测（本条替代"加时间预算"的直觉，理由见上节）。红题耗时中位 156 min vs Claude 12.8 min，而 Claude 在我们撞顶的 12 道题上通过耗时中位只有 60.9 min——问题在**前 60 分钟就走进死胡同**。要的不是硬超时，是"连续 N 轮没有可验证进展就强制换方案"。与 2.5.10（收工窗口活锁）是同一族但不同阶段：2.5.10 管最后 20 分钟，本条管前 60 分钟。**先做观测**：在 20 道翻面题上打点"每轮是否产生了新的可验证事实"，确认这个信号能把红绿分开，再谈干预策略
 - [ ] **2.5.25** 3 道"快速答错"题是最便宜的靶子：`sanitize-git-repo`（12.7 min 交错答案，Claude **2.2 min** 就做对）、`pytorch-model-cli`（15.6 min）、`video-processing`（65.4 min）。这些题时间充裕得离谱，失败是**第一次尝试就走错且交付前没有自检**。`raman-fitting` 的 `x0=19196`（应为 1580）是同一族——一个数量级离谱的拟合值，跑一次自检就能发现。检查现有验证门禁（2.5.6 的 `ran_since_write`）在这几道题上为什么没触发或触发了没用
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
