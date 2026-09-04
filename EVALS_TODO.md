@@ -674,6 +674,40 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 1. "我们赢在持久性 +6 题"应为 **+5**，`financial-document-processor` 是 Claude 侧限流，不是能力差。
 2. "撞满 170 min 说明预算不够"基本是**错的**，但不是完全无关。撞顶题里 10/12 被 Claude 在 60 min 量级做完，预算不是主约束；固定 170 值 1–2 道题（`winning-avg-corewars` + `train-fasttext` 的翻面），且**改法是跟随 Harbor 的逐题预算而不是统一抬高**——`train-fasttext` 的 Harbor 预算是 221 min 以上，统一抬到 175 一样吃不到（2.5.23）。
 
+### 读 89 条轨迹：两种病，10/16 只差一项断言
+
+`headless.log` 一直在 artifact 里（`evals/jobs/*/*/*/agent/headless.log`），之前的聚合脚本只抽了 `result.json` 才以为没有。run [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) 的 89 条轨迹 + `verifier/test-stdout.txt` 全部读过，16 道失败按**结束方式**干净地裂成两类：
+
+| 类 | 题数 | 结束方式 | 含义 |
+| --- | --- | --- | --- |
+| **A 单流跑飞** | 6 | `[hard_timeout]` | 模型进了一个不结束的推理流，被墙上时钟砍断 |
+| **B 自信错交** | 10 | 正常收工 | 模型认为自己做完了，交了错答案 |
+
+对照：73 道通过题里 72 道正常收工，只有 1 道撞硬超时。**结束方式几乎完美地区分红绿。**
+
+**16 道失败里 10 道只挂 1 项测试**（`gcode-to-text`、`sanitize-git-repo`、`extract-elf`、`extract-moves-from-video`、`build-pov-ray`、`path-tracing`、`circuit-fibsqrt`、`dna-assembly`、`pytorch-model-cli`、`path-tracing-reverse`）。这些不是"模型做不到"，是差一步。几个具体断言：`dna-assembly` 引物 Tm 73.64 而要求 ≤72；`path-tracing` 图像相似度 0.9626 而要求 >0.99；`extract-elf` 命中 66.67% 而要求 75%。
+
+#### A 类：跑飞发生在**一轮之内**，不是"多轮打转"
+
+- `circuit-fibsqrt`：**第 1 轮**就烧掉 170 分钟，日志 **1.33 MB**，尾部是模型在反复推导 Fibonacci 倍角恒等式（"still 3 mults" / "no." / "Hmm, known identity"）被砍断。verifier 却是 2 过 / 1 挂——它中途写出来的东西差一点就成了。
+- `regex-chess`：第 2 轮，日志 1.41 MB。
+- `dna-assembly`：第 15 轮被砍断时正在说"anneal also in range, and pair d…"——**它知道 Tm 要在 [58,72]，自己写下"The task range 58-72 is generous"，还在验算途中就被杀了**，交上去的是 73.64。
+
+**这就是 `harbor_steerable.py` 里 `_TUNING_KEYS` 注释自己写的那句话**："Reasoning effort is here because `max` is what produces the 450 KB-to-1.3 MB single-round reasoning that starves the spiral tasks."我们设 `STEERABLE_REASONING_EFFORT=max`（第 516 行），且计分 commit `27d521a` 把切流三个预算全部默认关掉。**max 推理 + 无切流**就是 1.33 MB 单轮的成因。
+
+**存在一处参数不对称，方向对我们不利：`evals/harbor_claude_code_glm.py` 不设任何 reasoning / thinking 参数**，Claude Code 那条腿用的是默认档。这解释了它红题中位 12.8 min vs 我们 156 min。注意这个不对称是当初为了和 `pi-glm` 对齐（2.5.15）才引入的，不是疏漏——但它从未被 A/B 过。
+
+#### B 类：自检做得很多，参照物错了
+
+两个最清楚的样本，都不是"没自检"：
+
+- **`sanitize-git-repo`**（6 轮 / 12.7 min / 正常收工，Claude 2.2 min 通过）：模型正确找出全部 5 个密钥、正确替换，**并额外用 `git filter-branch` 重写了 109 个提交来清理历史**，然后做了 6 项自检（工作树 grep、跨 109 提交 `git grep`、`cat-file --batch-all-objects` 全对象扫描、`.git/` 元数据裸扫、`git fsck`、提交数守恒）全部通过。verifier：`test_removal_of_secret_information` 过、`test_correct_replacement_of_secret_information` 过、**`test_no_other_files_changed` 挂**——报错是 `ValueError: SHA d6987af… could not be resolved, git returned: missing`，即**重写历史把测试要比对的原始提交删掉了**。它是因为**做多了**而挂的。
+- **`pytorch-model-cli`**（11 轮 / 15.6 min / 正常收工，Claude 9.2 min 通过）：模型做了 4 项自检——在 10 k MNIST 测试集上网格搜索归一化参数（峰值 mean=0.5，92.1% vs 65.9%）、200 张图端到端 94.5%、与 numpy 参考实现 **200/200 一致**、多种 PNG 格式鲁棒性。verifier 挂在 `test_cli_tool_output`："Predictions do not match expected values"。**它的参考实现本身编码了一个猜出来的预处理**，自检只证明了"我和我自己一致"。
+
+**所以 B 类的病不是"自检不足"，是"自检的参照物是自建标准而不是题面字面要求"。**加强自检强度会让这个病更重，不是更轻——`pytorch-model-cli` 已经做到网格搜索 10 k 样本了。要改的是参照物：从指令里抽出**字面**验收条件（数值阈值、"不要改动 X"、精确输出格式）逐条核对，然后停手。
+
+**这也顺便改写了我们赢 Claude 的那 5 道的读法。** 之前记为"耐心红利"，但 `mailman`（Claude 28 min 交卷，`rgplugin` 根本没装）、`chess-best-move`（只给 1 步，题目要 2 步）、`caffe-cifar-10`（solver 缺两个字段）是 Claude 的**字面要求漏读**。两边是**同一个天平的两端**：我们超交付、它欠交付。谁都不是"更认真"。
+
 ### `pi-glm` 复现跑：三样本 0.7336 ± 0.0222
 
 为把 `pi-glm` 从 1 个样本补到 3 个，在 `ci/evals-pi-glm` 上又派了两次全量（[33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301)、[33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232)，串行）。按实际产出结果的 trial 计分，不把 job 超时造成的缺失记成模型失败：
@@ -779,8 +813,10 @@ Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`�
 - [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
 - [ ] **2.5.22** `codex-glm` 的 7 道 `NonZeroAgentExitCodeError` 和 1 道 `NetworkConnectionError` 是 OpenRouter Responses API 转译层拒包（`Invalid input: expected string, received undefined`），不是模型答错。要么给 Codex 换 wire API，要么在 gateway 侧修这个 shim，否则 codex-glm 的分数永远是下界
 - [ ] **2.5.23** 软超时改成跟随 Harbor 的逐题预算，而不是固定 150 min。30 个 trial 精确停在 170.0（软超时 150 + 约 20 min 收工），而 **Harbor 的预算是逐题算的**：Claude 在 `train-fasttext` 上跑了 221.1 min 且计分有效。固定 170 的两个已知代价是 `winning-avg-corewars`（Claude 171.6 过，我们 170.0 自杀，差 1.6 min）和 `train-fasttext`（我们 3/4 过，唯一失败那次正好停在 170.0）。**统一抬到 175 吃不到 `train-fasttext`**，必须读 Harbor 传进来的单题预算再倒扣收工余量。顺带量清楚收工那 20 分钟在做什么——只是写文件就压到 5 min 内。**值 1–2 道题，是便宜的顺手改动，不是主解法**
-- [ ] **2.5.24** 早期偏航检测（本条替代"加时间预算"的直觉，理由见上节）。红题耗时中位 156 min vs Claude 12.8 min，而 Claude 在我们撞顶的 12 道题上通过耗时中位只有 60.9 min——问题在**前 60 分钟就走进死胡同**。要的不是硬超时，是"连续 N 轮没有可验证进展就强制换方案"。与 2.5.10（收工窗口活锁）是同一族但不同阶段：2.5.10 管最后 20 分钟，本条管前 60 分钟。**先做观测**：在 20 道翻面题上打点"每轮是否产生了新的可验证事实"，确认这个信号能把红绿分开，再谈干预策略
-- [ ] **2.5.25** 3 道"快速答错"题是最便宜的靶子：`sanitize-git-repo`（12.7 min 交错答案，Claude **2.2 min** 就做对）、`pytorch-model-cli`（15.6 min）、`video-processing`（65.4 min）。这些题时间充裕得离谱，失败是**第一次尝试就走错且交付前没有自检**。`raman-fitting` 的 `x0=19196`（应为 1580）是同一族——一个数量级离谱的拟合值，跑一次自检就能发现。检查现有验证门禁（2.5.6 的 `ran_since_write`）在这几道题上为什么没触发或触发了没用
+- [ ] **2.5.24** A/B `STEERABLE_REASONING_EFFORT`：`max` vs `high`，在 20 道翻面题上 ×3。**这是当前最大的单一杠杆，也是唯一已知的参数不对称。**理由不是猜的：`_TUNING_KEYS` 的注释自己写着 max 产生 450 KB–1.3 MB 单轮推理并饿死螺旋题，而轨迹证实 `circuit-fibsqrt` 第 1 轮就烧 170 min / 1.33 MB、`regex-chess` 第 2 轮 1.41 MB；`harbor_claude_code_glm.py` **不设任何 reasoning 参数**，其红题中位 12.8 min vs 我们 156 min。上限是 A 类 6 道，但**不是免费的**——max 大概率也在贡献我们赢的题，所以必须配对 A/B，不能直接改默认值。已经在 `_TUNING_KEYS` 里，改一个 env 就能派 arm
+- [ ] **2.5.25** 交付前自检改**参照物**，不是加强度。B 类 10 道的病是"自检参照自建标准"：`pytorch-model-cli` 做了 4 项自检（10 k MNIST 网格搜索、端到端 94.5%、与自己的 numpy 参考 200/200 一致）仍挂在 `test_cli_tool_output`，因为参考实现本身编码了猜出来的预处理；`sanitize-git-repo` 做了 6 项自检全过，挂在它**没检查的那一项**上。要做的是从指令抽**字面**验收条件（数值阈值、"不要改动 X"、精确输出格式）逐条核对。**验收样本**：`dna-assembly`（模型自己写下"Tm in [58,72]"却交了 73.64）、`path-tracing`（0.9626 vs 要求 >0.99）、`extract-elf`（66.67% vs 要求 75%）
+- [ ] **2.5.26** 抑制超交付。`sanitize-git-repo` 是唯一一道**因为做多了而挂**的题：用 `git filter-branch` 重写 109 个提交清理历史（题面没要求），把 `test_no_other_files_changed` 要比对的原始提交 SHA 删掉了。现有的 `delivery_nudge` / `missing_named_output` 门禁全是"催交付"方向的，**没有任何一个是"你改了不该改的东西"方向的**。加一条反向检查：交付前列出所有被修改/删除的路径，与指令点名的产出做差集，非空就要求模型解释或回滚。**单题可验收**
+- [ ] **2.5.27** 用"结束方式"当红绿预测量做在线监控。89 条轨迹里 73 道通过题有 72 道正常收工，16 道失败里 6 道 `[hard_timeout]`——结束方式几乎完美区分红绿。这比"推理量"/"耗时"都干净，可以当 A/B 的次级指标，在样本不够判分差时先看形状有没有变
 - [x] **2.5.15** `pi-glm` 请求参数与 steerable 对齐 —— `evals/harbor_pi_glm.py` 子类化 Harbor 的 Pi，补齐 1048576 窗口 / 65536 输出 / `reasoning_effort: max` / temperature 1.0 / Z.AI 路由；`suite.py` 拒绝 `harbor: pi`。**注意问题不止 reasoning effort**：窗口和输出上限也是兜底值，且 `reasoning: false` 让 `thinking: xhigh` 全程未生效，见上节
 - [x] **2.5.12** 逐题翻面率平均 12.6% 已在四个完整同配置样本上实测，**所有靶子选择都要按均值和多样本来，不能按单跑的红题名单**。`flaky` split 已在代码里重建为上节那 20 道 —— **此前本条只写在文档里、`suite.yaml` 从没改**，见下节
 - [x] **2.5.13** 0.8202 复现性：在 `ci/evals-stability-27d521a`（钉死 `27d521a`，**不含 `20a854d` 的门禁与提示词改动**）连跑 3 次全量，与基线合成 4 个样本。结论：**均值 0.8006 ± 0.0232，0.8202 是上沿不是定点，对外报数用 0.80**。workflow 的并发组只容得下 1 个运行中 + 1 个待队列，三次是串行的，共约 10 h
