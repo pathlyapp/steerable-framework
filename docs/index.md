@@ -92,7 +92,9 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80%**, Pi 73%, Codex 57% — the harness alone moves the score 26 points. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
-<div class="sf-bench">
+<div class="sf-bench sf-bench--wide">
+
+<div class="sf-bench-duo">
 
 <div class="sf-bench-group sf-bench-group--focus">
 <div class="sf-bench-kicker">Same model · same gateway · four harnesses</div>
@@ -152,6 +154,56 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 
 <p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.11 · Claude Code $0.16 · Codex $0.77. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
 </div>
+
+<div class="sf-bench-group sf-bench-group--focus">
+<div class="sf-bench-kicker">Cost × score · one OpenRouter account</div>
+<p class="sf-bench-blurb">Dollars per solved task vs TB 2.1 score. Top-left is the sweet spot — Steerable is the cheapest seat in the frontier band.</p>
+<svg class="sf-scatter" viewBox="0 0 400 300" role="img" aria-label="Cost per solved task versus Terminal-Bench 2.1 score for four harnesses on the same model">
+<rect class="band" x="44" y="50.9" width="344" height="30.8"/>
+<text class="bandlbl" x="384" y="46" text-anchor="end">frontier band 79–84%</text>
+<line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
+<line class="grid" x1="136.7" y1="14" x2="136.7" y2="260"/>
+<line class="grid" x1="229.4" y1="14" x2="229.4" y2="260"/>
+<line class="grid" x1="299.6" y1="14" x2="299.6" y2="260"/>
+<line class="grid" x1="369.7" y1="14" x2="369.7" y2="260"/>
+<line class="grid" x1="44" y1="75.5" x2="388" y2="75.5"/>
+<line class="grid" x1="44" y1="137" x2="388" y2="137"/>
+<line class="grid" x1="44" y1="198.5" x2="388" y2="198.5"/>
+<line class="axis" x1="44" y1="14" x2="44" y2="260"/>
+<line class="axis" x1="44" y1="260" x2="388" y2="260"/>
+<text class="tick" x="66.6" y="272" text-anchor="middle">$0.05</text>
+<text class="tick" x="136.7" y="272" text-anchor="middle">$0.10</text>
+<text class="tick" x="229.4" y="272" text-anchor="middle">$0.25</text>
+<text class="tick" x="299.6" y="272" text-anchor="middle">$0.50</text>
+<text class="tick" x="369.7" y="272" text-anchor="middle">$1.00</text>
+<text class="tick" x="39" y="17" text-anchor="end">90</text>
+<text class="tick" x="39" y="78.5" text-anchor="end">80</text>
+<text class="tick" x="39" y="140" text-anchor="end">70</text>
+<text class="tick" x="39" y="201.5" text-anchor="end">60</text>
+<text class="tick" x="39" y="263" text-anchor="end">50</text>
+<text class="axisTitle" x="216" y="290" text-anchor="middle">$ per solved task (log)</text>
+<text class="axisTitle" x="12" y="137" text-anchor="middle" transform="rotate(-90 12 137)">TB 2.1 score</text>
+<circle class="pt" cx="86.7" cy="118.6" r="11.7"/>
+<text class="lbl" x="86.7" y="140" text-anchor="middle">Pi</text>
+<text class="sub" x="86.7" y="150" text-anchor="middle">73% · $0.06 · 20 min</text>
+<circle class="pt pt--ours" cx="141.7" cy="75.5" r="15.6"/>
+<text class="lbl" x="158" y="46" text-anchor="end">Steerable · ours</text>
+<text class="sub" x="158" y="56" text-anchor="end">80% · $0.11 · 36 min</text>
+<circle class="pt" cx="181.1" cy="57.1" r="8.9"/>
+<text class="lbl" x="193" y="52">Claude Code</text>
+<text class="sub" x="193" y="62">83% · $0.16 · 12 min</text>
+<circle class="pt" cx="343.7" cy="217" r="7.1"/>
+<text class="lbl" x="333" y="213" text-anchor="end">Codex CLI</text>
+<text class="sub" x="333" y="223" text-anchor="end">57% · $0.77 · 7 min</text>
+</svg>
+<p class="sf-bench-foot">Bubble area = median minutes per task. Costs from OpenRouter analytics on the eval account; Codex is a protocol-bound lower bound.</p>
+</div>
+
+</div>
+
+</div>
+
+<div class="sf-bench">
 
 <div class="sf-bench-group">
 <div class="sf-bench-kicker">Frontier CLIs · public board</div>

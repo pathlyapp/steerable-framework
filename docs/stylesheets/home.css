@@ -144,6 +144,92 @@
   margin: 0 auto 1.4rem;
 }
 
+.sf-bench--wide {
+  max-width: 58rem;
+}
+
+.sf-bench-duo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 64rem) {
+  .sf-bench-duo {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sf-scatter {
+  display: block;
+  width: 100%;
+  height: auto;
+  padding: 0.1rem 0.5rem 0;
+}
+
+.sf-scatter .grid {
+  stroke: var(--md-default-fg-color--lightest);
+  stroke-width: 0.5;
+}
+
+.sf-scatter .axis {
+  stroke: var(--md-default-fg-color--light);
+  stroke-width: 0.8;
+}
+
+.sf-scatter .tick {
+  fill: var(--md-default-fg-color--light);
+  font-size: 8.5px;
+}
+
+.sf-scatter .axisTitle {
+  fill: var(--md-default-fg-color--light);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.sf-scatter .band {
+  fill: rgba(38, 166, 154, 0.08);
+  stroke: rgba(38, 166, 154, 0.4);
+  stroke-width: 0.7;
+  stroke-dasharray: 3 3;
+}
+
+.sf-scatter .bandlbl {
+  fill: rgba(38, 166, 154, 0.9);
+  font-size: 7.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sf-scatter .pt {
+  fill: rgba(127, 127, 140, 0.3);
+  stroke: var(--md-default-fg-color--light);
+  stroke-width: 1;
+}
+
+.sf-scatter .pt--ours {
+  fill: rgba(92, 107, 192, 0.72);
+  stroke: #5c6bc0;
+  stroke-width: 1.4;
+}
+
+[data-md-color-scheme="slate"] .sf-scatter .pt--ours {
+  fill: rgba(129, 140, 248, 0.72);
+  stroke: #818cf8;
+}
+
+.sf-scatter .lbl {
+  fill: var(--md-default-fg-color);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.sf-scatter .sub {
+  fill: var(--md-default-fg-color--light);
+  font-size: 8px;
+}
+
 .sf-bench-group {
   border: 0.05rem solid var(--md-default-fg-color--lightest);
   border-radius: 0.7rem;
