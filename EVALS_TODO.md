@@ -557,7 +557,23 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 | `claude-code-glm` [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303) | 73/88 | **0.8295** | 1（`train-fasttext`） | 6（4×断流、1×限流、1×超时） | 289.8 M | 5.37 M | 39.4 h / 88 | 11.8 min |
 | `codex-glm` [33787435198](https://github.com/pathlyapp/steerable-framework/actions/runs/33787435198) | 47/82 | **0.5732** | 7 | 9（7×进程崩、1×超时、1×网关拒包） | 696.4 M | 1.54 M | 38.6 h / 82 | 7.4 min |
 
-对照已完成的全量：`steerable` 四样本均值 **0.8006 ± 0.0232**（69/70/73/73），`pi-glm` 三样本均值 **0.7336 ± 0.0222**（67/61/65）。
+四个 harness 的时间与 token 全量对照（steerable / pi-glm 为多样本逐轮列出；token 取自 `result.json` 的 `agent_result`，时间取 `agent_execution` 起止）：
+
+| harness | run | 分数 | 输入 token | 缓存 token | 输出 token | agent 总时 | 单题中位 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `steerable` | [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) | 0.8202（73/89） | — | — | — | 84.8 h / 89 | 35.0 min |
+| `steerable` | [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570) | 0.7865（70/89） | — | — | — | 103.0 h / 89 | 48.2 min |
+| `steerable` | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202（73/89） | — | — | — | 82.0 h / 89 | 35.0 min |
+| `steerable` | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753（69/89） | — | — | — | 85.4 h / 89 | 32.0 min |
+| `pi-glm` | [33593245247](https://github.com/pathlyapp/steerable-framework/actions/runs/33593245247) | 0.7528（67/89） | 144.1 M | 137.6 M | 3.7 M | 45.3 h / 89 | 20.4 min |
+| `pi-glm` | [33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301) | 0.7093（61/86） | 163.0 M | 156.3 M | 4.2 M | 44.1 h / 86 | 17.1 min |
+| `pi-glm` | [33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232) | 0.7386（65/88） | 109.6 M | 103.0 M | 3.7 M | 45.7 h / 88 | 23.2 min |
+
+**steerable 四轮的 token 无法补录**：计分 commit `27d521a` 早于遥测提交 `a618599`（`STEERABLE_RUN_SUMMARY`，W1.4.3.3），`result.json` 的 `agent_result` 三个 token 字段全空、`headless.log` 也没有汇总行，artifact 里没有第二个数据源。要拿到 steerable 的 token 只能在含遥测的 commit 上重跑一轮（遥测不改行为，分数可作第五个样本）。2.5.18 仍是正解。
+
+**耗时形状跨 harness 差 2–4 倍**：单题中位 steerable 32–48 min，pi-glm 17–23 min，claude-code-glm 11.8 min，codex-glm 7.4 min。steerable 每题花的墙上时间是 Claude Code 的 3 倍上下，但分数并没有相应更高——长时间主要耗在跑飞题的软超时上（红题中位 150 min 撞满，见上节），绿题效率才是可比较项。
+
+对照均值：`steerable` 四样本 **0.8006 ± 0.0232**（69/70/73/73），`pi-glm` 三样本 **0.7336 ± 0.0222**（67/61/65）。
 
 **`claude-code-glm` 的 0.8295 落在 `steerable` 四样本区间（0.7753–0.8202）的上沿之外，是五个 harness 里单样本最高的。** 但它是 1 个样本对 4 个样本，差 0.029 约 1.2 个标准差，读不出"Claude Code 的 harness 比 steerable 强"。能下的结论是：**GLM 在这套题上的天花板不低于 0.83，steerable 的 0.80 不是模型能力上限。**
 
