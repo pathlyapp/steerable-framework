@@ -6,8 +6,17 @@ export interface PolicyDecision {
   reason: string;
 }
 
+// Side-effect-free network reads the prefix rules cannot reach. Exact
+// names, not a "web_" prefix: a future web_deploy-style tool must not
+// inherit the read posture. Kept in lockstep with the Python classifier
+// (conformance case: tests/conformance/cases/policy/decide_tool_mode.yaml).
+const READ_EXACT = new Set(["web_search", "web_fetch"]);
+
 export function decideToolMode(toolName: string): ToolMode {
   const normalized = toolName.toLowerCase();
+  if (READ_EXACT.has(normalized)) {
+    return "read";
+  }
   if (normalized.startsWith("get_") || normalized.startsWith("list_") || normalized.startsWith("read_")) {
     return "read";
   }

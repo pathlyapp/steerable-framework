@@ -18,13 +18,17 @@ dependencies = [
 [project.optional-dependencies]
 sqlalchemy = ["sqlalchemy>=2.0"]
 fastapi = ["fastapi>=0.110", "starlette>=0.37"]
-openai = ["httpx>=0.27"]
+# The `socks` extra is not optional in practice: httpx builds a transport for
+# every proxy the environment declares while the client is constructed, so a
+# host exporting `all_proxy=socks5://…` — the common shell proxy snippet — makes
+# construction raise without it, failing provider calls that never reach a URL.
+openai = ["httpx[socks]>=0.27"]
 anthropic = ["anthropic>=0.40"]
 all = [
   "sqlalchemy>=2.0",
   "fastapi>=0.110",
   "starlette>=0.37",
-  "httpx>=0.27",
+  "httpx[socks]>=0.27",
   "anthropic>=0.40",
 ]
 

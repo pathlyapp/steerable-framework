@@ -1,10 +1,10 @@
 """Wave 1 step 5: durable record channel + O(tail) resume.
 
-Covers the serialization codec (entry_to_dict / entry_from_dict), the
-ContextManager pending-queue the loop flushes, the StorageAdapter history
-method group (InMemory reference), the loop's flush wiring (continuous
-per-chat log semantics), and resume.load_history_transcript's
-boundary-aware tail projection.
+Covers the serialization codec (entry_to_dict / entry_from_dict /
+upgrade_entry_dict), the ContextManager pending-queue the loop flushes,
+the StorageAdapter history method group (InMemory reference), the loop's
+flush wiring (continuous per-chat log semantics), and
+resume.load_history_transcript's boundary-aware tail projection.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from steerable_agent_runtime import (
     message_from_dict,
     message_to_dict,
     tool,
+    upgrade_entry_dict,
 )
 from steerable_agent_runtime.hooks import NoopHooks, PreStepAction
 from steerable_agent_runtime.llm import LLMStreamChunk
@@ -98,8 +99,21 @@ def test_entry_codec_roundtrip_all_kinds() -> None:
 
 
 def test_entry_from_dict_rejects_unknown_envelope() -> None:
+    # Even with an otherwise-parseable payload, an unknown discriminant
+    # refuses the whole record — no salvage, no skip-and-continue.
     with pytest.raises(RecordFormatError, match="unknown record entry envelope"):
-        entry_from_dict({"entry": "mystery", "seq": 0, "v": RECORD_FORMAT_VERSION})
+        entry_from_dict(
+            {
+                "entry": "mystery",
+                "seq": 0,
+                "v": RECORD_FORMAT_VERSION,
+                "kind": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "x"}],
+                },
+            }
+        )
 
 
 def test_boundary_codec_roundtrips_replacement_count() -> None:
@@ -173,6 +187,76 @@ def test_entry_from_dict_refuses_newer_version_fail_closed() -> None:
 def test_entry_from_dict_refuses_non_integer_version() -> None:
     with pytest.raises(RecordFormatError, match="unsupported record format version"):
         entry_from_dict({"entry": "item", "v": "2", "seq": 0})
+
+
+def test_upgrade_entry_dict_v1_to_v2_is_stamp_only() -> None:
+    # W4-6 added the ``v`` key itself, not a shape change — the upgrade is
+    # the stamp and nothing else. Pinned against a literal ``2`` so a
+    # future v3 bump must revisit this step instead of silently
+    # mis-stamping or dropping v1 support.
+    legacy = {
+        "entry": "item",
+        "seq": 3,
+        "kind": "user",
+        "turn_id": "t1",
+        "token_estimate": 2,
+        "message": {"role": "user", "content": [{"type": "text", "text": "old"}]},
+    }
+    assert upgrade_entry_dict(legacy, from_version=1) == {**legacy, "v": 2}
+    # The stored dict is never mutated in place.
+    assert "v" not in legacy
+    # Current-version dicts pass through untouched.
+    current = entry_to_dict(
+        HistoryItem(seq=0, kind="user", message=_msg("user", "hi"), token_estimate=1)
+    )
+    assert upgrade_entry_dict(current, from_version=RECORD_FORMAT_VERSION) == current
+
+
+def test_upgrade_entry_dict_refuses_a_version_with_no_step() -> None:
+    # The seam stays fail-closed: a version with no upgrade step is refused
+    # whole, never partially read — a format bump that forgets its step
+    # trips here, loudly.
+    with pytest.raises(RecordFormatError, match="no upgrade path"):
+        upgrade_entry_dict({"entry": "item", "v": 99}, from_version=99)
+
+
+def test_v1_entry_loads_and_rewrites_stamped_v2() -> None:
+    # v1 stays readable (no ``v`` key), and a loaded-then-rewritten entry
+    # persists the upgrade: ``entry_to_dict`` stamps the current version
+    # with every payload field unchanged.
+    legacy = {
+        "entry": "item",
+        "seq": 3,
+        "kind": "user",
+        "turn_id": "t1",
+        "token_estimate": 2,
+        "message": {"role": "user", "content": [{"type": "text", "text": "old"}]},
+    }
+    entry = entry_from_dict(legacy)
+    assert isinstance(entry, HistoryItem)
+    assert "v" not in legacy  # the read never mutates the stored dict
+    assert entry_to_dict(entry) == {**legacy, "v": RECORD_FORMAT_VERSION}
+
+
+def test_entry_from_dict_newer_version_error_is_actionable() -> None:
+    # The desktop-downgrade case: the message names what happened and the
+    # remedy, and the version gate fires before any payload field is read —
+    # a future-version entry with an unparseable payload still raises
+    # RecordFormatError, never a partial read (KeyError) or a truncation.
+    future = {
+        "entry": "item",
+        "v": RECORD_FORMAT_VERSION + 1,
+        "seq": 41,
+        # no "kind" / "message": the payload is deliberately unreadable.
+    }
+    with pytest.raises(RecordFormatError) as excinfo:
+        entry_from_dict(future)
+    message = str(excinfo.value)
+    assert f"version: {RECORD_FORMAT_VERSION + 1}" in message
+    assert "seq=41" in message
+    assert "newer version of the app" in message
+    assert "upgrade the app" in message
+    assert "not modified" in message
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +1009,33 @@ async def test_resume_until_seq_truncates_for_fork() -> None:
 async def test_resume_empty_record_returns_none() -> None:
     storage = InMemoryStorage()
     assert await load_history_transcript(storage, "nope") is None
+
+
+@pytest.mark.asyncio
+async def test_resume_names_the_record_on_format_error() -> None:
+    # The entry dict carries no record id; the resume funnel wraps the
+    # codec error with it, so the desktop-downgrade report identifies
+    # which record is unreadable.
+    storage = InMemoryStorage()
+    await storage.append_history(
+        "chat_1",
+        [
+            {
+                "entry": "item",
+                "v": RECORD_FORMAT_VERSION + 1,
+                "seq": 0,
+                "kind": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "x"}],
+                },
+            }
+        ],
+    )
+    with pytest.raises(
+        RecordFormatError, match=r"record 'chat_1': unsupported record format version"
+    ):
+        await load_history_transcript(storage, "chat_1")
 
 
 @pytest.mark.asyncio

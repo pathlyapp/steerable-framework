@@ -164,6 +164,34 @@ def test_allow_list_empty_list_denies_all_outbound() -> None:
     assert "com.apple.SystemConfiguration.configd" in profile
 
 
+def test_web_egress_off_by_default_even_with_an_allow_list() -> None:
+    profile = build_seatbelt_profile(allowed_hosts=["127.0.0.1:11434"])
+    assert "mDNSResponder" not in profile
+    assert '(remote tcp "*:443")' not in profile
+
+
+def test_web_egress_adds_the_resolver_socket_and_http_ports() -> None:
+    # web_fetch/web_search reach hosts the model names at runtime: the
+    # resolver socket (no IP reach) plus the two http(s) ports are all a
+    # profile can grant ahead of the call. Without the resolver the SSRF
+    # pre-check fails as "cannot resolve <host>".
+    profile = build_seatbelt_profile(
+        allowed_hosts=["127.0.0.1:11434"], web_egress=True
+    )
+    assert '(literal "/private/var/run/mDNSResponder")' in profile
+    assert '(remote tcp "*:443")' in profile
+    assert '(remote tcp "*:80")' in profile
+    # Still fail-closed for everything else.
+    assert "\n(allow network-outbound)\n" not in profile
+
+
+def test_web_egress_is_a_noop_when_outbound_is_already_open() -> None:
+    open_profile = build_seatbelt_profile(allowed_hosts=None, web_egress=True)
+    assert open_profile == build_seatbelt_profile(allowed_hosts=None)
+    no_network = build_seatbelt_profile(network=False, web_egress=True)
+    assert "network-outbound" not in no_network
+
+
 def test_allow_list_rejects_invalid_entries() -> None:
     with pytest.raises(ValueError, match="invalid allow-list entry"):
         build_seatbelt_profile(allowed_hosts=['evil.com";(allow network-outbound)'])
@@ -183,6 +211,24 @@ def test_cli_allow_host_flag(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert '(remote tcp "localhost:11434")' in out
     assert "\n(allow network-outbound)\n" not in out
+
+
+def test_cli_allow_web_egress_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "sys.argv",
+            [
+                "sandbox",
+                "profile",
+                "--allow-host",
+                "localhost:11434",
+                "--allow-web-egress",
+            ],
+        )
+        assert main() == 0
+    out = capsys.readouterr().out
+    assert '(literal "/private/var/run/mDNSResponder")' in out
+    assert '(remote tcp "*:443")' in out
 
 
 @pytest.fixture
@@ -238,6 +284,23 @@ def test_allow_list_actually_enforced_by_seatbelt(tcp_server_port: int) -> None:
         )
     assert denied.returncode != 0
     assert "Operation not permitted" in denied.stderr.decode()
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+def test_web_egress_profile_is_accepted_by_the_kernel() -> None:
+    """The widened profile must still load: a rule sbpl rejects would turn
+    every sandboxed spawn into the unsandboxed fallback."""
+
+    profile = build_seatbelt_profile(
+        allowed_hosts=["localhost:11434"], web_egress=True
+    )
+    loaded = subprocess.run(
+        seatbelt_argv(profile, [sys.executable, "-c", "print('loaded')"]),
+        capture_output=True,
+        check=False,
+    )
+    assert loaded.returncode == 0, loaded.stderr.decode()
+    assert b"loaded" in loaded.stdout
 
 
 class TestSeatbeltExecBackend:

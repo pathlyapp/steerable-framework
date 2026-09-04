@@ -139,7 +139,15 @@ Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
   TLS interception, no plain-HTTP forwarding in v1), fails closed on an
   empty allow-list, and its bare-host entries allow 443/80 to mirror the
   profile semantics above. Point the sidecar's HTTP stack at it with
-  `HTTPS_PROXY=http://127.0.0.1:<port>` (httpx honors proxy env vars).
+  `HTTPS_PROXY=http://127.0.0.1:<port>` (httpx honors proxy env vars), and set
+  `STEERABLE_EGRESS_CONFINED=1` beside it. The marker declares that the proxy
+  owns every host: without it, proxy variables read as ambient host
+  configuration, and a provider endpoint the OS lists as direct (loopback, and
+  on macOS the private LAN ranges) is exempted from them so a local model stays
+  reachable behind a system proxy — see `llm/system_proxy.py`. Set the marker
+  only when the proxy really is running; the desktop omits it on its
+  startup-failure fallback so the sidecar never believes it is confined when it
+  is not.
 
 The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 
@@ -349,6 +357,27 @@ are stripped, never forwarded; chunked request bodies → 501. One rule per
 proxy (one provider per sidecar is the deployment reality). CONNECT
 tunneling is unaffected and still governed by the allow-list.
 
+### Network-read tools under the proxy (W5-2)
+
+`web_search` / `web_fetch` (spec: `tools.md` "Web tools") execute inside
+the sidecar process, so both egress layers apply to them as to the LLM
+client. Two honest consequences:
+
+- **Port-level enforcement (default):** remote allow-list entries degrade
+  to `*:443`, so `web_fetch` over HTTPS is reachable under layer 1 — the
+  tool's own SSRF policy (per-hop DNS validation against
+  `ipaddress.is_global`, v4-mapped/NAT64 unwrapping, same-origin redirect
+  cap) is the real boundary, not the sandbox.
+- **Per-host proxy (`STEERABLE_EGRESS_PROXY=1`):** outbound is confined to
+  a proxy that tunnels only the provider endpoint, so an arbitrary
+  `web_fetch` cannot succeed. The desktop sets
+  `STEERABLE_EGRESS_CONFINED=1` in the sidecar env on exactly the
+  proxy-started path; both tools then fail loud with an actionable error
+  naming the remedies instead of hanging behind the proxy's 403/405. The
+  marker is deliberately distinct from the opt-in var so a proxy startup
+  failure (which falls back to port-level enforcement) never leaves the
+  sidecar believing it is confined when it is not.
+
 ## Current product posture (2026-08-29, Wave 4 wired)
 
 All three layers are **on by default** in the DeepPath desktop build:
@@ -359,11 +388,27 @@ All three layers are **on by default** in the DeepPath desktop build:
   vars and, on macOS, the System Configuration proxy via `scutil`) —
   the sidecar's httpx stack honors ambient proxies, so a configured proxy
   is an effective egress point and must be allow-listed or every LLM call
-  is denied for proxy users (found by dogfooding, 2026-08-29). Explicit
+  is denied for proxy users (found by dogfooding, 2026-08-29). Provider
+  endpoints that the platform's own bypass list declares direct do not
+  route through an ambient proxy at all (`llm/system_proxy.py` restores
+  the macOS ExceptionsList that `urllib.getproxies()` drops, without
+  which a local Ollama's traffic reaches the system proxy and comes back
+  as its HTTP 502 rather than the model's reply). The allow-list still
+  unions both kinds of endpoint. Explicit
   override: `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`. The hostname
   limitation documented above applies: remote entries degrade to port-only
   enforcement, which still breaks reverse shells / beacons / DNS
   tunnelling but not exfiltration to an attacker HTTPS endpoint on 443.
+  On a platform without Seatbelt (non-macOS, missing
+  `/usr/bin/sandbox-exec`, or profile-generation failure) the sidecar
+  process runs unconfined. The desktop records the spawn outcome as a
+  structured posture (`backend`/`enforcement`/`reason`, mirroring the
+  layer-3 `partial | none` vocabulary) and the settings page's security
+  section renders it as a durable row: an explicit `sandbox: false` /
+  `STEERABLE_SIDECAR_SANDBOX=0` opt-out is shown neutrally, while an
+  involuntary degradation warns that the key-holding process runs
+  unconfined and names the supported remedy on such platforms — running
+  the app / sidecar inside a container.
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as
   `execSandbox: {enabled, writableRoots: [project root], network: true,
   allowedHosts: [provider endpoint], requireFull: false}`. The backend is
@@ -392,6 +437,12 @@ All three layers are **on by default** in the DeepPath desktop build:
   this": the sidecar persists it as a rule and applies it within the
   same run. A corrupt policy file fails closed (no rules → every call
   falls through to the prompt).
+- **Network-read tools** (`web_search` / `web_fetch`, W5-2) run the same
+  approval algebra as every other tool: category = tool name (an
+  `allow_always` on `web_fetch` grants exactly that tool, nothing wider),
+  mode `read`, and the target URL is the first key the approval modal
+  surfaces. Under the per-host egress proxy they fail loud instead of
+  hanging — see "Network-read tools under the proxy" above.
 
 One wiring gap found and closed during Wave 4: the CoreLoop path used to
 drop `projectRoot` on reverse-channel tool calls, so the project-mode

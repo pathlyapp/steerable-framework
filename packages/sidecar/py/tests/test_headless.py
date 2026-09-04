@@ -227,7 +227,7 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
     hooks_src = src[src.index("ChainHooks") :]
-    assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")
+    assert hooks_src.index("default_harness.hooks") < hooks_src.index("delivery")
 
 
 @pytest.mark.asyncio
@@ -359,6 +359,38 @@ def test_assemble_harness_single_adds_no_delegation_tools(tmp_path: Path) -> Non
     assert not {"agent_spawn", "agent_send", "agent_wait", "agent_close"} & names
 
 
+def test_assemble_harness_progressive_wires_tool_search(tmp_path: Path) -> None:
+    """The progressive arm's discovery tool is registered on the router
+    during assembly — the offered descriptor always dispatches — and the
+    offered list is the registry's direct tier."""
+    from steerable_agent_runtime import ToolRouter
+
+    spec_path = tmp_path / "progressive.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: progressive\nmemory: stateless\norchestration: single\n",
+        encoding="utf-8",
+    )
+    router = ToolRouter()
+    router.register(lambda: "x", name="bash", description="Run commands")
+    router.register(
+        lambda: "y",
+        name="get_weather",
+        description="Current weather",
+        exposure="deferred",
+    )
+
+    *_, descriptors, _limits = headless_mod._assemble_harness(
+        spec_path, {"model": "fake"}, provider=None, executor=object(), tools=router
+    )
+
+    names = [d.get("function", {}).get("name") or d.get("name") for d in descriptors]
+    assert names == ["bash", "tool_search"]
+    assert router.get("tool_search") is not None
+
+
 class _FakeTools:
     def describe_model(self) -> list[dict]:
         return [{"name": "bash"}]
@@ -397,6 +429,88 @@ async def test_run_with_bash_tool(
         headless_mod, "default_llm_provider_factory", lambda _params: provider
     )
     await _run("run echo", cwd=str(tmp_path), max_rounds=8)
+
+
+@pytest.mark.asyncio
+async def test_default_path_takes_loop_limits_from_the_bundled_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W3.4.2.4: with no ``--harness``, the limits still come from
+    `default.harness.yaml`. This path used to leave `limits` unset and answer
+    `max_tool_errors` from a literal 32, so the spec's 16 never reached a run.
+    """
+    from steerable_agent_runtime.harness_spec import load_harness_spec
+    from steerable_sidecar.sidecar import _DEFAULT_HARNESS_SPEC_PATH
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    seen: list[object] = []
+    real_loop = headless_mod.CoreLoop
+
+    def capture(*args, **kwargs):
+        seen.append(kwargs["config"])
+        return real_loop(*args, **kwargs)
+
+    monkeypatch.setattr(headless_mod, "CoreLoop", capture)
+
+    await _run("say done", cwd=str(tmp_path), harness_path=None)
+
+    pinned = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
+    assert len(seen) == 1
+    config = seen[0]
+    assert (config.max_rounds, config.max_tool_errors, config.tool_dedup) == (
+        pinned.max_rounds,
+        pinned.max_tool_errors,
+        bool(pinned.tool_dedup),
+    )
+
+
+@pytest.mark.asyncio
+async def test_max_rounds_flag_overrides_the_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--max-rounds` outranks the spec; the other limits stay pinned to it."""
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    seen: list[object] = []
+    real_loop = headless_mod.CoreLoop
+
+    def capture(*args, **kwargs):
+        seen.append(kwargs["config"])
+        return real_loop(*args, **kwargs)
+
+    monkeypatch.setattr(headless_mod, "CoreLoop", capture)
+
+    await _run("say done", cwd=str(tmp_path), max_rounds=9)
+
+    assert seen[0].max_rounds == 9
+    assert seen[0].max_tool_errors == 16
 
 
 @pytest.mark.asyncio

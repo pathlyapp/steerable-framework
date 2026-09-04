@@ -185,6 +185,24 @@ exports decodable rows to JSONL for corrupt databases. Content compaction
 stays in the loop's declared `CompactionBoundary` — maintenance never
 rewrites the history record (W2.6.3).
 
+The record is versioned (`RECORD_FORMAT_VERSION` in `history.py`, stamped
+as `v` on every written entry). Two versions exist: v1 is the
+pre-versioning shape (no `v` key, written before W4-6) and v2 is the
+current shape. The v1→v2 delta is the `v` key itself — the `item` /
+`boundary` / `seed` envelopes are field-identical across both versions, so
+the upgrade is the stamp and nothing else. Reads upgrade older versions in
+memory on load (`upgrade_entry_dict`, the seam a future structural
+migration plugs into); the channel stays append-only, old entries are
+never rewritten (W2.6.3), a record legitimately mixes versions on disk,
+and any entry re-written after a load persists the current version.
+
+Reads are fail-closed. An entry written by a newer build (the
+desktop-downgrade case) raises `RecordFormatError` naming the remedy —
+upgrade the app; the record was not modified — and an unknown envelope
+discriminant is refused the same way. There is no skip-and-continue read
+path: a record this build cannot fully read is refused whole rather than
+silently truncated.
+
 ### `TransportAdapter`
 
 ```python

@@ -18,7 +18,7 @@ suffix; registry keys keep the plan's dimension names.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -28,6 +28,8 @@ from .hooks import LoopHooks, NoopHooks
 from .llm import LLMProvider
 from .retry import RetryHooks
 from .storage import InMemoryStorage, StorageAdapter
+from .tool_search import DEFAULT_MAX_RESULTS
+from .tools import ToolRouter
 
 # ---------------------------------------------------------------------------
 # Protocols — one per harness dimension
@@ -72,6 +74,21 @@ class ToolSelection(Protocol):
     assumes: str
 
     def select(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class RouterToolSelection(Protocol):
+    """Optional ``tools``-dimension seam: selection that needs the run's
+    ``ToolRouter`` — to register discovery tools and to read exposure
+    tiers.
+
+    ``AssembledHarness.wire_tools`` calls ``register`` before ``select``
+    runs. A strategy implementing this protocol must treat unwired
+    ``select`` as an error: the model is never offered a tool that cannot
+    dispatch.
+    """
+
+    def register(self, router: ToolRouter) -> None: ...
 
 
 @runtime_checkable
@@ -413,22 +430,67 @@ class MinimalToolset:
 
 @dataclass(frozen=True, slots=True)
 class ProgressiveDisclosure:
-    """Core tools plus the tool-search descriptor; the model discovers the
-    long tail on demand (assembly wires the router side via
-    ``register_tool_search``)."""
+    """The direct tier plus the tool-search descriptor; the model discovers
+    the deferred tier on demand.
 
-    core: frozenset[str] = frozenset({"bash", "read_file", "write_file", "edit_file"})
+    The registry's exposure tiers are the listing policy: ``select`` keeps
+    descriptors the bound router marks ``direct`` (names the router does
+    not know pass through — tiers govern only the router's own
+    registrations), drops any stale search descriptor, and appends one
+    canonical ``tool_search`` descriptor. The strategy therefore needs the
+    run's router: the entrypoint calls ``AssembledHarness.wire_tools``
+    before selection, which registers the discovery tool — dispatchable by
+    the time its descriptor is offered — and binds the tier source.
+    ``select`` before ``register`` raises rather than offer a dead tool.
+    """
+
+    max_results: int = DEFAULT_MAX_RESULTS
     name: str = "progressive"
     assumes: str = (
         "the model can express its need as a search query, and discovery "
         "latency costs less than the tokens a full tool listing would burn"
     )
+    # Bound by register(), never by construction: assemble_harness builds
+    # strategies from spec params alone, so the router arrives via the
+    # entrypoint-driven wiring step like every other runtime dependency.
+    _router: ToolRouter | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        # slots=True never materializes an init=False field's default (the
+        # slot descriptor shadows it), so the unwired sentinel is set here.
+        object.__setattr__(self, "_router", None)
+
+    def register(self, router: ToolRouter) -> None:
+        from .tool_search import register_tool_search
+
+        register_tool_search(router, max_results=self.max_results)
+        object.__setattr__(self, "_router", router)
 
     def select(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        from .tool_search import tool_search_descriptor
+        from .tool_search import TOOL_SEARCH_NAME, tool_search_descriptor
 
-        kept = [t for t in tools if _tool_name(t) in self.core]
-        return [*kept, tool_search_descriptor()]
+        if self._router is None:
+            raise ValueError(
+                "tools: progressive requires the run's ToolRouter — the "
+                "entrypoint must call AssembledHarness.wire_tools(router) "
+                "before select_tools. Paths whose tools arrive over the "
+                "wire without an in-process router (the sidecar host-tools "
+                "chat path) cannot serve it; use tools: full or minimal."
+            )
+        unlisted = {
+            registered.name
+            for registered in self._router.list_tools()
+            if registered.exposure != "direct"
+        }
+        kept = [
+            descriptor
+            for descriptor in tools
+            if (name := _tool_name(descriptor)) not in unlisted
+            and name != TOOL_SEARCH_NAME
+        ]
+        return [*kept, tool_search_descriptor(max_results=self.max_results)]
 
 
 # ---------------------------------------------------------------------------

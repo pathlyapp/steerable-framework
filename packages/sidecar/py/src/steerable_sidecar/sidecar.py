@@ -39,6 +39,7 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -80,11 +81,13 @@ from steerable_agent_runtime import (
     TraceRecorder,
     WorldStateHooks,
     branch_label,
+    close_dangling_tool_calls,
     entry_from_dict,
     estimate_cost_usd,
     export_trace,
     fork_record,
     lineage,
+    load_history_transcript,
     orchestration_tool_descriptors,
     resolve_fork_seq,
     select_catalog,
@@ -111,6 +114,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 
 from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostToolExecutor
+from .loop_limits import resolve_loop_limits
 from .sandbox import select_exec_backend
 
 logger = logging.getLogger("steerable_sidecar")
@@ -657,6 +661,9 @@ class Sidecar:
               "tools":   [...],         # OpenAI tool descriptors
               "streamId": "str_xyz",    # auto-generated if omitted
               "providerOptions": {...}, # passthrough
+              "resume":  True,          # W7-1: continue the record's
+                                        # interrupted turn; messages must be
+                                        # empty, recordId (or chatId) required
             }
 
         Returns ``{"streamId": "..."}`` immediately. Chunks arrive as
@@ -680,12 +687,69 @@ class Sidecar:
 
         stream_id = params.get("streamId") or _new_stream_id()
         messages = _coerce_messages(params.get("messages") or [])
+        # W7-1: resume=true continues the durable record's interrupted turn
+        # instead of opening a new one. The record's projected transcript
+        # becomes the loop seed verbatim — the host neither re-sends the last
+        # user message nor fabricates a synthetic continuation prompt, and
+        # the loop's seed reconciliation sees an exact extension of the
+        # record, so no compaction.boundary is declared and the record
+        # continues linearly. `messages` must be empty: the record is
+        # authoritative and merging a second history would silently fork.
+        if params.get("resume"):
+            if not _use_coreloop(params):
+                raise JsonRpcError(
+                    "resume requires useCoreLoop",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            if messages:
+                raise JsonRpcError(
+                    "resume replays the durable record; messages must be empty",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            record_id = params.get("recordId") or params.get("chatId")
+            if not record_id:
+                raise JsonRpcError(
+                    "resume requires recordId (or chatId)",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            resumed = await load_history_transcript(self.storage, str(record_id))
+            if not resumed:
+                raise JsonRpcError(
+                    f"record {record_id} has no history to resume",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            # Defensive close: the loop's flush discipline keeps its own
+            # records free of dangling tool_calls, but the record is a
+            # durable artifact other writers/versions may have produced.
+            messages = close_dangling_tool_calls(resumed)
+            # The host re-sends its freshly assembled systemPrompt on every
+            # turn; the record's leading system message (written by the
+            # interrupted turn) must yield to it or the mutual-exclusion
+            # check below fires. Splicing it out keeps the seed an exact
+            # extension of the record when the prompt is unchanged.
+            if (
+                params.get("systemPrompt") is not None
+                and messages
+                and messages[0].role == "system"
+            ):
+                messages = messages[1:]
         # W2.8.2: the host's assembled system prompt arrives as a typed
         # fragment (token cap enforced at this boundary), not an opaque seed
-        # message. Supplying both is a host bug — fail loud.
+        # message. Supplying both seeds is a host bug — fail loud.
+        #
+        # Only the *leading* message counts as a competing seed. Later system
+        # messages are ordinary transcript content this sidecar itself injected
+        # — the skills catalog, `<world-state>`, reminders — and a resumed
+        # record replays them verbatim. Rejecting those would make resume
+        # impossible for every turn that carried a skill or world-state
+        # fragment.
         system_prompt = params.get("systemPrompt")
         if system_prompt is not None:
-            if any(m.role == "system" for m in messages):
+            if messages and messages[0].role == "system":
                 raise JsonRpcError(
                     "systemPrompt param and a system message in messages are "
                     "mutually exclusive",
@@ -1121,11 +1185,41 @@ class Sidecar:
         trace still retain every intermediate assistant turn.
         """
 
-        hooks: LoopHooks = (
-            self._loop_hooks_factory(params)
-            if self._loop_hooks_factory is not None
-            else _default_loop_hooks(params, summarizer=_summarizer_for(provider))
-        )
+        if self._loop_hooks_factory is not None:
+            # An embedder-supplied hooks factory replaces the whole default
+            # assembly, tools dimension included — no selection is applied.
+            hooks: LoopHooks = self._loop_hooks_factory(params)
+            tool_selection: Any = None
+        else:
+            default_harness = _assemble_default_harness(
+                params, summarizer=_summarizer_for(provider)
+            )
+            hooks = default_harness.hooks
+            tool_selection = default_harness.tool_selection
+        # The bundled spec's tools dimension governs the host-supplied tool
+        # surface; the sidecar's own additions below (subagent / skills /
+        # orchestration) are orthogonal dimensions advertised past
+        # selection, mirroring the headless assembly. The bundled `full`
+        # strategy is a pass-through. A router-backed strategy
+        # (progressive) cannot run on this path — host tools dispatch over
+        # the reverse channel, so there is no in-process ToolRouter to bind
+        # — and must fail loud rather than offer a dead descriptor.
+        tools = params.get("tools")
+        if tools is not None and tool_selection is not None:
+            try:
+                tools = tool_selection.select(list(tools))
+            except ValueError as exc:
+                logger.error("chat stream %s rejected: %s", stream_id, exc)
+                await transport.emit_notification(
+                    "stream.error",
+                    {
+                        "streamId": stream_id,
+                        "kind": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
+                self._streams.pop(stream_id, None)
+                return
         # antiHallucination: sink the desktop loop's four guards (data-need
         # routing, deferred/claimed retry, grounding judge, narration) into
         # the CoreLoop via hooks. Off unless the host opts in.
@@ -1270,7 +1364,6 @@ class Sidecar:
         # domain (W4-5): filtered-out calls fail closed with
         # tool_not_delegated, so a read-only research sub-agent cannot reach
         # the parent's write/shell tools by construction.
-        tools = params.get("tools")
         if params.get("subagent"):
             subagent_opts = params.get("subagent")
             tool_filter = (
@@ -1802,18 +1895,20 @@ def _summarizer_for(provider: Any) -> Any | None:
     return provider
 
 
-def _default_loop_hooks(
+def _assemble_default_harness(
     params: dict[str, Any], summarizer: Any | None = None
-) -> LoopHooks:
-    """Default hook chain for the CoreLoop chat path, assembled from the
-    bundled ``default.harness.yaml`` (W1.2.4: the declarative spec is the
-    single source of truth for the default harness — this function only
-    resolves the sidecar's runtime parameters and deployment env knobs).
+) -> Any:
+    """Assemble the bundled ``default.harness.yaml`` into the loop's seams
+    (W1.2.4: the declarative spec is the single source of truth for the
+    default harness — this function only resolves the sidecar's runtime
+    parameters and deployment env knobs).
 
-    Slice order is the spec's: pressure compaction's ``pre_step`` first,
-    spill's ``post_tool_result``, then overflow backtrack ahead of
-    taxonomy-routed backoff on ``on_request_error`` — the same effective
-    ordering as the previous hand-rolled chain.
+    Returns the full ``AssembledHarness``: callers take ``.hooks`` for the
+    hook chain and drive the tools dimension against their tool surface —
+    ``wire_tools(router)`` where an in-process router exists (headless,
+    ACP), ``select_tools`` everywhere. Router-backed tools strategies
+    (progressive) raise on selection without wiring, so a path with no
+    router must not select them.
     """
     from dataclasses import replace
 
@@ -1853,7 +1948,7 @@ def _default_loop_hooks(
     # Desktop 60k–131k windows keep 2 tool results. GLM 1M Harbor traces
     # otherwise fold compile/train tails after two bash calls.
     large = max_ctx >= 200_000
-    assembled = assemble_harness(
+    return assemble_harness(
         spec,
         provider=summarizer,
         runtime_params={
@@ -1874,7 +1969,18 @@ def _default_loop_hooks(
             },
         },
     )
-    return assembled.hooks
+
+
+def _default_loop_hooks(
+    params: dict[str, Any], summarizer: Any | None = None
+) -> LoopHooks:
+    """The default harness's hook chain (assembly: `_assemble_default_harness`).
+
+    Slice order is the spec's: pressure compaction's ``pre_step`` first,
+    spill's ``post_tool_result``, then overflow backtrack ahead of
+    taxonomy-routed backoff on ``on_request_error``.
+    """
+    return _assemble_default_harness(params, summarizer).hooks
 
 
 def _retry_params_from_env() -> dict[str, int]:
@@ -1900,18 +2006,17 @@ def _retry_params_from_env() -> dict[str, int]:
     return params
 
 
+@lru_cache(maxsize=1)
 def _default_harness_spec():
-    """Load the bundled default spec once per process (chat turns are
-    frequent; the YAML parse is not free)."""
-    from functools import lru_cache
+    """Load the bundled default spec once per process (every chat turn reads
+    it for loop limits and tool selection; the parse is not free).
 
+    The cache lives on this function, not on a per-call inner closure — a
+    closure redefined each call carries a fresh empty cache and re-parses.
+    """
     from steerable_agent_runtime.harness_spec import load_harness_spec
 
-    @lru_cache(maxsize=1)
-    def _cached(path: str):
-        return load_harness_spec(path)
-
-    return _cached(str(_DEFAULT_HARNESS_SPEC_PATH))
+    return load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH)
 
 
 def _spill_directory() -> str:
@@ -1925,7 +2030,22 @@ def _spill_directory() -> str:
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
-    max_rounds = int(params.get("maxRounds", 32))
+    # Loop-limit precedence (W3.4.2.4): explicit request param > the bundled
+    # default spec's `loop:` section > the baseline. `resolve_loop_limits` is
+    # that one rule, shared with headless and ACP.
+    resolved = resolve_loop_limits(
+        _default_harness_spec().loop,
+        max_rounds=(
+            int(params["maxRounds"]) if params.get("maxRounds") is not None else None
+        ),
+        max_tool_errors=(
+            int(params["maxToolErrors"])
+            if params.get("maxToolErrors") is not None
+            else None
+        ),
+    )
+    max_rounds = resolved.max_rounds
+    max_tool_errors = resolved.max_tool_errors
     budget = None
     if (budget_tokens := params.get("budgetTokens")) is not None:
         budget = BudgetLimit(
@@ -1958,8 +2078,9 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         )
     return LoopConfig(
         max_rounds=max_rounds,
-        max_tool_errors=int(params.get("maxToolErrors", 3)),
+        max_tool_errors=max_tool_errors,
         budget=budget,
+        tool_dedup=resolved.tool_dedup,
         temperature=(
             float(params["temperature"])
             if params.get("temperature") is not None

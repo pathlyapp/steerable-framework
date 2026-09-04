@@ -140,8 +140,9 @@ class HistorySeed:
 RecordEntry = HistoryItem | CompactionBoundary | HistorySeed
 
 #: Durable record format version. v1 is the pre-versioning shape (no ``v``
-#: key); writers always stamp ``v: 2``. Bump only on a structural change to
-#: the envelope shapes below — never for additive content kinds.
+#: key); writers always stamp ``v: 2``. Reads upgrade older versions on
+#: load (``upgrade_entry_dict``). Bump only on a structural change to the
+#: envelope shapes below — never for additive content kinds.
 RECORD_FORMAT_VERSION = 2
 
 
@@ -149,7 +150,8 @@ class RecordFormatError(ValueError):
     """A durable record entry this build cannot read (fail-closed).
 
     Raised by ``entry_from_dict`` for a missing/unsupported ``v`` or an
-    unknown envelope discriminant. Deliberately a ``ValueError`` subclass so
+    unknown envelope discriminant, and by ``upgrade_entry_dict`` for a
+    version with no upgrade step. Deliberately a ``ValueError`` subclass so
     existing ``except ValueError`` callers keep working; the class name is
     the machine-greppable signal that the record — not the input — is at
     fault. There is no skip-and-continue read path: a record this build
@@ -650,21 +652,71 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
     raise TypeError(f"unknown record entry type: {type(entry).__name__}")
 
 
+def upgrade_entry_dict(data: dict[str, Any], *, from_version: int) -> dict[str, Any]:
+    """Bring a raw entry dict at ``from_version`` up to the current format.
+
+    The one live step, v1 → v2, stamps the ``v`` key and changes nothing
+    else: the W4-6 bump added the key itself, not a shape change — the
+    ``item`` / ``boundary`` / ``seed`` envelopes are field-identical across
+    v1 and v2, so a v1 payload already parses as v2. A future structural
+    bump chains its own step here; a version left without a step raises
+    ``RecordFormatError``, so the fail-closed stance covers upgrades too —
+    an entry that cannot upgrade is refused whole, never partially read.
+
+    The upgrade is in-memory only and never mutates the input dict. The
+    record channel is append-only — ``StorageAdapter`` has no update path
+    and W2.6.3 bars maintenance from rewriting records — so v1 entries
+    stay v1 on disk and a record legitimately mixes versions; every write
+    funnels through ``entry_to_dict``, which stamps the current version,
+    so any entry re-written after a load (a fork seed, a re-flushed item)
+    persists the upgrade.
+    """
+    version = from_version
+    upgraded = data
+    if version == 1:
+        # v1 → v2 (W4-6): the bump added the ``v`` key itself, not a shape
+        # change — the envelopes are field-identical across both versions,
+        # so the upgrade is the stamp and nothing else.
+        upgraded = {**upgraded, "v": 2}
+        version = 2
+    if version != RECORD_FORMAT_VERSION:
+        raise RecordFormatError(
+            f"no upgrade path from record format v{from_version} to "
+            f"v{RECORD_FORMAT_VERSION} "
+            f"(this build reads v1..v{RECORD_FORMAT_VERSION})"
+        )
+    return upgraded
+
+
 def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
     """Inverse of ``entry_to_dict``; fail-closed on unreadable shapes.
 
     Version gate first: a missing ``v`` is the pre-versioning v1 shape
     (accepted); a ``v`` newer than this build's ``RECORD_FORMAT_VERSION``
     means the record was written by a newer build — refuse it whole rather
-    than guess (the desktop-downgrade case). An unknown ``entry``
-    discriminant is refused the same way. Both raise ``RecordFormatError``.
+    than guess (the desktop-downgrade case), with the remedy in the
+    message. Accepted older versions go through ``upgrade_entry_dict``
+    before envelope dispatch. An unknown ``entry`` discriminant is refused
+    the same way. All of these raise ``RecordFormatError``.
     """
     version = data.get("v", 1)
-    if not isinstance(version, int) or version < 1 or version > RECORD_FORMAT_VERSION:
+    if isinstance(version, int) and version > RECORD_FORMAT_VERSION:
+        # The desktop-downgrade case: name the remedy and the entry, and
+        # state that the read left the record untouched. The record id is
+        # not in the entry dict — the resume funnel (resume.py) adds it.
+        raise RecordFormatError(
+            f"unsupported record format version: {version!r} "
+            f"(entry seq={data.get('seq')!r}; this build reads "
+            f"v1..v{RECORD_FORMAT_VERSION}). The record was written by a "
+            f"newer version of the app — upgrade the app to open it; the "
+            f"record was not modified."
+        )
+    if not isinstance(version, int) or version < 1:
         raise RecordFormatError(
             f"unsupported record format version: {version!r} "
             f"(this build reads v1..v{RECORD_FORMAT_VERSION})"
         )
+    data = upgrade_entry_dict(data, from_version=version)
     envelope = data.get("entry")
     if envelope == "item":
         return HistoryItem(

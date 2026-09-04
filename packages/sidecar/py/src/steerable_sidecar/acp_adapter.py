@@ -86,6 +86,7 @@ from steerable_agent_runtime.approval import ApprovalKind
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
+from .loop_limits import resolve_loop_limits
 from .workspace_tools import workspace_tools_for_cwd
 
 logger = logging.getLogger(__name__)
@@ -248,9 +249,9 @@ def _env_provider_params() -> dict[str, Any]:
 def _default_loop_config() -> LoopConfig:
     """LoopConfig from the bundled default harness spec's ``loop:`` section.
 
-    Falls back to the historical constants when the spec pins nothing —
-    the spec declares what experiments vary; entrypoints keep owning the
-    baseline.
+    ACP has no per-request override channel, so this is the spec's values or
+    the shared baseline — resolved by the same rule the chat and headless
+    entrypoints use.
     """
     from .sidecar import _DEFAULT_HARNESS_SPEC_PATH
 
@@ -260,14 +261,11 @@ def _default_loop_config() -> LoopConfig:
         limits = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
     except Exception:  # spec unreadable — baseline constants still apply
         limits = None
+    resolved = resolve_loop_limits(limits)
     return LoopConfig(
-        max_rounds=(limits.max_rounds if limits else None) or 80,
-        max_tool_errors=(limits.max_tool_errors if limits else None) or 16,
-        tool_dedup=(
-            limits.tool_dedup
-            if limits is not None and limits.tool_dedup is not None
-            else False
-        ),
+        max_rounds=resolved.max_rounds,
+        max_tool_errors=resolved.max_tool_errors,
+        tool_dedup=resolved.tool_dedup,
     )
 
 
@@ -621,7 +619,15 @@ class SteerableAcpAgent(acp.Agent):
                 **({"run_command": run_command} if run_command is not None else {}),
             )
         mcp_clients = await self._mount_mcp(router, session)
-        from .sidecar import _default_loop_hooks
+        from .sidecar import _assemble_default_harness
+
+        # The bundled default spec drives every dimension, tools included:
+        # wiring binds the prompt's router (MCP catalogs land deferred, so
+        # a router-backed tools strategy can register its discovery seam)
+        # and selection shapes the offered list. The bundled `full`
+        # strategy is a pass-through.
+        default_harness = _assemble_default_harness(self._provider_params)
+        default_harness.wire_tools(router)
 
         # The router's require_consent gate stays armed; with a client
         # attached, ApprovalExecutor routes every non-read call through
@@ -644,7 +650,7 @@ class SteerableAcpAgent(acp.Agent):
             # W3.4.2.4: loop limits come from the bundled default harness
             # spec, not a hardcoded knob here — one declarative source.
             config=_default_loop_config(),
-            hooks=_default_loop_hooks(self._provider_params),
+            hooks=default_harness.hooks,
             history_store=self._storage,
             record_id=session_id,
         )
@@ -654,7 +660,7 @@ class SteerableAcpAgent(acp.Agent):
         # record stays delta-only.
         events = loop.run(
             list(session.history),
-            tools=router.describe_model(),
+            tools=default_harness.select_tools(router.describe_model()),
             chat_id=session_id,
         )
         assistant_text: list[str] = []

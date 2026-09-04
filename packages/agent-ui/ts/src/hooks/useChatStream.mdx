@@ -33,6 +33,12 @@ const {
   messages,            // ChatMessage[]
   isStreaming,         // boolean
   sendUserMessage,     // ({ content }) => Promise<void>
+  resumeTurn,          // ({ metadata? }?) => Promise<void> — W7-1 crash resume
+  steerUserMessage,    // (content) => Promise<boolean> — raw mid-turn steer
+  steerOrFollowUpUserMessage, // (content) => Promise<SteerOutcome> — steer with never-drop fallback
+  followUpUserMessage, // ({ content }) => void — queue for after the turn (W6-2)
+  pendingFollowUps,    // ChatStreamSendInput[] — queued, not yet sent
+  removeFollowUp,      // (index) => void — withdraw a queued message
   cancel,              // () => void
   setMessages,         // (messages) => void
   appendMessage,       // (message) => void
@@ -113,6 +119,19 @@ const { ... } = useChatStream({
 });
 ```
 
+## Steering and follow-ups (W6-2)
+
+While a turn is streaming there are three ways to submit more input, with different delivery guarantees:
+
+* `steerUserMessage(content)` — raw mid-turn steer. Resolves `true` when the running turn accepted the message (it is appended to the transcript at once); `false` when no steerable turn is active (no transport `steer`, or the turn already ended). On `false` nothing else happens — what to do with the draft is the caller's problem.
+* `followUpUserMessage(input)` — queue the message; it is sent automatically as the next turn when the current turn's `finally` drains the queue. `pendingFollowUps` exposes the queue (in order, not yet sent) and `removeFollowUp(index)` withdraws one. `sendUserMessage` while streaming degrades into this same queue rather than dropping.
+* `steerOrFollowUpUserMessage(content)` — the never-drop combinator, intended for composer Enter handlers. It tries the steer first and resolves a `SteerOutcome` telling the caller where the message landed:
+  * `'steered'` — injected into the running turn.
+  * `'queued'` — the turn is still running but not steerable; the message sits in the follow-up queue and auto-sends at turn end.
+  * `'sent'` — no turn was running by the time the steer attempt settled. This covers the race where the turn ends while `transport.steer` is in flight: that turn's `finally` already drained the queue, so queueing would strand the message until some unrelated future turn ends — it is sent immediately as a normal new turn instead.
+
+The hook exposes only the neutral outcome; rendering any notice ("queued instead of injected", "N queued will be discarded") is the caller's job, in the caller's locale.
+
 ## Cancellation
 
 `transport.stream` may return a `() => void` cancel handle. The hook stores it and calls it when:
@@ -122,8 +141,11 @@ const { ... } = useChatStream({
 
 If your transport can't cancel, return `void` — the hook will simply mark `isStreaming` as `false` when the promise settles.
 
+`cancel()` also drops every queued follow-up (W6-2): an explicit stop means "don't keep going", so queued messages are not auto-sent afterwards. If your UI shows `pendingFollowUps`, tell the user that stopping discards them before they confirm.
+
 ## Caveats
 
-* `sendUserMessage` is a no-op while `isStreaming` is true. Wire your composer's send button to `disabled={isStreaming}` to mirror this in the UI.
+* `sendUserMessage` while `isStreaming` is true does NOT drop the message — it appends to the W6-2 follow-up queue and auto-sends as the next turn. If you'd rather block input during streaming, wire your composer's send button to `disabled={isStreaming}`.
+* `resumeTurn` (W7-1) streams an assistant turn WITHOUT appending a user message — the transport receives `{ content: '', metadata: { resume: true } }` and the backend replays the durable record's projection as the loop seed. Use it for a "continue the interrupted turn" affordance after a crash/kill; it is a no-op while streaming and is never queued as a follow-up.
 * Tool results are attached to the **latest assistant message**. If you need per-call lookup, override `renderToolCall` on `ChatPanel` and pull the result from your own map.
 * Setting `toolResultToMessage` to a non-null returner switches to a "tool result lives in its own message" model — useful if you want to render tool results as standalone bubbles. Otherwise the result rides inline on the assistant turn.

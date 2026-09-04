@@ -165,6 +165,26 @@ def _parse_host_entry(entry: str) -> tuple[str, tuple[int, ...]]:
     return host, (port,)
 
 
+#: Extra egress the network-read tools (``web_fetch``/``web_search``) need on
+#: top of a fail-closed allow-list. Their targets are whatever the model asks
+#: for, so no host list can name them in advance.
+#:
+#: Name resolution goes through the system resolver's UNIX socket rather than
+#: port 53 — allowing that socket costs no IP reach at all, and without it
+#: every fetch dies in the SSRF pre-check as ``cannot resolve <host>``, which
+#: reads like the user's network is down (found by driving the desktop's web
+#: tool against a live sandboxed sidecar). The two port rules are what
+#: Seatbelt can express for arbitrary hosts; per-host enforcement needs the
+#: local allow-listing proxy.
+_WEB_EGRESS_POLICY = """
+; network-read tools (web_fetch/web_search): the model chooses the target, so
+; only the resolver socket and the http(s) ports can be declared ahead of it.
+(allow network-outbound (literal "/private/var/run/mDNSResponder"))
+(allow network-outbound (remote tcp "*:443"))
+(allow network-outbound (remote tcp "*:80"))
+"""
+
+
 def _egress_policy(allowed_hosts: Sequence[str]) -> str:
     """Fail-closed network rules: deny outbound except declared endpoints.
 
@@ -218,6 +238,7 @@ def build_seatbelt_profile(
     writable_roots: list[str] | None = None,
     network: bool = True,
     allowed_hosts: Sequence[str] | None = None,
+    web_egress: bool = False,
 ) -> str:
     """Render a complete Seatbelt profile for the sidecar process.
 
@@ -234,6 +255,12 @@ def build_seatbelt_profile(
     A list (even empty) fails closed: outbound is denied except to the
     declared endpoints. Invalid entries raise ``ValueError`` at generation
     time, never a malformed profile.
+
+    ``web_egress`` widens a fail-closed allow-list with what ``web_fetch`` /
+    ``web_search`` need: the system resolver plus outbound http(s). Set it
+    only where those tools are actually offered — it grants reach to any host
+    on ports 80 and 443. It is a no-op when ``allowed_hosts`` is ``None``
+    (outbound is already open) or ``network`` is off.
     """
 
     parts = [_BASE_POLICY]
@@ -244,9 +271,12 @@ def build_seatbelt_profile(
             f"(allow file-read* file-write* (subpath {_sbpl_string(normalized)}))\n"
         )
     if network:
-        parts.append(
-            _NETWORK_POLICY if allowed_hosts is None else _egress_policy(allowed_hosts)
-        )
+        if allowed_hosts is None:
+            parts.append(_NETWORK_POLICY)
+        else:
+            parts.append(_egress_policy(allowed_hosts))
+            if web_egress:
+                parts.append(_WEB_EGRESS_POLICY)
     return "\n".join(parts)
 
 
@@ -537,6 +567,15 @@ def main() -> int:
             "allow ports 443 and 80. Omit entirely to keep outbound open."
         ),
     )
+    profile_cmd.add_argument(
+        "--allow-web-egress",
+        action="store_true",
+        help=(
+            "Also allow what web_fetch/web_search need: the system resolver "
+            "and outbound http(s) to any host. Pass only where those tools "
+            "are offered; without it every fetch fails name resolution."
+        ),
+    )
     args = parser.parse_args()
 
     if args.command == "profile":
@@ -545,6 +584,7 @@ def main() -> int:
                 writable_roots=list(args.writable_root),
                 network=not args.no_network,
                 allowed_hosts=list(args.allow_host) or None,
+                web_egress=args.allow_web_egress,
             )
         )
         return 0

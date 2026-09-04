@@ -17,6 +17,231 @@
     "oldField": "oldText",
     "overlap": "reject"
   },
+  "toolSearch": {
+    "bm25": {
+      "b": 0.75,
+      "k1": 1.2,
+      "nameWeight": 2
+    },
+    "defaultMaxResults": 8,
+    "inventory": [
+      {
+        "description": "Create a new issue in a GitHub repository",
+        "name": "mcp__github__create_issue"
+      },
+      {
+        "description": "Search issues and pull requests in a repository",
+        "name": "mcp__github__search_issues"
+      },
+      {
+        "description": "List repositories for the authenticated user",
+        "name": "mcp__github__list_repos"
+      },
+      {
+        "description": "Post a message to a Slack channel",
+        "name": "mcp__slack__post_message"
+      },
+      {
+        "description": "Search messages across Slack channels",
+        "name": "mcp__slack__search_messages"
+      },
+      {
+        "description": "Create an issue in a Linear workspace",
+        "name": "mcp__linear__create_issue"
+      },
+      {
+        "description": "Read a file from the local workspace",
+        "name": "local_read_file"
+      },
+      {
+        "description": "A tool whose entire name is one query term",
+        "name": "issue"
+      }
+    ],
+    "maxResultsCeiling": 20,
+    "scoreTolerance": 1e-12,
+    "scoreVectors": [
+      {
+        "query": "github",
+        "ranked": [
+          {
+            "name": "mcp__github__create_issue",
+            "score": 1.443104830718
+          },
+          {
+            "name": "mcp__github__list_repos",
+            "score": 1.30187499838
+          },
+          {
+            "name": "mcp__github__search_issues",
+            "score": 1.251896326088
+          }
+        ]
+      },
+      {
+        "query": "create issue",
+        "ranked": [
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 3.451237117528
+          },
+          {
+            "name": "mcp__github__create_issue",
+            "score": 3.400327657896
+          },
+          {
+            "name": "issue",
+            "score": 1.384801863508
+          }
+        ]
+      },
+      {
+        "query": "message",
+        "ranked": [
+          {
+            "name": "mcp__slack__post_message",
+            "score": 2.778736145041
+          }
+        ]
+      },
+      {
+        "query": "search",
+        "ranked": [
+          {
+            "name": "mcp__slack__search_messages",
+            "score": 2.047846649401
+          },
+          {
+            "name": "mcp__github__search_issues",
+            "score": 1.957222827178
+          }
+        ]
+      },
+      {
+        "query": "issue repository",
+        "ranked": [
+          {
+            "name": "mcp__github__create_issue",
+            "score": 2.658061541828
+          },
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 1.464710891814
+          },
+          {
+            "name": "issue",
+            "score": 1.384801863508
+          },
+          {
+            "name": "mcp__github__search_issues",
+            "score": 1.21495671111
+          }
+        ]
+      },
+      {
+        "query": "issue",
+        "ranked": [
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 1.464710891814
+          },
+          {
+            "name": "mcp__github__create_issue",
+            "score": 1.443104830718
+          },
+          {
+            "name": "issue",
+            "score": 1.384801863508
+          }
+        ]
+      },
+      {
+        "query": "create",
+        "ranked": [
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 1.986526225713
+          },
+          {
+            "name": "mcp__github__create_issue",
+            "score": 1.957222827178
+          }
+        ]
+      },
+      {
+        "query": "slack channel",
+        "ranked": [
+          {
+            "name": "mcp__slack__post_message",
+            "score": 3.734001329872
+          },
+          {
+            "name": "mcp__slack__search_messages",
+            "score": 2.047846649401
+          }
+        ]
+      },
+      {
+        "query": "linear workspace search",
+        "ranked": [
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 4.028010974315
+          },
+          {
+            "name": "mcp__slack__search_messages",
+            "score": 2.047846649401
+          },
+          {
+            "name": "mcp__github__search_issues",
+            "score": 1.957222827178
+          },
+          {
+            "name": "local_read_file",
+            "score": 1.324075484332
+          }
+        ]
+      },
+      {
+        "query": "mcp",
+        "ranked": [
+          {
+            "name": "mcp__slack__search_messages",
+            "score": 0.4577086775
+          },
+          {
+            "name": "mcp__github__list_repos",
+            "score": 0.448572269188
+          },
+          {
+            "name": "mcp__linear__create_issue",
+            "score": 0.439793469682
+          },
+          {
+            "name": "mcp__slack__post_message",
+            "score": 0.439793469682
+          },
+          {
+            "name": "mcp__github__create_issue",
+            "score": 0.431351686207
+          },
+          {
+            "name": "mcp__github__search_issues",
+            "score": 0.431351686207
+          }
+        ]
+      },
+      {
+        "query": "kubernetes helm rollout",
+        "ranked": []
+      },
+      {
+        "query": "zzz",
+        "ranked": []
+      }
+    ],
+    "tieBreak": "score descending, then name ascending"
+  },
   "tools": {
     "bash": {
       "desktopName": "local_exec_shell",
@@ -69,7 +294,7 @@
       ]
     }
   },
-  "version": 1,
+  "version": 2,
   "versionAlgorithm": "sha256-utf8-hex",
   "versionToken": {
     "inputField": "expectedVersion",

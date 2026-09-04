@@ -165,10 +165,10 @@ def project_transcript(
         # bookkeeping, not transcript content.
 
     flush_assistant()
-    return _close_dangling_tool_calls(messages)
+    return close_dangling_tool_calls(messages)
 
 
-def _close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
+def close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     """Append synthetic tool messages for tool_calls with no recorded result.
 
     A trace that ends mid-tool-execution (crash, kill, lost stream) projects
@@ -177,6 +177,12 @@ def _close_dangling_tool_calls(messages: list[LLMMessage]) -> list[LLMMessage]:
     explicit "interrupted" marker keeps the session resumable and tells the
     model not to trust the unknown outcome. Complete traces pass through
     unchanged.
+
+    Public: the sidecar's ``resume`` path (W7-1) applies it to the durable
+    record's projection. The loop's own flush discipline (assistant message
+    and its tool results flush together at round end) keeps records it
+    writes free of dangling calls; the close guards records produced by
+    other writers or older builds and is a no-op on clean transcripts.
     """
     out: list[LLMMessage] = []
     i = 0
@@ -250,6 +256,7 @@ async def load_history_items(
         CompactionBoundary,
         HistoryItem,
         HistorySeed,
+        RecordFormatError,
         entry_from_dict,
         kind_for_role,
     )
@@ -278,7 +285,13 @@ async def load_history_items(
     )
     items: list[HistoryItem] = []
     for raw in entries:
-        entry = entry_from_dict(raw)
+        try:
+            entry = entry_from_dict(raw)
+        except RecordFormatError as exc:
+            # The entry dict carries no record id; name it here so a
+            # fail-closed read (the desktop-downgrade case) identifies
+            # which record is unreadable.
+            raise RecordFormatError(f"record {record_id!r}: {exc}") from exc
         if isinstance(entry, HistoryItem):
             items.append(entry)
         elif isinstance(entry, HistorySeed):

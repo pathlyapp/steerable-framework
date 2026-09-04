@@ -25,8 +25,9 @@ from steerable_agent_runtime.storage import InMemoryStorage
 
 from .acp_adapter import _env_provider_params
 from .delivery import DeliveryGatedExecutor, DeliveryHooks
+from .loop_limits import resolve_loop_limits
 from .sidecar import (
-    _default_loop_hooks,
+    _assemble_default_harness,
     _summarizer_for,
     default_llm_provider_factory,
 )
@@ -186,6 +187,15 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="Harness spec YAML (W1.2.2); omitted = the built-in default chain",
     )
+    parser.add_argument(
+        "--no-web-tools",
+        action="store_true",
+        help=(
+            "Omit web_search / web_fetch. Required by offline task contracts "
+            "(TB 2.1): a reachable fetch answers from outside the environment "
+            "under test and confounds a harness comparison."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(__version__)
@@ -200,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
                 cwd=args.cwd,
                 max_rounds=args.max_rounds,
                 harness_path=args.harness,
+                web_tools=not args.no_web_tools,
             )
         )
     except ValueError as exc:
@@ -279,6 +290,10 @@ def _assemble_harness(
             },
         },
     )
+    # Router-backed tools strategies (progressive) register their discovery
+    # tool and read exposure tiers from the router; wiring precedes
+    # selection so an offered tool always dispatches.
+    assembled.wire_tools(tools)
     descriptors = assembled.tool_selection.select(tools.describe_model())
     wrapped = assembled.orchestration.wrap(executor, provider=provider, tools=descriptors)
     if spec.orchestration.impl != "single":
@@ -366,11 +381,12 @@ async def _run(
     cwd: str,
     max_rounds: int | None = None,
     harness_path: Path | None = None,
+    web_tools: bool = True,
 ) -> None:
     params = _env_provider_params()
     if not params.get("model"):
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
-    tools = workspace_tools_for_cwd(cwd, jailed=True)
+    tools = workspace_tools_for_cwd(cwd, jailed=True, web_tools=web_tools)
     provider = default_llm_provider_factory(params)
     # consent_granted=True is deliberate and scoped to this entrypoint:
     # headless runs (Harbor evals, CI) are unattended — nobody answers an
@@ -387,14 +403,23 @@ async def _run(
     )
     limits: Any = None
     if harness_path is None:
+        default_harness = _assemble_default_harness(
+            params, summarizer=_summarizer_for(provider)
+        )
+        # The bundled spec pins the loop limits for this path too (W3.4.2.4).
+        # Reading them from the assembled spec, rather than leaving the
+        # literals below to answer, is what keeps `default.harness.yaml` the
+        # single source: editing its `loop:` section must move headless.
+        limits = default_harness.spec.loop
+        default_harness.wire_tools(tools)
         hooks: Any = ChainHooks(
             # Compact first so a same-round write nudge is folded onto the
             # rewritten tail instead of sitting in the summarized middle.
-            _default_loop_hooks(params, summarizer=_summarizer_for(provider)),
+            default_harness.hooks,
             delivery,
         )
         storage: Any = InMemoryStorage()
-        tool_descriptors = tools.describe_model()
+        tool_descriptors = default_harness.select_tools(tools.describe_model())
     else:
         hooks, storage, executor, tool_descriptors, limits = _assemble_harness(
             harness_path,
@@ -404,17 +429,16 @@ async def _run(
             tools=tools,
             instruction=instruction,
         )
+    # `--max-rounds` overrides the spec; the spec overrides the baseline. Same
+    # rule as the chat and ACP entrypoints (see loop_limits).
+    resolved_limits = resolve_loop_limits(limits, max_rounds=max_rounds or None)
     loop = CoreLoop(
         provider,
         executor,
         config=LoopConfig(
-            max_rounds=max_rounds or (limits.max_rounds if limits else None) or 80,
-            max_tool_errors=(limits.max_tool_errors if limits else None) or 32,
-            tool_dedup=(
-                limits.tool_dedup
-                if limits is not None and limits.tool_dedup is not None
-                else False
-            ),
+            max_rounds=resolved_limits.max_rounds,
+            max_tool_errors=resolved_limits.max_tool_errors,
+            tool_dedup=resolved_limits.tool_dedup,
             temperature=_temperature(),
             max_tokens=_max_tokens(),
             soft_timeout_ms=_soft_timeout_ms(),

@@ -9,7 +9,8 @@
  *
  * Self-skips when the Python environment is unavailable (e.g. a TS-only CI
  * runner that never ran `uv sync`) — an E2E that cannot boot its subject
- * must say so, not fail.
+ * must say so, not fail. CI sets STEERABLE_E2E_REQUIRED=1 to turn that skip
+ * into a hard failure so the full-stack coverage cannot silently rot.
  */
 import { execFileSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
@@ -37,6 +38,9 @@ function pythonSidecarAvailable(): boolean {
 }
 
 const AVAILABLE = pythonSidecarAvailable();
+// CI sets STEERABLE_E2E_REQUIRED=1 so a sidecar-incapable runner fails hard
+// instead of silently skipping the full-stack coverage.
+const E2E_REQUIRED = process.env.STEERABLE_E2E_REQUIRED === '1';
 const describeE2E = AVAILABLE ? describe : describe.skip;
 
 /** Deterministic mock of POST /v1/chat/completions (SSE). */
@@ -197,10 +201,21 @@ describeE2E('E2E: TS runtime ↔ real Python sidecar', () => {
   });
 });
 
-if (!AVAILABLE) {
+if (!AVAILABLE && E2E_REQUIRED) {
+  // The suite above skips; register the failure explicitly so CI sees it.
+  describe('E2E: TS runtime ↔ real Python sidecar (required)', () => {
+    it('requires a sidecar-capable python', () => {
+      throw new Error(
+        `[e2e-real-sidecar] ${VENV_PYTHON} cannot import steerable_sidecar and ` +
+          'STEERABLE_E2E_REQUIRED=1 forbids skipping (run `uv sync` at the repo root)',
+      );
+    });
+  });
+} else if (!AVAILABLE) {
   // Visible in the test report instead of a silent skip.
   console.warn(
     `[e2e-real-sidecar] skipped: ${VENV_PYTHON} cannot import steerable_sidecar ` +
-      '(run `uv sync` at the repo root to enable)',
+      '(run `uv sync` at the repo root to enable; CI sets STEERABLE_E2E_REQUIRED=1 ' +
+      'to make this a hard failure)',
   );
 }

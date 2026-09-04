@@ -16,6 +16,8 @@ inputs:
   - frobnicate
   - local_exec_shell
   - web_search
+  - web_fetch
+  - web_deploy
   - ""
 expected:
   - read
@@ -33,5 +35,7 @@ expected:
   - destructive
   - other
   - other
+  - read
+  - read
   - other
   - other

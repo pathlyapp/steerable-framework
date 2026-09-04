@@ -15,7 +15,10 @@ dependencies = [
   # agent.chat.stream (openai_compat / ollama). Not optional here: the
   # sidecar exists to talk to LLM endpoints. (anthropic stays a lazy
   # import, only loaded when provider=anthropic.)
-  "httpx>=0.27",
+  # The `socks` extra covers hosts exporting `all_proxy=socks5://…`: httpx
+  # builds a transport per declared proxy at client construction, so the scheme
+  # must be buildable or every provider call fails before reaching a URL.
+  "httpx[socks]>=0.27",
   "steerable-agent-protocol>=0.1.0,<1.0.0",
   "steerable-agent-harness>=0.1.0,<1.0.0",
   "steerable-agent-runtime>=0.1.0,<1.0.0",

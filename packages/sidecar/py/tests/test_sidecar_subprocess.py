@@ -11,9 +11,23 @@ import pytest
 
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("CI_SKIP_SIDECAR_SUBPROCESS") == "1",
+    os.environ.get("CI_SKIP_SIDECAR_SUBPROCESS") == "1"
+    and os.environ.get("STEERABLE_E2E_REQUIRED") != "1",
     reason="explicitly disabled via CI_SKIP_SIDECAR_SUBPROCESS",
 )
+
+
+def test_e2e_gate_configuration() -> None:
+    """CI sets STEERABLE_E2E_REQUIRED=1 so real-process coverage cannot
+    silently rot; the explicit subprocess opt-out then becomes a hard
+    failure instead of a skip."""
+    assert not (
+        os.environ.get("CI_SKIP_SIDECAR_SUBPROCESS") == "1"
+        and os.environ.get("STEERABLE_E2E_REQUIRED") == "1"
+    ), (
+        "CI_SKIP_SIDECAR_SUBPROCESS=1 conflicts with STEERABLE_E2E_REQUIRED=1: "
+        "the subprocess e2e tests are required, remove the opt-out"
+    )
 
 
 async def _spawn_sidecar() -> asyncio.subprocess.Process:

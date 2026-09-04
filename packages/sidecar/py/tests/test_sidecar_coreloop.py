@@ -1012,6 +1012,26 @@ def test_build_loop_config_tool_timeout_wiring() -> None:
     assert _build_loop_config({"toolTimeoutMs": 5_000}).tool_timeout_ms == 5_000
 
 
+def test_build_loop_config_loop_limits_follow_harness_spec() -> None:
+    """W3.4.2.4 precedence: explicit request param > the bundled default
+    spec's `loop:` section (80/16/false) > the entrypoint baseline. The
+    budget's max_steps follows the resolved max_rounds."""
+    from steerable_sidecar.sidecar import _build_loop_config
+
+    cfg = _build_loop_config({})
+    assert cfg.max_rounds == 80
+    assert cfg.max_tool_errors == 16
+    assert cfg.tool_dedup is False
+    assert cfg.budget is not None
+    assert cfg.budget.max_steps == 80
+
+    explicit = _build_loop_config({"maxRounds": 12, "maxToolErrors": 5})
+    assert explicit.max_rounds == 12
+    assert explicit.max_tool_errors == 5
+    assert explicit.budget is not None
+    assert explicit.budget.max_steps == 12
+
+
 @pytest.mark.asyncio
 async def test_subagent_optin_advertises_and_executes_delegation() -> None:
     """params.subagent wraps the executor and appends the tool descriptor;
@@ -1496,3 +1516,421 @@ async def test_session_messages_projects_branch_record() -> None:
         _frame("agent.session.messages", {"recordId": "nope"})
     )
     assert missing["error"]["kind"] == "invalid_request"
+
+
+# ---------------------------------------------------------------------------
+# The chat path honors the bundled spec's tools dimension
+# ---------------------------------------------------------------------------
+
+
+def _spec_with_tools(impl: str):
+    from steerable_agent_runtime.harness_spec import harness_spec_from_dict
+
+    return harness_spec_from_dict(
+        {
+            "context": "null",
+            "retry": "none",
+            "validator": "null",
+            "tools": impl,
+            "memory": "stateless",
+            "orchestration": "single",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_path_full_spec_passes_host_tools_through() -> None:
+    """No-behavior-change guard: the bundled `full` tools strategy offers
+    the host's tool list to the provider unchanged."""
+    provider = _ScriptedProvider([_text_round("ok")])
+    sidecar = _make_sidecar(provider)
+    host_tools = [
+        {"type": "function", "function": {"name": "alpha", "parameters": {}}},
+        {"type": "function", "function": {"name": "beta", "parameters": {}}},
+    ]
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": host_tools,
+            "useCoreLoop": True,
+        },
+    )
+
+    assert provider.stream_kwargs[0]["tools"] == host_tools
+
+
+@pytest.mark.asyncio
+async def test_chat_path_honors_tools_dimension(monkeypatch) -> None:
+    """The spec's tools strategy shapes the host-supplied surface before
+    the first provider call (minimal filters to its allowlist)."""
+    import steerable_sidecar.sidecar as sidecar_mod
+
+    monkeypatch.setattr(
+        sidecar_mod, "_default_harness_spec", lambda: _spec_with_tools("minimal")
+    )
+    provider = _ScriptedProvider([_text_round("ok")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"type": "function", "function": {"name": "bash", "parameters": {}}},
+                {
+                    "type": "function",
+                    "function": {"name": "mcp__github__create_issue", "parameters": {}},
+                },
+            ],
+            "useCoreLoop": True,
+        },
+    )
+
+    offered = provider.stream_kwargs[0]["tools"]
+    assert [t["function"]["name"] for t in offered] == ["bash"]
+
+
+@pytest.mark.asyncio
+async def test_chat_path_router_backed_tools_strategy_fails_loud(monkeypatch) -> None:
+    """progressive needs an in-process ToolRouter; host tools dispatch over
+    the reverse channel, so the stream errors before any provider call
+    rather than offering an undispatchable tool_search."""
+    import steerable_sidecar.sidecar as sidecar_mod
+
+    monkeypatch.setattr(
+        sidecar_mod, "_default_harness_spec", lambda: _spec_with_tools("progressive")
+    )
+    provider = _ScriptedProvider([_text_round("unreachable")])
+    sidecar = _make_sidecar(provider)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {"type": "function", "function": {"name": "bash", "parameters": {}}}
+            ],
+            "useCoreLoop": True,
+        },
+    )
+
+    errors = [p for m, p in events if m == "stream.error"]
+    assert errors and "wire_tools" in errors[0]["message"]
+    assert not [p for m, p in events if m == "stream.done" and p.get("ok")]
+    assert provider.attempts == 0
+
+
+# ---------------------------------------------------------------------------
+# W7-1: resume=true continues the durable record's interrupted turn
+# ---------------------------------------------------------------------------
+
+
+def _system_entry(seq: int, text: str) -> dict:
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    return entry_to_dict(
+        HistoryItem(
+            seq=seq,
+            kind=kind_for_role("system"),
+            message=LLMMessage.text_of("system", text),
+            token_estimate=3,
+        )
+    )
+
+
+def _user_entry(seq: int, text: str) -> dict:
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    return entry_to_dict(
+        HistoryItem(
+            seq=seq,
+            kind=kind_for_role("user"),
+            message=LLMMessage.text_of("user", text),
+            token_estimate=3,
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_reseeds_from_the_record_without_a_new_user_message() -> None:
+    """Crash mid-turn-2: the record ends at the user's question (the seed
+    flushes before the first provider call; the reply never landed).
+    resume=true replays the record's projection as the loop seed — the
+    provider is re-asked the unanswered question, no synthetic continuation
+    prompt is injected, and the record continues linearly (no compaction
+    boundary, no duplicated user message)."""
+    provider = _ScriptedProvider([_text_round("answer 1"), _text_round("answer 2")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "question 1"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    # The crash: turn 2's user message flushed with the seed, then the
+    # process died before any assistant output was recorded.
+    await sidecar.storage.append_history("chat_1", [_user_entry(2, "question 2")])
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+
+    resume_call = provider.seen_messages[-1]
+    assert [m.role for m in resume_call] == ["user", "assistant", "user"]
+    assert resume_call[0].content_text == "question 1"
+    assert resume_call[1].content_text == "answer 1"
+    assert resume_call[2].content_text == "question 2"
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+    record = await sidecar.storage.list_history("chat_1")
+    assert all(e["entry"] != "boundary" for e in record)
+    assert [e["message"]["role"] for e in record] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_closes_dangling_tool_calls_from_foreign_records() -> None:
+    """The loop's own flush discipline never persists an assistant message
+    whose tool_calls lack results (they flush together at round end), but
+    the record is a durable artifact other writers or older builds may have
+    produced: resume closes unanswered calls with the synthetic interrupted
+    marker so providers accept the transcript."""
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    provider = _ScriptedProvider([_text_round("recovered")])
+    sidecar = _make_sidecar(provider)
+    await sidecar.storage.append_history(
+        "rec_crash",
+        [
+            _user_entry(0, "run the tool"),
+            entry_to_dict(
+                HistoryItem(
+                    seq=1,
+                    kind=kind_for_role("assistant"),
+                    message=LLMMessage.text_of(
+                        "assistant",
+                        "calling",
+                        tool_calls=[
+                            ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2}),
+                            ToolCall(id="c2", name="add", arguments={"a": 3, "b": 4}),
+                        ],
+                    ),
+                    token_estimate=3,
+                )
+            ),
+            # c1's result landed; the writer died before c2's.
+            entry_to_dict(
+                HistoryItem(
+                    seq=2,
+                    kind=kind_for_role("tool"),
+                    message=LLMMessage.text_of(
+                        "tool", "3", name="add", tool_call_id="c1"
+                    ),
+                    token_estimate=1,
+                )
+            ),
+        ],
+    )
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "recordId": "rec_crash",
+        },
+    )
+
+    seed = provider.seen_messages[-1]
+    assert [m.role for m in seed] == ["user", "assistant", "tool", "tool"]
+    assert seed[2].tool_call_id == "c1"
+    assert seed[3].tool_call_id == "c2"
+    assert "interrupted" in seed[3].content_text
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_resume_splices_the_fresh_system_prompt() -> None:
+    """The desktop re-sends its assembled systemPrompt on every turn; on
+    resume the record's leading system message yields to it — an unchanged
+    prompt reconciles as an exact extension, a changed one takes effect
+    immediately — instead of tripping the mutual-exclusion check."""
+    provider = _ScriptedProvider([_text_round("answer 1"), _text_round("answer 2")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v1",
+            "messages": [{"role": "user", "content": "question 1"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    # Record so far: system(0), user(1), assistant(2); the crashed turn
+    # adds its user message at seq 3.
+    await sidecar.storage.append_history("chat_1", [_user_entry(3, "question 2")])
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v2",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+
+    resume_call = provider.seen_messages[-1]
+    assert [m.role for m in resume_call] == ["system", "user", "assistant", "user"]
+    assert resume_call[0].content_text == "prompt v2"
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_resume_keeps_mid_transcript_system_fragments() -> None:
+    """A record carrying a system fragment past the seed still resumes.
+
+    The skills catalog, `<world-state>`, and reminders are all injected as
+    system-role transcript entries, so a real desktop turn's record holds
+    system messages at non-zero indices. Only the leading message competes
+    with the host's `systemPrompt`; treating any of them as a competing seed
+    made resume fail on every turn that carried a skill (found by driving the
+    desktop's crash-resume path against a live sidecar).
+    """
+    provider = _ScriptedProvider([_text_round("answer 1"), _text_round("answer 2")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v1",
+            "messages": [{"role": "user", "content": "question 1"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    # Record: system(0), user(1), assistant(2). The interrupted turn adds a
+    # skills fragment and its user message.
+    await sidecar.storage.append_history(
+        "chat_1",
+        [
+            _system_entry(3, "# Available skills (load on demand)"),
+            _user_entry(4, "question 2"),
+        ],
+    )
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "systemPrompt": "prompt v2",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+    resume_call = provider.seen_messages[-1]
+    assert [m.role for m in resume_call] == [
+        "system",
+        "user",
+        "assistant",
+        "system",
+        "user",
+    ]
+    # The host's fresh prompt seeds the turn; the record's own fragment stays
+    # where the record put it, so the seed is an exact extension.
+    assert resume_call[0].content_text == "prompt v2"
+    assert resume_call[3].content_text == "# Available skills (load on demand)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        # A host history alongside the record replay would silently fork.
+        {
+            "resume": True,
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        # Nothing recorded yet — there is no turn to continue.
+        {"resume": True, "useCoreLoop": True, "chatId": "nope", "messages": []},
+        # No record handle at all.
+        {"resume": True, "useCoreLoop": True, "messages": []},
+        # Resume is a CoreLoop-only contract.
+        {"resume": True, "chatId": "chat_1", "messages": []},
+    ],
+)
+async def test_resume_rejects_invalid_combinations(params: dict) -> None:
+    provider = _ScriptedProvider([_text_round("unused")])
+    sidecar = _make_sidecar(provider)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {"provider": "openai_compat", "model": "fake", **params},
+        )
+    )
+
+    assert response["error"]["kind"] == "invalid_params"
+    assert provider.attempts == 0

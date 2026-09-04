@@ -264,6 +264,7 @@ def workspace_tools_for_cwd(
     jailed: bool = False,
     fs: WorkspaceFs = LOCAL_FS,
     run_command: BashRunner | None = None,
+    web_tools: bool = True,
 ) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
@@ -276,6 +277,12 @@ def workspace_tools_for_cwd(
     ``fs`` is the file-content channel (3.4.3.1) and ``run_command`` the
     one-shot bash execution (3.4.3.2); both default to local disk and a
     local subprocess.
+
+    ``web_tools=False`` omits the network-read pair. A caller whose task
+    contract is offline must say so: TB 2.1 tasks are solved from the
+    container alone, and a reachable ``web_fetch`` both confounds a harness
+    comparison and lets a trial answer from outside the environment under
+    test.
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
@@ -728,6 +735,16 @@ def workspace_tools_for_cwd(
         schema=_WRITE_STDIN_SCHEMA,
         require_consent=False,
     )
+
+    # web_search / web_fetch: the network-read pair. Registered here so the
+    # headless and ACP surfaces carry the same implementation the desktop
+    # delegates to; web_search only registers when a search backend is
+    # configured (see web_tools.py). A malformed STEERABLE_WEB_* bound raises
+    # here — headless/ACP fail at load rather than run with untended bounds.
+    if web_tools:
+        from .web_tools import register_web_tools
+
+        register_web_tools(router)
     return router
 
 

@@ -36,10 +36,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .harness import STRATEGY_REGISTRY
+from .harness import STRATEGY_REGISTRY, RouterToolSelection
 from .hooks import ChainHooks, LoopHooks
 from .llm import LLMProvider
 from .storage import StorageAdapter
+from .tools import ToolRouter
 
 #: Dimensions whose strategies contribute LoopHooks and therefore compose.
 _HOOKS_DIMENSIONS = ("context", "retry", "validator")
@@ -271,6 +272,19 @@ class AssembledHarness:
         tools: list[dict[str, Any]] | None = None,
     ) -> Any:
         return self.orchestration.wrap(executor, provider=provider, tools=tools)
+
+    def wire_tools(self, router: ToolRouter) -> None:
+        """Bind the run's ``ToolRouter`` to the tools dimension.
+
+        Router-backed strategies (`harness.RouterToolSelection`) register
+        discovery tools and read exposure tiers here; pure descriptor
+        filters (full/minimal) have nothing to bind, so this is a no-op
+        for them. Entrypoints with an in-process router call this once
+        before `select_tools`; selecting a router-backed strategy without
+        wiring raises rather than offering a tool that cannot dispatch.
+        """
+        if isinstance(self.tool_selection, RouterToolSelection):
+            self.tool_selection.register(router)
 
     def select_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self.tool_selection.select(tools)

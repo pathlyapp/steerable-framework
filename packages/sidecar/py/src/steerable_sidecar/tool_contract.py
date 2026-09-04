@@ -21,7 +21,14 @@ other. The single source of truth is the JSON document
   desktop's ``hashContent``) cannot silently diverge;
 * the **edit-op semantics** (the algorithm itself is already single-sourced in
   ``file_edit.apply_edits`` and reached by the desktop over RPC);
-* the **required input / result fields** per tool.
+* the **required input / result fields** per tool;
+* the **`tool_search` ranking** (``toolSearch``): the BM25 constants, the name
+  weight, the result caps, and score vectors over a fixed inventory. Discovery
+  is the fifth capability with two implementations (``tool_search._rank`` and
+  the desktop's ``tool-search-rank.ts``), and the model sees one tool either
+  way — a different ranking is a different contract. The vectors carry scores
+  rather than ranks alone because a drift in ``k1``, ``b``, the name weight or
+  the idf form can leave the order intact on a given inventory.
 
 Product-specific extensions are out of scope and allowed to differ: the
 desktop's ``local_`` prefix, its extra ``cwd`` / ``timeout`` / ``createDirs``

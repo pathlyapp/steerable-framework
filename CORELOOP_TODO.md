@@ -1730,6 +1730,102 @@ records + 纯 reducer + SQLite）看着比我们和 dsh 都激进，但
   式 lane/reducer 重写（我们的 `HistoryItem` 追加式记录已覆盖同一问
   题，且我们的在跑）。
 
+#### 第十一轮复审（2026-09-04，四方对照：codex / dsh / pi / 自勘）
+
+基线 `codex@0650d6d1ca` / `dsh@76fda72979` / `pi@e44d75c20` / 我们 `80c905d`。
+四路并行深潜（三家外部各一路 + 一路只读源码、不读路线图的自勘）。
+23 轴：**领先 2 / 追平 8 / 混合 2 / 落后 11**，另 4 项单方特有。详见
+canvas `steerable-r11-four-framework-review`。
+
+**头号结论：不是能力退步，是口径变准。** R10 记 4 个落后轴，R11 记 11 个，
+中间只隔四天、没删任何能力。差别全来自重新按源码核。前几轮的记分卡朝
+**两个方向同时**漂移——把我们独有的当共同基线（于是不记领先），又把别人
+独有的记成已追平（于是不记落后）。所以「13 轴全 par/lead」不只是选题
+效应，是口径本身不稳。
+
+**R6 的头号风险「机制造好了但产品不插电」已基本消解。** 自勘确认桌面真实
+聊天路径上这些是**缺省接通**、不需 env：审批代数（每工具过 Electron 弹窗，
+无窗口 fail-closed deny）、逐 exec 沙箱、sidecar 进程沙箱（macOS）、
+`cache_control` 写入、项目信任门控（缺省不信任）、多模态 base64 `ImagePart`、
+regen 走 fork、用量面板、遥测隐私档位、分层技能、`spill` 在缺省 harness 链。
+仍未接：AG-UI、ACP、RecordingProvider、`resume.py`、`delegate_subagent`
++ `toolFilter` 窄域、DeliveryHooks、per-host egress 代理。
+
+**记分卡校正五处（每条都给了推翻旧结论的源码位置）**：
+1. **「循环韧性预算：我们 + codex + dsh 有」——错，四家只有我们在 loop 层有。**
+   codex 的连续失败熔断只在 `ext/goal/src/accounting.rs:151`（goal 扩展，3 轮）
+   与 MCP 重连退避，agent loop 是 `needs_follow_up` 就 continue；dsh 的
+   `maxRounds` 只在 `packages/workflow/tool-ralph/src/index.ts:35`（工作流工具，
+   默认 256）；pi 内外层都是 `while(true)`（`agent-loop.ts:171-175`）。
+   我们是 `loop.py:1985` 熔断 + `soft_timeout` 收尾。**低估了自己。**
+2. **「`before_completion` 三态否决：三家均无对应物」——过头了。** 三家都有
+   完成边界拦截，只是二态：codex Stop hook 可 block 并注入后 continue
+   （`turn.rs:547-582` + `hook_runtime.rs:376-449`）、dsh `pre-step` 可 reject
+   （`runtime-types.ts:56-57`）、pi `before_run_end` 可注入 `followUp`
+   （`boundary.ts:171-183`）。真正独有的是第三态 narrate。**高估了自己。**
+3. **「我们是四家里唯一只读不写 cache 的」——已不成立。** `sidecar.py:2163-2177`
+   对 Anthropic 缺省开、`cache_control.py:127-154` 三锚点。且 codex **从来
+   没有** `cache_control`（全库零命中），它走 `prompt_cache_key`
+   （`client.rs:540-552`）+ ID 稳定性，是另一条路线，不该记成这一轴领先我们。
+4. **pi 的 `AgentHarness` 已大幅实装**：`HarnessNotImplemented` /
+   `UnavailableRegistry` 全库零命中，Lane 的 prompt/steer/followUp/compact/
+   resume/abort/watch 都已实现，只剩 `Harness.watchSession` 抛
+   `SliceNotImplemented`（`harness.ts:305-306`）。但生产路径仍是
+   `SessionManager` + `AgentSession`（`main.ts:959-965`），CLI/RPC/evals 都
+   没切——**「只认在跑的那套」这条纪律依然对**，结论不变但理由要更新。
+5. **R11 新成轴 3 个**（均满足 ≥2 家规则）：**web 搜索/抓取**（codex
+   `ext/web-search` + dsh `packages/web/tool-web` 且已改缺省暴露，我们
+   **全栈零命中**）、**持久格式迁移**（pi v1→v2→v3 载入即迁移、codex 双轨
+   + repair、dsh 刻意 fail-closed 不承诺、我们没做）、**崩溃恢复接线**。
+   三轴现已追齐：web 与崩溃恢复见下面的缺陷清单；持久格式走
+   `RECORD_FORMAT_VERSION = 2` + 载入即迁移（`upgrade_entry_dict`，v1→v2 只
+   补 `v` 键不动内容，磁盘旧行保持原样，新追加才带 v2）。读到更高版本时整条
+   拒绝而非静默截断，报错点名「升级 app 才能打开，记录未被修改」。
+
+**六个真实缺陷（自我不一致或没接线，非能力差距）**，按痛感：
+- [x] **非 macOS 与沙箱失败时接近裸跑** → 走「明确告知」这条：sidecar 记录
+      并上报 posture（`platform_unsupported` / `seatbelt_missing` /
+      `profile_failed` / 手动关闭 / Seatbelt 部分强制），安全设置面板据此显示
+      未收容与 API key 暴露面，并给容器化指引；`docs/spec/safety.md` 与代码
+      同口径。Seatbelt 只能按端口限制远程主机这点也一并说明，不再宣称站
+      codex/dsh 那侧。
+- [x] **harness 声明的 loop 限额被入口绕过** → 三个入口（桌面聊天链、
+      headless、ACP）改走同一个 `loop_limits.resolve_loop_limits`：优先级为
+      调用方显式覆盖 > spec 的 `loop:` 段 > 基线 80/16/false，基线只答自定义
+      spec 省略的字段。此前三份副本各自实现，正是分歧的来源——headless 的
+      默认路径压根没读 spec，`max_tool_errors` 由字面量 32 作答，声明的 16
+      从未进过一次真实运行。`test_loop_limits.py` 钉住优先级与「基线等于
+      内置 spec」，`test_headless.py` 捕获默认路径真实产出的 `LoopConfig`。
+- [x] **`router.ts` 算了 `maxTurns` 却没下发** → 已删。轮次上限交给 sidecar
+      的 YAML，桌面只经 `maxRounds`/`maxToolErrors` 覆盖。
+- [x] **web 搜索/抓取完全缺失** → `web_tools.py` 单实现（字节上限、超时、
+      重定向上限、URL 长度、SSRF 全在那里），宿主只持 schema 并经
+      `tool.invoke` 前转，可用集以 `tool.list` 握手为真相源——未配搜索后端
+      时不广告 `web_search`。批准按 read 模式走，`url` 排在提示首列。出网被
+      收敛到代理时（`STEERABLE_EGRESS_CONFINED=1`）直接报错并给补救路径；
+      操作者可用 `STEERABLE_WEB_TOOLS=0` / `--no-web-tools` 整对关掉。
+- [x] **崩溃后无法续跑** → 以 `turn_active` 标记加末条消息角色判定中断，UI
+      给续跑入口，sidecar 关闭悬空 tool_call。用户主动取消不误报为中断。
+      resume 传 `systemPrompt` 时只与**首条**消息互斥，好让技能目录这类
+      转录中段的 system 片段能原样重放。
+- [x] **steer 失败静默、follow-up 入口隐蔽** → 失败降级为 follow-up 队列并
+      提示「本轮结束后自动发出」，排队条目可单条撤回，停止即丢弃（语义显式）。
+      成功的 steer 也写进桌面 store：record 本来就记了，但重开会话渲染的是
+      store，缺这一步用户会回到一个没有问题的答案。
+
+**评测口径的一处仓库卫生问题**：`evals/jobs/steerable/OVERNIGHT.md` 是 8/30
+的本地过夜作业（77 个 id 只跑分 13 个、均值 0.385），**不是**记分口径
+（记分是 `docs/evals.md` 里那四条 GHA run，均值 0.8006 / SD 0.023），但文件
+本身没说清，下一个读仓库的人容易把 0.385 当真实水平。建议加注或归档。
+
+**四项真正的单方特有**（按 ≥2 家规则不成轴，但都是真的）：loop 层韧性护栏、
+伪工具调用恢复、CJK token 估算 + 模型校准系数（dsh 源码注释自承
+「systematically underprices CJK」）、跨语言契约 `tool_contract.json`。
+
+**明确不建议动的三项落后**（是选择不是欠债）：插件运行时（hooks 已够，
+pi 的进程内不沙箱加载 + 无上限 context 钩子风险面大于收益）、provider 广度
+（厂商侧在收敛）、多 agent 编排（codex 两年后才上 v2，pi 核心至今没有）。
+
 **原 A5 备忘**（并入第一步勘察范围，2026-08-27 勘察结论）：
 - [ ] api 侧最大的活：把约 100 个 SSE 发射点改成结构化事件 —— 实测 114
       点，但勘察重估为「O(20) 形状映射 + transport + 编排旁路」，
