@@ -47,7 +47,7 @@ Same model, different harness — measured on this repo's protocol, not vendor p
 
 | Harness | TB 2.1 | Runs | Input tokens / run | Cost / run | Cost / solved task |
 | ------- | ------ | ---- | ------------------ | ---------- | ------------------ |
-| Claude Code | 83.0% (73/88) | 1 | 289.8 M | $11.32 | $0.155 |
+| Claude Code | 83.1% (74/89) | 1 | 299.2 M | $11.96 | $0.162 |
 | **Steerable** | **80.1% ±2.3** | 4 | ~194 M (gateway estimate) | ~$7.50 | ~$0.105 |
 | Pi | 73.4% ±2.2 | 3 | 138.9 M | ~$3.90 | $0.061 |
 | Codex CLI | 58.4% (52/89) | 1+fill-in | 888.5 M | $42.32 | $0.814 |

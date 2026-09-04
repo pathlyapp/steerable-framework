@@ -189,9 +189,9 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt pt--ours" cx="141.7" cy="75.5" r="15.6"/>
 <text class="lbl" x="158" y="46" text-anchor="end">Steerable · ours</text>
 <text class="sub" x="158" y="56" text-anchor="end">80% · $0.11 · 36 min</text>
-<circle class="pt" cx="181.1" cy="57.1" r="8.9"/>
-<text class="lbl" x="193" y="52">Claude Code</text>
-<text class="sub" x="193" y="62">83% · $0.16 · 12 min</text>
+<circle class="pt" cx="184.7" cy="56.2" r="8.9"/>
+<text class="lbl" x="197" y="51">Claude Code</text>
+<text class="sub" x="197" y="61">83% · $0.16 · 12 min</text>
 <circle class="pt" cx="348.9" cy="208.3" r="7.1"/>
 <text class="lbl" x="338" y="204" text-anchor="end">Codex CLI</text>
 <text class="sub" x="338" y="214" text-anchor="end">58% · $0.81 · 7 min</text>
