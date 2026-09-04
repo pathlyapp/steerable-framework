@@ -22,6 +22,11 @@ from steerable_agent_runtime import (
     ToolRouter,
     register_tool_search,
     tool,
+    tool_search_descriptor,
+)
+from steerable_agent_runtime.harness_spec import (
+    assemble_harness,
+    harness_spec_from_dict,
 )
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
@@ -214,6 +219,49 @@ async def test_tool_search_finds_deferred_by_keyword() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_search_ranks_name_hits_first() -> None:
+    router = ToolRouter()
+    router.register(
+        lambda: "a",
+        name="deploy_app",
+        description="Deploy the app",
+        exposure="deferred",
+    )
+    router.register(
+        lambda: "b",
+        name="run_checks",
+        description="Run the deploy pipeline checks",
+        exposure="deferred",
+    )
+    register_tool_search(router)
+
+    result = await router.dispatch(
+        ToolCall(id="1", name="tool_search", arguments={"query": "deploy"})
+    )
+
+    # Name tokens index double, so the name hit outranks the
+    # description-only hit; both rank (BM25 needs one term, not all).
+    names = [m["name"] for m in result.data["value"]["matches"]]
+    assert names == ["deploy_app", "run_checks"]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_tolerates_off_vocabulary_terms() -> None:
+    router = _searchable_router()
+    register_tool_search(router)
+
+    result = await router.dispatch(
+        ToolCall(
+            id="1", name="tool_search", arguments={"query": "github frobnicate"}
+        )
+    )
+
+    # "frobnicate" hits nothing; the terms that do hit still rank.
+    names = {m["name"] for m in result.data["value"]["matches"]}
+    assert names == {"mcp__github__create_issue", "mcp__github__list_prs"}
+
+
+@pytest.mark.asyncio
+async def test_tool_search_scores_partial_term_matches() -> None:
     router = _searchable_router()
     register_tool_search(router)
 
@@ -221,14 +269,57 @@ async def test_tool_search_ranks_name_hits_first() -> None:
         ToolCall(id="1", name="tool_search", arguments={"query": "create issue"})
     )
 
-    matches = result.data["value"]["matches"]
-    # Both create_issue tools match both terms; name hits (2 pts/term)
-    # outrank description-only hits, and ties break by name for
-    # determinism. The linear hit has "issue" in the name but "create"
-    # only in the description.
-    assert matches[0]["name"] == "mcp__github__create_issue"
-    assert matches[1]["name"] == "mcp__linear__create_issue"
-    assert len(matches) == 2  # AND semantics: list_prs lacks "create"
+    # list_prs contains neither term and scores 0 — the relevance floor
+    # keeps it out without requiring every term to hit.
+    names = {m["name"] for m in result.data["value"]["matches"]}
+    assert names == {"mcp__github__create_issue", "mcp__linear__create_issue"}
+
+
+@pytest.mark.asyncio
+async def test_tool_search_default_cap_is_eight() -> None:
+    router = ToolRouter()
+    for i in range(10):
+        router.register(
+            lambda: "x",
+            name=f"crm_action_{i}",
+            description="CRM action",
+            exposure="deferred",
+        )
+    register_tool_search(router)
+
+    result = await router.dispatch(
+        ToolCall(id="1", name="tool_search", arguments={"query": "crm"})
+    )
+
+    assert len(result.data["value"]["matches"]) == 8
+    # The descriptor advertises the same default the handler applies.
+    params = tool_search_descriptor()["function"]["parameters"]
+    assert "default 8" in params["properties"]["max_results"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_per_call_ceiling_is_20() -> None:
+    router = ToolRouter()
+    for i in range(25):
+        router.register(
+            lambda: "x",
+            name=f"crm_action_{i}",
+            description="CRM action",
+            exposure="deferred",
+        )
+    register_tool_search(router)
+
+    result = await router.dispatch(
+        ToolCall(
+            id="1",
+            name="tool_search",
+            arguments={"query": "crm", "max_results": 100},
+        )
+    )
+
+    # Every match carries a full schema; the ceiling bounds the payload no
+    # matter what a call requests.
+    assert len(result.data["value"]["matches"]) == 20
 
 
 @pytest.mark.asyncio
@@ -266,6 +357,95 @@ async def test_tool_search_no_match_and_hidden_invisible() -> None:
         ToolCall(id="2", name="tool_search", arguments={"query": "reset internal"})
     )
     assert hidden.data["value"]["matches"] == []
+
+
+# ---------------------------------------------------------------------------
+# progressive harness strategy: router wiring + tier-derived selection
+# ---------------------------------------------------------------------------
+
+
+def _harness_for(tools_impl: str):
+    return assemble_harness(
+        harness_spec_from_dict(
+            {
+                "context": "null",
+                "retry": "none",
+                "validator": "null",
+                "tools": tools_impl,
+                "memory": "stateless",
+                "orchestration": "single",
+            }
+        )
+    )
+
+
+def test_progressive_select_without_router_fails_loud() -> None:
+    """Selecting progressive without wiring the router raises instead of
+    offering a tool_search descriptor nothing can dispatch."""
+    harness = _harness_for("progressive")
+    with pytest.raises(ValueError, match="wire_tools"):
+        harness.select_tools([{"type": "function", "function": {"name": "bash"}}])
+
+
+def test_wire_tools_is_a_noop_for_filter_strategies() -> None:
+    """full/minimal bind nothing: wiring must not conjure a search tool."""
+    router = ToolRouter()
+    harness = _harness_for("full")
+    harness.wire_tools(router)
+    assert router.get("tool_search") is None
+    tools = [{"type": "function", "function": {"name": "bash"}}]
+    assert harness.select_tools(tools) == tools
+
+
+@pytest.mark.asyncio
+async def test_progressive_offers_direct_tier_and_dispatchable_search() -> None:
+    router = ToolRouter()
+    router.register(lambda text: text, name="echo", description="Echo text")
+    router.register(
+        lambda city: {"weather": city},
+        name="get_weather",
+        description="Get current weather for a city",
+        schema={
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+        },
+        exposure="deferred",
+    )
+    router.register(
+        lambda: "x",
+        name="internal_reset",
+        description="Reset internal state",
+        exposure="hidden",
+    )
+
+    harness = _harness_for("progressive")
+    harness.wire_tools(router)
+    # Selection derives from the registry's tiers even when handed the full
+    # inventory: deferred/hidden are unlisted, exactly one search descriptor.
+    offered = harness.select_tools(router.describe())
+    assert _names(offered) == ["echo", "tool_search"]
+    # Selection is idempotent — wiring already put tool_search in the
+    # direct tier, so re-selecting the offered list changes nothing.
+    assert _names(harness.select_tools(offered)) == ["echo", "tool_search"]
+
+    # The offered search tool dispatches and finds the deferred tool.
+    found = await router.dispatch(
+        ToolCall(id="1", name="tool_search", arguments={"query": "weather"})
+    )
+    assert found.success
+    assert [m["name"] for m in found.data["value"]["matches"]] == ["get_weather"]
+
+    # Hidden tools are in neither the listing nor search results.
+    hidden = await router.dispatch(
+        ToolCall(id="2", name="tool_search", arguments={"query": "reset internal"})
+    )
+    assert hidden.data["value"]["matches"] == []
+
+    # The deferred tool dispatches directly by name without being listed.
+    direct = await router.dispatch(
+        ToolCall(id="3", name="get_weather", arguments={"city": "Paris"})
+    )
+    assert direct.success
 
 
 # ---------------------------------------------------------------------------

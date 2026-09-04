@@ -4,6 +4,7 @@ export type {
   UseChatStreamReturn,
   ChatStreamTransport,
   ChatStreamSendInput,
+  SteerOutcome,
 } from './useChatStream.js';
 
 export { useToolCallStatus } from './useToolCallStatus.js';

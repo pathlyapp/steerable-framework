@@ -270,6 +270,10 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in text
     assert 'STEERABLE_OPENROUTER_REQUIRE_PARAMETERS", "0"' in text
     assert "--max-rounds 250" in text
+    # TB 2.1 is an offline contract and the container has egress for the LLM
+    # gateway, so a reachable web_fetch would let a trial answer from outside
+    # the environment under test.
+    assert "--no-web-tools" in text
     run_fn = text[
         text.index("@with_prompt_template") : text.index("def _forwarded_env")
     ]

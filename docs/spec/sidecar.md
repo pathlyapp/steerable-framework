@@ -125,6 +125,16 @@ narration and rejected retry drafts, and emits only the terminal tool-free
 response. Tool progress notifications, the durable record, and the trace are
 unchanged. `"final"` requires `useCoreLoop: true`.
 
+`resume: true` (CoreLoop-only) continues the durable record's interrupted
+turn instead of opening a new one: the record's projected transcript —
+dangling `tool_calls` closed with a synthetic "interrupted" tool message —
+becomes the loop seed verbatim, so the host neither re-sends the last user
+message nor injects a synthetic continuation prompt. `messages` must be
+empty and `recordId` (or `chatId`) must name a non-empty record; both
+violations fail with `invalid_params`. A host `systemPrompt` on the same
+request replaces the record's leading system message, so a refreshed
+prompt takes effect on the resumed turn.
+
 CoreLoop tunables accepted in `params` (all optional): `maxRounds`,
 `maxToolErrors`, `budgetTokens`, `softTimeoutMs`, `toolTimeoutMs`.
 `toolTimeoutMs` is the per-tool-execution backstop: a tool that produces
@@ -231,3 +241,13 @@ options:
 - Parent processes should also send `SIGTERM` as a backstop in case
   `system.shutdown` hangs; the sidecar installs a `SIGTERM` handler that
   forces an immediate exit.
+- `web_fetch` (always) and `web_search` (when a search backend is
+  configured) are registered on the RPC router at boot
+  (`steerable_sidecar/web_tools.py`; bounds and SSRF policy in
+  `tools.md` "Web tools"). Hosts learn availability from `tool.list`
+  rather than assuming it, and delegate execution with `tool.invoke` —
+  the nested call (the sidecar's CoreLoop asking the host over reverse
+  `tool.invoke`, and the host forwarding back over forward `tool.invoke`)
+  is safe because requests interleave on the loop. A malformed
+  `STEERABLE_WEB_*` bound logs an error and leaves the web pair
+  unregistered instead of failing boot.

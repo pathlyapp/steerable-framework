@@ -7,6 +7,7 @@ import asyncio
 import logging
 
 from .sidecar import Sidecar, SidecarConfig
+from .web_tools import register_web_tools
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,6 +42,17 @@ def main() -> int:
         storage_path=args.storage_path,
     )
     sidecar = Sidecar(config=config)
+    # web_search / web_fetch on the RPC router: the desktop host delegates
+    # these calls here over forward `tool.invoke` (single implementation —
+    # the host carries schemas only). A malformed STEERABLE_WEB_* bound must
+    # not brick chat for an optional feature, so the misconfiguration logs
+    # loud and the sidecar serves without the web pair.
+    try:
+        register_web_tools(sidecar.tools)
+    except ValueError as exc:
+        logging.getLogger("steerable_sidecar").error(
+            "web tools disabled: %s", exc
+        )
     try:
         asyncio.run(sidecar.serve())
     except KeyboardInterrupt:

@@ -14,13 +14,14 @@ import {
   useChatStream,
   type ChatStreamSendInput,
   type ChatStreamTransport,
+  type SteerOutcome,
 } from './useChatStream';
 
 /**
  * A transport whose streams stay open until the test explicitly finishes them,
  * so we can submit follow-ups mid-stream and watch the queue drain.
  */
-function makeControllableTransport() {
+function makeControllableTransport(steer?: ChatStreamTransport['steer']) {
   const streams: Array<{
     input: ChatStreamSendInput;
     onEvent: (e: SSEEvent) => void;
@@ -38,8 +39,18 @@ function makeControllableTransport() {
           },
         });
       }),
+    ...(steer ? { steer } : {}),
   };
   return { transport, streams };
+}
+
+/** Manually-resolved promise, for parking a steer attempt mid-flight. */
+function makeDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 function makeTransport(
@@ -337,6 +348,148 @@ describe('steerUserMessage', () => {
   });
 });
 
+describe('steerOrFollowUpUserMessage', () => {
+  it("resolves 'steered' and appends the message when the turn accepts the injection", async () => {
+    const steer = vi.fn().mockResolvedValue(true);
+    const { transport, streams } = makeControllableTransport(steer);
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'start' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    let outcome: SteerOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.steerOrFollowUpUserMessage('补充一句');
+    });
+    expect(outcome).toBe('steered');
+    expect(
+      result.current.messages.some((m) => m.role === 'user' && m.content === '补充一句'),
+    ).toBe(true);
+    expect(result.current.pendingFollowUps).toEqual([]);
+    expect(streams).toHaveLength(1);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+  });
+
+  it("resolves 'queued' when the transport has no steer, then drains at turn end", async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    let outcome: SteerOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.steerOrFollowUpUserMessage('排队等下轮');
+    });
+    expect(outcome).toBe('queued');
+    expect(result.current.pendingFollowUps).toEqual([{ content: '排队等下轮' }]);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('排队等下轮');
+    await act(async () => {
+      streams[1]!.finish();
+    });
+  });
+
+  it("resolves 'queued' when the steer is rejected and the turn is still running", async () => {
+    const steer = vi.fn().mockResolvedValue(false);
+    const { transport, streams } = makeControllableTransport(steer);
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    let outcome: SteerOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.steerOrFollowUpUserMessage('拒收的转向');
+    });
+    expect(outcome).toBe('queued');
+    expect(steer).toHaveBeenCalledWith('拒收的转向');
+    expect(result.current.pendingFollowUps).toEqual([{ content: '拒收的转向' }]);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('拒收的转向');
+    await act(async () => {
+      streams[1]!.finish();
+    });
+  });
+
+  it("resolves 'sent' when the turn ended while the steer attempt was in flight", async () => {
+    const gate = makeDeferred<boolean>();
+    const steer = vi.fn(() => gate.promise);
+    const { transport, streams } = makeControllableTransport(steer);
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    let outcomePromise: Promise<SteerOutcome>;
+    await act(async () => {
+      outcomePromise = result.current.steerOrFollowUpUserMessage('来迟的补充');
+    });
+    expect(steer).toHaveBeenCalledWith('来迟的补充');
+
+    // The turn ends while the steer is still pending: its `finally` drains
+    // the (empty) queue and clears isStreaming before the steer settles.
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    let outcome: SteerOutcome | undefined;
+    await act(async () => {
+      gate.resolve(false);
+      outcome = await outcomePromise;
+    });
+    // Queueing here would strand the message (the drain already ran), so it
+    // goes out immediately as a fresh turn instead.
+    expect(outcome).toBe('sent');
+    expect(result.current.pendingFollowUps).toEqual([]);
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('来迟的补充');
+    await act(async () => {
+      streams[1]!.finish();
+    });
+  });
+
+  it("resolves 'sent' without touching steer when no turn is streaming", async () => {
+    const steer = vi.fn().mockResolvedValue(true);
+    const { transport, streams } = makeControllableTransport(steer);
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    let outcome: SteerOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.steerOrFollowUpUserMessage('直接发出');
+    });
+    expect(outcome).toBe('sent');
+    expect(steer).not.toHaveBeenCalled();
+    expect(streams).toHaveLength(1);
+    expect(streams[0]!.input.content).toBe('直接发出');
+    expect(result.current.pendingFollowUps).toEqual([]);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+  });
+});
+
 describe('follow-up queue (W6-2)', () => {
   it('sendUserMessage while streaming queues instead of dropping, then auto-sends next turn', async () => {
     const { transport, streams } = makeControllableTransport();
@@ -460,5 +613,92 @@ describe('follow-up queue (W6-2)', () => {
     });
     await waitFor(() => expect(result.current.isStreaming).toBe(false));
     expect(streams).toHaveLength(1);
+  });
+});
+
+describe('resumeTurn (W7-1)', () => {
+  it('streams an assistant turn with resume:true and NO new user message', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() =>
+      useChatStream({
+        transport,
+        initialMessages: [
+          {
+            id: 'u1',
+            role: 'user',
+            content: '被中断的请求',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+
+    act(() => {
+      void result.current.resumeTurn({ metadata: { mode: 'plan' } });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(result.current.isStreaming).toBe(false));
+
+    // The wire input carries the resume marker and the caller's metadata,
+    // with empty content — the backend replays the record, so no user text
+    // is re-sent.
+    expect(streams).toHaveLength(1);
+    expect(streams[0]!.input).toEqual({
+      content: '',
+      metadata: { mode: 'plan', resume: true },
+    });
+    // The transcript gains ONLY the assistant placeholder — the interrupted
+    // turn's user message is already there (initialMessages), not duplicated.
+    expect(result.current.messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
+    expect(result.current.isStreaming).toBe(false);
+  });
+
+  it('is a no-op while streaming (a resume is not queueable)', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.sendUserMessage({ content: 'first' });
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.resumeTurn();
+    });
+    expect(streams).toHaveLength(1);
+    expect(result.current.pendingFollowUps).toEqual([]);
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+  });
+
+  it('drains the follow-up queue after the resumed turn ends', async () => {
+    const { transport, streams } = makeControllableTransport();
+    const { result } = renderHook(() => useChatStream({ transport }));
+
+    act(() => {
+      void result.current.resumeTurn();
+    });
+    await waitFor(() => expect(streams).toHaveLength(1));
+
+    await act(async () => {
+      result.current.followUpUserMessage({ content: 'next question' });
+    });
+
+    await act(async () => {
+      streams[0]!.finish();
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    expect(streams[1]!.input.content).toBe('next question');
+    await act(async () => {
+      streams[1]!.finish();
+    });
   });
 });

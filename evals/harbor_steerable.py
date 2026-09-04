@@ -532,6 +532,12 @@ class SteerableHarborAgent(BaseInstalledAgent):
                     f"{shlex.quote(_VENV_PYTHON)} -u -m steerable_sidecar.headless "
                     f"--instruction-file {shlex.quote(_INSTRUCTION_REMOTE)} --cwd . "
                     f"--max-rounds 250 "
+                    # TB 2.1 is an offline contract: a trial is solved from the
+                    # container. The container has egress for the LLM gateway,
+                    # so web_fetch would be reachable — it must not be offered,
+                    # or a task can be answered from outside the environment
+                    # under test and every score becomes uncomparable.
+                    f"--no-web-tools "
                     f"{harness_flag}"
                     f"> {shlex.quote(log)} 2>&1"
                 ),

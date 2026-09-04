@@ -227,7 +227,7 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
     hooks_src = src[src.index("ChainHooks") :]
-    assert hooks_src.index("_default_loop_hooks") < hooks_src.index("delivery")
+    assert hooks_src.index("default_harness.hooks") < hooks_src.index("delivery")
 
 
 @pytest.mark.asyncio
@@ -357,6 +357,38 @@ def test_assemble_harness_single_adds_no_delegation_tools(tmp_path: Path) -> Non
     )
     names = {d.get("function", {}).get("name") or d.get("name") for d in descriptors}
     assert not {"agent_spawn", "agent_send", "agent_wait", "agent_close"} & names
+
+
+def test_assemble_harness_progressive_wires_tool_search(tmp_path: Path) -> None:
+    """The progressive arm's discovery tool is registered on the router
+    during assembly — the offered descriptor always dispatches — and the
+    offered list is the registry's direct tier."""
+    from steerable_agent_runtime import ToolRouter
+
+    spec_path = tmp_path / "progressive.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        'validator: "null"\n'
+        "tools: progressive\nmemory: stateless\norchestration: single\n",
+        encoding="utf-8",
+    )
+    router = ToolRouter()
+    router.register(lambda: "x", name="bash", description="Run commands")
+    router.register(
+        lambda: "y",
+        name="get_weather",
+        description="Current weather",
+        exposure="deferred",
+    )
+
+    *_, descriptors, _limits = headless_mod._assemble_harness(
+        spec_path, {"model": "fake"}, provider=None, executor=object(), tools=router
+    )
+
+    names = [d.get("function", {}).get("name") or d.get("name") for d in descriptors]
+    assert names == ["bash", "tool_search"]
+    assert router.get("tool_search") is not None
 
 
 class _FakeTools:

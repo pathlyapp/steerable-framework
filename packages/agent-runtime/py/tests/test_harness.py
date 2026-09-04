@@ -30,6 +30,7 @@ from steerable_agent_runtime.hooks import NoopHooks, PreStepAction
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.llm.errors import LLMError
 from steerable_agent_runtime.storage import InMemoryStorage
+from steerable_agent_runtime.tools import ToolRouter
 
 
 class _Ctx:
@@ -178,12 +179,17 @@ def test_minimal_toolset_filters_by_nested_name() -> None:
     assert names == ["bash", "read_file"]
 
 
-def test_progressive_disclosure_keeps_core_and_appends_search() -> None:
-    tools = [_descriptor("bash"), _descriptor("grep")]
-    selected = ProgressiveDisclosure().select(tools)
+def test_progressive_disclosure_lists_direct_tier_and_appends_search() -> None:
+    router = ToolRouter()
+    router.register(lambda: "x", name="bash", description="Run commands")
+    router.register(
+        lambda: "y", name="grep", description="Search files", exposure="deferred"
+    )
+    strategy = ProgressiveDisclosure()
+    strategy.register(router)
+    selected = strategy.select([_descriptor("bash"), _descriptor("grep")])
     names = [t["function"]["name"] for t in selected]
-    assert names[0] == "bash"
-    assert "tool_search" in names[-1]
+    assert names == ["bash", "tool_search"]
 
 
 # -- memory ------------------------------------------------------------------

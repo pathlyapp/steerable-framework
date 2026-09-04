@@ -48,6 +48,18 @@ export interface ChatStreamTransport {
   steer?: (content: string) => Promise<boolean>;
 }
 
+/**
+ * Where `steerOrFollowUpUserMessage` actually delivered the message:
+ *   - `'steered'` — the running turn accepted the injection.
+ *   - `'queued'` — the turn is still running but not steerable; the message
+ *     sits in the W6-2 follow-up queue and auto-sends at turn end.
+ *   - `'sent'` — no turn was running by the time the steer attempt settled;
+ *     the message went out immediately as a normal new turn.
+ * The union lets callers render their own locale-specific notice per
+ * outcome; the hook itself carries no user-facing copy.
+ */
+export type SteerOutcome = 'steered' | 'queued' | 'sent';
+
 export interface UseChatStreamOptions {
   /** Required transport handle; see `ChatStreamTransport`. */
   transport: ChatStreamTransport;
@@ -77,12 +89,31 @@ export interface UseChatStreamReturn {
    */
   sendUserMessage: (input: ChatStreamSendInput) => Promise<void>;
   /**
+   * W7-1: resume the interrupted turn recorded on the backend. Streams an
+   * assistant turn WITHOUT appending a user message — the transport receives
+   * `{ content: '', metadata: { ...input?.metadata, resume: true } }` and the
+   * backend replays the durable record's projection as the loop seed, so the
+   * user never retypes the interrupted request. No-op while streaming (a
+   * resume is not queueable as a follow-up — it is not a user message).
+   */
+  resumeTurn: (input?: { metadata?: Record<string, unknown> }) => Promise<void>;
+  /**
    * Steer the running turn with an extra user message. No-op resolving
    * `false` when not streaming or the transport has no `steer`. On success
    * the message is appended to the visible transcript immediately (the loop
    * consumes it at the next round boundary).
    */
   steerUserMessage: (content: string) => Promise<boolean>;
+  /**
+   * Steer with a never-drop fallback (W6-2): tries `steerUserMessage` first,
+   * then degrades based on live turn state — see `SteerOutcome` for the
+   * three outcomes. The turn-already-ended race is resolved by re-checking
+   * `isStreaming` after the steer attempt settles: a finished turn's
+   * `finally` has already drained the queue, so queueing there would strand
+   * the message until some future turn ends — it is sent directly instead.
+   * Prefer this over `steerUserMessage` for composer Enter handlers.
+   */
+  steerOrFollowUpUserMessage: (content: string) => Promise<SteerOutcome>;
   /**
    * Explicitly queue a message as a follow-up (W6-2): sent automatically as
    * the next turn once the current turn finishes. When not streaming this is
@@ -313,16 +344,15 @@ export function useChatStream(
     [options],
   );
 
-  const sendUserMessage = useCallback(
-    async (input: ChatStreamSendInput) => {
-      if (isStreamingRef.current) {
-        // W6-2: queue instead of dropping. The finishing turn's `finally`
-        // drains the queue and starts the next turn automatically.
-        followUpsRef.current = [...followUpsRef.current, input];
-        bumpFollowUpVersion();
-        return;
+  // Shared turn core: stream one assistant turn and drain the follow-up
+  // queue at the end. `echoUserMessage` is false only for W7-1 resume —
+  // the interrupted turn's user message is already in the transcript and
+  // the backend replays it from the durable record.
+  const startTurn = useCallback(
+    async (input: ChatStreamSendInput, opts: { echoUserMessage: boolean }) => {
+      if (opts.echoUserMessage) {
+        dispatch({ type: 'append', message: newUserMessage(input.content) });
       }
-      dispatch({ type: 'append', message: newUserMessage(input.content) });
       dispatch({ type: 'append', message: newAssistantPlaceholder() });
       setStreaming(true);
       try {
@@ -351,6 +381,31 @@ export function useChatStream(
       }
     },
     [handleEvent, options.transport, setStreaming],
+  );
+
+  const sendUserMessage = useCallback(
+    async (input: ChatStreamSendInput) => {
+      if (isStreamingRef.current) {
+        // W6-2: queue instead of dropping. The finishing turn's `finally`
+        // drains the queue and starts the next turn automatically.
+        followUpsRef.current = [...followUpsRef.current, input];
+        bumpFollowUpVersion();
+        return;
+      }
+      await startTurn(input, { echoUserMessage: true });
+    },
+    [startTurn],
+  );
+
+  const resumeTurn = useCallback(
+    async (input?: { metadata?: Record<string, unknown> }) => {
+      if (isStreamingRef.current) return;
+      await startTurn(
+        { content: '', metadata: { ...input?.metadata, resume: true } },
+        { echoUserMessage: false },
+      );
+    },
+    [startTurn],
   );
 
   useEffect(() => {
@@ -398,6 +453,42 @@ export function useChatStream(
     [options.transport],
   );
 
+  const steerOrFollowUpUserMessage = useCallback(
+    async (content: string): Promise<SteerOutcome> => {
+      const input: ChatStreamSendInput = { content };
+      // No turn running: there is nothing to inject into and nothing whose
+      // `finally` would drain the queue — a normal send is the only route
+      // that delivers the message.
+      if (!isStreamingRef.current) {
+        void sendRef.current?.(input);
+        return 'sent';
+      }
+      const steer = options.transport.steer;
+      if (steer) {
+        const ok = await steer(content);
+        if (ok) {
+          dispatch({ type: 'append', message: newUserMessage(content) });
+          return 'steered';
+        }
+        // The turn may have ended while the steer was in flight; its
+        // `finally` already ran the queue drain, so a queued message would
+        // sit unsent until an unrelated future turn ends. Send it as a fresh
+        // turn instead. If a queued follow-up already started the next turn,
+        // isStreamingRef is true again and queueing below is correct.
+        if (!isStreamingRef.current) {
+          void sendRef.current?.(input);
+          return 'sent';
+        }
+      }
+      // Turn still running but not steerable (transport lacks `steer`, or
+      // the loop rejected the injection): W6-2 queue, drained at turn end.
+      followUpsRef.current = [...followUpsRef.current, input];
+      bumpFollowUpVersion();
+      return 'queued';
+    },
+    [options.transport],
+  );
+
   const setMessages = useCallback((messages: ChatMessage[]) => {
     dispatch({ type: 'reset', messages });
   }, []);
@@ -420,7 +511,9 @@ export function useChatStream(
       messages: state.messages,
       isStreaming: isStreamingRef.current,
       sendUserMessage,
+      resumeTurn,
       steerUserMessage,
+      steerOrFollowUpUserMessage,
       followUpUserMessage,
       // followUpVersion re-keys this memo so queue changes surface to the UI.
       pendingFollowUps: followUpsRef.current,
@@ -433,7 +526,9 @@ export function useChatStream(
     [
       state.messages,
       sendUserMessage,
+      resumeTurn,
       steerUserMessage,
+      steerOrFollowUpUserMessage,
       followUpUserMessage,
       removeFollowUp,
       cancel,

@@ -72,6 +72,7 @@ from .history import (
     entry_to_dict,
     message_from_dict,
     message_to_dict,
+    upgrade_entry_dict,
 )
 from .hooks import (
     ChainHooks,
@@ -159,7 +160,12 @@ from .replay import (
     build_step_decision_event,
     reduce_execution_state,
 )
-from .resume import load_history_transcript, load_transcript, project_transcript
+from .resume import (
+    close_dangling_tool_calls,
+    load_history_transcript,
+    load_transcript,
+    project_transcript,
+)
 from .retry import RetryHooks
 from .sandboxed import (
     DEFAULT_SHELL_TOOLS,
@@ -343,6 +349,7 @@ __all__ = [
     "branch_label",
     "build_step_decision_event",
     "clamp_reasoning_effort",
+    "close_dangling_tool_calls",
     "detect_claimed_execution",
     "detect_deferred_execution",
     "detect_deferred_execution_eager",
@@ -397,6 +404,7 @@ __all__ = [
     "to_otlp_json",
     "tool",
     "tool_search_descriptor",
+    "upgrade_entry_dict",
 ]
 
 __version__ = "0.1.0"
