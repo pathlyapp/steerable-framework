@@ -561,15 +561,20 @@ cheap-12 噪声太大（同一配置两轮差 2 道），只有全量 89 道能�
 
 | harness | run | 分数 | 输入 token | 缓存 token | 输出 token | agent 总时 | 单题中位 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `steerable` | [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) | 0.8202（73/89） | — | — | — | 84.8 h / 89 | 35.0 min |
-| `steerable` | [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570) | 0.7865（70/89） | — | — | — | 103.0 h / 89 | 48.2 min |
-| `steerable` | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202（73/89） | — | — | — | 82.0 h / 89 | 35.0 min |
-| `steerable` | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753（69/89） | — | — | — | 85.4 h / 89 | 32.0 min |
+| `steerable` | [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757) | 0.8202（73/89） | ~193 M ✳ | ~174 M ✳ | ~14 M ✳ | 84.8 h / 89 | 35.0 min |
+| `steerable` | [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570) | 0.7865（70/89） | ~193 M ✳ | ~174 M ✳ | ~14 M ✳ | 103.0 h / 89 | 48.2 min |
+| `steerable` | [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872) | 0.8202（73/89） | ~193 M ✳ | ~174 M ✳ | ~14 M ✳ | 82.0 h / 89 | 35.0 min |
+| `steerable` | [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349) | 0.7753（69/89） | ~193 M ✳ | ~174 M ✳ | ~14 M ✳ | 85.4 h / 89 | 32.0 min |
 | `pi-glm` | [33593245247](https://github.com/pathlyapp/steerable-framework/actions/runs/33593245247) | 0.7528（67/89） | 144.1 M | 137.6 M | 3.7 M | 45.3 h / 89 | 20.4 min |
 | `pi-glm` | [33712341301](https://github.com/pathlyapp/steerable-framework/actions/runs/33712341301) | 0.7093（61/86） | 163.0 M | 156.3 M | 4.2 M | 44.1 h / 86 | 17.1 min |
 | `pi-glm` | [33712363232](https://github.com/pathlyapp/steerable-framework/actions/runs/33712363232) | 0.7386（65/88） | 109.6 M | 103.0 M | 3.7 M | 45.7 h / 88 | 23.2 min |
 
-**steerable 四轮的 token 无法补录**：计分 commit `27d521a` 早于遥测提交 `a618599`（`STEERABLE_RUN_SUMMARY`，W1.4.3.3），`result.json` 的 `agent_result` 三个 token 字段全空、`headless.log` 也没有汇总行，artifact 里没有第二个数据源。要拿到 steerable 的 token 只能在含遥测的 commit 上重跑一轮（遥测不改行为，分数可作第五个样本）。2.5.18 仍是正解。
+**✳ steerable 的 token 是从 OpenRouter Analytics API 反推的网关侧估值（±15%），不是 artifact。** 计分 commit `27d521a` 早于遥测提交 `a618599`（`STEERABLE_RUN_SUMMARY`，W1.4.3.3），artifact 里没有数据源；但评测独占 OpenRouter 账号，且 4 轮 catalog 集中在 09-01 10:27 → 09-02 01:27 UTC，与 pi-glm（09-02 05:04 起）、codex/claude（09-03）零重叠。该窗口 `z-ai/glm-5.3-flash-20260826` 总消耗 969.6 M token（prompt 903.7 M、completion 65.9 M、cached 813.8 M、$34.76），扣除空对照 run（54/89 题 ≈ 129 M）和 cheap-12 canary（≈ 10 M）后 ÷4 得单轮均值。**方法误差已用 pi-glm run1 标定：同窗口网关侧 154.9 M vs `result.json` 144.1 M，偏高 7.5%**（网关计数含重试和未完成的流）。单轮成本约 $7.4。要精确值仍在含遥测的 commit 上重跑（2.5.18），但估值已足够跨 harness 比较。
+
+**两个新结论：**
+
+1. **steerable 单轮输出 ~14 M token，是 pi-glm（3.7–4.2 M）的 3.5 倍、claude-code-glm（5.37 M）的 2.6 倍。** 2.5.11 的"每步文本量"问题现在有了钱包维度的量化：输出 token 是按量计费里最贵的部分，steerable 在这项上多花 2–4 倍。
+2. **网关侧 token 与 harness 自报的差异就是重试成本。** codex-glm 网关侧约为自报的 1.9 倍（Responses API 转译层拒包后整段上下文重发），claude-code-glm 约 3 倍（断流重试，长对话每次重发全量）。pi-glm 只有 1.07 倍。2.5.22 的协议问题不只压分数，还直接烧钱。
 
 **耗时形状跨 harness 差 2–4 倍**：单题中位 steerable 32–48 min，pi-glm 17–23 min，claude-code-glm 11.8 min，codex-glm 7.4 min。steerable 每题花的墙上时间是 Claude Code 的 3 倍上下，但分数并没有相应更高——长时间主要耗在跑飞题的软超时上（红题中位 150 min 撞满，见上节），绿题效率才是可比较项。
 
