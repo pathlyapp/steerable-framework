@@ -89,7 +89,7 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <h2 class="sf-section">Terminal-Bench 2.1</h2>
 
 <p class="sf-lede" markdown>
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80%**, Pi 73%, Codex 57% — the harness alone moves the score 26 points. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -144,15 +144,15 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <span class="sf-bench-agent">Codex CLI</span>
 <span class="sf-bench-model">GLM-5.3-Flash</span>
 </div>
-<span class="sf-bench-pct">57%</span>
-<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:57%"></span></span>
+<span class="sf-bench-pct">58%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:58%"></span></span>
 <div class="sf-bench-meta">
 <span class="sf-bench-note">protocol-bound lower bound · 7× $ per solve</span>
 <span class="sf-bench-src">this repo, catalog-89</span>
 </div>
 </div>
 
-<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.11 · Claude Code $0.16 · Codex $0.77. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
+<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.11 · Claude Code $0.16 · Codex $0.81. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
@@ -192,11 +192,11 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt" cx="181.1" cy="57.1" r="8.9"/>
 <text class="lbl" x="193" y="52">Claude Code</text>
 <text class="sub" x="193" y="62">83% · $0.16 · 12 min</text>
-<circle class="pt" cx="343.7" cy="217" r="7.1"/>
-<text class="lbl" x="333" y="213" text-anchor="end">Codex CLI</text>
-<text class="sub" x="333" y="223" text-anchor="end">57% · $0.77 · 7 min</text>
+<circle class="pt" cx="348.9" cy="208.3" r="7.1"/>
+<text class="lbl" x="338" y="204" text-anchor="end">Codex CLI</text>
+<text class="sub" x="338" y="214" text-anchor="end">58% · $0.81 · 7 min</text>
 </svg>
-<p class="sf-bench-foot">Bubble area = median minutes per task. Costs from OpenRouter analytics on the eval account; Codex is a protocol-bound lower bound.</p>
+<p class="sf-bench-foot">Bubble area = median minutes per task. Costs from OpenRouter analytics on the eval account; Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
 </div>
 
 </div>
