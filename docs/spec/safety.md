@@ -139,7 +139,15 @@ Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
   TLS interception, no plain-HTTP forwarding in v1), fails closed on an
   empty allow-list, and its bare-host entries allow 443/80 to mirror the
   profile semantics above. Point the sidecar's HTTP stack at it with
-  `HTTPS_PROXY=http://127.0.0.1:<port>` (httpx honors proxy env vars).
+  `HTTPS_PROXY=http://127.0.0.1:<port>` (httpx honors proxy env vars), and set
+  `STEERABLE_EGRESS_CONFINED=1` beside it. The marker declares that the proxy
+  owns every host: without it, proxy variables read as ambient host
+  configuration, and a provider endpoint the OS lists as direct (loopback, and
+  on macOS the private LAN ranges) is exempted from them so a local model stays
+  reachable behind a system proxy — see `llm/system_proxy.py`. Set the marker
+  only when the proxy really is running; the desktop omits it on its
+  startup-failure fallback so the sidecar never believes it is confined when it
+  is not.
 
 The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 

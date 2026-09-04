@@ -29,7 +29,7 @@ from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
-from .system_proxy import direct_mounts
+from .system_proxy import client_env_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class OpenAICompatProvider:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0),
-                mounts=direct_mounts(self.base_url),
+                **client_env_kwargs(self.base_url),
             ) as client:
                 response = await client.post(
                     f"{self.base_url.rstrip('/')}/chat/completions",
@@ -206,7 +206,7 @@ class OpenAICompatProvider:
             async with (
                 httpx.AsyncClient(
                     timeout=_stream_timeout(),
-                    mounts=direct_mounts(self.base_url),
+                    **client_env_kwargs(self.base_url),
                 ) as client,
                 client.stream(
                     "POST",
