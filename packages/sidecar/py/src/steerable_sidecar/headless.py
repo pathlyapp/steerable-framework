@@ -366,6 +366,18 @@ def _soft_timeout_ms() -> int | None:
     return None if value <= 0 else value
 
 
+def _abandon_process_after_hard_timeout() -> None:
+    """Skip ``asyncio.run`` executor shutdown after a hard timeout.
+
+    Bash runs in ``asyncio.to_thread`` with ``communicate(timeout=3600)``.
+    Cancelling ``_consume`` does not stop that thread, and
+    ``loop.shutdown_default_executor`` waits for it — Harbor then holds
+    ``docker exec`` until GHA kills the job. ``os._exit`` is the EOF.
+    Tests monkeypatch this.
+    """
+    os._exit(0)
+
+
 def _hard_run_timeout_sec() -> float | None:
     """Exit before Harbor's 180 min wait_for so docker exec gets EOF.
 
@@ -464,6 +476,14 @@ async def _run(
     hooks: Any = _eval_hooks(
         assembled_hooks, delivery, resolved_limits.max_tool_errors or 16
     )
+    timeout = _hard_run_timeout_sec()
+    # Tool wall-clock must end before the process abandon below. A 175 min
+    # cap sitting after the 170 min wait_for never shrank bash
+    # ``communicate(timeout=3600)``, so ``asyncio.run`` then waited out the
+    # thread and Harbor held docker exec.
+    wrap_up_hard_cap_ms = (
+        max(int(timeout * 1000) - 30_000, 1_000) if timeout is not None else 10_500_000
+    )
     loop = CoreLoop(
         provider,
         executor,
@@ -480,7 +500,7 @@ async def _run(
             # steal.py / gcode: a 1-hour bash or another reasoning stream
             # after the 150 min soft timeout ate Harbor's remaining 30 min.
             wrap_up_tool_timeout_ms=120_000,
-            wrap_up_hard_cap_ms=10_500_000,
+            wrap_up_hard_cap_ms=wrap_up_hard_cap_ms,
             # All three cuts are off. They were added to rescue trials that
             # reasoned for an hour without calling a tool, and each was
             # calibrated against the trials it was meant to rescue, which is
@@ -581,7 +601,7 @@ async def _run(
                 sys.stdout.write("\n")
                 sys.stdout.flush()
 
-    timeout = _hard_run_timeout_sec()
+    timed_out = False
     try:
         if timeout is None:
             await _consume()
@@ -591,6 +611,7 @@ async def _run(
         # Harbor ×12 is 180 min. Exit first so docker exec communicate()
         # sees EOF instead of hanging the whole n-concurrent shard.
         # (asyncio.TimeoutError is the builtin only on 3.11+; catch both.)
+        timed_out = True
         sys.stdout.write("\n[hard_timeout]\n")
         sys.stdout.flush()
     except Exception as exc:
@@ -622,6 +643,8 @@ async def _run(
             + "\n"
         )
         sys.stdout.flush()
+        if timed_out:
+            _abandon_process_after_hard_timeout()
 
 
 if __name__ == "__main__":  # pragma: no cover

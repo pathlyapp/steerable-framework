@@ -223,7 +223,8 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=16" in src
     assert "wrap_up_tool_timeout_ms=120_000" in src
-    assert "wrap_up_hard_cap_ms=10_500_000" in src
+    assert "wrap_up_hard_cap_ms=wrap_up_hard_cap_ms" in src
+    assert "_abandon_process_after_hard_timeout" in src
     assert "_hard_run_timeout_sec" in src
     assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
@@ -698,6 +699,9 @@ async def test_run_exits_on_hard_timeout(
 
     monkeypatch.setattr(headless_mod, "_hard_run_timeout_sec", lambda: 0.05)
     monkeypatch.setattr(
+        headless_mod, "_abandon_process_after_hard_timeout", lambda: None
+    )
+    monkeypatch.setattr(
         headless_mod, "_env_provider_params", lambda: {"model": "fake"}
     )
     monkeypatch.setattr(
@@ -705,6 +709,13 @@ async def test_run_exits_on_hard_timeout(
     )
     await _run("hang", cwd=str(tmp_path), max_rounds=4)
     assert "[hard_timeout]" in capsys.readouterr().out
+
+
+def test_hard_timeout_abandon_exits_the_process() -> None:
+    import inspect
+
+    src = inspect.getsource(headless_mod._abandon_process_after_hard_timeout)
+    assert "os._exit" in src
 
 
 @pytest.mark.asyncio

@@ -325,7 +325,9 @@ def workspace_tools_for_cwd(
             )
         return None
 
-    def _run_bash(command: str, cwd: Path) -> ToolResult:
+    def _run_bash(
+        command: str, cwd: Path, live_pids: list[int] | None = None
+    ) -> ToolResult:
         # Shells reset SIGHUP on exec; trap so background qemu-system
         # survives this tool returning (session-leader HUP).
         proc = subprocess.Popen(
@@ -339,6 +341,8 @@ def workspace_tools_for_cwd(
             errors="replace",
             start_new_session=True,
         )
+        if live_pids is not None:
+            live_pids.append(proc.pid)
         try:
             stdout, stderr = proc.communicate(timeout=_BASH_TIMEOUT_SEC)
         except subprocess.TimeoutExpired:
@@ -365,7 +369,16 @@ def workspace_tools_for_cwd(
 
     async def _run_local(command: str, cwd: Path) -> ToolResult:
         # Off the event loop so CoreLoop parallel_tools can overlap bash.
-        return await asyncio.to_thread(_run_bash, command, cwd)
+        # Cancelling this await (tool timeout / hard timeout) must kill the
+        # session; otherwise communicate(timeout=3600) pins the default
+        # executor and Harbor never sees EOF.
+        live_pids: list[int] = []
+        try:
+            return await asyncio.to_thread(_run_bash, command, cwd, live_pids)
+        except asyncio.CancelledError:
+            if live_pids:
+                _kill_process_group(live_pids[0])
+            raise
 
     run = run_command or _run_local
 

@@ -40,7 +40,7 @@ is older than the four-run split; used only when it names a flaky id.
 | `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 bash tools, never `write_file`, `/tmp/frame.bmp` missing. Instruction never names that path (only `vm.js`). Named-output retry never ran because they never completed. | ReminderHooks runaway (arm 2), not a named-output regex |
 | `path-tracing-reverse` | 1/4 | 33497477757: 0.464 vs 0.995, `empty_round` then `[soft_timeout]`, kept disassembling. 33547943349: 0.957 vs 0.995 after they `cmp`'d images; `empty_round` ×2 + `named_gzip_cap` | Live-lock is the empty half. The near-miss is a named `> 0.995` bar they already checked |
 | `video-processing` | 1/4 | 33497477757 pass. 33547943349: landing frame 61 vs inclusive `[62, 64]`; `jump_analyzer.py` also crashed | Off-by-one on a named range. Not the verify gate |
-| `code-from-image` | 2/4 | Flaky A/B B 3/3 (gate off; A still running) | Flaky A/B only |
+| `code-from-image` | 2/4 | A/B 33951133679 both arms 3/3. Arm A wall ~134m vs B 25m (same hang family as pov-ray: hard timeout wait_for then executor/bash thread) | Not the verify gate |
 | `dna-assembly` | 2/4 | 33497477757: primers written; forward Tm 73.64 > 72; `[soft_timeout]` then `[hard_timeout]` while iterating. Primer length note already in `_SYSTEM` | Timeout + named Tm bar. Do not add a Tm clause |
 | `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — retry copy no longer names that command (`72e1776`). Do not call the arm until the full 20-task pair |
 | `install-windows-3.11` | 2/4 | 33497477757 and 33547943349 pass. 33530806570: 103 tools, `instruction_listen` fired, keyboard test: no key caused ≥10% image difference | VM visual-feedback miss. Domain notes already cover daemonize/screenshot. Not a new clause |
@@ -66,7 +66,7 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (6 paired tasks): B better on 2, A on 0, tied 4, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `build-pov-ray` 3/3 both arms |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (7 paired tasks): B better on 2, A on 0, tied 5, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `build-pov-ray` and `code-from-image` 3/3 both arms |
 | ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
