@@ -150,6 +150,39 @@ def child_env(
     return env
 
 
+async def run_headless(
+    args: list[str], env: dict[str, str], *, timeout: float = 90.0
+) -> tuple[int, str, str]:
+    """Run one ``steerable_sidecar.headless`` turn to completion.
+
+    Returns ``(exit code, stdout, stderr)``. The child is killed if it
+    outlives ``timeout``, so a wedged eval path fails the test instead of
+    hanging the suite.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "steerable_sidecar.headless",
+        *args,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise
+    return proc.returncode, stdout.decode(), stderr.decode()
+
+
+def model_tool_names(tool_list: list[dict[str, Any]] | None) -> set[str]:
+    """Names in an OpenAI-shaped ``tools`` array (a model request or tool.list)."""
+    return {(t.get("function") or {}).get("name") or "" for t in tool_list or []}
+
+
 # ---------------------------------------------------------------------------
 # Mock OpenAI server
 # ---------------------------------------------------------------------------
