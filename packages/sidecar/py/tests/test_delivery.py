@@ -1468,6 +1468,55 @@ def test_git_rewrite_block_refuses_filter_branch() -> None:
     assert log is None
 
 
+def test_git_rewrite_block_refuses_helper_script_that_rewrites(tmp_path) -> None:
+    """Inline veto is not enough: the next attempt is ``bash /tmp/rewrite.sh``."""
+    hooks = DeliveryHooks(instruction="Remove API keys from the repository.")
+    script = tmp_path / "rewrite.sh"
+    script.write_text(
+        "git filter-branch -f --tree-filter 'sed -i s/SECRET/x/g' -- --all\n",
+        encoding="utf-8",
+    )
+    blocked = hooks.git_rewrite_block_result(
+        ToolCall(id="t", name="bash", arguments={"command": f"bash {script}"})
+    )
+    assert blocked is not None
+    env_prefixed = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": f"FILTER=1 bash {script}"},
+        )
+    )
+    assert env_prefixed is not None
+    py = tmp_path / "rewrite.py"
+    py.write_text(
+        "import os\nos.system('git filter-branch -f')\n",
+        encoding="utf-8",
+    )
+    assert (
+        hooks.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": f"python3 {py}"})
+        )
+        is not None
+    )
+    probe = tmp_path / "probe.sh"
+    probe.write_text("which git-filter-repo\ngit --version\n", encoding="utf-8")
+    assert (
+        hooks.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": f"bash {probe}"})
+        )
+        is None
+    )
+    sed = tmp_path / "scrub.sh"
+    sed.write_text("sed -i s/SECRET/x/ ray.yaml\n", encoding="utf-8")
+    assert (
+        hooks.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": f"bash {sed}"})
+        )
+        is None
+    )
+
+
 def test_git_rewrite_block_fires_on_sanitize_instruction() -> None:
     """Official TB 2.1 instruction names no history rewrite (harbor-framework/terminal-bench-2-1)."""
     instruction = (
