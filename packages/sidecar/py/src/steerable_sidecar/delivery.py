@@ -623,8 +623,9 @@ class DeliveryHooks(NoopHooks):
         return True
 
     def _delivery_missing(self) -> tuple[str, ...]:
-        """Named paths still absent: created outputs must be non-empty;
-        instruction-named files that existed at start must still exist."""
+        """Named paths still absent: created files must be non-empty,
+        created directories need only exist, and instruction-named files
+        that existed at start must still exist."""
         required = set(self._required)
         missing: list[str] = []
         for path in self._named:
@@ -1884,9 +1885,17 @@ def _promote_make_artifacts(make_dir: Path, missing: tuple[str, ...]) -> None:
 
 
 def _file_ready(path: str) -> bool:
-    """True when a named output exists and has at least one byte."""
+    """True when a named output is a non-empty file or an existing directory.
+
+    ``named_output_paths`` keeps last components that contain a dot, so a
+    versioned source tree such as ``/app/povray-2.2`` is required as if it
+    were a file. ``is_file()`` then stays false for the whole trial, wrap-up
+    keeps listing it as missing, and ``writes`` never increments.
+    """
     file = Path(path)
     try:
+        if file.is_dir():
+            return True
         return file.is_file() and file.stat().st_size > 0
     except OSError:
         return False

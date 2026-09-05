@@ -214,6 +214,38 @@ async def test_wrap_up_skips_named_nudge_when_outputs_exist(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wrap_up_skips_named_nudge_when_required_path_is_a_directory(
+    tmp_path,
+) -> None:
+    dest = tmp_path / "povray-2.2"
+    hooks = DeliveryHooks(
+        instruction=f"compile the 2.2 tree in {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.mkdir()
+    (dest / "BUILD-NOTES.md").write_text("ok\n", encoding="utf-8")
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    action = await hooks.pre_step(notice, LoopContext())
+    assert action.reason != "wrap_up_named_output"
+
+
+@pytest.mark.asyncio
+async def test_named_directory_counts_as_a_write(tmp_path) -> None:
+    dest = tmp_path / "povray-2.2"
+    hooks = DeliveryHooks(named_outputs=(str(dest),))
+    dest.mkdir()
+    await hooks.post_tool_result(
+        ToolResult(success=True, data={}), _call("bash"), LoopContext()
+    )
+    assert hooks.writes >= 1
+
+
+@pytest.mark.asyncio
 async def test_inspect_blocked_after_wrap_up_named(tmp_path) -> None:
     dest = tmp_path / "out.txt"
     hooks = DeliveryHooks(
@@ -1759,6 +1791,21 @@ async def test_named_make_skips_when_only_side_effect_missing(tmp_path) -> None:
     )
     action = await hooks.before_completion(_draft(tools=2), LoopContext())
     assert action.reason == "missing_named_output"
+    assert hooks._make_runs == 0
+
+
+@pytest.mark.asyncio
+async def test_named_directory_does_not_rerun_make(tmp_path) -> None:
+    dest = tmp_path / "povray-2.2"
+    (tmp_path / "Makefile").write_text("all:\n\tfalse\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=f"compile {dest}",
+        named_outputs=(str(dest),),
+    )
+    dest.mkdir()
+    (dest / "src.c").write_text("int main(){}\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
     assert hooks._make_runs == 0
 
 

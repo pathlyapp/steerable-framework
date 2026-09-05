@@ -28,6 +28,9 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    Early paired shards (not a verdict): `extract-elf` 1/3 with the gate vs
    3/3 without; both A losses fired `unverified_output` then re-ran the
    generator. The retry copy no longer names the hidden-test command.
+   `build-pov-ray` is 3/3 on both arms; Arm A wall-clocked 117m because
+   `_file_ready` never accepted the versioned source directory. That
+   existence check is not behind `STEERABLE_DELIVERY_VERIFY`.
 2. **ReminderHooks** — `STEERABLE_REMINDERS=1` on B. Default is off so this
    does not confound (1). `runaway_calls=12` is consecutive non-writes,
    including after a write (make-mips 256-bash tail after `vm.js`).
