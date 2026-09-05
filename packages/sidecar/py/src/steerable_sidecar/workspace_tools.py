@@ -10,6 +10,7 @@ bridges (3.4.3) when the client advertises the capabilities.
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import signal
@@ -32,6 +33,10 @@ _MIN_KEEP_BYTES = 8192
 # TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
 # does not kill a single bash at 300s. Harbor's long-task kill is ~180 min.
 _BASH_TIMEOUT_SEC = 3600
+# Native pixels for PNG/JPEG reads. Off by default; flaky arm B sets
+# ``STEERABLE_READ_IMAGES=1``. ASCII preview stays either way. BMP stays
+# ASCII: vision endpoints accept PNG/JPEG, not BMP.
+_IMAGE_ATTACH_MAX_BYTES = 400_000
 
 #: One-shot bash execution behind the tool: (command, cwd) → result.
 #: The local default spawns a subprocess; the ACP terminal bridge runs the
@@ -529,11 +534,20 @@ def workspace_tools_for_cwd(
         require_consent=False,
         metadata={"shell_command_param": "command"},
     )
+    read_desc = (
+        "Read a UTF-8 text file from the workspace. Prefer an absolute path. "
+        "PNG/JPEG files attach as images the model can see, plus an ASCII preview."
+        if _read_images_enabled()
+        else (
+            "Read a UTF-8 text file from the workspace. Prefer an absolute path. "
+            "PNG/JPEG/BMP files return an ASCII preview, not UTF-8."
+        )
+    )
     router.register(
         read_file,
         name="read_file",
         mode="read",
-        description="Read a UTF-8 text file from the workspace. Prefer an absolute path.",
+        description=read_desc,
         schema=_READ_SCHEMA,
         require_consent=False,
     )
@@ -785,25 +799,49 @@ def refuse_truncated_overwrite(existing_bytes: int, new_bytes: int) -> bool:
     return new_bytes < max(512, existing_bytes // 4)
 
 
+def _read_images_enabled() -> bool:
+    raw = os.environ.get("STEERABLE_READ_IMAGES")
+    if raw is None or not str(raw).strip():
+        return False
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _image_blob(raw: bytes) -> dict[str, str] | None:
+    """PNG/JPEG bytes for the next LLM request; None when the run is text-only."""
+    if not _read_images_enabled() or len(raw) > _IMAGE_ATTACH_MAX_BYTES:
+        return None
+    if raw.startswith(b"\x89PNG"):
+        media = "image/png"
+    elif raw[:2] == b"\xff\xd8":
+        media = "image/jpeg"
+    else:
+        return None
+    return {
+        "b64": base64.b64encode(raw).decode("ascii"),
+        "media_type": media,
+    }
+
+
 def _binary_read_result(target: Path, raw: bytes) -> ToolResult:
     """Tool result for a non-UTF-8 file: ASCII preview when the image format
     is known, otherwise a decode instruction (never a guessed content)."""
     preview = ascii_png_preview(raw)
     if preview is not None:
-        return ToolResult(
-            success=True,
-            data={
-                "path": str(target),
-                "content": preview,
-                "kind": (
-                    "jpeg_ascii"
-                    if preview.startswith("JPEG ")
-                    else "bmp_ascii"
-                    if preview.startswith("BMP ")
-                    else "png_ascii"
-                ),
-            },
-        )
+        data: dict[str, object] = {
+            "path": str(target),
+            "content": preview,
+            "kind": (
+                "jpeg_ascii"
+                if preview.startswith("JPEG ")
+                else "bmp_ascii"
+                if preview.startswith("BMP ")
+                else "png_ascii"
+            ),
+        }
+        blob = _image_blob(raw)
+        if blob is not None:
+            data["_image"] = blob
+        return ToolResult(success=True, data=data)
     kind = (
         "PNG"
         if raw.startswith(b"\x89PNG")

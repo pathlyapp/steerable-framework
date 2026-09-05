@@ -179,6 +179,22 @@ _SYSTEM_CC_ALIGN = (
     "Call grep or glob rather than bash grep, rg, find, or ls."
 )
 
+#: ASCII-only image sentence in ``_SYSTEM``. ``STEERABLE_READ_IMAGES=1``
+#: swaps it so the model looks at attached PNG/JPEG instead of OCR.
+_ASCII_IMAGE_NOTE = (
+    "PNG/JPEG/BMP files are pixels, not UTF-8: read_file returns an ASCII "
+    "preview for 8-bit PNG, baseline JPEG, and uncompressed BMP (square "
+    "images also get a rank/file 8x8 brightness and occupancy grid); decode "
+    "exact pixels with Python (PIL/numpy) or ffmpeg.\n"
+)
+_NATIVE_IMAGE_NOTE = (
+    "PNG/JPEG files attach as images after the read_file JSON; that JSON "
+    "is only an ASCII preview. Look at the attached images for the actual "
+    "contents. BMP stays ASCII (vision endpoints take PNG/JPEG); decode BMP "
+    "with Python (PIL/numpy) or ffmpeg. Square images still get a rank/"
+    "file 8x8 brightness and occupancy grid.\n"
+)
+
 
 def _env_flag(name: str, *, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -188,9 +204,12 @@ def _env_flag(name: str, *, default: bool) -> bool:
 
 
 def _system_prompt() -> str:
+    prompt = _SYSTEM
+    if _env_flag("STEERABLE_READ_IMAGES", default=False):
+        prompt = prompt.replace(_ASCII_IMAGE_NOTE, _NATIVE_IMAGE_NOTE, 1)
     if _env_flag("STEERABLE_PROMPT_CC_ALIGN", default=False):
-        return f"{_SYSTEM}\n{_SYSTEM_CC_ALIGN}"
-    return _SYSTEM
+        prompt = f"{prompt}\n{_SYSTEM_CC_ALIGN}"
+    return prompt
 
 
 def _eval_hooks(assembled: Any, delivery: DeliveryHooks, max_tool_errors: int) -> ChainHooks:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import struct
 import time
 import zlib
@@ -252,6 +253,7 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert preview.success is True
     assert preview.data["kind"] == "png_ascii"
     assert "PNG 4x2" in preview.data["content"]
+    assert "_image" not in preview.data
     assert "mean-brightness" not in preview.data["content"]
     square = [[40 if (y // 10 + x // 10) % 2 == 0 else 90 for x in range(80)] for y in range(80)]
     for y in range(70, 80):
@@ -289,11 +291,47 @@ async def test_clip_and_binary_stdout(tmp_path: Path) -> None:
     assert jpeg_preview.success is True
     assert jpeg_preview.data["kind"] == "jpeg_ascii"
     assert "JPEG 16x8" in jpeg_preview.data["content"]
+    assert "_image" not in jpeg_preview.data
     junk_jpeg = tmp_path / "junk.jpg"
     junk_jpeg.write_bytes(b"\xff\xd8\xff\x00" + b"\xff" * 40)
     junk_jpeg_read = await _call(router, "read_file", {"path": "junk.jpg"})
     assert junk_jpeg_read.success is False
     assert "JPEG" in (junk_jpeg_read.error or "")
+
+
+@pytest.mark.asyncio
+async def test_read_file_attaches_png_pixels_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code Read sends pixels; ASCII-only is why code-from-image
+    brute-forced a hash that missed ``bee26a``."""
+    monkeypatch.setenv("STEERABLE_READ_IMAGES", "1")
+    router = workspace_tools_for_cwd(tmp_path)
+    png = tmp_path / "code.png"
+    raw = _gray_png(4, 2, [[0, 0, 255, 255], [0, 0, 255, 255]])
+    png.write_bytes(raw)
+    read = await _call(router, "read_file", {"path": "code.png"})
+    assert read.success is True
+    assert read.data["kind"] == "png_ascii"
+    blob = read.data["_image"]
+    assert blob["media_type"] == "image/png"
+    assert blob["b64"] == base64.b64encode(raw).decode("ascii")
+    bmp = tmp_path / "frame.bmp"
+    bmp.write_bytes(
+        _bgr_bmp(4, 2, [[(0, 0, 0), (0, 0, 0), (255, 255, 255), (255, 255, 255)]] * 2)
+    )
+    bmp_read = await _call(router, "read_file", {"path": "frame.bmp"})
+    assert bmp_read.success is True
+    assert "_image" not in bmp_read.data
+    jpeg_path = Path(__file__).with_name("half.jpg")
+    jpeg = tmp_path / "invoice.jpg"
+    jpeg.write_bytes(jpeg_path.read_bytes())
+    jpeg_read = await _call(router, "read_file", {"path": "invoice.jpg"})
+    assert jpeg_read.success is True
+    assert jpeg_read.data["_image"]["media_type"] == "image/jpeg"
+    monkeypatch.setenv("STEERABLE_READ_IMAGES", "1")
+    oversize = b"\x89PNG\r\n\x1a\n" + b"\x00" * 400_001
+    assert workspace_tools_mod._image_blob(oversize) is None
 
 
 @pytest.mark.asyncio

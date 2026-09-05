@@ -43,26 +43,37 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    `[hard_timeout]` (0 tools after the fire). Same on flaky
    `circuit-fibsqrt__NyFMSat`. Ignore [33964691558](https://github.com/pathlyapp/steerable-framework/actions/runs/33964691558) (402).
 3b. **Live-lock pre-wrap + keep-required** — same env on B.
-   **In flight** on `de45915`: GHA [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219).
-   Detector also counts pre-wrap `empty_round` while `writes == 0`.
-   After WRITE_NOW, keep `tool_choice=required` until wrap-up quality
-   gates pass (prefix / raster / example / missing), not until
-   `writes > 0` — catalog 70 already had a wrong digest on disk.
-   Wrap-up itself re-asserts required every remaining round for those
-   gates (default on; `post_tool_result` used to clear `_force_tool`).
-   Mechanism task is `circuit-fibsqrt`. Do not skip to self_critique.
-   Empty rounds after a write still do not count.
-4. **self_critique** — `STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml`
+   **Done. No conversion. Keep off.** GHA
+   [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219)
+   (`de45915`). 19 paired (A-2 `train-fasttext` still running at score).
+   B better 3, A on 5, tied 11, p=0.7266, mean −0.0175, 95% CI
+   [−0.1228, +0.1053]. **7 B fires, 0 A.** Mechanism `circuit-fibsqrt`
+   A 3/3 vs B 2/3: A's three passes used instruction-example, 0 livelock.
+   B `FuSgtPw` fired and passed; `ZdwsGff` fired then `[hard_timeout]`
+   (reward 0). The other five fires all reward 0 (`make-mips`
+   `ZGFfojS`, model-extraction `cG5CC2T` / `ms688u9`, dna-assembly
+   `DqmtAib` / `i8zbF7r`). Keep-required until wrap-up quality gates
+   pass is already default; the detector stays 0.
+4. **Native image read** — `STEERABLE_READ_IMAGES=1` on B. Claude Code's
+   Read tool sends PNG/JPEG pixels; we only returned an ASCII preview.
+   GLM-5.3-Flash is natively multimodal. CC `code-from-image` was a 600-token
+   pass; our left-tail brute-forced a hash that missed `bee26a`. OpenAI
+   tool messages are text-only, so pixels follow as a user turn after the
+   tool JSON. The image arm also swaps the `_SYSTEM` sentence that told
+   the model to OCR. OpenRouter lists the model as `text+image+video→text`;
+   Harbor already has `require_parameters=0`. Default stays off until this
+   arm. Dispatch when `evals-flaky-steerable` is free. BMP stays
+   ASCII (vision endpoints take PNG/JPEG).
+5. **self_critique** — `STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml`
    on B. Enables `validator: self_critique` and therefore
    AntiHallucinationHooks (discipline retry + grounding + narrate).
    `ChainHooks(assembled, delivery)` still runs assembled first for
    `pre_step` (compaction before wrap-up appends). `before_completion`
    now prefers `retry` over `narrate`, so an empty wrap-up still hits
    DeliveryHooks `empty_round` / missing-named instead of a no-tools
-   summary. Arm 4 therefore measures discipline/grounding, not a stolen
-   write-forcing path. Dispatch only after the pre-wrap livelock wave
-   frees `evals-flaky-steerable`.
-5. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
+   summary. Measures discipline/grounding, not a stolen write-forcing
+   path. Dispatch after the image-read wave.
+6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
    + grep/glob preference. Tool-description fact fixes (`bash` cwd vs
    shell state, `grep` over bash grep) are committed defaults, not this arm.
 
@@ -116,12 +127,26 @@ B's circuit 2/3 vs A 1/3 is not the firing trial. Spiral-red
 `regex-chess` 0/3 with a livelock fire on every trial; after WRITE_NOW
 the model said it would write `/app/re.json` and kept designing.
 Shard 2 (`winning-avg-corewars`) compose-died. **Keep
-`STEERABLE_LIVELOCK_EMPTY_STREAK` off** until 3b measures pre-wrap plus
-keep-required-until-write. Do not rerun A-10 / spiral-2 for this
-verdict. Ignore [33964691558](https://github.com/pathlyapp/steerable-framework/actions/runs/33964691558) (402).
+`STEERABLE_LIVELOCK_EMPTY_STREAK` off**. 3b (pre-wrap + keep-required)
+also lost: [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219).
+Do not rerun A-10 / spiral-2 for this verdict. Ignore [33964691558](https://github.com/pathlyapp/steerable-framework/actions/runs/33964691558) (402).
+
+## Pre-wrap livelock verdict (33976774219)
+
+Done. `de45915`, `STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B. 19 paired
+(A-2 `train-fasttext` still in flight at local score; B is 2/3). B
+better on 3, A on 5, tied on 11. Sign test p = 0.7266. Mean −0.0175,
+95% CI [−0.1228, +0.1053]. **No separation.** 7 livelock fires on B,
+0 on A. Six of seven reward 0. Mechanism `circuit-fibsqrt` A 3/3 vs
+B 2/3: instruction-example already compiled sibling `.c` on A's
+passes; livelock did not buy the B loss (`ZdwsGff`). `code-from-image`
+tied 3/3, both arms still OCR'd. **Keep the detector off.** Keep-required
+until wrap-up quality gates is already default on this SHA. Next arm
+is native image read.
 
 ## Already falsified (do not rerun)
 
 Stream cuts (default off), compaction 0.8→0.9 (p=0.623), named-output
 regex (no-op on 89), widening timeouts (ours are already the widest),
-wrap-up-only livelock (33966115606, p=1.0; regex-chess 0/3).
+wrap-up-only livelock (33966115606, p=1.0; regex-chess 0/3),
+pre-wrap livelock (33976774219, p=0.7266; circuit A 3/3 vs B 2/3).

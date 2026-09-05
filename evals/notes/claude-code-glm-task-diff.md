@@ -27,7 +27,9 @@ Token counts from those `result.json` files (CC GLM 33798916303):
 
 There is no CC tool trace to copy. Sanitize was a short pass (working-tree
 edit, not a history rewrite). `code-from-image` was a short pass (full
-hash, not the `bee26a` prefix). `gcode-to-text` stayed in a long session
+hash, not the `bee26a` prefix). Native image input is the remaining CC
+Read gap — GLM-5.3-Flash is multimodal; our `read_file` still ASCII-previews
+unless `STEERABLE_READ_IMAGES=1`. `gcode-to-text` stayed in a long session
 instead of writing the raster into `/app/out.txt` — that is the
 shown-text veto, not a prompt transplant. `circuit-fibsqrt` spent 207k
 output tokens on the circuit; our 69-run thought until `[hard_timeout]`

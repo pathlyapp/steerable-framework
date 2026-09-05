@@ -427,12 +427,32 @@ def test_eval_hooks_adds_reminders_when_enabled(
 
 def test_system_prompt_cc_align_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("STEERABLE_PROMPT_CC_ALIGN", raising=False)
+    monkeypatch.delenv("STEERABLE_READ_IMAGES", raising=False)
     assert headless_mod._system_prompt() == headless_mod._SYSTEM
     monkeypatch.setenv("STEERABLE_PROMPT_CC_ALIGN", "1")
     prompt = headless_mod._system_prompt()
     assert prompt.startswith(headless_mod._SYSTEM)
     assert "Do not end a turn because the session is long" in prompt
     assert len(headless_mod._SYSTEM) < 7000
+
+
+def test_system_prompt_native_images_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog 70 OCR'd because _SYSTEM told it the preview was the source."""
+    monkeypatch.delenv("STEERABLE_READ_IMAGES", raising=False)
+    monkeypatch.delenv("STEERABLE_PROMPT_CC_ALIGN", raising=False)
+    assert headless_mod._ASCII_IMAGE_NOTE in headless_mod._SYSTEM
+    assert headless_mod._system_prompt() == headless_mod._SYSTEM
+    monkeypatch.setenv("STEERABLE_READ_IMAGES", "1")
+    prompt = headless_mod._system_prompt()
+    assert "attach as images after the read_file JSON" in prompt
+    assert "decode exact pixels with Python" not in prompt
+    assert "BMP stays ASCII" in prompt
+    assert "read_file returns an ASCII preview" in headless_mod._SYSTEM
+    assert len(prompt) < 7000
+    monkeypatch.setenv("STEERABLE_PROMPT_CC_ALIGN", "1")
+    assert len(headless_mod._system_prompt()) < 7000
 
 
 class _FakeTools:
