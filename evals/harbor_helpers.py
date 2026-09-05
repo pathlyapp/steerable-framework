@@ -252,6 +252,10 @@ def spec_as_json(spec_path: str | Path) -> Path:
     persists until process exit so the upload can read it later.
     """
     source = Path(spec_path)
+    if not source.is_file() and not source.is_absolute():
+        source = _REPO_ROOT / spec_path
+    if not source.is_file():
+        raise FileNotFoundError(f"harness spec not found: {spec_path}")
     if source.suffix.lower() == ".json":
         return source
     import yaml  # host-side only; the container never sees PyYAML
