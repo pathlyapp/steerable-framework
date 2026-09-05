@@ -210,6 +210,18 @@ def test_spec_as_json_passes_json_through(tmp_path) -> None:
     assert spec_as_json(spec) == spec
 
 
+def test_spec_as_json_resolves_repo_relative_path_from_another_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    """Arm B sets STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml.
+    Harbor's agent process is not guaranteed to keep cwd at the repo root."""
+    monkeypatch.chdir(tmp_path)
+    converted = spec_as_json("evals/harnesses/self_critique.harness.yaml")
+    import json
+
+    assert json.loads(converted.read_text())["validator"] == "self_critique"
+
+
 def test_usage_from_headless_log_reads_the_last_summary() -> None:
     text = (
         "noise\n"
