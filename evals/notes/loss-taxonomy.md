@@ -36,7 +36,7 @@ is older than the four-run split; used only when it names a flaky id.
 | Task | 4-run | Closest mechanism | Arm? |
 | ---- | ----- | ---------------- | ---- |
 | `circuit-fibsqrt` | 1/4 | Catalog 33497477757: 2 tools then 1.3 MB reasoning, `[hard_timeout]`. Not empty wrap-up | Spiral. Live-lock empty-streak will not see this |
-| `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 tools, `/tmp/frame.bmp` missing, verifier TimeoutError. `_SYSTEM` already names that side-effect file | Named-output / VM; not a new prompt clause |
+| `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 bash tools, never `write_file`, `/tmp/frame.bmp` missing. Instruction never names that path (only `vm.js`). Named-output retry never ran because they never completed. | ReminderHooks runaway (arm 2), not a named-output regex |
 | `path-tracing-reverse` | 1/4 | 33497477757: 0.464 vs 0.995, `empty_round` then `[soft_timeout]`, kept disassembling. 33547943349: 0.957 vs 0.995 after they `cmp`'d images; `empty_round` ×2 + `named_gzip_cap` | Live-lock is the empty half. The near-miss is a named `> 0.995` bar they already checked |
 | `video-processing` | 1/4 | 33497477757 pass. 33547943349: landing frame 61 vs inclusive `[62, 64]`; `jump_analyzer.py` also crashed | Off-by-one on a named range. Not the verify gate |
 | `code-from-image` | 2/4 | Flaky A/B B 3/3 (gate off; A still running) | Flaky A/B only |
@@ -51,7 +51,7 @@ is older than the four-run split; used only when it names a flaky id.
 | `chess-best-move` | 3/4 | Catalog 33497477757: pass, 31 tools, no gate | Flaky A/B; not a scoring-fact hole on the pass trial |
 | `largest-eigenval` | 3/4 | Catalog 33497477757: `unverified_output` at round 53 then passed | **Delivery gate** — already in 20a854d |
 | `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Partial sample leans B; not a verdict |
-| `path-tracing` | 3/4 | Catalog 33497477757: `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. Named file already existed, so wrap-up inspect-block did not fire | Not 20a854d. ReminderHooks zero-write will not fire either (they were writing). Live-lock empty-streak will not see this |
+| `path-tracing` | 3/4 | Catalog 33497477757: `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. Named file already existed, so wrap-up inspect-block did not fire | Not 20a854d. ReminderHooks consecutive-non-write will not fire (they were writing). Live-lock empty-streak will not see this |
 | `sam-cell-seg` | 3/4 | Catalog 33497477757: pass, 70 tools, no gate | Flaky A/B |
 | `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. Domain note already in `_SYSTEM` | Implementation, not verify. Do not add another tensor clause |
 | `train-fasttext` | 3/4 | Catalog 33497477757: pass, 46 tools, no gate | Flaky A/B |
@@ -66,7 +66,7 @@ on a guessed 8-id list.
 | Arm | Do it? | Why |
 | --- | ------ | --- |
 | 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (4 paired tasks): B better on 2, A on 0, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses so far |
-| ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` match recorded modes; unwired until this branch |
+| ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
 | CC-align prompt (`STEERABLE_PROMPT_CC_ALIGN=1`) | Yes | Persist-if-long + grep/glob. Tool-description facts landed as defaults |
