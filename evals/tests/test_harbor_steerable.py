@@ -256,8 +256,12 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     assert "STEERABLE_DELIVERY_VERIFY" in forwarded
     assert "STEERABLE_LIVELOCK_EMPTY_STREAK" in forwarded
     assert "STEERABLE_PROMPT_CC_ALIGN" in forwarded
-    assert "STEERABLE_HARNESS" in forwarded
     assert "STEERABLE_REQUEST_RECORD_PATH" in forwarded
+    # Host-only: the agent reads this in __init__ and uploads JSON. Forwarding
+    # the repo-relative YAML path into the trial would make the container look
+    # for a file that is not there.
+    assert "STEERABLE_HARNESS" not in forwarded
+    assert 'os.environ.get("STEERABLE_HARNESS")' in text
     run_body = text[text.index("    async def run(") :]
     assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
 
