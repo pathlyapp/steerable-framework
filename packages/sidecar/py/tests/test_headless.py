@@ -665,6 +665,7 @@ async def test_run_emits_run_summary_terminal_line(
     assert summary["peak_context_tokens"] == 40
     assert summary["tool_errors"] == 1
     assert summary["tool_recoveries"] == 1
+    assert summary["cache_tokens"] == 0
     assert "cost_usd" not in summary  # absent, never zero-filled
 
 

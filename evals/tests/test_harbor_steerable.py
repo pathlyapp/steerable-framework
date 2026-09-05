@@ -21,6 +21,8 @@ from evals.harbor_helpers import (
     trial_python_ok,
     trial_python_tag,
     trial_python_venv,
+    usage_from_headless_log,
+    uv_tarball,
     uv_tarball,
     musl_uv_binary,
     linux_cpython_tarball,
@@ -208,6 +210,18 @@ def test_spec_as_json_passes_json_through(tmp_path) -> None:
     assert spec_as_json(spec) == spec
 
 
+def test_usage_from_headless_log_reads_the_last_summary() -> None:
+    text = (
+        "noise\n"
+        'STEERABLE_RUN_SUMMARY {"input_tokens": 1, "output_tokens": 2, "cache_tokens": 0}\n'
+        "more noise\n"
+        'STEERABLE_RUN_SUMMARY {"input_tokens": 100, "output_tokens": 20, "cache_tokens": 7}\n'
+    )
+    assert usage_from_headless_log(text) == (100, 20, 7)
+    assert usage_from_headless_log("no summary") == (None, None, None)
+    assert usage_from_headless_log("STEERABLE_RUN_SUMMARY {") == (None, None, None)
+
+
 def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     """A `setdefault` default is unreachable unless its key is forwarded.
 
@@ -285,6 +299,9 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     ]
     assert run_fn.index("await self.exec_as_agent") < run_fn.index(
         "await self._align_verifier_python"
+    )
+    assert run_fn.index("await self._align_verifier_python") < run_fn.index(
+        "await self._record_token_usage"
     )
     assert "finally:" in run_fn
     assert text.index("await self._inject_host_uv") < text.index(
