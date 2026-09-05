@@ -14,17 +14,18 @@ one. Arm decisions follow the mechanism, not the 0/4 label.
 | ---- | --------- | -------- | ---- |
 | `extract-moves-from-video` | Hard timeout / capability | OCR marathon (380-frame tesseract); 1 of 6 hard_timeouts; also spiral-red | No (capability + clock). Not 20a854d |
 | `filter-js-from-html` | Runaway text / timeout | Burns the 65536 output cap (pi) or `AgentTimeoutError` ~2h11m (us); XSS assert false when it wraps | Prompt/tool timing (2.5.11), not verify gate. CC-align grep will not fix HTML |
-| `gcode-to-text` | Harness loss + hard kill | Pi passed; **CC GLM passed**; we 0/4 | Live-lock/wrap-up maybe; 2.5.16 still needed |
+| `gcode-to-text` | Hard timeout | Catalog 33497477757: `[hard_timeout]` after 47 tools; wrote `nseg 26` dump not `flag{…}`. Pi/CC passed | Live-lock/wrap-up; not 20a854d |
 | `make-doom-for-mips` | Capability wall | 0/4 both harnesses; soft-timeout then wrap | No |
-| `pytorch-model-cli` | Harness loss | Pi passed, we 0/4; early wrong answer, no timeout | 2.5.16 trajectory; not verify/livelock |
-| `raman-fitting` | Harness loss | Pi passed; we fitted x0=19196 vs 1580; early wrong | 2.5.16; not 20a854d |
+| `pytorch-model-cli` | Wrong weights/preprocess | 33497477757: 5/6 tests pass; hidden images predict 7 vs 2 etc. No timeout | Not verify/livelock; do not prompt-tune |
+| `raman-fitting` | Wrong x unit | 33497477757: fitted native-file x (G=6328, 2D=3745) vs Raman cm⁻¹ (1580 / 2670) | Not 20a854d |
 | `regex-chess` | Live-lock | `tool_choice=required` ~62% compliance; 16 empty wrap-up retries ate the window; spiral-red | **Live-lock (2.5.10)** — mechanism, do not score the arm on this one task |
-| `sanitize-git-repo` | Hard task, not GLM wall | Pi passed once; **Claude Code GLM passed**; steerable 0/4. Early wrong, no timeout | **Harness loss vs CC.** Reminders/runaway may touch it; 20a854d is the first measurement |
+| `sanitize-git-repo` | Over-rewrote git history | 33497477757: secret tests passed; `test_no_other_files_changed` needs pinned SHA `d6987af…` and `commit.diff(None)`. Agent `filter-branch` + `gc --prune` deleted it. Oracle only `sed`s the working tree | **Landed in `_SYSTEM`**. Not an A/B |
 | `winning-avg-corewars` | Reasoning spiral / timeout | spiral-red; hard kill historically | Live-lock is the wrap-up half; spiral itself is 2.5.11 |
 
-Harness-loss three (`gcode-to-text`, `pytorch-model-cli`, `raman-fitting`)
-are the only 0/4 ids where the same model passed under Pi. Plan does not
-count on flipping them for ≥72/round.
+The Pi-pass / we-0/4 triple is not one mechanism: timeout (`gcode-to-text`),
+wrong inference (`pytorch-model-cli`), wrong unit (`raman-fitting`).
+`sanitize-git-repo` is the 0/4 with a harness-side fix (keep the pinned SHA).
+Do not count the other three toward ≥72/round.
 
 ## Flaky (20)
 
@@ -69,6 +70,7 @@ on a guessed 8-id list.
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
 | CC-align prompt (`STEERABLE_PROMPT_CC_ALIGN=1`) | Yes | Persist-if-long + grep/glob. Tool-description facts landed as defaults |
+| Keep pinned git SHA (`_SYSTEM`) | Landed | `sanitize-git-repo` over-prune. Grading fact, not a flaky A/B |
 | Capability-wall 0/4 | No | `make-doom-for-mips`, `extract-moves-from-video`, `regex-chess` as a *score* target |
 | Stream cuts / compaction 0.9 / named-output regex / wider timeouts | No | Already falsified |
 
