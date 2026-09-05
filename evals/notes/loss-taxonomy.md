@@ -54,7 +54,7 @@ is older than the four-run split; used only when it names a flaky id.
 | `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Partial sample leans B; not a verdict |
 | `path-tracing` | 3/4 | Catalog 33497477757 (pre-20a854d): `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. A/B 33951133679 Arm A (gate on) 3/3, gate never fired; Arm B still running | Catalog fail is not the gate. ReminderHooks consecutive-non-write will not fire on the fit loop (they were writing) |
 | `sam-cell-seg` | 3/4 | 33497477757 pass. 33530806570: 252 tools (235 bash / 16 edit), polyline scored as a rectangle, IoU 0.44 | Implementation. ReminderHooks bash-as-non-write would nudge; not the verify gate |
-| `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. Domain note already in `_SYSTEM` | Implementation, not verify. Do not add another tensor clause |
+| `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. A/B 33951133679 A 3/3 (one trial 135m), B 1/1 (two `VerifierTimeoutError`, skipped by `flaky_score`) | Implementation, not verify. Do not add another tensor clause |
 | `train-fasttext` | 3/4 | 33497477757 pass. 33547943349: local acc 0.6153 vs 0.62, they were retuning, `[hard_timeout]`. Hidden test 0.617 | Named bar + clock. Persist prompt already demands a visible margin. Not a new clause |
 
 `unverified_output` fired **8 times** in catalog 33369888461, 7/8 then
@@ -66,7 +66,7 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (7 paired tasks): B better on 2, A on 0, tied 5, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `build-pov-ray` and `code-from-image` 3/3 both arms |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (8 paired tasks): B better on 2, A on 0, tied 6, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `build-pov-ray`, `code-from-image`, and `torch-tensor-parallelism` (A 3/3 vs B 1/1 after skipping verifier timeouts) |
 | ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
