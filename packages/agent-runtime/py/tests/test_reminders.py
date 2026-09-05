@@ -91,7 +91,7 @@ async def test_runaway_exploration_fires_without_writes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runaway_exploration_silent_after_a_write() -> None:
+async def test_runaway_exploration_silent_right_after_a_write() -> None:
     hooks = ReminderHooks(max_tool_errors=4, rules=ReminderRules(runaway_calls=3))
     ctx = _Ctx(round_index=1)
     for i in range(3):
@@ -107,6 +107,30 @@ async def test_runaway_exploration_silent_after_a_write() -> None:
     )
     action = await hooks.pre_step([], ctx)
     assert not action.appends
+
+
+@pytest.mark.asyncio
+async def test_runaway_exploration_fires_after_write_then_inspect() -> None:
+    """make-mips 33547943349: vm.js existed, then 200 bash greps. A lifetime
+    write flag would have silenced the reminder for the rest of the run."""
+    hooks = ReminderHooks(max_tool_errors=4, rules=ReminderRules(runaway_calls=3))
+    ctx = _Ctx(round_index=1)
+    await hooks.post_tool_result(
+        ToolResult(success=True, data={}),
+        ToolCall(id="w", name="write_file", arguments={}),
+        ctx,
+    )
+    for i in range(3):
+        await hooks.post_tool_result(
+            ToolResult(success=True, data={}),
+            ToolCall(id=str(i), name="read_file", arguments={}),
+            ctx,
+        )
+    action = await hooks.pre_step([], ctx)
+    assert action.appends
+    fragment = action.appends[0].fragment
+    assert isinstance(fragment, RunawayExplorationReminder)
+    assert "3 tool calls since the last write" in fragment.render()
 
 
 @pytest.mark.asyncio

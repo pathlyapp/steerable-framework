@@ -147,7 +147,7 @@ async def test_long_session_old_results_folded_in_late_requests() -> None:
 
 @pytest.mark.asyncio
 async def test_long_session_runaway_reminder_fires() -> None:
-    """35 reads without a single write is the runaway-exploration failure
+    """35 reads without a write is the runaway-exploration failure
     mode; the reminder must land at the highest-recency position."""
     provider, _ = await _run_session(
         ChainHooks(ReminderHooks(max_tool_errors=16, rules=None))
@@ -155,9 +155,9 @@ async def test_long_session_runaway_reminder_fires() -> None:
     hits = [
         call
         for call in provider.calls
-        if any("Exploration without output" in m.content_text for m in call)
+        if any("tool calls since the last write" in m.content_text for m in call)
     ]
     assert hits, "runaway reminder never fired"
     # Recency: in the firing request the reminder is the LAST message.
     firing = hits[0]
-    assert "Exploration without output" in firing[-1].content_text
+    assert "tool calls since the last write" in firing[-1].content_text

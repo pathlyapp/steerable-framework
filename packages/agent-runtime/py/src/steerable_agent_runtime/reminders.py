@@ -71,7 +71,7 @@ class AbandonedRecoveryReminder(ContextFragment):
 
 
 class RunawayExplorationReminder(ContextFragment):
-    """Many tool calls without a single write — exploration without output."""
+    """Many tool calls without a write since the last one."""
 
     content_kind = "reminder.runaway_exploration"
     max_tokens = 200
@@ -81,15 +81,14 @@ class RunawayExplorationReminder(ContextFragment):
 
     def body(self) -> str:
         return (
-            f"[system notice] Exploration without output: {self._calls} tool "
-            "calls so far, none of them a write or edit. If you are still "
-            "exploring, say what you are looking for; if you have what you "
-            "need, produce the artifact now."
+            f"[system notice] {self._calls} tool calls since the last write. "
+            "If the required files already exist, run them; if they do "
+            "not, write them now. Do not keep inspecting source."
         )
 
     @classmethod
     def type_markers(cls) -> tuple[str, str]:
-        return ("[system notice] Exploration without output:", "")
+        return ("[system notice]", "Do not keep inspecting source.")
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +156,7 @@ REMINDER_CATALOG: tuple[ReminderEntry, ...] = (
     ),
     ReminderEntry(
         id="exploration.runaway",
-        failure_mode="探索失控：大量读取类调用而零产出",
+        failure_mode="探索失控：连续非写入调用，含写过之后继续只读",
         fragment=RunawayExplorationReminder,
     ),
 )
@@ -190,7 +189,8 @@ class ReminderRules:
     #: Fire ``recovery.error_streak`` when consecutive errors reach this
     #: fraction of the loop's circuit breaker.
     error_streak_ratio: float = 0.5
-    #: Fire ``exploration.runaway`` after this many tool calls without a write.
+    #: Fire ``exploration.runaway`` after this many tool calls without a
+    #: write since the last one (or since the start).
     runaway_calls: int = 12
     #: Re-fire a still-true rule after this many rounds (fade-out is the
     #: point, but every-round spam is noise).
@@ -200,11 +200,11 @@ class ReminderRules:
 class ReminderHooks(NoopHooks):
     """Fires catalog reminders from observed loop state.
 
-    ``post_tool_result`` tracks the signals (error streaks, whether any
-    write happened); ``pre_step`` evaluates the rules and appends a due
-    reminder as the last transcript item before the request — the
-    highest-recency position (W2.2.3). Each rule fires once, then re-fires
-    only after ``refire_rounds`` while its condition still holds.
+    ``post_tool_result`` tracks error streaks and consecutive non-write
+    calls (a write resets that streak; a prior write does not silence
+    later inspect-only runs). ``pre_step`` appends a due reminder as the
+    last transcript item before the request. Each rule fires once, then
+    re-fires only after ``refire_rounds`` while its condition still holds.
     """
 
     def __init__(
@@ -217,14 +217,14 @@ class ReminderHooks(NoopHooks):
         self._rules = rules or ReminderRules()
         self._max_tool_errors = max_tool_errors
         self._write_tools = write_tools
-        self._saw_write = False
-        self._calls = 0
+        self._since_write = 0
         self._fired_at: dict[str, int] = {}
 
     async def post_tool_result(self, result: Any, call: Any, ctx: Any) -> Any:
-        self._calls += 1
         if call.name in self._write_tools and getattr(result, "success", False):
-            self._saw_write = True
+            self._since_write = 0
+        else:
+            self._since_write += 1
         return result
 
     async def pre_step(self, transcript: Any, ctx: Any) -> PreStepAction:
@@ -261,8 +261,7 @@ class ReminderHooks(NoopHooks):
             self._fired_at["recovery.error_streak"] = round_index
             return "recovery.error_streak"
         if (
-            self._calls >= self._rules.runaway_calls
-            and not self._saw_write
+            self._since_write >= self._rules.runaway_calls
             and ready("exploration.runaway")
         ):
             self._fired_at["exploration.runaway"] = round_index
@@ -275,5 +274,5 @@ class ReminderHooks(NoopHooks):
                 getattr(ctx, "consecutive_tool_errors", 0), self._max_tool_errors
             )
         if entry.id == "exploration.runaway":
-            return RunawayExplorationReminder(self._calls)
+            return RunawayExplorationReminder(self._since_write)
         return entry.fragment()

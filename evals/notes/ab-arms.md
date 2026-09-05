@@ -28,7 +28,8 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    3/3 without; both A losses fired `unverified_output` then re-ran the
    generator. The retry copy no longer names the hidden-test command.
 2. **ReminderHooks** — `STEERABLE_REMINDERS=1` on B. Default is off so this
-   does not confound (1).
+   does not confound (1). `runaway_calls=12` is consecutive non-writes,
+   including after a write (make-mips 256-bash tail after `vm.js`).
 3. **Live-lock** — `STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B. Default is 0.
    Mechanism fix (EVALS_TODO 2.5.10): consecutive wrap-up
    `tool_choice=required` rounds with no tool call stop forcing.
