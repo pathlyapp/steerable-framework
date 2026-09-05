@@ -46,7 +46,7 @@ is older than the four-run split; used only when it names a flaky id.
 | `install-windows-3.11` | 2/4 | 33497477757 and 33547943349 pass. 33530806570: 103 tools, `instruction_listen` fired, keyboard test: no key caused ≥10% image difference | VM visual-feedback miss. Domain notes already cover daemonize/screenshot. Not a new clause |
 | `model-extraction-relu-logits` | 2/4 | 33497477757 pass. 33547943349: 0 tools, 1.4 MB round-0 reasoning, `[hard_timeout]`, `stolen_A1.npy` never written | Spiral on the first stream. Live-lock empty-streak and ReminderHooks never see a tool. Do not re-enable stream cuts |
 | `mteb-retrieve` | 2/4 | A/B: 1/3 both arms; gate never fired | Wrong answer, not the gate |
-| `protein-assembly` | 2/4 | 33497477757 pass. 33547943349: wrong fusion order (flag-donor-dhfr-acceptor-snap) | Wrong answer. Order is in the instruction |
+| `protein-assembly` | 2/4 | 33497477757 pass. 33547943349: wrong fusion order (flag-donor-dhfr-acceptor-snap). A/B 33951133679 both arms 1/3; gate never fired | Wrong answer. Order is in the instruction |
 | `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Not shown as a gate win on the partial sample |
 | `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B B (gate off) 3/3 | Do **not** add a POV-Ray `_SYSTEM` clause. Instruction already names `/app/povray-2.2` |
 | `chess-best-move` | 3/4 | 33497477757 pass. 33530806570: wrote `g2g4` to `/app/move.txt`; "File is wrong". One `empty_round`. Gate did not fire | Wrong move. Not a scoring-fact hole |
@@ -66,7 +66,7 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (4 paired tasks): B better on 2, A on 0, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses so far |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (5 paired tasks): B better on 2, A on 0, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses so far |
 | ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
