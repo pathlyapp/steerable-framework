@@ -6,7 +6,7 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 
 ## Score of record
 
-**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution). Current `main` also contains the persistence prompt and post-write verification gate from `20a854d`; those changes are newer than the measured commit and are not included in the 80% score.
+**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution). Current `main` also contains the persistence prompt and post-write verification gate from `20a854d`; those changes are newer than the measured commit and are not included in the 80% score. A HEAD three-run that proves every round ≥72/89 has not been recorded yet — see Pending measurement below.
 
 | Sample | GitHub Actions | Mean |
 | ------ | -------------- | ---- |
@@ -55,6 +55,22 @@ Same model, different harness — measured on this repo's protocol, not vendor p
 Codex CLI completed the full 89-task catalog after a fill-in run for the 7 tasks cut by job timeouts (5 passed). Its score is still protocol-depressed, not a clean model reading: OpenRouter's Responses API translation layer rejected long-conversation payloads (15,522 zero-token failed requests across both runs), and errored trials score 0 without the model being wrong. Steerable's per-run tokens come from OpenRouter analytics because the four scored runs predate our token telemetry (±15%, calibrated against Pi's exact records); every other number is from per-trial `result.json`. For reference, [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout) — consistent with our own 83% Claude Code measurement on the 170-minute protocol.
 
 The Pi result is our own Harbor run rather than a vendor-submitted leaderboard score. Its model request parameters match the Steerable leg, subject to the protocol differences documented below.
+
+## Task stratification at `27d521a`
+
+Four catalog runs at that commit (GHA [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757), [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570), [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872), [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349)) split the 89 ids as:
+
+- **60 stable green** (4/4)
+- **9 stable red** (0/4): `extract-moves-from-video`, `filter-js-from-html`, `gcode-to-text`, `make-doom-for-mips`, `pytorch-model-cli`, `raman-fitting`, `regex-chess`, `sanitize-git-repo`, `winning-avg-corewars`
+- **20 flaky** (listed under `splits.flaky` in `evals/suite.yaml`, with x/4 comments): 4×1/4, 7×2/4, 9×3/4
+
+Expected passes = 60 + 11.25 = 71.25 (80.06%). Measured SD 2.06 matches a Bernoulli model of those 20 tasks, so variance is the flaky layer, not a hidden systematic. `flaky` / `spiral-red` were rebuilt from this four-run table. Rebuild them only after a new multi-run catalog, not from a single dispatch. Mechanism labels for the 29 losses: `evals/notes/loss-taxonomy.md`.
+
+Claude Code on the same model and protocol: **83.1% (74/89), 1 run**. Catalog shards: GHA [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303); fill-in [33833495592](https://github.com/pathlyapp/steerable-framework/actions/runs/33833495592). Recipe: `evals/README.md` (`--agent claude-code-glm`, CLI 2.1.259). Per-task set vs steerable sample 1: `evals/notes/claude-code-glm-task-diff.md`.
+
+## Pending measurement
+
+HEAD adds env-gated arms (see `evals/notes/ab-arms.md`) on top of `20a854d`. Score of record stays `27d521a` until three full catalog runs on the synthesized arm each post ≥72/89, with their GHA run ids in the table above. Flaky A/B uses `Evals weekly` `split=flaky` and `arm_b_env`; judge with `evals/flaky_score.py` (p<0.05 and bootstrap CI excluding 0).
 
 ## What runs
 

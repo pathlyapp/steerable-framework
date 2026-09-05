@@ -107,6 +107,8 @@ class ProxyConfig:
     connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S
     #: W2.2.2 credential broker. None → non-CONNECT methods stay 405.
     inject: InjectRule | None = None
+    #: JSONL path for forwarded request bodies (inject mode). None → no tee.
+    record_requests: str | None = None
 
     def __post_init__(self) -> None:
         if self.allow is None:
@@ -177,6 +179,7 @@ class EgressProxyServer:
                         head,
                         self.config.inject,
                         self.config.connect_timeout_s,
+                        self.config.record_requests,
                     )
                     return
                 # Checked before authority validity: a GET with a weird

@@ -622,6 +622,62 @@ async def test_empty_round_forces_tool_choice_on_next_step() -> None:
     assert done.tool_choice is None
 
 
+@pytest.mark.asyncio
+async def test_livelock_stops_forcing_after_empty_wrap_streak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    wrap = [
+        LLMMessage.text_of("user", "The time budget for this task is almost gone.")
+    ]
+    await hooks.before_completion(
+        _draft(tools=0, content="", had_tool_calls=False), ctx
+    )
+    first = await hooks.pre_step(wrap, ctx)
+    assert first.tool_choice == "required"
+    second = await hooks.pre_step(wrap, ctx)
+    assert second.tool_choice == "required"
+    third = await hooks.pre_step(wrap, ctx)
+    assert third.tool_choice is None
+    assert third.reason == "forced_empty_livelock"
+    assert third.appends
+    assert "Forced tool rounds" in (third.appends[0].message.content_text or "")
+    fourth = await hooks.pre_step(wrap, ctx)
+    assert fourth.tool_choice is None
+    assert fourth.appends is None
+
+
+@pytest.mark.asyncio
+async def test_livelock_does_not_count_pre_wrap_empty_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    await hooks.before_completion(
+        _draft(tools=0, content="", had_tool_calls=False), ctx
+    )
+    for _ in range(4):
+        action = await hooks.pre_step([], ctx)
+        assert action.tool_choice == "required"
+        assert action.reason != "forced_empty_livelock"
+
+
+@pytest.mark.asyncio
+async def test_unverified_gate_disabled_by_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_DELIVERY_VERIFY", "0")
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("edit_file"), ctx)
+    action = await hooks.before_completion(_draft(tools=1), ctx)
+    assert action.reason != "unverified_output"
+
+
 def test_named_output_paths_skips_usr_bin() -> None:
     paths = named_output_paths(
         "Write /app/re.json and /tmp/frame.bmp using /usr/bin/python3 "

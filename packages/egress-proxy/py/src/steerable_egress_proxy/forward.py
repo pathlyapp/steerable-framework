@@ -24,12 +24,17 @@ a whole class of request-smuggling surface.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import ssl
+import threading
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
+
+_TEE_LOCK = threading.Lock()
 
 #: Headers never forwarded to the upstream: hop-by-hop per RFC 9110 §7.6.1,
 #: plus any client-supplied credential (the whole reason the broker exists).
@@ -165,12 +170,29 @@ def parse_and_rewrite_request(
     return ForwardedRequest(method, path, head_bytes, content_length, chunked)
 
 
+def tee_forwarded_request(path: str, parsed: ForwardedRequest, body: bytes) -> None:
+    """Append one JSONL record. Does not include rewritten (credential) headers."""
+    record = {
+        "method": parsed.method,
+        "path": parsed.path,
+        "body_bytes": len(body),
+        "body": body.decode("utf-8", "replace"),
+    }
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    with _TEE_LOCK:
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+
+
 async def forward_request(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     head: bytes,
     rule: InjectRule,
     connect_timeout_s: float,
+    record_requests: str | None = None,
 ) -> None:
     """Forward one plain-HTTP request to the rule's upstream over TLS.
 
@@ -178,6 +200,10 @@ async def forward_request(
     Returns a status string for logging; raises nothing on the happy path —
     connection errors are answered with a status line and swallowed like the
     CONNECT path's teardown.
+
+    ``record_requests`` appends one JSONL object per completed request body
+    (method, path, body). The injected credential is never written: it lives
+    only on the rewritten upstream head, which this tee does not record.
     """
     parsed = parse_and_rewrite_request(head, rule)
     if isinstance(parsed, str):
@@ -212,14 +238,19 @@ async def forward_request(
         await upstream_w.drain()
         # Request body: exactly Content-Length bytes (chunked rejected above).
         remaining = parsed.body_remaining
+        body_parts: list[bytes] = []
         while remaining > 0:
             chunk = await reader.read(min(64 * 1024, remaining))
             if not chunk:
                 upstream_w.close()
                 return  # client vanished mid-body; nothing useful to send
             upstream_w.write(chunk)
+            if record_requests is not None:
+                body_parts.append(chunk)
             remaining -= len(chunk)
         await upstream_w.drain()
+        if record_requests is not None:
+            tee_forwarded_request(record_requests, parsed, b"".join(body_parts))
 
         await _stream_response(upstream_r, writer)
     finally:

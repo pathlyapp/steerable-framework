@@ -117,6 +117,10 @@ _MISSING_NAMED_RETRY = (
     "Pasting the program only in chat does not create the file."
 )
 _WRAP_UP_MARKER = "The time budget for this task is"
+_LIVELOCK_WRITE_NOW = (
+    "[system notice] Forced tool rounds produced no calls. Stop retrying "
+    "empty reasoning: write the required files now, or state the blocker."
+)
 _WRAP_UP_NAMED = (
     "Time is almost up. These instruction-named output files still do "
     "not exist: {paths}. Emit a bash tool call now: "
@@ -466,6 +470,29 @@ _CPU_ONLY_RETRY = (
 )
 
 
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _delivery_verify_enabled() -> bool:
+    """Post-write verification gate (20a854d). ``STEERABLE_DELIVERY_VERIFY=0`` disables."""
+    return _env_flag("STEERABLE_DELIVERY_VERIFY", default=True)
+
+
+def _livelock_empty_streak() -> int:
+    """Consecutive wrap-up ``tool_choice=required`` rounds with no tool call.
+
+    Unset or ``0`` disables. A flaky arm sets ``STEERABLE_LIVELOCK_EMPTY_STREAK=3``.
+    """
+    raw = os.environ.get("STEERABLE_LIVELOCK_EMPTY_STREAK")
+    if raw is None or not str(raw).strip():
+        return 0
+    return max(0, int(raw))
+
+
 class DeliveryHooks(NoopHooks):
     """Nudge, then veto completion, when a coding turn never mutates files."""
 
@@ -510,6 +537,8 @@ class DeliveryHooks(NoopHooks):
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
         self._force_tool = False
+        self._forced_empty_streak = 0
+        self._livelock_nudged = False
         self._listen_retries = 0
         self._socket_retries = 0
         self._sockets = named_socket_paths(instruction)
@@ -665,6 +694,8 @@ class DeliveryHooks(NoopHooks):
                 tool_choice="required",
                 append_action="delivery_nudge",
             )
+        if wrapping and self._livelock_nudged:
+            return PreStepAction(kind="proceed")
         nudge_limit = (
             _MAX_NAMED_EXPLORE_NUDGES if named_missing else self._max_nudges
         )
@@ -701,6 +732,23 @@ class DeliveryHooks(NoopHooks):
             if self._force_tool or self.writes == 0
             else None
         )
+        cap = _livelock_empty_streak()
+        if wrapping and cap > 0 and tool_choice == "required":
+            self._forced_empty_streak += 1
+            if self._forced_empty_streak >= cap:
+                self._force_tool = False
+                self._livelock_nudged = True
+                return PreStepAction(
+                    kind="proceed",
+                    appends=[
+                        TranscriptAppend(
+                            message=LLMMessage.text_of("user", _LIVELOCK_WRITE_NOW),
+                            kind="delivery.forced_empty_livelock",
+                        )
+                    ],
+                    reason="forced_empty_livelock",
+                    append_action="delivery_nudge",
+                )
         if tool_choice and reason is None:
             reason = (
                 "empty_round_force_tool"
@@ -721,6 +769,7 @@ class DeliveryHooks(NoopHooks):
         self, result: ToolResult, call: ToolCall, ctx: LoopContext
     ) -> ToolResult:
         self._force_tool = False
+        self._forced_empty_streak = 0
         name = call.name
         # Ordered before the write branches so a call that both runs and
         # delivers — `python3 gen.py`, `make` — ends up unverified: what it
@@ -777,6 +826,8 @@ class DeliveryHooks(NoopHooks):
         once wrap-up has been announced, where an extra round risks the
         delivery it would be checking.
         """
+        if not _delivery_verify_enabled():
+            return None
         if self._wrapping or self._verify_retries >= _MAX_UNVERIFIED_RETRIES:
             return None
         if self.writes == 0 or self.ran_since_write:

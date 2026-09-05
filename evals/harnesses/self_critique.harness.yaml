@@ -1,0 +1,21 @@
+# Arm C (validator): default harness with self-critique on.
+
+# Identical to default.harness.yaml except `validator: self_critique`.
+# That is the only dimension this arm varies: AntiHallucinationHooks
+# (discipline retry + the narrate third state on empty wrap-up). Delivery
+# stays the transport's outer layer in headless, not a harness field.
+context:
+  - impl: pressure_compaction
+  - impl: spill
+retry:
+  - impl: informed_backtrack
+  - impl: simple
+    params: {max_attempts: 3}
+validator: self_critique
+tools: full
+memory: stateless
+orchestration: single
+loop:
+  max_rounds: 80
+  max_tool_errors: 16
+  tool_dedup: false

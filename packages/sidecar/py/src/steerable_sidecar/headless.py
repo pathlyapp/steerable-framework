@@ -168,6 +168,40 @@ _SYSTEM = (
     "workspace."
 )
 
+#: Extra persist / search clauses from the Claude Code static extract.
+#: Off by default; flaky arm B sets ``STEERABLE_PROMPT_CC_ALIGN=1``.
+_SYSTEM_CC_ALIGN = (
+    "Do not end a turn because the session is long. "
+    "Call grep or glob rather than bash grep, rg, find, or ls."
+)
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _system_prompt() -> str:
+    if _env_flag("STEERABLE_PROMPT_CC_ALIGN", default=False):
+        return f"{_SYSTEM}\n{_SYSTEM_CC_ALIGN}"
+    return _SYSTEM
+
+
+def _eval_hooks(assembled: Any, delivery: DeliveryHooks, max_tool_errors: int) -> ChainHooks:
+    """Transport delivery always; ReminderHooks only when ``STEERABLE_REMINDERS=1``."""
+    if not _env_flag("STEERABLE_REMINDERS", default=False):
+        return ChainHooks(assembled, delivery)
+    from steerable_agent_runtime.reminders import ReminderHooks
+
+    return ChainHooks(
+        assembled,
+        ReminderHooks(max_tool_errors=max_tool_errors),
+        delivery,
+    )
+
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="steerable-sidecar-headless")
@@ -234,15 +268,14 @@ def _assemble_harness(
     provider: Any,
     executor: Any,
     tools: Any,
-    instruction: str = "",
 ) -> tuple[Any, Any, Any, list[dict[str, Any]], Any]:
     """W1.2.2: assemble the declarative spec into the loop's seams.
 
     Returns (hooks, storage, executor, tool_descriptors, loop_limits). The
     spec's context/retry/validator/memory strategies REPLACE the built-in
     default chain — that is the factorial protocol's point: arms differ in
-    exactly the dimensions the spec names. DeliveryHooks stays: delivery
-    semantics are the transport's, not a harness dimension.
+    exactly the dimensions the spec names. DeliveryHooks is the transport's
+    outer layer, added in ``_eval_hooks``, not a harness dimension.
     """
     from steerable_agent_runtime.harness_spec import assemble_harness, load_harness_spec
     from steerable_agent_runtime.tokens import resolve_context_window
@@ -306,9 +339,7 @@ def _assemble_harness(
 
         descriptors = [*descriptors, *orchestration_tool_descriptors()]
     return (
-        # Assembled chain first so compaction folds a same-round write nudge
-        # onto the rewritten tail; delivery is the transport's outer layer.
-        ChainHooks(assembled.hooks, DeliveryHooks(instruction=instruction)),
+        assembled.hooks,
         assembled.storage,
         wrapped,
         descriptors,
@@ -402,6 +433,7 @@ async def _run(
         delivery,
     )
     limits: Any = None
+    assembled_hooks: Any
     if harness_path is None:
         default_harness = _assemble_default_harness(
             params, summarizer=_summarizer_for(provider)
@@ -412,26 +444,23 @@ async def _run(
         # single source: editing its `loop:` section must move headless.
         limits = default_harness.spec.loop
         default_harness.wire_tools(tools)
-        hooks: Any = ChainHooks(
-            # Compact first so a same-round write nudge is folded onto the
-            # rewritten tail instead of sitting in the summarized middle.
-            default_harness.hooks,
-            delivery,
-        )
+        assembled_hooks = default_harness.hooks
         storage: Any = InMemoryStorage()
         tool_descriptors = default_harness.select_tools(tools.describe_model())
     else:
-        hooks, storage, executor, tool_descriptors, limits = _assemble_harness(
+        assembled_hooks, storage, executor, tool_descriptors, limits = _assemble_harness(
             harness_path,
             params,
             provider=provider,
             executor=executor,
             tools=tools,
-            instruction=instruction,
         )
     # `--max-rounds` overrides the spec; the spec overrides the baseline. Same
     # rule as the chat and ACP entrypoints (see loop_limits).
     resolved_limits = resolve_loop_limits(limits, max_rounds=max_rounds or None)
+    hooks: Any = _eval_hooks(
+        assembled_hooks, delivery, resolved_limits.max_tool_errors or 16
+    )
     loop = CoreLoop(
         provider,
         executor,
@@ -484,7 +513,7 @@ async def _run(
         record_id="headless",
     )
     seed = [
-        LLMMessage.text_of("system", _SYSTEM),
+        LLMMessage.text_of("system", _system_prompt()),
         LLMMessage.text_of("user", instruction),
     ]
     thinking = False
