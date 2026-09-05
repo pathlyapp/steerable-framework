@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import struct
 import time
 import zlib
@@ -307,6 +308,20 @@ async def test_bash_timeout_kills_pipeline(
     assert timed.success is False
     assert "timed out" in (timed.error or "")
     assert elapsed < 10
+
+
+@pytest.mark.asyncio
+async def test_bash_cancel_kills_pipeline(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    started = time.monotonic()
+    task = asyncio.create_task(
+        _call(router, "bash", {"command": "sleep 30 | cat"})
+    )
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert time.monotonic() - started < 5
 
 
 @pytest.mark.asyncio
