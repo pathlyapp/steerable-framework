@@ -7,13 +7,10 @@ GHA gather on this split prints that report into the job summary.
 Dispatch (after the knobs are on the branch GHA checks out):
 
 ```bash
-gh workflow run evals-weekly.yml \
+gh workflow run evals-weekly.yml --ref feat/evals-tb-stable-80 \
   -f split=flaky \
   -f agent=steerable \
-  -f arm_b_env="$(cat <<'EOF'
-STEERABLE_DELIVERY_VERIFY=0
-EOF
-)"
+  -f arm_b_env="$(printf '%s\n' 'STEERABLE_REMINDERS=1')"
 ```
 
 Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
@@ -48,12 +45,11 @@ Kill a losing arm; do not stack losers into the catalog three-run.
 
 ## Applying the 20a854d verdict
 
-The running A/B ([33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679)) is the `4d6e801` tree: persist prompt on both arms, gate on A / off on B. It does **not** include the retry copy (`72e1776`), directory `_file_ready` (`53d5402`), or hard-timeout process abandon (`9221f19`). GHA 180 may truncate the slow shards; judge on whatever pairs finish.
+Done. GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) is the `4d6e801` tree (persist on both arms; gate on A / off on B). It does **not** include the retry copy (`72e1776`), directory `_file_ready` (`53d5402`), or hard-timeout process abandon (`9221f19`). GHA 180 cancelled A-0, A-6, and B-11 during executor-thread join after the agent had already written `STEERABLE_RUN_SUMMARY`; B-18 failed on two `VerifierTimeoutError`. `flaky_score` skips `reward is None`, so those hanging trials are absent from the denominators.
 
-- **B wins (p<0.05 and CI excludes 0) and the disagreed tasks are mostly gate fires** → default `STEERABLE_DELIVERY_VERIFY` off. Persistence stays in `_SYSTEM`. Then arm 2's A is gate-off defaults (needs that commit first).
-- **B wins only on `extract-elf`** (old copy named `node extract.js > out.json`) **and variance** (`modernize-scientific-stack` 2/3 vs 3/3, gate never fired) → **keep the gate on**. The copy is already fixed. Do not treat that as a gate-off win.
-- **A wins** → keep the gate; copy and directory fixes already on HEAD.
-- **No separation** → keep the committed default (gate on) and dispatch arm 2 on HEAD. Do not queue arm 2 while this run occupies `evals-flaky-steerable`.
+20 paired tasks: B better on 6, A on 4, tied on 10. Sign test p = 0.7539. Mean per-task change +0.0667, 95% CI [-0.0500, +0.1917]. **No separation.** `unverified_output` fired three times, all on A: two `extract-elf` losses (old copy re-ran `node extract.js > out.json`) and one `largest-eigenval` **pass**. Every other B-better task (`modernize-scientific-stack`, `video-processing`, `install-windows-3.11`, `train-fasttext`, `largest-eigenval`'s miss) had zero gate fires.
+
+**Keep `STEERABLE_DELIVERY_VERIFY` on.** Next: ReminderHooks on HEAD (`STEERABLE_REMINDERS=1` on B). Do not default the gate off.
 
 ## Already falsified (do not rerun)
 

@@ -2,9 +2,9 @@
 
 Sources: `EVALS_TODO.md` (2.5.9–2.5.17), `evals/suite.yaml` four-run
 pass counts, `docs/evals.md`, catalogs 33497477757 (73/89), 33530806570
-(70/89), and 33547943349 (69/89), and the in-flight flaky A/B 33951133679
-(partial). Claude Code GLM transcripts for the 83.1% run are not in this
-repo. Recipe: `evals/README.md`.
+(70/89), and 33547943349 (69/89), and the closed flaky A/B 33951133679
+(20 paired; no separation). Claude Code GLM transcripts for the 83.1% run
+are not in this repo. Recipe: `evals/README.md`.
 
 The four buckets are failure *mechanisms*. A task can sit in more than
 one. Arm decisions follow the mechanism, not the 0/4 label.
@@ -36,26 +36,26 @@ is older than the four-run split; used only when it names a flaky id.
 
 | Task | 4-run | Closest mechanism | Arm? |
 | ---- | ----- | ---------------- | ---- |
-| `circuit-fibsqrt` | 1/4 | Catalog 33497477757: 2 tools then 1.3 MB reasoning, `[hard_timeout]`. Not empty wrap-up | Spiral. Live-lock empty-streak will not see this |
+| `circuit-fibsqrt` | 1/4 | A/B A 2/2 vs B 2/3. A's third trial `[hard_timeout]` at round 42 then executor hang; GHA 180 cancelled, so `flaky_score` saw 2/2 | Spiral. Live-lock empty-streak will not see this. Hang-after-timeout is `9221f19` |
 | `make-mips-interpreter` | 1/4 | A/B 33951133679 **both arms 0/3**. A: they wrote (3–12 `write_file`/`edit_file`) then 60–168 bash; `max consecutive non-write` 15 / 27 / 152 — ReminderHooks would have fired on all three. Gate never fired | ReminderHooks runaway after a write (arm 2) |
 | `path-tracing-reverse` | 1/4 | A/B **both arms 1/3**. A's pass also had `empty_round` ×6; both losses are SSIM after `image.c` compiled | Live-lock will not separate pass from fail here. Near-miss is the 0.995 bar |
 | `video-processing` | 1/4 | A/B A 0/3 vs B 2/3. Gate never fired on either arm | Off-by-one / implementation. Not the verify gate |
 | `code-from-image` | 2/4 | A/B 33951133679 both arms 3/3. Arm A wall ~134m vs B 25m (same hang family as pov-ray: hard timeout wait_for then executor/bash thread) | Not the verify gate |
 | `dna-assembly` | 2/4 | A/B A 1/3 vs B 0/3. Gate never fired. Losses are Tm/timeout, not verify | Timeout + named Tm bar. Do not add a Tm clause |
-| `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — retry copy no longer names that command (`72e1776`). Do not call the arm until the full 20-task pair |
-| `install-windows-3.11` | 2/4 | 33497477757 and 33547943349 pass. 33530806570: 103 tools, `instruction_listen` fired, keyboard test: no key caused ≥10% image difference | VM visual-feedback miss. Domain notes already cover daemonize/screenshot. Not a new clause |
-| `model-extraction-relu-logits` | 2/4 | 33497477757 pass. 33547943349: 0 tools, 1.4 MB round-0 reasoning, `[hard_timeout]`, `stolen_A1.npy` never written | Spiral on the first stream. Live-lock empty-streak and ReminderHooks never see a tool. Do not re-enable stream cuts |
+| `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — the only gate-fire-then-fail. Retry copy already forbids that command (`72e1776`). Not a gate-off win |
+| `install-windows-3.11` | 2/4 | A/B A 1/2 vs B 2/3. A's third trial wrote a run summary then executor hang; GHA cancelled. Gate never fired | VM visual-feedback miss. Not the verify gate |
+| `model-extraction-relu-logits` | 2/4 | A/B A 2/3 vs B 1/2. B's third trial wrote a run summary then executor hang; GHA cancelled. Gate never fired | Spiral. Live-lock and ReminderHooks never see a tool. Do not re-enable stream cuts |
 | `mteb-retrieve` | 2/4 | A/B: 1/3 both arms; gate never fired | Wrong answer, not the gate |
 | `protein-assembly` | 2/4 | 33497477757 pass. 33547943349: wrong fusion order (flag-donor-dhfr-acceptor-snap). A/B 33951133679 both arms 1/3; gate never fired | Wrong answer. Order is in the instruction |
-| `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Not shown as a gate win on the partial sample |
-| `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B 33951133679 both arms 3/3. Arm A wall 117m vs B 41m: one A trial 115 min; `_file_ready` treated `/app/povray-2.2` as a missing file after the tree existed (versioned dir looks like an extension). Not `STEERABLE_DELIVERY_VERIFY` — `unverified_output` did not fire | Do **not** add a POV-Ray `_SYSTEM` clause. Directory `_file_ready` is the harness fix; it is not in the running A/B tree |
+| `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Wrong DAG. Not the verify gate |
+| `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B 33951133679 both arms 3/3. Arm A wall 117m vs B 41m: one A trial 115 min; `_file_ready` treated `/app/povray-2.2` as a missing file after the tree existed (versioned dir looks like an extension). Not `STEERABLE_DELIVERY_VERIFY` — `unverified_output` did not fire | Do **not** add a POV-Ray `_SYSTEM` clause. Directory `_file_ready` (`53d5402`) was not in 33951133679; it is on HEAD for later arms |
 | `chess-best-move` | 3/4 | 33497477757 pass. 33530806570: wrote `g2g4` to `/app/move.txt`; "File is wrong". One `empty_round`. A/B 33951133679 both arms 2/3; gate did not fire | Wrong move. Not a scoring-fact hole |
 | `largest-eigenval` | 3/4 | A/B A 2/3 vs B 3/3. A's pass `t8ynMPy` fired `unverified_output` then passed. A's loss is `[hard_timeout]` at 170 min with **zero** gate fires | Gate helped one pass. The miss is the hang-past-hard-timeout family (`9221f19`), not a gate-off win |
-| `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Partial sample leans B; not a verdict |
+| `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Variance / wrong answer. Not a gate-off win |
 | `path-tracing` | 3/4 | Catalog 33497477757 (pre-20a854d): `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. A/B 33951133679 **both arms 3/3**; gate never fired | Catalog fail is not the gate. Persist is on both arms here |
 | `sam-cell-seg` | 3/4 | A/B A 3/3 vs B 2/3. Gate never fired | Implementation. ReminderHooks bash-as-non-write would nudge; not the verify gate |
 | `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. A/B 33951133679 A 3/3 (one trial 135m), B 1/1 (two `VerifierTimeoutError`, skipped by `flaky_score`) | Implementation, not verify. Do not add another tensor clause |
-| `train-fasttext` | 3/4 | 33497477757 pass. 33547943349: local acc 0.6153 vs 0.62, they were retuning, `[hard_timeout]`. Hidden test 0.617. A/B B 2/3; A still running | Named bar + clock. Persist prompt already demands a visible margin. Not a new clause |
+| `train-fasttext` | 3/4 | A/B A 1/3 vs B 2/3. One A loss is `[soft_timeout]` then `[hard_timeout]` at round 56. Gate never fired | Named bar + clock. Persist prompt already demands a visible margin. Not a new clause |
 
 `unverified_output` fired **8 times** in catalog 33369888461, 7/8 then
 passed. The 8 task names were not kept; `largest-eigenval` is the one
@@ -66,8 +66,8 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **In flight, 16 paired** | B better on 4, A on 2, tied 10, p=0.6875, CI includes 0. The only disagreed task where the gate fired and then failed is `extract-elf` (old retry copy). `largest-eigenval` A's miss is hard_timeout, not a gate fire. Keep the gate unless the last 4 shards reverse that. See `ab-arms.md` |
-| ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **No. Keep the gate on** | 20 paired: B better 6, A on 4, tied 10, p=0.7539, CI includes 0. Gate-fire-then-fail is only `extract-elf` (old copy). See `ab-arms.md` |
+| ReminderHooks (`STEERABLE_REMINDERS=1`) | **Yes, next** | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode. Dispatch on HEAD (`53d5402` + `9221f19` + copy) |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
 | CC-align prompt (`STEERABLE_PROMPT_CC_ALIGN=1`) | Yes | Persist-if-long + grep/glob. Tool-description facts landed as defaults |
