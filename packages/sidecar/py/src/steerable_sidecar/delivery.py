@@ -2726,7 +2726,11 @@ def _invoked_script_rewrites_history(command: str) -> bool:
 def _bash_runs_helper_writing_missing(
     command: str, missing: tuple[str, ...]
 ) -> bool:
-    """True when python3 foo.py's source writes a still-missing named output."""
+    """True when python3 foo.py's source writes a named output still in ``missing``.
+
+    Match the full path or the basename: a generator that opens ``gates.txt``
+    after wrap-up example is delivery, not inspect.
+    """
     for cand in _python_script_paths(command):
         path = Path(cand)
         if not path.is_file():
@@ -2735,6 +2739,10 @@ def _bash_runs_helper_writing_missing(
             src = path.read_text(encoding="utf-8", errors="replace")[:64_000]
         except OSError:
             continue
-        if any(item in src for item in missing) and _BASH_MUTATE_FILE.search(src):
+        names = {Path(item).name for item in missing}
+        if _BASH_MUTATE_FILE.search(src) and (
+            any(item in src for item in missing)
+            or any(name in src for name in names)
+        ):
             return True
     return False

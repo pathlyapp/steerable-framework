@@ -2230,6 +2230,28 @@ async def test_wrap_up_instruction_example_when_starter_mismatches() -> None:
             arguments={"command": f"cat > {dest} <<'EOF'\nfixed\nEOF"},
         )
         assert hooks.inspect_block_result(write) is None
+        helper = dest.parent / "gen.py"
+        helper.write_text(
+            "from pathlib import Path\n"
+            f"Path({dest.name!r}).write_text('fixed\\n')\n",
+            encoding="utf-8",
+        )
+        generate = ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": f"python3 {helper}"},
+        )
+        assert hooks.inspect_block_result(generate) is None
+        look = dest.parent / "look.py"
+        look.write_text(f"print(open({dest.name!r}).read())\n", encoding="utf-8")
+        inspect_py = ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": f"python3 {look}"},
+        )
+        assert hooks.inspect_block_result(inspect_py) is not None
+        helper.unlink(missing_ok=True)
+        look.unlink(missing_ok=True)
     finally:
         sim.unlink(missing_ok=True)
         src.unlink(missing_ok=True)
