@@ -21,6 +21,8 @@ from evals.harbor_helpers import (
     trial_python_ok,
     trial_python_tag,
     trial_python_venv,
+    usage_from_headless_log,
+    uv_tarball,
     uv_tarball,
     musl_uv_binary,
     linux_cpython_tarball,
@@ -208,6 +210,30 @@ def test_spec_as_json_passes_json_through(tmp_path) -> None:
     assert spec_as_json(spec) == spec
 
 
+def test_spec_as_json_resolves_repo_relative_path_from_another_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    """Arm B sets STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml.
+    Harbor's agent process is not guaranteed to keep cwd at the repo root."""
+    monkeypatch.chdir(tmp_path)
+    converted = spec_as_json("evals/harnesses/self_critique.harness.yaml")
+    import json
+
+    assert json.loads(converted.read_text())["validator"] == "self_critique"
+
+
+def test_usage_from_headless_log_reads_the_last_summary() -> None:
+    text = (
+        "noise\n"
+        'STEERABLE_RUN_SUMMARY {"input_tokens": 1, "output_tokens": 2, "cache_tokens": 0}\n'
+        "more noise\n"
+        'STEERABLE_RUN_SUMMARY {"input_tokens": 100, "output_tokens": 20, "cache_tokens": 7}\n'
+    )
+    assert usage_from_headless_log(text) == (100, 20, 7)
+    assert usage_from_headless_log("no summary") == (None, None, None)
+    assert usage_from_headless_log("STEERABLE_RUN_SUMMARY {") == (None, None, None)
+
+
 def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     """A `setdefault` default is unreachable unless its key is forwarded.
 
@@ -226,6 +252,17 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     }
     assert "STEERABLE_TEMPERATURE" in forwarded
     assert "STEERABLE_REASONING_EFFORT" in forwarded
+    assert "STEERABLE_REMINDERS" in forwarded
+    assert "STEERABLE_DELIVERY_VERIFY" in forwarded
+    assert "STEERABLE_LIVELOCK_EMPTY_STREAK" in forwarded
+    assert "STEERABLE_PROMPT_CC_ALIGN" in forwarded
+    assert "STEERABLE_READ_IMAGES" in forwarded
+    assert "STEERABLE_REQUEST_RECORD_PATH" in forwarded
+    # Host-only: the agent reads this in __init__ and uploads JSON. Forwarding
+    # the repo-relative YAML path into the trial would make the container look
+    # for a file that is not there.
+    assert "STEERABLE_HARNESS" not in forwarded
+    assert 'os.environ.get("STEERABLE_HARNESS")' in text
     run_body = text[text.index("    async def run(") :]
     assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
 
@@ -279,6 +316,9 @@ def test_harbor_run_matches_claude_code_tb_knobs() -> None:
     ]
     assert run_fn.index("await self.exec_as_agent") < run_fn.index(
         "await self._align_verifier_python"
+    )
+    assert run_fn.index("await self._align_verifier_python") < run_fn.index(
+        "await self._record_token_usage"
     )
     assert "finally:" in run_fn
     assert text.index("await self._inject_host_uv") < text.index(

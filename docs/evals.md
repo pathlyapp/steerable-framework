@@ -6,7 +6,7 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 
 ## Score of record
 
-**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution). Current `main` also contains the persistence prompt and post-write verification gate from `20a854d`; those changes are newer than the measured commit and are not included in the 80% score.
+**Steerable + GLM-5.3-Flash = 80%** on the 89-task catalog. Four independent full runs at commit `27d521a`, mean **0.8006**, SD **0.0232**. We report 80, not the 0.8202 high-water mark (that value appeared twice and is the top of the distribution). Current `main` also contains the persistence prompt and post-write verification gate from `20a854d`; those changes are newer than the measured commit and are not included in the 80% score. A HEAD three-run that proves every round ≥72/89 has not been recorded yet — see Pending measurement below.
 
 | Sample | GitHub Actions | Mean |
 | ------ | -------------- | ---- |
@@ -55,6 +55,24 @@ Same model, different harness — measured on this repo's protocol, not vendor p
 Codex CLI completed the full 89-task catalog after a fill-in run for the 7 tasks cut by job timeouts (5 passed). Its score is still protocol-depressed, not a clean model reading: OpenRouter's Responses API translation layer rejected long-conversation payloads (15,522 zero-token failed requests across both runs), and errored trials score 0 without the model being wrong. Steerable's per-run tokens come from OpenRouter analytics because the four scored runs predate our token telemetry (±15%, calibrated against Pi's exact records); every other number is from per-trial `result.json`. For reference, [Z.AI](https://z.ai/blog/glm-5.3-flash) reports GLM-5.3-Flash at **84.3%** inside Claude Code 2.1.207 (`temperature=1.0`, 6-hour timeout) — consistent with our own 83% Claude Code measurement on the 170-minute protocol.
 
 The Pi result is our own Harbor run rather than a vendor-submitted leaderboard score. Its model request parameters match the Steerable leg, subject to the protocol differences documented below.
+
+## Task stratification at `27d521a`
+
+Four catalog runs at that commit (GHA [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757), [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570), [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872), [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349)) split the 89 ids as:
+
+- **60 stable green** (4/4)
+- **9 stable red** (0/4): `extract-moves-from-video`, `filter-js-from-html`, `gcode-to-text`, `make-doom-for-mips`, `pytorch-model-cli`, `raman-fitting`, `regex-chess`, `sanitize-git-repo`, `winning-avg-corewars`
+- **20 flaky** (listed under `splits.flaky` in `evals/suite.yaml`, with x/4 comments): 4×1/4, 7×2/4, 9×3/4
+
+Expected passes = 60 + 11.25 = 71.25 (80.06%). Measured SD 2.06 matches a Bernoulli model of those 20 tasks, so variance is the flaky layer, not a hidden systematic. `flaky` / `spiral-red` were rebuilt from this four-run table. Rebuild them only after a new multi-run catalog, not from a single dispatch. Mechanism labels for the 29 losses: `evals/notes/loss-taxonomy.md`.
+
+Claude Code on the same model and protocol: **83.1% (74/89), 1 run**. Catalog shards: GHA [33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303); fill-in [33833495592](https://github.com/pathlyapp/steerable-framework/actions/runs/33833495592). Recipe: `evals/README.md` (`--agent claude-code-glm`, CLI 2.1.259). Per-task set vs steerable sample 1: `evals/notes/claude-code-glm-task-diff.md`.
+
+## Pending measurement
+
+Score of record stays `27d521a` until three full catalog runs on the synthesized arm each post ≥72/89, with their GHA run ids in the table above.
+
+Flaky A/B of the `20a854d` verify gate is done: GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) (`STEERABLE_DELIVERY_VERIFY=0` on B). 20 paired tasks, p=0.7539, CI includes 0 — **no separation; keep the gate on**. The only gate-fire-then-fail is `extract-elf` (old retry copy, already fixed on HEAD). ReminderHooks A/B is done: GHA [33959644133](https://github.com/pathlyapp/steerable-framework/actions/runs/33959644133) (`STEERABLE_REMINDERS=1` on B). 20 paired, p=0.3438, CI includes 0; `make-mips-interpreter` A 2/3 vs B 1/3 — **keep reminders off**. Wrap-up livelock A/B is done: GHA [33966115606](https://github.com/pathlyapp/steerable-framework/actions/runs/33966115606) (`STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B). 19 paired, p=1.0, CI includes 0; 4 B fires, 0 conversion — **keep livelock off**. Spiral-red [33966527336](https://github.com/pathlyapp/steerable-framework/actions/runs/33966527336): `regex-chess` 0/3 with a fire on every trial. Ignore [33964691558](https://github.com/pathlyapp/steerable-framework/actions/runs/33964691558) (402). Left-tail stack is `de45915` plus helper-script git rewrite, wrap-up generator writes, and git-leak prune allow (`4746d14`): Harbor env-start retry, git-history bash gate (command **or** invoked helper; allow `rewriting history` / recover-then-purge so `git-leak-recovery` can still `gc --prune`), named `.txt` stub/prefix/raster, wrap-up shown-text + inspect-block of dump reads and helper rewrite, wrap-up prefix/stub, wrap-up re-asserts `tool_choice=required` while those gates fail, wrap-up instruction-example (compile sibling `.c`; `cat > gen.py` and `python3 gen.py` that writes the named file still run), pre-wrap livelock detector (default still 0), `ChainHooks` retry-over-narrate. Arm 3b is done: GHA [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219) (`STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B, SHA `de45915`). 19 paired, p=0.7266, CI includes 0; mechanism `circuit-fibsqrt` A 3/3 vs B 2/3 with 7 B fires and 6 reward-0 — **keep livelock off**. Catalog measurement is `4746d14` or later. Remaining arms: `evals/notes/ab-arms.md`.
 
 ## What runs
 

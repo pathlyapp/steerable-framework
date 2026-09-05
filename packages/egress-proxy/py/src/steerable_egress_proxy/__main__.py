@@ -78,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="upstream port (default 443 for https, 80 for http)",
     )
+    parser.add_argument(
+        "--record-requests",
+        metavar="PATH",
+        help=(
+            "append JSONL of forwarded request bodies (inject mode only). "
+            "The injected credential is not recorded."
+        ),
+    )
     args = parser.parse_args(argv)
 
     bind_host, sep, bind_port_s = args.bind.rpartition(":")
@@ -110,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
+    if args.record_requests and inject is None:
+        print("error: --record-requests requires --inject-host", file=sys.stderr)
+        return 2
     try:
         bind_port = int(bind_port_s)
         allow = AllowList(args.allow)
@@ -119,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             bind_port=bind_port,
             connect_timeout_s=args.connect_timeout,
             inject=inject,
+            record_requests=args.record_requests,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

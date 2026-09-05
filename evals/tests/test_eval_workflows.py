@@ -44,6 +44,32 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     assert "**/agent/headless.log" in workflow
 
 
+def test_flaky_feishu_copy_matches_the_split() -> None:
+    """The start card still said 25 ids after suite.yaml shrank flaky to 20."""
+    assert "20 题 × 2 臂" in WEEKLY
+    assert "25 题" not in WEEKLY
+
+
+def test_flaky_start_card_names_arm_b_overrides() -> None:
+    """A defaulted arm_b_env is a silent no-op A/B; the start card has to
+    show what B actually received."""
+    assert "ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}" in WEEKLY
+    assert 'os.environ.get("ARM_B_ENV")' in WEEKLY
+
+
+def test_flaky_gather_runs_the_paired_scorer() -> None:
+    """Harbor Mean on a flaky dispatch is last-attempt overwrite; the
+    verdict that decides a catalog run is flaky_score on every attempt."""
+    assert "python3 -m evals.flaky_score --root statuses" in WEEKLY
+    assert '::warning::flaky_score failed' in WEEKLY
+
+
+def test_attribution_waits_for_every_scored_split() -> None:
+    """needs: [eval] ran the report before a flaky/catalog matrix finished."""
+    assert "needs: [eval, flaky, spiral, catalog, failed-prev]" in WEEKLY
+    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev]") >= 2
+
+
 def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
     the same-model pi comparison has to be dispatchable there."""
@@ -95,7 +121,7 @@ def test_weekly_cheap_12_matrix_runs_every_live_agent() -> None:
 
 def test_arms_matrix_references_registered_harnesses() -> None:
     suite = load_suite()
-    for harness in ("default", "subagent", "minimal"):
+    for harness in ("default", "subagent", "minimal", "self_critique"):
         assert harness in suite.harnesses, f"arm matrix references unregistered {harness}"
 
 

@@ -147,6 +147,18 @@ class CompletionAction:
     reason: str | None = None
 
 
+_COMPLETION_KIND_RANK = {"accept": 0, "narrate": 1, "retry": 2}
+
+
+def _completion_outranks(new: CompletionAction, current: CompletionAction) -> bool:
+    """Prefer forcing another working round over a no-tools summary."""
+    new_rank = _COMPLETION_KIND_RANK[new.kind]
+    old_rank = _COMPLETION_KIND_RANK[current.kind]
+    if new_rank != old_rank:
+        return new_rank > old_rank
+    return new.kind != "accept"
+
+
 @dataclass(slots=True)
 class RetryAction:
     """Outcome of an ``on_request_error`` hook.
@@ -259,7 +271,10 @@ class ChainHooks:
     - ``post_tool_result``: the result threads through each hook in order.
     - ``on_request_error``: the first ``retry`` decision wins; if every hook
       says ``fail``, the first failure reason is surfaced.
-    - ``before_completion``: the first non-``accept`` action wins.
+    - ``before_completion``: every hook runs. ``retry`` outranks
+      ``narrate``, which outranks ``accept``. Same-rank later hooks win,
+      so a trailing delivery gate still forces writes when an earlier
+      validator would only ask for a no-tools summary.
     - ``wrap_up_may_drop_tools``: False if any hook forbids dropping tools.
 
     This is how a product stacks e.g. compaction + spill + retry without the
@@ -338,11 +353,12 @@ class ChainHooks:
     async def before_completion(
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
+        picked = CompletionAction(kind="accept")
         for hook in self._hooks:
             action = await hook.before_completion(draft, ctx)
-            if action.kind != "accept":
-                return action
-        return CompletionAction(kind="accept")
+            if _completion_outranks(action, picked):
+                picked = action
+        return picked
 
     def wrap_up_may_drop_tools(self) -> bool:
         for hook in self._hooks:

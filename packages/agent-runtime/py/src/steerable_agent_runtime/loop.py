@@ -75,7 +75,7 @@ from .history import (
     entry_to_dict,
 )
 from .hooks import CompletionDraft, LoopHooks, NoopHooks
-from .llm import LLMMessage, LLMProvider, LLMUsage
+from .llm import ImagePart, LLMMessage, LLMProvider, LLMUsage, TextPart
 from .pseudo import (
     PseudoStreamStripper,
     extract_inline_tool_calls,
@@ -1628,6 +1628,7 @@ class CoreLoop:
 
             breaker_tripped = False
             steer_interrupted = False
+            round_images: list[tuple[str, ImagePart]] = []
             for batch_idx, (batch_safe, batch) in enumerate(batches):
                 if breaker_tripped or steer_interrupted:
                     break
@@ -1832,6 +1833,19 @@ class CoreLoop:
                         else:
                             ctx.consecutive_tool_errors += 1
 
+                    # Pop pixels before spill: a base64 PNG in ``data`` is
+                    # always larger than the 16 KB inline budget, and spilling
+                    # it would hide the image from the next request. OpenAI
+                    # tool messages are text-only, so the pixels ride on a
+                    # user message after this batch (``_append_read_images``).
+                    path = ""
+                    if isinstance(result.data, dict):
+                        path = str(result.data.get("path") or "")
+                    image = _pop_result_image(result)
+                    if image is not None:
+                        if isinstance(result.data, dict):
+                            result.data["pixels"] = "attached"
+                        round_images.append((path or call.name, image))
                     # ── hook: post_tool_result (spill / truncation) ──────
                     result = await self._hooks.post_tool_result(result, call, ctx)
 
@@ -1884,14 +1898,7 @@ class CoreLoop:
                             **({"error": result.error} if result.error else {}),
                         },
                     )
-                    manager.append(
-                        LLMMessage.text_of(
-                            "tool",
-                            _result_content(result),
-                            name=call.name,
-                            tool_call_id=call.id,
-                        )
-                    )
+                    manager.append(_tool_result_message(call, result))
 
                     # Approval abort ends the turn: record the batch like the
                     # breaker does (real results for executed calls, synthetic
@@ -2042,6 +2049,7 @@ class CoreLoop:
             # above — skip the "executing" bookkeeping and run the wrap-up
             # round directly. Artifact wrap-up still executes tools, so it
             # falls through and increments like a normal round.
+            _append_read_images(manager, round_images)
             if wrap_up and withholding_tools():
                 continue
             if wrap_up:
@@ -2446,6 +2454,57 @@ def _step_summary(
     }
 
 
+_MAX_READ_IMAGES_PER_ROUND = 4
+
+
+def _pop_result_image(result: ToolResult) -> ImagePart | None:
+    """Take ``data._image`` off the payload so spill and JSON never carry it."""
+    data = result.data
+    if not isinstance(data, dict):
+        return None
+    blob = data.pop("_image", None)
+    if not isinstance(blob, dict):
+        return None
+    b64 = blob.get("b64")
+    media = blob.get("media_type") or "image/png"
+    if not isinstance(b64, str) or not b64:
+        return None
+    return ImagePart.from_base64(b64, media_type=str(media))
+
+
+def _tool_result_message(call: ToolCall, result: ToolResult) -> LLMMessage:
+    """Tool observation as text. OpenAI forbids image_url on role=tool."""
+    return LLMMessage.text_of(
+        "tool", _result_content(result), name=call.name, tool_call_id=call.id
+    )
+
+
+def _append_read_images(
+    manager: ContextManager, images: list[tuple[str, ImagePart]]
+) -> None:
+    """Put PNG/JPEG pixels on a user turn after the tool-result batch.
+
+    OpenAI ``ChatCompletionToolMessageParam.content`` is string or text
+    parts only. Claude Code's Anthropic wire can nest images in
+    ``tool_result``; the Harbor GLM cell is OpenAI-compat, so the pixels
+    follow the tool JSON as a user message instead.
+    """
+    if not images:
+        return
+    kept = images[:_MAX_READ_IMAGES_PER_ROUND]
+    parts: list = [
+        TextPart(
+            "Pixels from the files just read. The tool JSON is an ASCII "
+            "preview; look at these images for the actual contents."
+        )
+    ]
+    for path, image in kept:
+        if path:
+            parts.append(TextPart(f"\n{path}:"))
+        parts.append(image)
+    manager.append(LLMMessage(role="user", content=parts), kind="tool.image")
+
+
 def _result_content(result: ToolResult) -> str:
     """Serialize a ToolResult into the tool-message content for the transcript."""
 
@@ -2455,7 +2514,10 @@ def _result_content(result: ToolResult) -> str:
     if result.error:
         payload["error"] = result.error
     if result.data is not None:
-        payload["data"] = result.data
+        data = result.data
+        if isinstance(data, dict) and "_image" in data:
+            data = {k: v for k, v in data.items() if k != "_image"}
+        payload["data"] = data
     if result.message:
         payload["message"] = result.message
     return json.dumps(payload, ensure_ascii=False)

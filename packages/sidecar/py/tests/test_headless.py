@@ -102,6 +102,8 @@ def test_system_prompt_keeps_tools_and_grading_facts() -> None:
     assert "pgrep matches the wait loop" in prompt
     assert "a huge write_file argument often never emits" in prompt
     assert "read_file returns an ASCII preview" in prompt
+    assert "git gc --prune" in prompt
+    assert "cannot be found anywhere in the repo" in prompt
 
 
 def test_missing_instruction_errors() -> None:
@@ -222,12 +224,16 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "wrap_up_keeps_tools=True" in src
     assert "wrap_up_max_tool_rounds=16" in src
     assert "wrap_up_tool_timeout_ms=120_000" in src
-    assert "wrap_up_hard_cap_ms=10_500_000" in src
+    assert "wrap_up_hard_cap_ms=wrap_up_hard_cap_ms" in src
+    assert "_abandon_process_after_hard_timeout" in src
     assert "_hard_run_timeout_sec" in src
     assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
-    hooks_src = src[src.index("ChainHooks") :]
-    assert hooks_src.index("default_harness.hooks") < hooks_src.index("delivery")
+    eval_src = inspect.getsource(headless_mod._eval_hooks)
+    assert "ChainHooks(assembled, delivery)" in eval_src
+    run_src = inspect.getsource(headless_mod._run)
+    assert "default_harness.hooks" in run_src
+    assert "_eval_hooks" in run_src
 
 
 @pytest.mark.asyncio
@@ -298,7 +304,7 @@ def test_assemble_harness_replaces_default_chain(tmp_path: Path) -> None:
     kinds = [type(h).__name__ for h in _flatten(hooks)]
     assert "ObservationAgingHooks" in kinds
     assert "CompactionHooks" not in kinds  # spec did not ask for it
-    assert "DeliveryHooks" in kinds  # transport semantics always stay
+    assert "DeliveryHooks" not in kinds  # transport layer is `_eval_hooks`
     assert limits.max_rounds is None  # no loop section → entrypoint default
 
 
@@ -389,6 +395,64 @@ def test_assemble_harness_progressive_wires_tool_search(tmp_path: Path) -> None:
     names = [d.get("function", {}).get("name") or d.get("name") for d in descriptors]
     assert names == ["bash", "tool_search"]
     assert router.get("tool_search") is not None
+
+
+def test_eval_hooks_adds_delivery_without_reminders_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steerable_agent_runtime.hooks import ChainHooks
+    from steerable_sidecar.delivery import DeliveryHooks
+
+    monkeypatch.delenv("STEERABLE_REMINDERS", raising=False)
+    delivery = DeliveryHooks()
+    chain = headless_mod._eval_hooks(object(), delivery, 16)
+    assert isinstance(chain, ChainHooks)
+    kinds = [type(h).__name__ for h in chain._hooks]
+    assert "ReminderHooks" not in kinds
+    assert kinds[-1] == "DeliveryHooks"
+
+
+def test_eval_hooks_adds_reminders_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steerable_sidecar.delivery import DeliveryHooks
+
+    monkeypatch.setenv("STEERABLE_REMINDERS", "1")
+    delivery = DeliveryHooks()
+    chain = headless_mod._eval_hooks(object(), delivery, 16)
+    kinds = [type(h).__name__ for h in chain._hooks]
+    assert "ReminderHooks" in kinds
+    assert kinds[-1] == "DeliveryHooks"
+
+
+def test_system_prompt_cc_align_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEERABLE_PROMPT_CC_ALIGN", raising=False)
+    monkeypatch.delenv("STEERABLE_READ_IMAGES", raising=False)
+    assert headless_mod._system_prompt() == headless_mod._SYSTEM
+    monkeypatch.setenv("STEERABLE_PROMPT_CC_ALIGN", "1")
+    prompt = headless_mod._system_prompt()
+    assert prompt.startswith(headless_mod._SYSTEM)
+    assert "Do not end a turn because the session is long" in prompt
+    assert len(headless_mod._SYSTEM) < 7000
+
+
+def test_system_prompt_native_images_is_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog 70 OCR'd because _SYSTEM told it the preview was the source."""
+    monkeypatch.delenv("STEERABLE_READ_IMAGES", raising=False)
+    monkeypatch.delenv("STEERABLE_PROMPT_CC_ALIGN", raising=False)
+    assert headless_mod._ASCII_IMAGE_NOTE in headless_mod._SYSTEM
+    assert headless_mod._system_prompt() == headless_mod._SYSTEM
+    monkeypatch.setenv("STEERABLE_READ_IMAGES", "1")
+    prompt = headless_mod._system_prompt()
+    assert "attach as images after the read_file JSON" in prompt
+    assert "decode exact pixels with Python" not in prompt
+    assert "BMP stays ASCII" in prompt
+    assert "read_file returns an ASCII preview" in headless_mod._SYSTEM
+    assert len(prompt) < 7000
+    monkeypatch.setenv("STEERABLE_PROMPT_CC_ALIGN", "1")
+    assert len(headless_mod._system_prompt()) < 7000
 
 
 class _FakeTools:
@@ -623,6 +687,7 @@ async def test_run_emits_run_summary_terminal_line(
     assert summary["peak_context_tokens"] == 40
     assert summary["tool_errors"] == 1
     assert summary["tool_recoveries"] == 1
+    assert summary["cache_tokens"] == 0
     assert "cost_usd" not in summary  # absent, never zero-filled
 
 
@@ -655,6 +720,9 @@ async def test_run_exits_on_hard_timeout(
 
     monkeypatch.setattr(headless_mod, "_hard_run_timeout_sec", lambda: 0.05)
     monkeypatch.setattr(
+        headless_mod, "_abandon_process_after_hard_timeout", lambda: None
+    )
+    monkeypatch.setattr(
         headless_mod, "_env_provider_params", lambda: {"model": "fake"}
     )
     monkeypatch.setattr(
@@ -662,6 +730,13 @@ async def test_run_exits_on_hard_timeout(
     )
     await _run("hang", cwd=str(tmp_path), max_rounds=4)
     assert "[hard_timeout]" in capsys.readouterr().out
+
+
+def test_hard_timeout_abandon_exits_the_process() -> None:
+    import inspect
+
+    src = inspect.getsource(headless_mod._abandon_process_after_hard_timeout)
+    assert "os._exit" in src
 
 
 @pytest.mark.asyncio

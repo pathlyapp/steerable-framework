@@ -10,6 +10,7 @@ bridges (3.4.3) when the client advertises the capabilities.
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import signal
@@ -32,6 +33,10 @@ _MIN_KEEP_BYTES = 8192
 # TB compiles, QEMU, and training exceed the old 5 min cap; Claude Code
 # does not kill a single bash at 300s. Harbor's long-task kill is ~180 min.
 _BASH_TIMEOUT_SEC = 3600
+# Native pixels for PNG/JPEG reads. Off by default; flaky arm B sets
+# ``STEERABLE_READ_IMAGES=1``. ASCII preview stays either way. BMP stays
+# ASCII: vision endpoints accept PNG/JPEG, not BMP.
+_IMAGE_ATTACH_MAX_BYTES = 400_000
 
 #: One-shot bash execution behind the tool: (command, cwd) → result.
 #: The local default spawns a subprocess; the ACP terminal bridge runs the
@@ -325,7 +330,9 @@ def workspace_tools_for_cwd(
             )
         return None
 
-    def _run_bash(command: str, cwd: Path) -> ToolResult:
+    def _run_bash(
+        command: str, cwd: Path, live_pids: list[int] | None = None
+    ) -> ToolResult:
         # Shells reset SIGHUP on exec; trap so background qemu-system
         # survives this tool returning (session-leader HUP).
         proc = subprocess.Popen(
@@ -339,6 +346,8 @@ def workspace_tools_for_cwd(
             errors="replace",
             start_new_session=True,
         )
+        if live_pids is not None:
+            live_pids.append(proc.pid)
         try:
             stdout, stderr = proc.communicate(timeout=_BASH_TIMEOUT_SEC)
         except subprocess.TimeoutExpired:
@@ -365,7 +374,16 @@ def workspace_tools_for_cwd(
 
     async def _run_local(command: str, cwd: Path) -> ToolResult:
         # Off the event loop so CoreLoop parallel_tools can overlap bash.
-        return await asyncio.to_thread(_run_bash, command, cwd)
+        # Cancelling this await (tool timeout / hard timeout) must kill the
+        # session; otherwise communicate(timeout=3600) pins the default
+        # executor and Harbor never sees EOF.
+        live_pids: list[int] = []
+        try:
+            return await asyncio.to_thread(_run_bash, command, cwd, live_pids)
+        except asyncio.CancelledError:
+            if live_pids:
+                _kill_process_group(live_pids[0])
+            raise
 
     run = run_command or _run_local
 
@@ -507,16 +525,29 @@ def workspace_tools_for_cwd(
         bash,
         name="bash",
         mode="other",
-        description="Run a shell command in the workspace directory.",
+        description=(
+            "Run a shell command in the workspace directory. The working "
+            "directory persists across calls; exported variables and aliases "
+            "do not — use bash_session for that."
+        ),
         schema=_BASH_SCHEMA,
         require_consent=False,
         metadata={"shell_command_param": "command"},
+    )
+    read_desc = (
+        "Read a UTF-8 text file from the workspace. Prefer an absolute path. "
+        "PNG/JPEG files attach as images the model can see, plus an ASCII preview."
+        if _read_images_enabled()
+        else (
+            "Read a UTF-8 text file from the workspace. Prefer an absolute path. "
+            "PNG/JPEG/BMP files return an ASCII preview, not UTF-8."
+        )
     )
     router.register(
         read_file,
         name="read_file",
         mode="read",
-        description="Read a UTF-8 text file from the workspace.",
+        description=read_desc,
         schema=_READ_SCHEMA,
         require_consent=False,
     )
@@ -630,8 +661,8 @@ def workspace_tools_for_cwd(
         description=(
             "Search file contents across the workspace (ripgrep when available). "
             "Returns structured {path, line, text} hits; the workspace ignore "
-            "set (node_modules, .git, …) is always applied. Prefer this over "
-            "bash grep -r."
+            "set (node_modules, .git, …) is always applied. Call this instead of "
+            "bash grep, rg, or find."
         ),
         schema=_GREP_SCHEMA,
         require_consent=False,
@@ -642,7 +673,7 @@ def workspace_tools_for_cwd(
         mode="read",
         description=(
             "List workspace files matching an fnmatch pattern. The ignore set "
-            "is shared with grep. Prefer this over bash find/ls."
+            "is shared with grep. Call this instead of bash find or ls."
         ),
         schema=_GLOB_SCHEMA,
         require_consent=False,
@@ -768,25 +799,49 @@ def refuse_truncated_overwrite(existing_bytes: int, new_bytes: int) -> bool:
     return new_bytes < max(512, existing_bytes // 4)
 
 
+def _read_images_enabled() -> bool:
+    raw = os.environ.get("STEERABLE_READ_IMAGES")
+    if raw is None or not str(raw).strip():
+        return False
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _image_blob(raw: bytes) -> dict[str, str] | None:
+    """PNG/JPEG bytes for the next LLM request; None when the run is text-only."""
+    if not _read_images_enabled() or len(raw) > _IMAGE_ATTACH_MAX_BYTES:
+        return None
+    if raw.startswith(b"\x89PNG"):
+        media = "image/png"
+    elif raw[:2] == b"\xff\xd8":
+        media = "image/jpeg"
+    else:
+        return None
+    return {
+        "b64": base64.b64encode(raw).decode("ascii"),
+        "media_type": media,
+    }
+
+
 def _binary_read_result(target: Path, raw: bytes) -> ToolResult:
     """Tool result for a non-UTF-8 file: ASCII preview when the image format
     is known, otherwise a decode instruction (never a guessed content)."""
     preview = ascii_png_preview(raw)
     if preview is not None:
-        return ToolResult(
-            success=True,
-            data={
-                "path": str(target),
-                "content": preview,
-                "kind": (
-                    "jpeg_ascii"
-                    if preview.startswith("JPEG ")
-                    else "bmp_ascii"
-                    if preview.startswith("BMP ")
-                    else "png_ascii"
-                ),
-            },
-        )
+        data: dict[str, object] = {
+            "path": str(target),
+            "content": preview,
+            "kind": (
+                "jpeg_ascii"
+                if preview.startswith("JPEG ")
+                else "bmp_ascii"
+                if preview.startswith("BMP ")
+                else "png_ascii"
+            ),
+        }
+        blob = _image_blob(raw)
+        if blob is not None:
+            data["_image"] = blob
+        return ToolResult(success=True, data=data)
     kind = (
         "PNG"
         if raw.startswith(b"\x89PNG")

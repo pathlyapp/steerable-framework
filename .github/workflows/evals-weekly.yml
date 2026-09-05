@@ -376,6 +376,7 @@ jobs:
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
+          ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
         run: |
           python3 - << 'PY'
           import os, json, urllib.request
@@ -392,7 +393,11 @@ jobs:
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"
           elif split == "flaky":
               title = "开始 · GHA flaky A/B"
-              body = "25 题（17 翻面 + 8 受伤对照）× 2 臂 × 3 次，单题 85 分钟上限。判断 harness 改动，不是正式分。"
+              overrides = (os.environ.get("ARM_B_ENV") or "").strip() or "(none)"
+              body = (
+                  "20 题 × 2 臂 × 3 次，单题 85 分钟上限。判断 harness 改动，不是正式分。"
+                  f"\nArm B:\n{overrides}"
+              )
           else:
               title = "开始 · GHA cheap-12"
               body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
@@ -445,6 +450,10 @@ jobs:
             --label "$label" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             || echo "::warning::Feishu post failed"
+          if [ "$EVAL_SPLIT" = "flaky" ]; then
+            python3 -m evals.flaky_score --root statuses | tee -a "$GITHUB_STEP_SUMMARY" \
+              || echo "::warning::flaky_score failed"
+          fi
       - name: Fail if every live agent was skipped
         run: |
           shopt -s globstar nullglob
@@ -467,7 +476,7 @@ jobs:
 
   attribution:
     name: Harness × model attribution report
-    needs: [eval]
+    needs: [eval, flaky, spiral, catalog, failed-prev]
     if: always()
     runs-on: ubuntu-latest
     steps:

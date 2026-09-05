@@ -334,3 +334,35 @@ def test_collect_rows_job_json_wins_over_trial_logs(tmp_path: Path) -> None:
     assert rows[0][2] is not None
     assert rows[0][2]["passed"] == ["fix-git"]
     assert rows[0][2]["failed"] == []
+
+
+def test_paired_ab_report_silent_without_both_arms(tmp_path: Path) -> None:
+    from evals.feishu import paired_ab_report
+
+    assert paired_ab_report(tmp_path) is None
+
+
+def test_paired_ab_report_includes_the_verdict(tmp_path: Path) -> None:
+    from evals.feishu import paired_ab_report
+
+    def write_trial(arm: str, reward: float, tag: str) -> None:
+        trial = (
+            tmp_path
+            / f"eval-steerable-flaky-{arm}-0"
+            / "evals"
+            / "jobs"
+            / "steerable"
+            / "run"
+            / f"some-task__{tag}"
+        )
+        trial.mkdir(parents=True)
+        (trial / "result.json").write_text(
+            json.dumps({"verifier_result": {"rewards": {"reward": reward}}})
+        )
+
+    write_trial("a", 0.0, "a0")
+    write_trial("b", 1.0, "b0")
+    text = paired_ab_report(tmp_path)
+    assert text is not None
+    assert "verdict:" in text
+    assert "some-task" in text

@@ -252,6 +252,10 @@ def spec_as_json(spec_path: str | Path) -> Path:
     persists until process exit so the upload can read it later.
     """
     source = Path(spec_path)
+    if not source.is_file() and not source.is_absolute():
+        source = _REPO_ROOT / spec_path
+    if not source.is_file():
+        raise FileNotFoundError(f"harness spec not found: {spec_path}")
     if source.suffix.lower() == ".json":
         return source
     import yaml  # host-side only; the container never sees PyYAML
@@ -512,3 +516,32 @@ def merge_trial_path(existing: str) -> str:
     have = set(parts)
     prefix = [p for p in _TRIAL_PATH_EXTRAS if p not in have]
     return ":".join([*prefix, *parts])
+
+
+_RUN_SUMMARY_PREFIX = "STEERABLE_RUN_SUMMARY "
+
+
+def usage_from_headless_log(text: str) -> tuple[int | None, int | None, int | None]:
+    """Last ``STEERABLE_RUN_SUMMARY`` input / output / cache token counts.
+
+    Harbor's ``agent_result`` token fields stay None unless the adapter copies
+    these numbers onto ``AgentContext``. A truncated final line is skipped.
+    """
+    summary: dict[str, object] | None = None
+    for line in text.splitlines():
+        if not line.startswith(_RUN_SUMMARY_PREFIX):
+            continue
+        try:
+            parsed = json.loads(line[len(_RUN_SUMMARY_PREFIX) :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            summary = parsed
+    if summary is None:
+        return None, None, None
+
+    def integer(key: str) -> int | None:
+        value = summary.get(key)
+        return value if isinstance(value, int) else None
+
+    return integer("input_tokens"), integer("output_tokens"), integer("cache_tokens")

@@ -37,13 +37,18 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 _JOB_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}__")
 # protein-assembly / other TB images: Docker Hub TLS or 429 during
 # `docker compose up` is an environment-start error, not an agent fail.
+# Dataset resolve can also die with httpx RemoteProtocolError before a
+# trial directory exists.
 _ENV_START_MARKERS = (
     "tls handshake timeout",
     "docker compose command failed",
+    "_run_docker_compose_command",
     "error response from daemon",
     "toomanyrequests",
     "429 too many requests",
     "net/http: tls handshake timeout",
+    "remoteprotocolerror",
+    "connectionterminated",
 )
 
 
@@ -148,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_timeout_multiplier=_retry_agent_timeout(
                     args.agent_timeout_multiplier
                 ),
+                harness=args.harness,
                 verifier_timeout_multiplier=args.verifier_timeout_multiplier,
                 harbor_bin=args.harbor,
             )
@@ -158,6 +164,13 @@ def main(argv: list[str] | None = None) -> int:
             print(shlex.join(argv_retry), flush=True)
             completed = subprocess.run(
                 argv_retry, cwd=REPO_ROOT, env=_harbor_child_env(env)
+            )
+        elif completed.returncode != 0 and not any_verifier_reward(jobs_dir):
+            # Dataset resolve can RemoteProtocolError before any trial dir exists.
+            print("harbor pre-trial retry", flush=True)
+            print(shlex.join(argv_harbor), flush=True)
+            completed = subprocess.run(
+                argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
             )
     finally:
         stop.set()
@@ -265,25 +278,67 @@ def _retry_agent_timeout(requested: float | None) -> float | None:
     return min(float(requested), _ENV_START_RETRY_AGENT_TIMEOUT_MULTIPLIER)
 
 
+def _env_start_hit(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _ENV_START_MARKERS)
+
+
 def env_start_error_tasks(jobs_dir: Path) -> tuple[str, ...]:
     """Catalog ids whose Harbor trial died in docker compose / image pull."""
     found: list[str] = []
     seen: set[str] = set()
     if not jobs_dir.is_dir():
         return ()
-    for exc in sorted(jobs_dir.rglob("exception.txt")):
-        try:
-            text = exc.read_text(encoding="utf-8", errors="replace").lower()
-        except OSError:
-            continue
-        if not any(marker in text for marker in _ENV_START_MARKERS):
-            continue
-        task = exc.parent.name.rsplit("__", 1)[0]
+
+    def add(task: str) -> None:
         if task in seen:
-            continue
+            return
         seen.add(task)
         found.append(task)
+
+    for exc in sorted(jobs_dir.rglob("exception.txt")):
+        try:
+            text = exc.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not _env_start_hit(text):
+            continue
+        add(exc.parent.name.rsplit("__", 1)[0])
+    for result in sorted(jobs_dir.rglob("result.json")):
+        name = result.parent.name
+        if "__" not in name:
+            continue
+        try:
+            payload = json.loads(result.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        info = payload.get("exception_info") if isinstance(payload, dict) else None
+        if not isinstance(info, dict):
+            continue
+        text = " ".join(
+            str(info.get(key) or "")
+            for key in ("exception_type", "exception_message", "exception_traceback")
+        )
+        if _env_start_hit(text):
+            add(name.rsplit("__", 1)[0])
     return tuple(found)
+
+
+def any_verifier_reward(jobs_dir: Path) -> bool:
+    """True when at least one trial produced a Harbor reward (including 0.0)."""
+    if not jobs_dir.is_dir():
+        return False
+    for result in jobs_dir.rglob("result.json"):
+        try:
+            payload = json.loads(result.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        rewards = ((payload.get("verifier_result") or {}).get("rewards")) or {}
+        if rewards.get("reward") is not None:
+            return True
+    return False
 
 
 def _trial_outcomes(jobs_dir: Path) -> dict[str, str]:

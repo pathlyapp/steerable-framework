@@ -40,6 +40,7 @@ from evals.harbor_helpers import (
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
     spec_as_json as _spec_as_json,
+    usage_from_headless_log as _usage_from_headless_log,
     trial_python_ok as _trial_python_ok,
     trial_python_tag as _trial_python_tag,
     trial_python_venv as _trial_python_venv,
@@ -86,6 +87,12 @@ _TUNING_KEYS = (
     # starves the spiral tasks.
     "STEERABLE_TEMPERATURE",
     "STEERABLE_REASONING_EFFORT",
+    "STEERABLE_REMINDERS",
+    "STEERABLE_DELIVERY_VERIFY",
+    "STEERABLE_LIVELOCK_EMPTY_STREAK",
+    "STEERABLE_PROMPT_CC_ALIGN",
+    "STEERABLE_READ_IMAGES",
+    "STEERABLE_REQUEST_RECORD_PATH",
 )
 _PROXY_KEYS = (
     "HTTP_PROXY",
@@ -118,7 +125,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
         # dimension (W1.3.1) explicitly so `--agent-kwarg harness=...` takes
         # effect instead of vanishing.
         super().__init__(*args, **kwargs)
-        self._harness_spec = harness
+        # Host-only (not in `_TUNING_KEYS`): the trial container never has
+        # the repo-relative YAML. ``run`` converts it to JSON and uploads.
+        self._harness_spec = harness or os.environ.get("STEERABLE_HARNESS") or None
 
     @override
     def get_version_command(self) -> str | None:
@@ -548,6 +557,28 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # pytest. Re-point python at python3 after the agent in case a
             # trial retargeted the symlink.
             await self._align_verifier_python(environment)
+            await self._record_token_usage(environment, context, log)
+
+    async def _record_token_usage(
+        self,
+        environment: BaseEnvironment,
+        context: AgentContext,
+        log: str,
+    ) -> None:
+        """Copy ``STEERABLE_RUN_SUMMARY`` onto Harbor ``agent_result`` token fields."""
+        result = await environment.exec(
+            command=f"tail -n 8 {shlex.quote(log)}",
+            user="root",
+        )
+        if result.return_code != 0:
+            return
+        inp, out, cache = _usage_from_headless_log(result.stdout or "")
+        if inp is not None:
+            context.n_input_tokens = inp
+        if out is not None:
+            context.n_output_tokens = out
+        if cache is not None:
+            context.n_cache_tokens = cache
 
     def _forwarded_env(self, keys: tuple[str, ...]) -> dict[str, str]:
         env: dict[str, str] = {}
