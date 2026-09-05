@@ -103,6 +103,7 @@ def test_system_prompt_keeps_tools_and_grading_facts() -> None:
     assert "a huge write_file argument often never emits" in prompt
     assert "read_file returns an ASCII preview" in prompt
     assert "git gc --prune" in prompt
+    assert "cannot be found anywhere in the repo" in prompt
 
 
 def test_missing_instruction_errors() -> None:

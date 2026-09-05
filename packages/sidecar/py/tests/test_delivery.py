@@ -1544,6 +1544,56 @@ def test_git_rewrite_block_fires_on_sanitize_instruction() -> None:
     )
 
 
+def test_git_rewrite_block_allows_official_git_leak_recovery() -> None:
+    """Official TB 2.1 git-leak-recovery (harbor-framework/terminal-bench-2-1).
+
+    ``rewrite history`` does not match ``rewriting history``. Catalog 69
+    ``git-leak-recovery`` passed by running ``git gc --prune=now --aggressive``
+    after recovering the dangling secret. Blocking that command would
+    cancel the sanitize +1 with a stable-green −1.
+    """
+    instruction = (
+        "A secret was accidentally committed to this repository in /app "
+        "and then removed by rewriting history. Please\n"
+        "1. recover the secret and write it to a /app/secret.txt file.\n"
+        "2. clean up the secret in that repo to make sure it cannot be found "
+        "anywhere in that repo.\n"
+        "3. make sure irrelevant files and commit messages remain untouched."
+    )
+    hooks = DeliveryHooks(instruction=instruction)
+    assert (
+        hooks.git_rewrite_block_result(
+            ToolCall(
+                id="t",
+                name="bash",
+                arguments={"command": "git gc --prune=now --aggressive"},
+            )
+        )
+        is None
+    )
+    past_tense_only = DeliveryHooks(
+        instruction="A secret was removed by rewriting history. Recover it."
+    )
+    assert (
+        past_tense_only.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": "git gc --prune=now"})
+        )
+        is None
+    )
+    recover_anywhere = DeliveryHooks(
+        instruction=(
+            "Please recover the secret to /app/secret.txt, then make sure "
+            "it cannot be found anywhere in that repo."
+        )
+    )
+    assert (
+        recover_anywhere.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": "git gc --prune=now"})
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_gated_executor_blocks_filter_branch_before_inner() -> None:
     ran: list[str] = []

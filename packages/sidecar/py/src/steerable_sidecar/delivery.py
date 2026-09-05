@@ -172,10 +172,13 @@ _GIT_REWRITE = re.compile(
     r"|\bbfg\b",
     re.IGNORECASE,
 )
+# ``rewrite history`` does not match official git-leak-recovery
+# ``removed by rewriting history``. That trial must prune dangling objects.
 _HISTORY_REWRITE_ALLOWED = re.compile(
-    r"rewrite history|filter-branch|filter-repo|git-filter-repo|"
-    r"git gc --prune",
-    re.IGNORECASE,
+    r"rewrit(?:e|ing)\s+history|filter-branch|filter-repo|git-filter-repo|"
+    r"git gc --prune|"
+    r"recover the secret.{0,240}cannot be found anywhere",
+    re.IGNORECASE | re.DOTALL,
 )
 _GIT_REWRITE_BLOCKED = (
     "Do not rewrite git history or `git gc --prune`: hidden tests still "
