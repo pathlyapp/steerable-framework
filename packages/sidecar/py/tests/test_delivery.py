@@ -14,6 +14,7 @@ from steerable_agent_runtime.loop import LoopContext
 from steerable_sidecar.delivery import (
     DeliveryGatedExecutor,
     DeliveryHooks,
+    _UNVERIFIED_RETRY,
     _is_script_listener,
     named_output_paths,
     named_socket_paths,
@@ -676,6 +677,15 @@ async def test_unverified_gate_disabled_by_env(
     await hooks.post_tool_result(ok, _call("edit_file"), ctx)
     action = await hooks.before_completion(_draft(tools=1), ctx)
     assert action.reason != "unverified_output"
+
+
+def test_unverified_retry_does_not_rerun_the_generator() -> None:
+    """extract-elf Arm A: the old copy named the hidden-test command, which
+    is `node extract.js > out.json` — deleting and regenerating the scored
+    file. Two of three such trials then failed; Arm B (gate off) was 3/3."""
+    assert "Do not rewrite or delete the scored files" in _UNVERIFIED_RETRY
+    assert "Re-running the generator" in _UNVERIFIED_RETRY
+    assert "hidden tests will execute" not in _UNVERIFIED_RETRY
 
 
 def test_named_output_paths_skips_usr_bin() -> None:

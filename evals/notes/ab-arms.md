@@ -24,6 +24,9 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    Persistence prompt stays on both arms (it is `_SYSTEM`, not an env).
    This isolates the post-write gate, which is the piece with a replay
    estimate (+4–5 tasks/run; unchecked trials 0.587 vs 0.768 checked).
+   Early paired shards (not a verdict): `extract-elf` 1/3 with the gate vs
+   3/3 without; both A losses fired `unverified_output` then re-ran the
+   generator. The retry copy no longer names the hidden-test command.
 2. **ReminderHooks** — `STEERABLE_REMINDERS=1` on B. Default is off so this
    does not confound (1).
 3. **Live-lock** — `STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B. Default is 0.
