@@ -31,6 +31,8 @@ from typing import NamedTuple
 _ARM = re.compile(r"^eval-steerable-flaky-([ab])-\d+$")
 #: Tool-call lines in ``headless.log``, counted as trajectory length.
 _TOOL = re.compile(r"\[tool \w+ ")
+#: ReminderHooks ``pre_step`` label in headless logs (Python dict repr).
+_REMINDER_HOOK = re.compile(r"'action': 'reminder'")
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -77,6 +79,39 @@ def _calls(result: Path) -> int | None:
         return len(_TOOL.findall(log.read_text(errors="replace")))
     except OSError:
         return None
+
+
+def extras(root: Path) -> str:
+    """Incomplete trials and ReminderHooks fires, which the verdict ignores.
+
+    ``collect`` drops ``reward is None`` so a GHA-killed hang cannot flip
+    the sign test. Those trials still need a line: an arm whose remaining
+    1/1 looks like a win may just have lost two verifier timeouts. The
+    reminder count is the wiring check for ``STEERABLE_REMINDERS=1`` —
+    zero fires on B means the arm never reached the model.
+    """
+    incomplete: dict[str, int] = defaultdict(int)
+    reminders: dict[str, int] = defaultdict(int)
+    for log in sorted(root.rglob("agent/headless.log")):
+        arm = _arm_of(log, root)
+        result = log.parent.parent / "result.json"
+        if not result.exists() or _passed(result) is None:
+            incomplete[arm] += 1
+        try:
+            text = log.read_text(errors="replace")
+        except OSError:
+            continue
+        reminders[arm] += len(_REMINDER_HOOK.findall(text))
+    arms = sorted(set(incomplete) | set(reminders))
+    if not arms:
+        return ""
+    lines = []
+    for arm in arms:
+        lines.append(
+            f"arm {arm}: {incomplete[arm]} incomplete (no reward)  "
+            f"{reminders[arm]} reminder hook_action"
+        )
+    return "\n".join(lines)
 
 
 def collect(root: Path) -> dict[str, dict[str, list[Trial]]]:
@@ -229,10 +264,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"not a directory: {args.root}", file=sys.stderr)
         return EXIT_USAGE
     data = collect(args.root)
+    extra = extras(args.root)
     if not data:
+        if extra:
+            print(extra)
+            return EXIT_OK
         print(f"no trial results under {args.root}", file=sys.stderr)
         return EXIT_USAGE
     print(report(data))
+    if extra:
+        print()
+        print(extra)
     return EXIT_OK
 
 

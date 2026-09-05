@@ -49,7 +49,7 @@ Done. GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions
 
 20 paired tasks: B better on 6, A on 4, tied on 10. Sign test p = 0.7539. Mean per-task change +0.0667, 95% CI [-0.0500, +0.1917]. **No separation.** `unverified_output` fired three times, all on A: two `extract-elf` losses (old copy re-ran `node extract.js > out.json`) and one `largest-eigenval` **pass**. Every other B-better task (`modernize-scientific-stack`, `video-processing`, `install-windows-3.11`, `train-fasttext`, `largest-eigenval`'s miss) had zero gate fires.
 
-**Keep `STEERABLE_DELIVERY_VERIFY` on.** Next: ReminderHooks on HEAD (`STEERABLE_REMINDERS=1` on B). Do not default the gate off.
+**Keep `STEERABLE_DELIVERY_VERIFY` on.** ReminderHooks is in flight on HEAD: GHA [33959644133](https://github.com/pathlyapp/steerable-framework/actions/runs/33959644133) (`STEERABLE_REMINDERS=1` on B). Do not default the gate off.
 
 ## Already falsified (do not rerun)
 

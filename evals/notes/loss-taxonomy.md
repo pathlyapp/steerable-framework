@@ -67,7 +67,7 @@ on a guessed 8-id list.
 | Arm | Do it? | Why |
 | --- | ------ | --- |
 | 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **No. Keep the gate on** | 20 paired: B better 6, A on 4, tied 10, p=0.7539, CI includes 0. Gate-fire-then-fail is only `extract-elf` (old copy). See `ab-arms.md` |
-| ReminderHooks (`STEERABLE_REMINDERS=1`) | **Yes, next** | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode. Dispatch on HEAD (`53d5402` + `9221f19` + copy) |
+| ReminderHooks (`STEERABLE_REMINDERS=1`) | **In flight** | GHA [33959644133](https://github.com/pathlyapp/steerable-framework/actions/runs/33959644133) on HEAD. `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
 | CC-align prompt (`STEERABLE_PROMPT_CC_ALIGN=1`) | Yes | Persist-if-long + grep/glob. Tool-description facts landed as defaults |

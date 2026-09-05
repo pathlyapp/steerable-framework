@@ -50,6 +50,13 @@ def test_flaky_feishu_copy_matches_the_split() -> None:
     assert "25 题" not in WEEKLY
 
 
+def test_flaky_start_card_names_arm_b_overrides() -> None:
+    """A defaulted arm_b_env is a silent no-op A/B; the start card has to
+    show what B actually received."""
+    assert "ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}" in WEEKLY
+    assert 'os.environ.get("ARM_B_ENV")' in WEEKLY
+
+
 def test_flaky_gather_runs_the_paired_scorer() -> None:
     """Harbor Mean on a flaky dispatch is last-attempt overwrite; the
     verdict that decides a catalog run is flaky_score on every attempt."""

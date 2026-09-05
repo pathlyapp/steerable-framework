@@ -16,6 +16,7 @@ from evals.flaky_score import (
     _arm_of,
     bootstrap_delta,
     collect,
+    extras,
     report,
     sign_test,
     spread,
@@ -124,3 +125,31 @@ def test_spread_is_reported_per_arm(tmp_path: Path) -> None:
     text = report(collect(tmp_path))
     assert "arm a: 3/3 attempts passed  pass rate 1.0000  trajectory spread 0.0" in text
     assert "arm b: 3/3 attempts passed  pass rate 1.0000  trajectory spread 19.0" in text
+
+
+def test_extras_count_incomplete_and_reminder_fires(tmp_path: Path) -> None:
+    """Wiring check for STEERABLE_REMINDERS, plus hangs the verdict skips."""
+    _trial(tmp_path, "a", 0, "task", "h0", reward=1.0, calls=4)
+    _trial(tmp_path, "b", 0, "task", "h0", reward=1.0, calls=4)
+    b_log = next((tmp_path / "eval-steerable-flaky-b-0").rglob("headless.log"))
+    b_log.write_text(
+        b_log.read_text()
+        + "[hook_action {'hook': 'pre_step', 'action': 'reminder', "
+        "'reason': 'context appended', 'round': 12}]\n"
+    )
+    hung = (
+        tmp_path
+        / "eval-steerable-flaky-a-1"
+        / "evals"
+        / "jobs"
+        / "steerable"
+        / "run"
+        / "hung__h0"
+        / "agent"
+    )
+    hung.mkdir(parents=True)
+    (hung / "headless.log").write_text("[hard_timeout]\n")
+    text = extras(tmp_path)
+    assert "arm a: 1 incomplete (no reward)  0 reminder hook_action" in text
+    assert "arm b: 0 incomplete (no reward)  1 reminder hook_action" in text
+
