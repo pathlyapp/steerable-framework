@@ -118,14 +118,61 @@ _MISSING_NAMED_RETRY = (
 )
 _WRAP_UP_MARKER = "The time budget for this task is"
 _LIVELOCK_WRITE_NOW = (
-    "[system notice] Forced tool rounds produced no calls. Stop retrying "
-    "empty reasoning: write the required files now, or state the blocker."
+    "[system notice] Forced tool rounds produced no calls. Stop empty "
+    "reasoning: emit a bash tool call that writes the required files now."
 )
 _WRAP_UP_NAMED = (
     "Time is almost up. These instruction-named output files still do "
     "not exist: {paths}. Emit a bash tool call now: "
     "`cat > {first} <<'EOF'` (or write_file). Do not keep exploring or "
     "only reason in chat."
+)
+_WRAP_UP_SHOWN = (
+    "Time is almost up. {path} is a rendering dump, not the text a print "
+    "shows. Write the short string the print would display: "
+    "`cat > {path} <<'EOF'` (or write_file). Do not keep dumping a raster."
+)
+_WRAP_UP_EXAMPLE = (
+    "Time is almost up. {detail} Write the scored outputs now; do not "
+    "keep reasoning without changing them."
+)
+_WRAP_UP_PREFIX = (
+    "Time is almost up. {path} does not start with {prefix}, which the "
+    "instruction states as a prefix of the answer. Write the full "
+    "value: `cat > {path} <<'EOF'` (or write_file)."
+)
+_WRAP_UP_PREFIX_ONLY = (
+    "Time is almost up. {path} is only the stated prefix {prefix}, not "
+    "the full value. Write the complete result: `cat > {path} <<'EOF'`."
+)
+_WRAP_UP_STUB = (
+    "Time is almost up. {path} is still {got}. Write the required value: "
+    "`cat > {path} <<'EOF'` (or write_file)."
+)
+# sanitize-git-repo: secret tests passed, then filter-branch + gc --prune
+# deleted the SHA hidden tests still resolve (catalog 33497477757).
+# `git -C dir` / `git -c k=v` / `git --no-pager` may sit before the subcommand.
+_GIT_PREFIX = r"git(?:\s+-(?:C|c)\s+\S+|\s+--[A-Za-z0-9][\w-]*)*"
+_GIT_REWRITE = re.compile(
+    rf"\b{_GIT_PREFIX}\s+filter-branch\b"
+    rf"|\b{_GIT_PREFIX}\s+filter-repo\b"
+    rf"|\b{_GIT_PREFIX}\s+gc\s+--prune\b"
+    r"|\bpython(?:3)?\s+-m\s+git_filter_repo\b"
+    # Hyphenated binary. Require command position so `which git-filter-repo`
+    # (catalog 33547943349 probed this, then ran filter-branch) is not a veto.
+    r"|(?:^|[;&\n]|\|\||&&)\s*git-filter-repo\b"
+    r"|\bbfg\b",
+    re.IGNORECASE,
+)
+_HISTORY_REWRITE_ALLOWED = re.compile(
+    r"rewrite history|filter-branch|filter-repo|git-filter-repo|"
+    r"git gc --prune",
+    re.IGNORECASE,
+)
+_GIT_REWRITE_BLOCKED = (
+    "Do not rewrite git history or `git gc --prune`: hidden tests still "
+    "resolve the original commit SHA. Edit secrets in the working tree "
+    "and leave existing commits in place."
 )
 # Absolute paths TB instructions name as outputs (`/app/re.json`,
 # `/tmp/frame.bmp`, `/app/polyglot/cmain`). Existing paths at start are
@@ -302,14 +349,33 @@ _SHOWN_TEXT_RETRY = (
     "{path} is {got} bytes; the instruction asks for the text a print "
     "shows, not a raster of the rendering. Write the short string."
 )
+_RASTER_LINE = re.compile(r"^[.#@+\-|= ]{24,}$")
+_SHOWN_RASTER_RETRY = (
+    "{path} is a rendering dump, not the text a print shows. Write the "
+    "short string the print would display."
+)
 _SHOWN_TEXT_PLACEHOLDER = re.compile(
     r"^(?:PROVISIONAL|PLACEHOLDER|TODO|TBD|FIXME|WIP|PENDING|STUB|"
     r"UNFINISHED|INCOMPLETE|TEMPORARY)\s*$",
     re.IGNORECASE,
 )
 _SHOWN_PLACEHOLDER_RETRY = (
-    "{path} is a stub ({got!r}), not the text a print shows. Write the "
-    "decoded print output; do not leave a status word."
+    "{path} is a stub ({got!r}), not the scored result. Write the required "
+    "output; do not leave a status word."
+)
+# Instruction-stated prefix of the scored text ("starts with `abc`").
+# The shown-text phrase is a different clause and does not cover this.
+_ANSWER_STARTS_WITH = re.compile(
+    r"starts with\s+[`'\"]([A-Za-z0-9]+)[`'\"]",
+    re.IGNORECASE,
+)
+_PREFIX_RETRY = (
+    "{path} does not start with {prefix!r}, which the instruction states "
+    "as a prefix of the correct answer. Write the full result."
+)
+_PREFIX_ONLY_RETRY = (
+    "{path} is only the instruction's stated prefix {prefix!r}. That is "
+    "a check on the answer, not the full value. Write the complete result."
 )
 # path-tracing-reverse: "<2k when compressed (`cat mystery.c | gzip | wc`)"
 _GZIP_K_CAP = re.compile(r"<\s*(\d+)\s*k\b", re.IGNORECASE)
@@ -341,6 +407,26 @@ _CHECKER_TIMEOUT = (
 _CHECKER_RETRY = (
     "A helper script ({name}) exists on disk. Run it now (python3 {name}) "
     "against the named outputs and fix failures before stopping."
+)
+# Instruction-stated example: "running /app/sim 208 should output 377".
+# A starter file that still prints the old value is not the scored result.
+_RUNNING_SHOULD = re.compile(
+    r"running\s+((?:/[A-Za-z0-9._/+-]+)(?:\s+[A-Za-z0-9._+-]+){0,3})"
+    r"\s+should\s+(?:output|give|print)\s+[`'\"]?([A-Za-z0-9_+-]+)[`'\"]?",
+    re.IGNORECASE,
+)
+_EXAMPLE_ARG = re.compile(r"^[A-Za-z0-9._/+-]+$")
+_EXAMPLE_ROOTS = ("/app/", "/tmp/", "/workspace/", "/home/agent/")
+_MAX_EXAMPLE_TIMEOUTS = 2
+_EXAMPLE_TIMEOUT_SEC = 60
+_EXAMPLE_COMPILE_TIMEOUT_SEC = 30
+_EXAMPLE_MISMATCH = (
+    "The instruction says running `{cmd}` should output {expected!r}; "
+    "got {got!r}. Fix the outputs until that example holds."
+)
+_EXAMPLE_TIMEOUT = (
+    "`{cmd}` did not finish in {sec}s. Fix the hang or shrink the "
+    "example input before stopping."
 )
 # Mechanical checks on named artifacts. Not hidden-test answer matching.
 _MAX_VALIDATE_RETRIES = 4
@@ -482,9 +568,12 @@ def _delivery_verify_enabled() -> bool:
 
 
 def _livelock_empty_streak() -> int:
-    """Consecutive wrap-up ``tool_choice=required`` rounds with no tool call.
+    """Consecutive forced-empty ``tool_choice=required`` rounds with no tool call.
 
-    Unset or ``0`` disables. A flaky arm sets ``STEERABLE_LIVELOCK_EMPTY_STREAK=3``.
+    Counts wrap-up required rounds, and pre-wrap ``empty_round`` retries
+    that still have not written (catalog 69/70 ``circuit-fibsqrt`` thought
+    until ``[hard_timeout]``). A write resets the streak. Unset or ``0``
+    disables. A flaky arm sets ``STEERABLE_LIVELOCK_EMPTY_STREAK=3``.
     """
     raw = os.environ.get("STEERABLE_LIVELOCK_EMPTY_STREAK")
     if raw is None or not str(raw).strip():
@@ -528,6 +617,9 @@ class DeliveryHooks(NoopHooks):
         self._bytes_retries = 0
         self._json_retries = 0
         self._check_retries = 0
+        self._example_timeouts = 0
+        self._example_compiled: set[str] = set()
+        self._example_wrong: bool | None = None
         self._validate_retries = 0
         self._entry_runs = 0
         self._make_runs = 0
@@ -535,6 +627,9 @@ class DeliveryHooks(NoopHooks):
         self._wrapping = False
         self._compact_nudges = 0
         self._wrap_up_named_nudges = 0
+        self._wrap_up_shown_nudges = 0
+        self._wrap_up_prefix_nudges = 0
+        self._wrap_up_example_nudges = 0
         self._force_tool = False
         self._forced_empty_streak = 0
         self._livelock_nudged = False
@@ -543,39 +638,107 @@ class DeliveryHooks(NoopHooks):
         self._sockets = named_socket_paths(instruction)
         self._cpu_only_retries = 0
 
+    def git_rewrite_block_result(self, call: ToolCall) -> ToolResult | None:
+        """Refuse history rewrite unless the instruction requires one.
+
+        ``sanitize-git-repo`` already had the secrets replaced; ``git
+        filter-branch`` then ``git gc --prune`` left pinned SHA ``d6987af``
+        missing. Oracle only ``sed``s the working tree. Also refuse the
+        hyphenated ``git-filter-repo`` binary and ``python -m git_filter_repo``.
+        Allow the command when the instruction itself names a history rewrite.
+        """
+        if call.name != "bash":
+            return None
+        if _HISTORY_REWRITE_ALLOWED.search(self._instruction or ""):
+            return None
+        if not _GIT_REWRITE.search(_bash_command(call)):
+            return None
+        return ToolResult(
+            success=False,
+            error=_GIT_REWRITE_BLOCKED,
+            needsFollowup=True,
+        )
+
     def inspect_block_result(self, call: ToolCall) -> ToolResult | None:
         """Refuse inspect-only tools after named-output nudges are ignored.
 
         Runs *before* the tool so a 3-hour OCR/ffmpeg/python-helper loop
         cannot eat the Harbor window. Also gates after the wrap-up named
         nudge so a render/OCR loop cannot continue after the time-budget
-        notice when explore nudges were still 0. Bash that compiles (make/gcc), runs
+        notice when explore nudges were still 0, after wrap-up shown-text
+        when the named ``.txt`` is a raster dump, and after wrap-up
+        instruction-example when a starter file still prints the old value
+        (catalog 69 ``circuit-fibsqrt`` never completed, so completion
+        veto never ran).
+        Bash that compiles (make/gcc), runs
         ``node …`` (side-effect frames), runs an on-disk named ``.py``,
         runs a helper ``.py`` whose source mutates a still-missing named
         path, or mutates a still-missing named path still runs.
         ``python3 gen.py`` that only inspects, and ``cat > explore.py``,
-        do not. ``read_file`` of a path that already exists still runs,
-        as does ``cat``/``head`` of that same on-disk file.
+        do not. After wrap-up shown-text, a helper whose source rewrites
+        an existing raster dump is also blocked: the dump already exists,
+        so regenerating it is the inspect spiral (catalog 69
+        ``python3 parse.py``). ``cat >`` / ``write_file`` of the dump
+        path still runs. ``read_file`` of a path that already exists still
+        runs, as does ``cat``/``head`` of that same on-disk file, except
+        after a wrap-up shown-text or instruction-example nudge: reading
+        the dump or the starter is the inspect spiral.
         Extensionless paths (sockets, qemu monitor) do not trigger the gate.
         """
         scored = self._scored_missing()
+        raster = self._shown_text_raster_paths()
+        example_named = (
+            tuple(p for p in self._named if Path(p).is_file())
+            if self._wrap_up_example_nudges >= 1
+            else ()
+        )
+        prefix_named = (
+            tuple(p for p in self._named if Path(p).is_file())
+            if self._wrap_up_prefix_nudges >= 1
+            else ()
+        )
+        blocked = scored or raster or example_named or prefix_named
         gated = (
             self.nudges >= _BLOCK_EXPLORE_AFTER_NUDGES
             or self._wrap_up_named_nudges >= 1
+            or self._wrap_up_shown_nudges >= 1
+            or self._wrap_up_prefix_nudges >= 1
+            or self._wrap_up_example_nudges >= 1
+            or (self._livelock_nudged and self.writes == 0)
         )
-        if not scored or not gated:
+        if not blocked or not gated:
             return None
         name = call.name
         if name not in _EXPLORE:
             return None
         if name == "read_file" and _read_file_on_disk(call):
-            return None
+            raw = str((call.arguments or {}).get("path") or "")
+            if (
+                raw not in raster
+                and raw not in example_named
+                and raw not in prefix_named
+            ):
+                return None
+        command = _bash_command(call)
+        viewed = _bash_viewed_file(command)
+        still_missing = tuple(path for path in blocked if path not in raster)
         if name == "bash" and (
-            _bash_delivers_required(call, scored, self._named)
-            or _bash_reads_existing(_bash_command(call))
+            _bash_delivers_required(call, still_missing, self._named)
+            or (
+                bool(raster)
+                and any(path in command for path in raster)
+                and bool(_BASH_MUTATE_FILE.search(command))
+                and _BASH_RUN_PYTHON.search(command) is None
+            )
+            or (
+                not raster
+                and self._wrap_up_example_nudges < 1
+                and _bash_reads_existing(command)
+                and viewed not in prefix_named
+            )
         ):
             return None
-        listed = ", ".join(scored[:8])
+        listed = ", ".join(blocked[:8])
         return ToolResult(
             success=False,
             error=_INSPECT_BLOCKED.format(paths=listed),
@@ -600,6 +763,16 @@ class DeliveryHooks(NoopHooks):
 
     def wrap_up_may_drop_tools(self) -> bool:
         if self._delivery_missing():
+            return False
+        if self._shown_text_raster_paths():
+            return False
+        if self._named_stub_path() is not None:
+            return False
+        if self._named_prefix_mismatch() is not None:
+            return False
+        if self._example_is_wrong():
+            return False
+        if self._livelock_nudged and self.writes == 0:
             return False
         # qemu-startup / install-windows name no scored files. If wrap-up
         # withholds tools, before_completion (telnet/listen, monitor
@@ -694,8 +867,88 @@ class DeliveryHooks(NoopHooks):
                 tool_choice="required",
                 append_action="delivery_nudge",
             )
-        if wrapping and self._livelock_nudged:
-            return PreStepAction(kind="proceed")
+        if wrapping and self._wrap_up_shown_nudges < 1:
+            raster = self._shown_text_raster_paths()
+            if raster:
+                self._wrap_up_shown_nudges += 1
+                self._force_tool = True
+                path = raster[0]
+                return PreStepAction(
+                    kind="proceed",
+                    appends=[
+                        TranscriptAppend(
+                            message=LLMMessage.text_of(
+                                "user",
+                                _WRAP_UP_SHOWN.format(path=path),
+                            ),
+                            kind="delivery.wrap_up_shown",
+                        )
+                    ],
+                    reason="wrap_up_shown_text",
+                    tool_choice="required",
+                    append_action="delivery_nudge",
+                )
+        if wrapping and self._wrap_up_prefix_nudges < 1:
+            stub = self._named_stub_path()
+            prefix = self._named_prefix_mismatch()
+            if stub is not None or prefix is not None:
+                self._wrap_up_prefix_nudges += 1
+                self._force_tool = True
+                if stub is not None:
+                    path, got = stub
+                    text = _WRAP_UP_STUB.format(path=path, got=got)
+                else:
+                    assert prefix is not None
+                    path, pref, only = prefix
+                    text = (
+                        _WRAP_UP_PREFIX_ONLY if only else _WRAP_UP_PREFIX
+                    ).format(path=path, prefix=pref)
+                return PreStepAction(
+                    kind="proceed",
+                    appends=[
+                        TranscriptAppend(
+                            message=LLMMessage.text_of("user", text),
+                            kind="delivery.wrap_up_prefix",
+                        )
+                    ],
+                    reason="wrap_up_named_prefix",
+                    tool_choice="required",
+                    append_action="delivery_nudge",
+                )
+        if wrapping and self._wrap_up_example_nudges < 1:
+            example = self._instruction_example_retry()
+            if example is not None:
+                self._wrap_up_example_nudges += 1
+                self._force_tool = True
+                detail = (example.message or "").strip()
+                return PreStepAction(
+                    kind="proceed",
+                    appends=[
+                        TranscriptAppend(
+                            message=LLMMessage.text_of(
+                                "user",
+                                _WRAP_UP_EXAMPLE.format(detail=detail),
+                            ),
+                            kind="delivery.wrap_up_example",
+                        )
+                    ],
+                    reason="wrap_up_instruction_example",
+                    tool_choice="required",
+                    append_action="delivery_nudge",
+                )
+        # Wrap-up quality gates (prefix / raster / example / missing) must
+        # re-assert required every remaining round. ``post_tool_result``
+        # clears ``_force_tool`` on every call, including a blocked inspect,
+        # and ``writes > 0`` is true after an early wrong digest (catalog 70
+        # ``code-from-image``). Standing down on either would replay the
+        # wrap-up livelock no-op: the model thinks until ``[hard_timeout]``.
+        keep_wrap_tools = wrapping and not self.wrap_up_may_drop_tools()
+        if keep_wrap_tools:
+            self._force_tool = True
+        elif wrapping:
+            self._force_tool = False
+            if self._livelock_nudged:
+                return PreStepAction(kind="proceed")
         nudge_limit = (
             _MAX_NAMED_EXPLORE_NUDGES if named_missing else self._max_nudges
         )
@@ -733,10 +986,15 @@ class DeliveryHooks(NoopHooks):
             else None
         )
         cap = _livelock_empty_streak()
-        if wrapping and cap > 0 and tool_choice == "required":
+        idle = wrapping or (self.writes == 0 and self._force_tool)
+        if (
+            idle
+            and cap > 0
+            and tool_choice == "required"
+            and not self._livelock_nudged
+        ):
             self._forced_empty_streak += 1
             if self._forced_empty_streak >= cap:
-                self._force_tool = False
                 self._livelock_nudged = True
                 return PreStepAction(
                     kind="proceed",
@@ -747,6 +1005,7 @@ class DeliveryHooks(NoopHooks):
                         )
                     ],
                     reason="forced_empty_livelock",
+                    tool_choice="required",
                     append_action="delivery_nudge",
                 )
         if tool_choice and reason is None:
@@ -771,6 +1030,8 @@ class DeliveryHooks(NoopHooks):
         self._force_tool = False
         self._forced_empty_streak = 0
         name = call.name
+        if call.name in _MUTATING or (name == "bash" and _bash_writes(call)):
+            self._example_wrong = None
         # Ordered before the write branches so a call that both runs and
         # delivers — `python3 gen.py`, `make` — ends up unverified: what it
         # produced is exactly what nothing has been run against yet.
@@ -936,12 +1197,85 @@ class DeliveryHooks(NoopHooks):
             )
         return None
 
-    def _named_shown_text_retry(self) -> CompletionAction | None:
-        """Veto a stub or huge named .txt when the instruction asks for print text."""
-        if self._bytes_retries >= _MAX_BYTES_RETRIES:
+    def _named_stub_path(self) -> tuple[str, str] | None:
+        """Named ``.txt`` whose whole body is a status word."""
+        for path in self._output_files():
+            if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
+                continue
+            try:
+                body = Path(path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            got = body.strip()
+            if _SHOWN_TEXT_PLACEHOLDER.match(got):
+                return path, got
+        return None
+
+    def _named_prefix_mismatch(self) -> tuple[str, str, bool] | None:
+        """``(path, prefix, only_prefix)`` when a named ``.txt`` misses the hint."""
+        match = _ANSWER_STARTS_WITH.search(self._instruction or "")
+        if not match:
             return None
+        prefix = match.group(1)
+        for path in self._output_files():
+            if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
+                continue
+            try:
+                body = Path(path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            got = body.strip()
+            if got == prefix:
+                return path, prefix, True
+            if not got.startswith(prefix):
+                return path, prefix, False
+        return None
+
+    def _named_stub_retry(self) -> CompletionAction | None:
+        """Veto a named .txt whose whole body is a status word.
+
+        This veto does not stand down: a PLACEHOLDER after four retries is
+        still not the scored result.
+        """
+        stub = self._named_stub_path()
+        if stub is None:
+            return None
+        path, got = stub
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=_SHOWN_PLACEHOLDER_RETRY.format(path=path, got=got),
+            reason="named_stub",
+        )
+
+    def _named_prefix_retry(self) -> CompletionAction | None:
+        """Veto a named .txt that misses or is only an instruction prefix.
+
+        ``starts with X`` names a prefix of a longer value. A file whose
+        whole body is exactly X is the check, not the answer. A longer
+        string that still misses X is also not the answer (catalog 70
+        shipped a 64-hex hash that did not start with the stated prefix).
+        Neither case stands down.
+        """
+        mismatch = self._named_prefix_mismatch()
+        if mismatch is None:
+            return None
+        path, prefix, only = mismatch
+        self._force_tool = True
+        message = (
+            _PREFIX_ONLY_RETRY if only else _PREFIX_RETRY
+        ).format(path=path, prefix=prefix)
+        return CompletionAction(
+            kind="retry",
+            message=message,
+            reason="named_prefix",
+        )
+
+    def _shown_text_raster_paths(self) -> tuple[str, ...]:
+        """Named ``.txt`` dumps that are a raster, not print text."""
         if not _ASKS_SHOWN_TEXT.search(self._instruction or ""):
-            return None
+            return ()
+        found: list[str] = []
         for path in self._output_files():
             if Path(path).suffix.lower() != ".txt" or not Path(path).is_file():
                 continue
@@ -950,26 +1284,36 @@ class DeliveryHooks(NoopHooks):
             except (OSError, UnicodeDecodeError):
                 continue
             got = len(body.encode("utf-8"))
-            if _SHOWN_TEXT_PLACEHOLDER.match(body.strip()):
-                self._bytes_retries += 1
-                self._force_tool = True
-                return CompletionAction(
-                    kind="retry",
-                    message=_SHOWN_PLACEHOLDER_RETRY.format(
-                        path=path, got=body.strip()
-                    ),
-                    reason="named_shown_text",
-                )
-            if got <= _MAX_SHOWN_TEXT_BYTES:
-                continue
-            self._bytes_retries += 1
-            self._force_tool = True
-            return CompletionAction(
-                kind="retry",
-                message=_SHOWN_TEXT_RETRY.format(path=path, got=got),
-                reason="named_shown_text",
+            art_rows = sum(
+                1 for line in body.splitlines() if _RASTER_LINE.match(line)
             )
-        return None
+            if got > _MAX_SHOWN_TEXT_BYTES or art_rows >= 8:
+                found.append(path)
+        return tuple(found)
+
+    def _named_shown_text_retry(self) -> CompletionAction | None:
+        """Veto a raster dump when the instruction asks for print text.
+
+        A file over 4 KiB, or eight-plus ASCII-art rows, is not the print
+        string. This veto does not stand down after a retry budget.
+        Completion never sees a timeout trial: wrap-up shown-text is
+        the same check on ``pre_step``.
+        """
+        paths = self._shown_text_raster_paths()
+        if not paths:
+            return None
+        path = paths[0]
+        got = Path(path).stat().st_size
+        self._force_tool = True
+        return CompletionAction(
+            kind="retry",
+            message=(
+                _SHOWN_TEXT_RETRY.format(path=path, got=got)
+                if got > _MAX_SHOWN_TEXT_BYTES
+                else _SHOWN_RASTER_RETRY.format(path=path)
+            ),
+            reason="named_shown_text",
+        )
 
     def _named_gzip_cap_retry(self) -> CompletionAction | None:
         """Veto a named source over an instruction `<Nk gzip` compressed cap."""
@@ -1158,6 +1502,102 @@ class DeliveryHooks(NoopHooks):
                 message=message,
                 reason="named_checker",
             )
+        return None
+
+    def _ensure_example_binary(self, argv0: str) -> bool:
+        """Compile ``{bin}.c`` once when the instruction names ``running {bin}``."""
+        dest = Path(argv0)
+        if dest.is_file():
+            return True
+        src = dest.with_suffix(".c")
+        if not src.is_file():
+            return False
+        key = str(dest)
+        if key in self._example_compiled:
+            return dest.is_file()
+        self._example_compiled.add(key)
+        compiler = shutil.which("gcc") or shutil.which("cc")
+        if compiler is None:
+            return False
+        code, _ = _run_cmd(
+            [compiler, "-O2", "-o", str(dest), str(src)],
+            cwd=str(dest.parent),
+            timeout=_EXAMPLE_COMPILE_TIMEOUT_SEC,
+        )
+        return code == 0 and dest.is_file()
+
+    def _example_is_wrong(self) -> bool:
+        """True when an instruction example command is runnable and mismatches.
+
+        Cached until a write: wrap-up calls this every round, and the
+        second official example is a 20k-step sim.
+        """
+        if self._example_wrong is not None:
+            return self._example_wrong
+        wrong = False
+        for argv, expected in instruction_example_commands(self._instruction):
+            if not Path(argv[0]).is_file() and not self._ensure_example_binary(
+                argv[0]
+            ):
+                continue
+            code, stdout = _run_stdout(
+                list(argv),
+                cwd=str(Path(argv[0]).parent),
+                timeout=_EXAMPLE_TIMEOUT_SEC,
+            )
+            if code is None or stdout.strip() != expected:
+                wrong = True
+                break
+        self._example_wrong = wrong
+        return wrong
+
+    def _instruction_example_retry(self) -> CompletionAction | None:
+        """Veto when an instruction example command prints the wrong value.
+
+        A pre-existing named file (starter input) is not ``_required``, so
+        missing-named and the verify gate never see it. The instruction's
+        own ``running … should output`` line is the check. The image may
+        ship only ``{bin}.c`` (catalog 69 ``circuit-fibsqrt``); compile it
+        once. Wrap-up also runs this because a timeout trial never
+        completes.
+        """
+        for argv, expected in instruction_example_commands(self._instruction):
+            if not Path(argv[0]).is_file() and not self._ensure_example_binary(
+                argv[0]
+            ):
+                continue
+            code, stdout = _run_stdout(
+                list(argv),
+                cwd=str(Path(argv[0]).parent),
+                timeout=_EXAMPLE_TIMEOUT_SEC,
+            )
+            cmd = " ".join(argv)
+            if code is None:
+                if self._example_timeouts >= _MAX_EXAMPLE_TIMEOUTS:
+                    continue
+                self._example_timeouts += 1
+                self._force_tool = True
+                self._example_wrong = True
+                return CompletionAction(
+                    kind="retry",
+                    message=_EXAMPLE_TIMEOUT.format(
+                        cmd=cmd, sec=_EXAMPLE_TIMEOUT_SEC
+                    ),
+                    reason="instruction_example",
+                )
+            got = stdout.strip()
+            if got == expected:
+                continue
+            self._force_tool = True
+            self._example_wrong = True
+            return CompletionAction(
+                kind="retry",
+                message=_EXAMPLE_MISMATCH.format(
+                    cmd=cmd, expected=expected, got=got
+                ),
+                reason="instruction_example",
+            )
+        self._example_wrong = False
         return None
 
     def _run_named_make(self, missing: tuple[str, ...]) -> CompletionAction | None:
@@ -1425,6 +1865,12 @@ class DeliveryHooks(NoopHooks):
         json_retry = self._named_json_blank_retry()
         if json_retry is not None:
             return json_retry
+        stub_retry = self._named_stub_retry()
+        if stub_retry is not None:
+            return stub_retry
+        prefix_retry = self._named_prefix_retry()
+        if prefix_retry is not None:
+            return prefix_retry
         shown_retry = self._named_shown_text_retry()
         if shown_retry is not None:
             return shown_retry
@@ -1434,6 +1880,9 @@ class DeliveryHooks(NoopHooks):
         check_retry = self._named_checker_retry()
         if check_retry is not None:
             return check_retry
+        example_retry = self._instruction_example_retry()
+        if example_retry is not None:
+            return example_retry
         listen_retry = self._instruction_listen_retry()
         if listen_retry is not None:
             return listen_retry
@@ -1597,6 +2046,42 @@ def named_socket_paths(instruction: str) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def instruction_example_commands(
+    instruction: str,
+) -> tuple[tuple[tuple[str, ...], str], ...]:
+    """``running /app/bin 208 should output 377`` → argv + expected stdout."""
+    found: list[tuple[tuple[str, ...], str]] = []
+    for match in _RUNNING_SHOULD.finditer(instruction or ""):
+        argv = tuple(match.group(1).split())
+        expected = match.group(2)
+        if not argv or not all(_EXAMPLE_ARG.match(part) for part in argv):
+            continue
+        if not argv[0].startswith(_EXAMPLE_ROOTS):
+            continue
+        found.append((argv, expected))
+    return tuple(found)
+
+
+def _run_stdout(
+    argv: list[str], *, timeout: int, cwd: str | None = None
+) -> tuple[int | None, str]:
+    """Return ``(exit_code, stdout)``; ``exit_code is None`` on timeout."""
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None, ""
+    except OSError as exc:
+        return 1, str(exc)
+    return completed.returncode, completed.stdout or ""
+
+
 def _run_cmd(
     argv: list[str], *, cwd: str | None = None, timeout: int
 ) -> tuple[int | None, str]:
@@ -1755,6 +2240,9 @@ class DeliveryGatedExecutor:
         self._hooks = hooks
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        blocked = self._hooks.git_rewrite_block_result(call)
+        if blocked is not None:
+            return blocked
         blocked = self._hooks.inspect_block_result(call)
         if blocked is not None:
             return blocked
@@ -2091,13 +2579,20 @@ def _read_file_on_disk(call: ToolCall) -> bool:
         return False
 
 
-def _bash_reads_existing(command: str) -> bool:
-    """True for ``cat``/``head`` of a single path that already exists."""
+def _bash_viewed_file(command: str) -> str | None:
     match = _BASH_VIEW_FILE.match(command.strip())
     if not match:
-        return False
+        return None
     raw = match.group(1).strip("'\"")
     if not raw or raw.startswith("-"):
+        return None
+    return raw
+
+
+def _bash_reads_existing(command: str) -> bool:
+    """True for ``cat``/``head`` of a single path that already exists."""
+    raw = _bash_viewed_file(command)
+    if not raw:
         return False
     try:
         return Path(raw).is_file()

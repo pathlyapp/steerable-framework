@@ -16,6 +16,7 @@ from steerable_sidecar.delivery import (
     DeliveryHooks,
     _UNVERIFIED_RETRY,
     _is_script_listener,
+    instruction_example_commands,
     named_output_paths,
     named_socket_paths,
 )
@@ -193,6 +194,154 @@ async def test_wrap_up_lists_missing_named_paths_once(tmp_path) -> None:
     assert f"cat > {dest} <<'EOF'" in (first.appends[0].message.content_text or "")
     second = await hooks.pre_step(notice, LoopContext())
     assert second.reason != "wrap_up_named_output"
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_shown_text_when_named_txt_is_a_raster(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_bytes(b"#" * 5000)
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_shown_text"
+    assert first.tool_choice == "required"
+    assert str(dest) in (first.appends[0].message.content_text or "")
+    second = await hooks.pre_step(notice, LoopContext())
+    assert second.reason != "wrap_up_shown_text"
+    dest.write_text("flag{short}\n", encoding="utf-8")
+    assert hooks.wrap_up_may_drop_tools() is True
+
+
+def test_wrap_up_keeps_tools_while_shown_text_is_a_raster(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_bytes(b"." * 8000)
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    assert hooks.wrap_up_may_drop_tools() is False
+    dest.write_text("HELLO\n", encoding="utf-8")
+    assert hooks.wrap_up_may_drop_tools() is True
+
+
+@pytest.mark.asyncio
+async def test_inspect_blocked_after_wrap_up_shown_text(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_bytes(b"#" * 5000)
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    inspect = ToolCall(id="t", name="bash", arguments={"command": f"cat {dest}"})
+    assert hooks.inspect_block_result(inspect) is None
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_shown_text"
+    blocked = hooks.inspect_block_result(inspect)
+    assert blocked is not None
+    assert str(dest) in (blocked.error or "")
+    write = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"cat > {dest} <<'EOF'\nHI\nEOF"},
+    )
+    assert hooks.inspect_block_result(write) is None
+    dump_read = ToolCall(
+        id="t", name="read_file", arguments={"path": str(dest)}
+    )
+    assert hooks.inspect_block_result(dump_read) is not None
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_shown_text_when_dump_has_a_caption(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    dest.write_text(
+        "=== VIEW (XY) of object at z=0.48 ===\n" + ("." * 80 + "\n") * 10,
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_shown_text"
+    assert first.tool_choice == "required"
+
+
+@pytest.mark.asyncio
+async def test_inspect_blocks_helper_rewrite_after_wrap_up_shown(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    helper = tmp_path / "parse.py"
+    dest.write_bytes(b"#" * 5000)
+    helper.write_text(
+        f"from pathlib import Path\nPath({str(dest)!r}).write_text('dump')\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    rerun = ToolCall(
+        id="t", name="bash", arguments={"command": f"python3 {helper}"}
+    )
+    assert hooks.inspect_block_result(rerun) is None
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_shown_text"
+    assert hooks.inspect_block_result(rerun) is not None
+    redirect = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"python3 {helper} > {dest}"},
+    )
+    assert hooks.inspect_block_result(redirect) is not None
+    inline = ToolCall(
+        id="t",
+        name="bash",
+        arguments={
+            "command": f"python3 -c \"open({str(dest)!r},'w').write('HI\\n')\""
+        },
+    )
+    assert hooks.inspect_block_result(inline) is None
 
 
 @pytest.mark.asyncio
@@ -656,11 +805,17 @@ async def test_empty_round_forces_tool_choice_on_next_step() -> None:
 
 
 @pytest.mark.asyncio
-async def test_livelock_stops_forcing_after_empty_wrap_streak(
+async def test_livelock_write_now_keeps_required_until_a_write(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    """In-flight wrap-up livelock fired WRITE_NOW then dropped tools
+    (starter named file exists) and stopped requiring, so the model
+    thought until hard_timeout. Keep tools and required until a write."""
     monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
-    hooks = DeliveryHooks()
+    dest = tmp_path / "gates.txt"
+    dest.write_text("starter\n", encoding="utf-8")
+    hooks = DeliveryHooks(named_outputs=(str(dest),))
     ctx = LoopContext()
     wrap = [
         LLMMessage.text_of("user", "The time budget for this task is almost gone.")
@@ -673,22 +828,90 @@ async def test_livelock_stops_forcing_after_empty_wrap_streak(
     second = await hooks.pre_step(wrap, ctx)
     assert second.tool_choice == "required"
     third = await hooks.pre_step(wrap, ctx)
-    assert third.tool_choice is None
+    assert third.tool_choice == "required"
     assert third.reason == "forced_empty_livelock"
     assert third.appends
     assert "Forced tool rounds" in (third.appends[0].message.content_text or "")
+    assert hooks.wrap_up_may_drop_tools() is False
     fourth = await hooks.pre_step(wrap, ctx)
-    assert fourth.tool_choice is None
+    assert fourth.tool_choice == "required"
     assert fourth.appends is None
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    fifth = await hooks.pre_step(wrap, ctx)
+    assert fifth.tool_choice is None
+    assert fifth.appends is None
 
 
 @pytest.mark.asyncio
-async def test_livelock_does_not_count_pre_wrap_empty_rounds(
+async def test_livelock_keeps_required_when_writes_already_happened(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Catalog 70 wrote a wrong digest before wrap-up; ``writes > 0``
+    must not drop required while the stated prefix still misses."""
+    monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
+    dest = tmp_path / "output.txt"
+    dest.write_text(
+        "39ad5ff920409f58e961498c997af185ff1b68241c83bcac8ce67a30c05d28c5\n",
+        encoding="utf-8",
+    )
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    ctx = LoopContext()
+    wrap = [
+        LLMMessage.text_of("user", "The time budget for this task is almost gone.")
+    ]
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    assert hooks.writes >= 1
+    first = await hooks.pre_step(wrap, ctx)
+    assert first.reason == "wrap_up_named_prefix"
+    second = await hooks.pre_step(wrap, ctx)
+    assert second.tool_choice == "required"
+    third = await hooks.pre_step(wrap, ctx)
+    assert third.tool_choice == "required"
+    fourth = await hooks.pre_step(wrap, ctx)
+    assert fourth.reason == "forced_empty_livelock"
+    assert fourth.tool_choice == "required"
+    later = await hooks.pre_step(wrap, ctx)
+    assert later.tool_choice == "required"
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.pre_step(wrap, ctx)
+    assert done.tool_choice is None
+
+
+@pytest.mark.asyncio
+async def test_livelock_write_now_on_pre_wrap_empty_with_no_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
     hooks = DeliveryHooks()
     ctx = LoopContext()
+    await hooks.before_completion(
+        _draft(tools=0, content="", had_tool_calls=False), ctx
+    )
+    first = await hooks.pre_step([], ctx)
+    assert first.tool_choice == "required"
+    assert first.reason != "forced_empty_livelock"
+    second = await hooks.pre_step([], ctx)
+    assert second.tool_choice == "required"
+    third = await hooks.pre_step([], ctx)
+    assert third.tool_choice == "required"
+    assert third.reason == "forced_empty_livelock"
+
+
+@pytest.mark.asyncio
+async def test_livelock_does_not_count_pre_wrap_empty_after_a_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_LIVELOCK_EMPTY_STREAK", "3")
+    hooks = DeliveryHooks()
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
     await hooks.before_completion(
         _draft(tools=0, content="", had_tool_calls=False), ctx
     )
@@ -1174,6 +1397,123 @@ async def test_gated_executor_does_not_run_blocked_inspect(tmp_path) -> None:
     assert ran == ["write_file"]
 
 
+def test_git_rewrite_block_refuses_filter_branch() -> None:
+    hooks = DeliveryHooks(instruction="Remove API keys from the repository.")
+    blocked = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "git filter-branch -f --index-filter 'git rm --cached'"},
+        )
+    )
+    assert blocked is not None
+    assert blocked.success is False
+    assert "original commit SHA" in (blocked.error or "")
+    prune = hooks.git_rewrite_block_result(
+        ToolCall(id="t", name="bash", arguments={"command": "git gc --prune=now"})
+    )
+    assert prune is not None
+    env_prefixed = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={
+                "command": (
+                    "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f "
+                    "--tree-filter 'sed -i s/SECRET/x/g' HEAD"
+                )
+            },
+        )
+    )
+    assert env_prefixed is not None
+    dashed = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "git -C /app/dclm filter-branch -f"},
+        )
+    )
+    assert dashed is not None
+    ok = hooks.git_rewrite_block_result(
+        ToolCall(id="t", name="bash", arguments={"command": "sed -i s/SECRET/x/ ray.yaml"})
+    )
+    assert ok is None
+    hyphen = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "cd /app/dclm && git-filter-repo --invert-paths --path-glob '*.pem'"},
+        )
+    )
+    assert hyphen is not None
+    module = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "python3 -m git_filter_repo --invert-paths"},
+        )
+    )
+    assert module is not None
+    probe = hooks.git_rewrite_block_result(
+        ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": "cd /app/dclm && which git-filter-repo; git --version"},
+        )
+    )
+    assert probe is None
+    log = hooks.git_rewrite_block_result(
+        ToolCall(id="t", name="bash", arguments={"command": "git log --all; git gc"})
+    )
+    assert log is None
+
+
+def test_git_rewrite_block_fires_on_sanitize_instruction() -> None:
+    """Official TB 2.1 instruction names no history rewrite (harbor-framework/terminal-bench-2-1)."""
+    instruction = (
+        'Please help sanitize my github repository "dclm" of all API keys.\n'
+        "Please ensure that the sensitive values are not present in the "
+        "repository after the sanitization. The placeholder values should be "
+        "consistent across the repository and should be kept. Also, be "
+        "careful to not delete or modify any files that are not contaminated "
+        "with sensitive information."
+    )
+    hooks = DeliveryHooks(instruction=instruction)
+    blocked = hooks.git_rewrite_block_result(
+        ToolCall(id="t", name="bash", arguments={"command": "git filter-branch -f"})
+    )
+    assert blocked is not None
+    assert blocked.success is False
+    hooks = DeliveryHooks(
+        instruction="Rewrite history with git filter-branch to drop the secret commit."
+    )
+    assert (
+        hooks.git_rewrite_block_result(
+            ToolCall(id="t", name="bash", arguments={"command": "git filter-branch -f"})
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_gated_executor_blocks_filter_branch_before_inner() -> None:
+    ran: list[str] = []
+
+    class _Inner:
+        async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+            ran.append(call.name)
+            return ToolResult(success=True, data={"ran": True})
+
+    hooks = DeliveryHooks(instruction="Remove API keys from the repository.")
+    gated = DeliveryGatedExecutor(_Inner(), hooks)
+    result = await gated.execute(
+        ToolCall(id="t", name="bash", arguments={"command": "git filter-branch -f"}),
+        LoopContext(),
+    )
+    assert result.success is False
+    assert ran == []
+
+
 def _bmp_header(width: int, height: int) -> bytes:
     import struct
 
@@ -1367,6 +1707,69 @@ async def test_named_txt_retries_when_shown_text_is_a_raster(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_named_txt_keeps_refusing_a_raster_after_four_retries(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_bytes(b"." * 8000)
+    for _ in range(5):
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "named_shown_text"
+    dest.write_text("flag{short}\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=9), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_ascii_art_under_size_cap(tmp_path) -> None:
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text(("." * 40 + "\n") * 8, encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_shown_text"
+    dest.write_text("HELLO\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_captioned_dot_dump(tmp_path) -> None:
+    """Catalog 69 shipped a labelled XY raster; art-row count catches it
+    without matching the caption."""
+    dest = tmp_path / "out.txt"
+    hooks = DeliveryHooks(
+        instruction=(
+            "When I run the print, what will the text show? "
+            f"Write the output to {dest}."
+        ),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text(
+        "=== VIEW (XY) of object at z=0.48 ===\n" + ("." * 80 + "\n") * 10,
+        encoding="utf-8",
+    )
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_shown_text"
+    dest.write_text("HELLO\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
 async def test_named_txt_retries_when_shown_text_is_a_stub(tmp_path) -> None:
     dest = tmp_path / "out.txt"
     hooks = DeliveryHooks(
@@ -1379,11 +1782,409 @@ async def test_named_txt_retries_when_shown_text_is_a_stub(tmp_path) -> None:
     dest.write_text("PROVISIONAL\n", encoding="utf-8")
     action = await hooks.before_completion(_draft(tools=4), LoopContext())
     assert action.kind == "retry"
-    assert action.reason == "named_shown_text"
+    assert action.reason == "named_stub"
     assert "stub" in (action.message or "")
     dest.write_text("HELLO\n", encoding="utf-8")
     done = await hooks.before_completion(_draft(tools=5), LoopContext())
     assert done.kind == "accept"
+
+
+_CODE_FROM_IMAGE = (
+    "You're given an image of a pseudocode snippet at /app/code.png. "
+    "Implement the intended logic of that snippet in any language and "
+    "produce the same final value it would print. Write the result to "
+    "{dest}. For helping you make sure your solution is correct, the "
+    "correct answer starts with `bee26a`"
+)
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_stub_without_shown_text_phrase(tmp_path) -> None:
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("PLACEHOLDER\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_stub"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_keeps_refusing_a_stub_after_four_retries(tmp_path) -> None:
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("PLACEHOLDER\n", encoding="utf-8")
+    for _ in range(5):
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "named_stub"
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=9), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_when_missing_stated_prefix(tmp_path) -> None:
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("deadbeef\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=4), LoopContext())
+    assert action.kind == "retry"
+    assert action.reason == "named_prefix"
+    assert "bee26a" in (action.message or "")
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=5), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_keeps_refusing_a_hash_missing_stated_prefix(tmp_path) -> None:
+    """Catalog 70 shipped a 64-hex digest that did not start with the hint."""
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text(
+        "39ad5ff920409f58e961498c997af185ff1b68241c83bcac8ce67a30c05d28c5\n",
+        encoding="utf-8",
+    )
+    for _ in range(5):
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "named_prefix"
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=9), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_retries_when_body_is_only_the_stated_prefix(tmp_path) -> None:
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("bee26a\n", encoding="utf-8")
+    for _ in range(5):
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "named_prefix"
+        assert "prefix" in (action.message or "").lower()
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.before_completion(_draft(tools=9), LoopContext())
+    assert done.kind == "accept"
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_named_prefix_when_hash_misses_stated_prefix(tmp_path) -> None:
+    """Catalog 70 wrote a digest then [hard_timeout]; completion retry never ran."""
+    dest = tmp_path / "output.txt"
+    dest.write_text(
+        "39ad5ff920409f58e961498c997af185ff1b68241c83bcac8ce67a30c05d28c5\n",
+        encoding="utf-8",
+    )
+    image = tmp_path / "code.png"
+    image.write_bytes(b"\x89PNG")
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    assert hooks.wrap_up_may_drop_tools() is False
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_named_prefix"
+    assert first.tool_choice == "required"
+    text = first.appends[0].message.content_text or ""
+    assert "39ad5ff9" not in text
+    assert "bee26a" in text
+    inspect = ToolCall(id="t", name="bash", arguments={"command": f"cat {dest}"})
+    assert hooks.inspect_block_result(inspect) is not None
+    image_read = ToolCall(
+        id="t", name="bash", arguments={"command": f"cat {image}"}
+    )
+    assert hooks.inspect_block_result(image_read) is None
+    write = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": f"cat > {dest} <<'EOF'\nbee26a0ff\nEOF"},
+    )
+    assert hooks.inspect_block_result(write) is None
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    assert hooks.wrap_up_may_drop_tools() is True
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_prefix_keeps_required_after_a_tool(tmp_path) -> None:
+    """Catalog 70 already wrote a digest; any later tool used to clear
+    ``_force_tool`` and leave wrap-up without ``tool_choice=required``."""
+    dest = tmp_path / "output.txt"
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    dest.write_text(
+        "39ad5ff920409f58e961498c997af185ff1b68241c83bcac8ce67a30c05d28c5\n",
+        encoding="utf-8",
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    ctx = LoopContext()
+    ok = ToolResult(success=True, data={})
+    await hooks.post_tool_result(ok, _call("write_file"), ctx)
+    first = await hooks.pre_step(notice, ctx)
+    assert first.reason == "wrap_up_named_prefix"
+    await hooks.post_tool_result(ok, _call("bash"), ctx)
+    later = await hooks.pre_step(notice, ctx)
+    assert later.tool_choice == "required"
+    dest.write_text("bee26a0ff\n", encoding="utf-8")
+    done = await hooks.pre_step(notice, ctx)
+    assert done.tool_choice is None
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_named_prefix_when_body_is_only_the_prefix(tmp_path) -> None:
+    dest = tmp_path / "output.txt"
+    dest.write_text("bee26a\n", encoding="utf-8")
+    hooks = DeliveryHooks(
+        instruction=_CODE_FROM_IMAGE.format(dest=dest),
+        named_outputs=(str(dest),),
+    )
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    first = await hooks.pre_step(notice, LoopContext())
+    assert first.reason == "wrap_up_named_prefix"
+    assert "prefix" in (first.appends[0].message.content_text or "").lower()
+    second = await hooks.pre_step(notice, LoopContext())
+    assert second.reason != "wrap_up_named_prefix"
+
+
+@pytest.mark.asyncio
+async def test_named_txt_skips_prefix_check_without_starts_with(tmp_path) -> None:
+    dest = tmp_path / "move.txt"
+    hooks = DeliveryHooks(
+        instruction=f"Write the best move to {dest} for example e2e4.",
+        named_outputs=(str(dest),),
+    )
+    dest.write_text("e2e4\n", encoding="utf-8")
+    action = await hooks.before_completion(_draft(tools=2), LoopContext())
+    assert action.kind == "accept"
+
+
+_CIRCUIT_EXAMPLES = (
+    "For example, the provided example /app/gates.txt file prints outputs "
+    "argv[1]/2.\n"
+    "As an example, running {sim} 208 should output 377 because isqrt(208)=14 "
+    "and fib(14) = 377,\n"
+    "and running {sim} 20000 should give 1407432322."
+)
+
+
+def test_instruction_example_commands_parses_running_should_output() -> None:
+    """Official TB 2.1 circuit-fibsqrt wording (harbor-framework/terminal-bench-2-1)."""
+    text = (
+        "For example, the provided example /app/gates.txt file prints outputs "
+        "argv[1]/2.\n"
+        "As an example, running /app/sim 208 should output 377 because "
+        "isqrt(208)=14 and fib(14) = 377,\n"
+        "and running /app/sim 20000 should give 1407432322."
+    )
+    assert instruction_example_commands(text) == (
+        (("/app/sim", "208"), "377"),
+        (("/app/sim", "20000"), "1407432322"),
+    )
+    assert instruction_example_commands(
+        'This should output "Results: X Y Z" where X, Y, Z are integers.'
+    ) == ()
+    assert instruction_example_commands(
+        "The .DAT files produced by running /app/program.py must be identical."
+    ) == ()
+    assert instruction_example_commands(
+        "If there are multiple winning moves, print them all, one per line."
+    ) == ()
+
+
+def _example_sim(path: Path, script: str) -> Path:
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_instruction_example_retries_when_stdout_mismatches() -> None:
+    sim = _example_sim(
+        Path("/tmp") / "steerable-example-sim-mismatch",
+        "#!/bin/sh\necho 104\n",
+    )
+    try:
+        dest = Path("/tmp/steerable-example-gates.txt")
+        dest.write_text("out0 = 0\n", encoding="utf-8")
+        hooks = DeliveryHooks(
+            instruction=_CIRCUIT_EXAMPLES.format(sim=sim),
+            named_outputs=(str(dest),),
+        )
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "instruction_example"
+        assert "377" in (action.message or "")
+        assert "104" in (action.message or "")
+    finally:
+        sim.unlink(missing_ok=True)
+        dest.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_instruction_example_keeps_refusing_a_mismatch() -> None:
+    sim = _example_sim(
+        Path("/tmp") / "steerable-example-sim-hold",
+        "#!/bin/sh\necho 104\n",
+    )
+    dest = Path("/tmp/steerable-example-gates-hold.txt")
+    dest.write_text("out0 = 0\n", encoding="utf-8")
+    try:
+        hooks = DeliveryHooks(
+            instruction=_CIRCUIT_EXAMPLES.format(sim=sim),
+            named_outputs=(str(dest),),
+        )
+        for _ in range(5):
+            action = await hooks.before_completion(_draft(tools=4), LoopContext())
+            assert action.kind == "retry"
+            assert action.reason == "instruction_example"
+        sim.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = 208 ]; then echo 377; else echo 1407432322; fi\n",
+            encoding="utf-8",
+        )
+        sim.chmod(0o755)
+        done = await hooks.before_completion(_draft(tools=9), LoopContext())
+        assert done.kind == "accept"
+    finally:
+        sim.unlink(missing_ok=True)
+        dest.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_instruction_example_runs_with_binary_parent_cwd() -> None:
+    """Official sim.c reads gates.txt from cwd; hidden tests invoke /app/sim."""
+    root = Path("/tmp/steerable-example-cwd")
+    root.mkdir(parents=True, exist_ok=True)
+    sim = _example_sim(root / "sim", "#!/bin/sh\ncat gates.txt\n")
+    (root / "gates.txt").write_text("377\n", encoding="utf-8")
+    dest = Path("/tmp/steerable-example-cwd-named.txt")
+    dest.write_text("x\n", encoding="utf-8")
+    try:
+        hooks = DeliveryHooks(
+            instruction=f"As an example, running {sim} 208 should output 377.",
+            named_outputs=(str(dest),),
+        )
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "accept"
+    finally:
+        sim.unlink(missing_ok=True)
+        (root / "gates.txt").unlink(missing_ok=True)
+        dest.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_instruction_example_compiles_sibling_c_when_binary_missing() -> None:
+    """TB circuit image ships sim.c; /app/sim is not in the image."""
+    root = Path("/tmp/steerable-example-compile")
+    root.mkdir(parents=True, exist_ok=True)
+    sim = root / "sim"
+    src = root / "sim.c"
+    dest = Path("/tmp/steerable-example-compile-gates.txt")
+    sim.unlink(missing_ok=True)
+    src.write_text(
+        '#include <stdio.h>\nint main(void){puts("104");return 0;}\n',
+        encoding="utf-8",
+    )
+    dest.write_text("out0 = 0\n", encoding="utf-8")
+    try:
+        hooks = DeliveryHooks(
+            instruction=_CIRCUIT_EXAMPLES.format(sim=sim),
+            named_outputs=(str(dest),),
+        )
+        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        assert action.kind == "retry"
+        assert action.reason == "instruction_example"
+        assert "104" in (action.message or "")
+        assert sim.is_file()
+    finally:
+        sim.unlink(missing_ok=True)
+        src.unlink(missing_ok=True)
+        dest.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_wrap_up_instruction_example_when_starter_mismatches() -> None:
+    root = Path("/tmp/steerable-example-wrap")
+    root.mkdir(parents=True, exist_ok=True)
+    sim = root / "sim"
+    src = root / "sim.c"
+    dest = Path("/tmp/steerable-example-wrap-gates.txt")
+    sim.unlink(missing_ok=True)
+    src.write_text(
+        '#include <stdio.h>\nint main(void){puts("104");return 0;}\n',
+        encoding="utf-8",
+    )
+    dest.write_text("out0 = 0\n", encoding="utf-8")
+    notice = [
+        LLMMessage.text_of(
+            "user",
+            "[system notice] The time budget for this task is nearly exhausted.",
+        )
+    ]
+    try:
+        hooks = DeliveryHooks(
+            instruction=_CIRCUIT_EXAMPLES.format(sim=sim),
+            named_outputs=(str(dest),),
+        )
+        assert hooks.wrap_up_may_drop_tools() is False
+        first = await hooks.pre_step(notice, LoopContext())
+        assert first.reason == "wrap_up_instruction_example"
+        assert first.tool_choice == "required"
+        assert "104" in (first.appends[0].message.content_text or "")
+        assert hooks.wrap_up_may_drop_tools() is False
+        ctx = LoopContext()
+        ok = ToolResult(success=True, data={})
+        await hooks.post_tool_result(ok, _call("write_file"), ctx)
+        later = await hooks.pre_step(notice, ctx)
+        assert later.tool_choice == "required"
+        assert later.reason != "wrap_up_instruction_example"
+        inspect = ToolCall(id="t", name="bash", arguments={"command": f"cat {dest}"})
+        blocked = hooks.inspect_block_result(inspect)
+        assert blocked is not None
+        write = ToolCall(
+            id="t",
+            name="bash",
+            arguments={"command": f"cat > {dest} <<'EOF'\nfixed\nEOF"},
+        )
+        assert hooks.inspect_block_result(write) is None
+    finally:
+        sim.unlink(missing_ok=True)
+        src.unlink(missing_ok=True)
+        dest.unlink(missing_ok=True)
 
 
 @pytest.mark.asyncio

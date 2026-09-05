@@ -11,9 +11,28 @@ Steerable comparison: GHA
 at `27d521a` (**73/89**, one of the four-run high-water marks). One sample
 on our side, so ids here that we pass 3/4 can still show as "we failed".
 
-Gateway request logs are not in the artifacts (only `result.json`). Round-by-round
-prompt/tool capture still needs `--record-requests` / `STEERABLE_REQUEST_RECORD_PATH`
-on a new trial. Recipe: `evals/README.md`.
+Gateway request logs are not in the artifacts (only `result.json` +
+verifier stdout). Round-by-round prompt/tool capture still needs
+`--record-requests` / `STEERABLE_REQUEST_RECORD_PATH` on a new trial.
+Recipe: `evals/README.md`.
+
+Token counts from those `result.json` files (CC GLM 33798916303):
+
+| Task | reward | input | output | cache |
+| ---- | ------ | ----- | ------ | ----- |
+| `sanitize-git-repo` `bTtfUKu` | 1.0 | 586k | 7.6k | 486k |
+| `gcode-to-text` `TFRrkPC` | 1.0 | 4.5M | 78k | 3.7M |
+| `circuit-fibsqrt` `cY8ynUc` | 1.0 | 2.0M | 207k | 1.6M |
+| `code-from-image` `2nAsayC` | 1.0 | 53k | 600 | 45k |
+
+There is no CC tool trace to copy. Sanitize was a short pass (working-tree
+edit, not a history rewrite). `code-from-image` was a short pass (full
+hash, not the `bee26a` prefix). `gcode-to-text` stayed in a long session
+instead of writing the raster into `/app/out.txt` — that is the
+shown-text veto, not a prompt transplant. `circuit-fibsqrt` spent 207k
+output tokens on the circuit; our 69-run thought until `[hard_timeout]`
+after two inspects (starter `N/2` still on disk). The example check now
+compiles `sim.c` at wrap-up; that is a harness gate, not a prompt transplant.
 
 ## They passed, we failed (9)
 

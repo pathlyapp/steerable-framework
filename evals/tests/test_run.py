@@ -11,6 +11,7 @@ from evals.run import (
     _harbor_child_env,
     _print_summary,
     _retry_agent_timeout,
+    any_verifier_reward,
     env_start_error_tasks,
     harbor_progress_line,
     main,
@@ -280,6 +281,53 @@ def test_env_start_error_tasks_detects_docker_tls(tmp_path: Path) -> None:
     other.mkdir()
     (other / "exception.txt").write_text("AssertionError: landing frame\n")
     assert env_start_error_tasks(tmp_path) == ("protein-assembly",)
+
+
+def test_env_start_error_tasks_detects_compose_cancelled(tmp_path: Path) -> None:
+    trial = tmp_path / "2026-09-05__12-28-31" / "largest-eigenval__pKT6He6"
+    trial.mkdir(parents=True)
+    (trial / "exception.txt").write_text(
+        "  File harbor/environments/docker/docker.py, line 649, in "
+        "_run_docker_compose_command\n"
+        "asyncio.exceptions.CancelledError\n"
+    )
+    other = tmp_path / "2026-09-05__12-28-31" / "chess-best-move__abc"
+    other.mkdir()
+    (other / "exception.txt").write_text("AssertionError: File is wrong\n")
+    assert env_start_error_tasks(tmp_path) == ("largest-eigenval",)
+
+
+def test_env_start_error_tasks_detects_dataset_remote_protocol(tmp_path: Path) -> None:
+    trial = tmp_path / "2026-09-05__12-28-31" / "largest-eigenval__pKT6He6"
+    trial.mkdir(parents=True)
+    (trial / "result.json").write_text(
+        json.dumps(
+            {
+                "verifier_result": None,
+                "exception_info": {
+                    "exception_type": "ExceptionGroup",
+                    "exception_message": "unhandled errors in a TaskGroup (1 sub-exception)",
+                    "exception_traceback": (
+                        "httpcore.RemoteProtocolError: ConnectionTerminated\n"
+                        "CancelledError during _run_docker_compose_command\n"
+                    ),
+                },
+            }
+        )
+    )
+    job = tmp_path / "2026-09-05__12-28-31"
+    (job / "result.json").write_text(json.dumps({"stats": {"n_errored_trials": 1}}))
+    assert env_start_error_tasks(tmp_path) == ("largest-eigenval",)
+    assert any_verifier_reward(tmp_path) is False
+
+
+def test_any_verifier_reward_counts_zero_as_scored(tmp_path: Path) -> None:
+    trial = tmp_path / "2026-09-05__12-28-31" / "fix-git__abc"
+    trial.mkdir(parents=True)
+    (trial / "result.json").write_text(
+        json.dumps({"verifier_result": {"rewards": {"reward": 0.0}}})
+    )
+    assert any_verifier_reward(tmp_path) is True
 
 
 def test_retry_agent_timeout_fits_remaining_gha_wall() -> None:
