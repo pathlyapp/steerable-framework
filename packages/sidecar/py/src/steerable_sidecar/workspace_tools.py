@@ -507,7 +507,11 @@ def workspace_tools_for_cwd(
         bash,
         name="bash",
         mode="other",
-        description="Run a shell command in the workspace directory.",
+        description=(
+            "Run a shell command in the workspace directory. The working "
+            "directory persists across calls; exported variables and aliases "
+            "do not — use bash_session for that."
+        ),
         schema=_BASH_SCHEMA,
         require_consent=False,
         metadata={"shell_command_param": "command"},
@@ -516,7 +520,7 @@ def workspace_tools_for_cwd(
         read_file,
         name="read_file",
         mode="read",
-        description="Read a UTF-8 text file from the workspace.",
+        description="Read a UTF-8 text file from the workspace. Prefer an absolute path.",
         schema=_READ_SCHEMA,
         require_consent=False,
     )
@@ -630,8 +634,8 @@ def workspace_tools_for_cwd(
         description=(
             "Search file contents across the workspace (ripgrep when available). "
             "Returns structured {path, line, text} hits; the workspace ignore "
-            "set (node_modules, .git, …) is always applied. Prefer this over "
-            "bash grep -r."
+            "set (node_modules, .git, …) is always applied. Call this instead of "
+            "bash grep, rg, or find."
         ),
         schema=_GREP_SCHEMA,
         require_consent=False,
@@ -642,7 +646,7 @@ def workspace_tools_for_cwd(
         mode="read",
         description=(
             "List workspace files matching an fnmatch pattern. The ignore set "
-            "is shared with grep. Prefer this over bash find/ls."
+            "is shared with grep. Call this instead of bash find or ls."
         ),
         schema=_GLOB_SCHEMA,
         require_consent=False,

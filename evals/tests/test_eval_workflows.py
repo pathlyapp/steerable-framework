@@ -95,7 +95,7 @@ def test_weekly_cheap_12_matrix_runs_every_live_agent() -> None:
 
 def test_arms_matrix_references_registered_harnesses() -> None:
     suite = load_suite()
-    for harness in ("default", "subagent", "minimal"):
+    for harness in ("default", "subagent", "minimal", "self_critique"):
         assert harness in suite.harnesses, f"arm matrix references unregistered {harness}"
 
 

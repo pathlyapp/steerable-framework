@@ -303,6 +303,40 @@ splits:
     - extract-moves-from-video
     - regex-chess
     - winning-avg-corewars
+  # 20 flaky + 9 stable-red at `27d521a`. Claude Code GLM reruns use this
+  # split instead of catalog-89. Not a GHA shard matrix — local / one job.
+  loss-29:
+    # flaky
+    - circuit-fibsqrt
+    - make-mips-interpreter
+    - path-tracing-reverse
+    - video-processing
+    - code-from-image
+    - dna-assembly
+    - extract-elf
+    - install-windows-3.11
+    - model-extraction-relu-logits
+    - mteb-retrieve
+    - protein-assembly
+    - bn-fit-modify
+    - build-pov-ray
+    - chess-best-move
+    - largest-eigenval
+    - modernize-scientific-stack
+    - path-tracing
+    - sam-cell-seg
+    - torch-tensor-parallelism
+    - train-fasttext
+    # stable red 0/4
+    - extract-moves-from-video
+    - filter-js-from-html
+    - gcode-to-text
+    - make-doom-for-mips
+    - pytorch-model-cli
+    - raman-fitting
+    - regex-chess
+    - sanitize-git-repo
+    - winning-avg-corewars
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert
@@ -379,6 +413,19 @@ agents:
     env_any:
       - OPENROUTER_API_KEY
     skipped: false
+  # Same model, same gateway, Claude Code harness. Stock `claude-code` is
+  # official Anthropic Sonnet. This leg needs three OpenRouter conventions
+  # the stock adapter does not apply (API root, AUTH_TOKEN, gateway model
+  # discovery). See evals/harbor_claude_code_glm.py.
+  claude-code-glm:
+    harbor: evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent
+    model: z-ai/glm-5.3-flash
+    kwargs:
+      version: 2.1.259
+      reasoning_effort: max
+    env_any:
+      - ANTHROPIC_BASE_URL
+    skipped: false
   dsh:
     harbor: null
     model: null
@@ -416,3 +463,6 @@ harnesses:
   # control arm for the interactive-session comparison (arm E = default).
   minimal:
     spec: evals/harnesses/minimal.harness.yaml
+  # Arm: default + validator self_critique (discipline retry + narrate).
+  self_critique:
+    spec: evals/harnesses/self_critique.harness.yaml

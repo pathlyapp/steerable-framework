@@ -88,7 +88,7 @@ def test_steerable_is_the_harness_aware_agent() -> None:
     suite = load_suite()
     assert suite.agents["steerable"].accepts_harness is True
     # Baselines run as shipped: varying their harness is not our variable.
-    for name in ("oracle", "claude-code", "codex", "pi", "pi-glm"):
+    for name in ("oracle", "claude-code", "codex", "pi", "pi-glm", "claude-code-glm"):
         assert suite.agents[name].accepts_harness is False
 
 
@@ -133,6 +133,28 @@ def test_iteration_splits_are_catalog_subsets_that_do_not_overlap() -> None:
     assert flaky <= suite.catalog_set
     assert spiral <= suite.catalog_set
     assert not flaky & spiral
+
+
+def test_loss_29_is_flaky_plus_stable_reds() -> None:
+    suite = load_suite()
+    flaky = set(suite.splits["flaky"])
+    loss = set(suite.splits["loss-29"])
+    stable_red = {
+        "extract-moves-from-video",
+        "filter-js-from-html",
+        "gcode-to-text",
+        "make-doom-for-mips",
+        "pytorch-model-cli",
+        "raman-fitting",
+        "regex-chess",
+        "sanitize-git-repo",
+        "winning-avg-corewars",
+    }
+    assert len(loss) == 29
+    assert loss == flaky | stable_red
+    assert flaky <= loss
+    assert set(suite.splits["spiral-red"]) <= loss
+    assert loss <= suite.catalog_set
 
 
 def test_sharded_jobs_shard_over_their_whole_split() -> None:
@@ -200,6 +222,24 @@ def test_pi_baseline_carries_no_gateway_kwargs() -> None:
     agent, so the Claude leg must not inherit pi-glm's endpoint kwargs."""
     suite = load_suite()
     assert "model_api" not in dict(suite.agents["pi"].kwargs)
+
+
+def test_claude_code_glm_uses_the_gateway_adapter() -> None:
+    """Stock `claude-code` is Anthropic Sonnet. The GLM comparison has to
+    rewrite ANTHROPIC_BASE_URL, AUTH_TOKEN, and gateway model discovery or
+    every trial is a synthetic model_not_found at duration_api_ms 0."""
+    suite = load_suite()
+    spec = suite.agents["claude-code-glm"]
+    assert spec.skipped is False
+    assert spec.harbor == "evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent"
+    assert spec.model == "z-ai/glm-5.3-flash"
+    assert spec.env_any == ("ANTHROPIC_BASE_URL",)
+    kwargs = dict(spec.kwargs)
+    assert kwargs["version"] == "2.1.259"
+    assert kwargs["reasoning_effort"] == "max"
+    argv = harbor_argv(suite, agent="claude-code-glm", tasks=("fix-git",), jobs_dir=Path("/tmp/jobs"))
+    assert argv[argv.index("--agent") + 1] == spec.harbor
+    assert argv[argv.index("--model") + 1] == "z-ai/glm-5.3-flash"
 
 
 def test_both_pi_legs_pin_the_npm_version() -> None:

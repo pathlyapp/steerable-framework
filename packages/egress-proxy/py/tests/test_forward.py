@@ -8,6 +8,7 @@ origin-form rewrite), so the tests assert on captured wire bytes, not mocks.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from steerable_egress_proxy import (
@@ -69,6 +70,7 @@ class RecordingUpstream:
 async def _start_proxy(
     inject: InjectRule | None = None,
     allow: list[str] | None = None,
+    record_requests: str | None = None,
 ) -> tuple[EgressProxyServer, asyncio.Task, int]:
     server = EgressProxyServer(
         ProxyConfig(
@@ -76,6 +78,7 @@ async def _start_proxy(
             bind_host="127.0.0.1",
             bind_port=0,
             inject=inject,
+            record_requests=record_requests,
         )
     )
     task = asyncio.create_task(server.serve())
@@ -179,6 +182,37 @@ async def test_forward_injects_and_streams_response():
         assert b"Authorization: Bearer test-key" in received
         assert b"should-never-arrive" not in received
         assert received.endswith(body)
+    finally:
+        task.cancel()
+        await server.close()
+
+
+async def test_forward_tees_request_body_without_the_secret(tmp_path):
+    upstream = RecordingUpstream()
+    upstream_port = await upstream.start()
+    rule = InjectRule(
+        host="127.0.0.1", secret="Bearer test-key", scheme="http", port=upstream_port
+    )
+    record = tmp_path / "requests.jsonl"
+    server, task, proxy_port = await _start_proxy(
+        inject=rule, record_requests=str(record)
+    )
+    try:
+        body = b'{"msg":"hi"}'
+        response = await _request(
+            proxy_port,
+            b"POST http://127.0.0.1/v1/messages HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body,
+        )
+        assert response.startswith(b"HTTP/1.1 200 OK")
+        line = json.loads(record.read_text(encoding="utf-8"))
+        assert line["method"] == "POST"
+        assert line["path"] == "/v1/messages"
+        assert line["body"] == '{"msg":"hi"}'
+        assert "test-key" not in record.read_text(encoding="utf-8")
     finally:
         task.cancel()
         await server.close()
@@ -293,6 +327,12 @@ async def test_connect_path_unaffected_by_inject_rule():
 
 
 # ---- CLI fail-loud ----------------------------------------------------------
+
+
+def test_cli_record_requests_requires_inject(capsys):
+    code = cli_main(["--allow", "x", "--record-requests", "/tmp/cc.jsonl"])
+    assert code == 2
+    assert "requires --inject-host" in capsys.readouterr().err
 
 
 def test_cli_inject_flags_must_come_together(capsys):

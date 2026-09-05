@@ -226,6 +226,12 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     }
     assert "STEERABLE_TEMPERATURE" in forwarded
     assert "STEERABLE_REASONING_EFFORT" in forwarded
+    assert "STEERABLE_REMINDERS" in forwarded
+    assert "STEERABLE_DELIVERY_VERIFY" in forwarded
+    assert "STEERABLE_LIVELOCK_EMPTY_STREAK" in forwarded
+    assert "STEERABLE_PROMPT_CC_ALIGN" in forwarded
+    assert "STEERABLE_HARNESS" in forwarded
+    assert "STEERABLE_REQUEST_RECORD_PATH" in forwarded
     run_body = text[text.index("    async def run(") :]
     assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
 

@@ -86,6 +86,12 @@ _TUNING_KEYS = (
     # starves the spiral tasks.
     "STEERABLE_TEMPERATURE",
     "STEERABLE_REASONING_EFFORT",
+    "STEERABLE_REMINDERS",
+    "STEERABLE_DELIVERY_VERIFY",
+    "STEERABLE_LIVELOCK_EMPTY_STREAK",
+    "STEERABLE_PROMPT_CC_ALIGN",
+    "STEERABLE_HARNESS",
+    "STEERABLE_REQUEST_RECORD_PATH",
 )
 _PROXY_KEYS = (
     "HTTP_PROXY",
@@ -118,7 +124,7 @@ class SteerableHarborAgent(BaseInstalledAgent):
         # dimension (W1.3.1) explicitly so `--agent-kwarg harness=...` takes
         # effect instead of vanishing.
         super().__init__(*args, **kwargs)
-        self._harness_spec = harness
+        self._harness_spec = harness or os.environ.get("STEERABLE_HARNESS") or None
 
     @override
     def get_version_command(self) -> str | None:

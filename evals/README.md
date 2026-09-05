@@ -11,6 +11,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | `oracle` | `oracle` | none | none |
 | `steerable` | `evals.harbor_steerable:SteerableHarborAgent` | `openai/z-ai/glm-5.3-flash` | GHA: `STEERABLE_API_KEY` + `STEERABLE_BASE_URL`. Local also accepts `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` |
 | `claude-code` | `claude-code` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
+| `claude-code-glm` | `evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent` | `z-ai/glm-5.3-flash` | `ANTHROPIC_BASE_URL` (+ key via `ANTHROPIC_API_KEY`, rewritten to `ANTHROPIC_AUTH_TOKEN`) |
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `pi-glm` | `evals.harbor_pi_glm:PiGlmHarborAgent` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
@@ -39,10 +40,58 @@ python -m evals.run --agent steerable --split oracle-canary
 python -m evals.run --agent steerable --split cheap-12
 python -m evals.run --agent pi --split cheap-12
 python -m evals.run --agent claude-code --split cheap-12
+python -m evals.run --agent claude-code-glm --split loss-29 --dry-run
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
-`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards).
+`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 20 coin-toss tasks for paired A/B. `--split loss-29` is those 20 plus the 9 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
+
+## Claude Code on GLM (same-model comparison)
+
+The published **83.1% (74/89)** used `--agent claude-code-glm`
+(`evals.harbor_claude_code_glm:ClaudeCodeGlmHarborAgent`), **not** weekly
+GHA `claude-code` (official Anthropic Sonnet). Catalog:
+[33798916303](https://github.com/pathlyapp/steerable-framework/actions/runs/33798916303);
+fill-in [33833495592](https://github.com/pathlyapp/steerable-framework/actions/runs/33833495592).
+Three gateway conventions the stock adapter does not apply, all of which
+fail before any request leaves the container:
+
+- `ANTHROPIC_BASE_URL` must be the API root. The CLI appends `/v1/messages`;
+  the OpenAI-dialect URL ending in `/v1` would request `/api/v1/v1/messages`.
+- The gateway key must land in `ANTHROPIC_AUTH_TOKEN` with `ANTHROPIC_API_KEY`
+  empty. A non-empty API key selects Anthropic auth regardless of the base URL.
+- `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, or the CLI rejects
+  `z-ai/glm-5.3-flash` as a synthetic `model_not_found` (`duration_api_ms: 0`).
+
+```bash
+export ANTHROPIC_BASE_URL="$STEERABLE_BASE_URL"   # e.g. https://openrouter.ai/api/v1
+export ANTHROPIC_API_KEY="$STEERABLE_API_KEY"
+
+python -m evals.run --agent claude-code-glm --split loss-29 \
+  --n-attempts 1 --n-concurrent 2 \
+  --agent-timeout-multiplier 12
+
+# Optional request-body tee. The inject proxy needs the http scheme of the
+# provider host (CONNECT is not MITM).
+steerable-egress-proxy --bind 127.0.0.1:8899 \
+  --allow openrouter.ai \
+  --inject-host openrouter.ai \
+  --inject-secret-env STEERABLE_API_KEY \
+  --inject-header Authorization \
+  --record-requests /tmp/cc-requests.jsonl
+
+STEERABLE_REQUEST_RECORD_PATH=/tmp/steerable-requests.jsonl \
+  python -m evals.run --agent steerable --split loss-29 --tasks fix-git
+```
+
+After the job: `python -m evals.task_diff --they <claude-job> --we <steerable-job>`.
+
+Pinned CLI: `@anthropic-ai/claude-code@2.1.259` (the 83.1% catalog). Static
+extract in `evals/notes/claude-code-vs-steerable.md` used 2.1.261.
+
+## Flaky A/B
+
+Arm A is committed defaults. Arm B is `STEERABLE_*` lines in the workflow `arm_b_env` input. Score with `python -m evals.flaky_score`. Arm order and kill rules: `evals/notes/ab-arms.md`.
 
 ## Layers
 

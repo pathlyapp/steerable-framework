@@ -226,8 +226,11 @@ def test_headless_wrap_up_keeps_tools() -> None:
     assert "_hard_run_timeout_sec" in src
     assert "wait_for" in src
     assert "DeliveryGatedExecutor" in src
-    hooks_src = src[src.index("ChainHooks") :]
-    assert hooks_src.index("default_harness.hooks") < hooks_src.index("delivery")
+    eval_src = inspect.getsource(headless_mod._eval_hooks)
+    assert "ChainHooks(assembled, delivery)" in eval_src
+    run_src = inspect.getsource(headless_mod._run)
+    assert "default_harness.hooks" in run_src
+    assert "_eval_hooks" in run_src
 
 
 @pytest.mark.asyncio
@@ -298,7 +301,7 @@ def test_assemble_harness_replaces_default_chain(tmp_path: Path) -> None:
     kinds = [type(h).__name__ for h in _flatten(hooks)]
     assert "ObservationAgingHooks" in kinds
     assert "CompactionHooks" not in kinds  # spec did not ask for it
-    assert "DeliveryHooks" in kinds  # transport semantics always stay
+    assert "DeliveryHooks" not in kinds  # transport layer is `_eval_hooks`
     assert limits.max_rounds is None  # no loop section → entrypoint default
 
 
@@ -389,6 +392,44 @@ def test_assemble_harness_progressive_wires_tool_search(tmp_path: Path) -> None:
     names = [d.get("function", {}).get("name") or d.get("name") for d in descriptors]
     assert names == ["bash", "tool_search"]
     assert router.get("tool_search") is not None
+
+
+def test_eval_hooks_adds_delivery_without_reminders_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steerable_agent_runtime.hooks import ChainHooks
+    from steerable_sidecar.delivery import DeliveryHooks
+
+    monkeypatch.delenv("STEERABLE_REMINDERS", raising=False)
+    delivery = DeliveryHooks()
+    chain = headless_mod._eval_hooks(object(), delivery, 16)
+    assert isinstance(chain, ChainHooks)
+    kinds = [type(h).__name__ for h in chain._hooks]
+    assert "ReminderHooks" not in kinds
+    assert kinds[-1] == "DeliveryHooks"
+
+
+def test_eval_hooks_adds_reminders_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from steerable_sidecar.delivery import DeliveryHooks
+
+    monkeypatch.setenv("STEERABLE_REMINDERS", "1")
+    delivery = DeliveryHooks()
+    chain = headless_mod._eval_hooks(object(), delivery, 16)
+    kinds = [type(h).__name__ for h in chain._hooks]
+    assert "ReminderHooks" in kinds
+    assert kinds[-1] == "DeliveryHooks"
+
+
+def test_system_prompt_cc_align_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEERABLE_PROMPT_CC_ALIGN", raising=False)
+    assert headless_mod._system_prompt() == headless_mod._SYSTEM
+    monkeypatch.setenv("STEERABLE_PROMPT_CC_ALIGN", "1")
+    prompt = headless_mod._system_prompt()
+    assert prompt.startswith(headless_mod._SYSTEM)
+    assert "Do not end a turn because the session is long" in prompt
+    assert len(headless_mod._SYSTEM) < 7000
 
 
 class _FakeTools:
