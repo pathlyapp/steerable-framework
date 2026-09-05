@@ -214,12 +214,11 @@ _EMPTY_ROUND_RETRY = (
 )
 _UNVERIFIED_RETRY = (
     "The turn is ending with nothing having run against the output since it "
-    "was last written — viewing it does not count — so nothing would have "
-    "caught it being wrong. Run one check now and fix what it reports: the "
-    "program the instruction says hidden tests will execute, on the examples the "
-    "instruction gives; the scoring CLI, eval command, or helper script it "
-    "names; or a small check of the thresholds it states. Reading the file "
-    "back is not a check. If the check passes, say so and stop."
+    "was last written — viewing it does not count. Do not rewrite or delete "
+    "the scored files. Run one independent check that would fail if they "
+    "were already wrong, and fix only what that check reports. Re-running "
+    "the generator that wrote the file is not a check. If the check "
+    "passes, say so and stop."
 )
 # One retry, because the gain is in going from no check to a check, not in
 # checking more. Measured over catalog-89 run 33369888461 by how many tool
