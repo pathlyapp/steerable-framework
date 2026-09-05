@@ -2016,12 +2016,30 @@ async def test_wrap_up_named_prefix_when_hash_misses_stated_prefix(tmp_path) -> 
         id="t", name="bash", arguments={"command": f"cat {image}"}
     )
     assert hooks.inspect_block_result(image_read) is None
+    png_read = ToolCall(id="t", name="read_file", arguments={"path": str(image)})
+    assert hooks.inspect_block_result(png_read) is None
+    named_read = ToolCall(id="t", name="read_file", arguments={"path": str(dest)})
+    assert hooks.inspect_block_result(named_read) is not None
     write = ToolCall(
         id="t",
         name="bash",
         arguments={"command": f"cat > {dest} <<'EOF'\nbee26a0ff\nEOF"},
     )
     assert hooks.inspect_block_result(write) is None
+    inline = ToolCall(
+        id="t",
+        name="bash",
+        arguments={
+            "command": f"python3 -c \"open({str(dest)!r},'w').write('bee26a0ff\\n')\""
+        },
+    )
+    assert hooks.inspect_block_result(inline) is None
+    brute = ToolCall(
+        id="t",
+        name="bash",
+        arguments={"command": "python3 -c 'print(\"search\")'"},
+    )
+    assert hooks.inspect_block_result(brute) is not None
     dest.write_text("bee26a0ff\n", encoding="utf-8")
     assert hooks.wrap_up_may_drop_tools() is True
 
@@ -2113,6 +2131,11 @@ def test_instruction_example_commands_parses_running_should_output() -> None:
         (("/app/sim", "208"), "377"),
         (("/app/sim", "20000"), "1407432322"),
     )
+    # `/app/sim` is the runner, not a scored output. Naming it would steal
+    # the example retry for a missing-binary nudge (catalog 69).
+    named = named_output_paths(text)
+    assert "/app/sim" not in named
+    assert "/app/gates.txt" in named
     assert instruction_example_commands(
         'This should output "Results: X Y Z" where X, Y, Z are integers.'
     ) == ()
@@ -2224,7 +2247,11 @@ async def test_instruction_example_compiles_sibling_c_when_binary_missing() -> N
             instruction=_CIRCUIT_EXAMPLES.format(sim=sim),
             named_outputs=(str(dest),),
         )
-        action = await hooks.before_completion(_draft(tools=4), LoopContext())
+        # Catalog 69 completed with empty content five times; example must
+        # beat empty_round so they see 104≠377 before wrap-up.
+        action = await hooks.before_completion(
+            _draft(tools=0, content=""), LoopContext()
+        )
         assert action.kind == "retry"
         assert action.reason == "instruction_example"
         assert "104" in (action.message or "")

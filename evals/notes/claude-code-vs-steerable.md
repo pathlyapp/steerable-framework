@@ -33,7 +33,7 @@ should not be replaced by Claude Code’s product identity.
 | Tool | Claude Code (extracted blurb) | Steerable |
 | ---- | ------------------------------- | --------- |
 | Shell | `Bash`: cwd persists between commands; shell state (env, aliases) does not; profile-initialized | `bash`: “Run a shell command in the workspace directory.” Persistent state is a separate `bash_session` |
-| Read | Absolute `file_path`; default line cap; images supported | `read_file`: UTF-8 text; binary images get an ASCII preview (called out in `_SYSTEM`) |
+| Read | Absolute `file_path`; default line cap; images supported | `read_file`: UTF-8 text; binary images get an ASCII preview (called out in `_SYSTEM`). Native PNG/JPEG pixels are `STEERABLE_READ_IMAGES=1` (next flaky arm) |
 | Edit | Exact string replacement; preserve indent after Read line-number prefixes | `edit_file`: exact → whitespace-tolerant → Unicode-normalised; prefer over whole-file rewrite |
 | Write | Overwrite if the file exists | `write_file`: create parents |
 | Grep | Dedicated ripgrep tool; never `grep`/`rg` via Bash | `grep`: “Prefer this over bash grep -r” |
@@ -43,10 +43,11 @@ should not be replaced by Claude Code’s product identity.
 
 ## What to change (and what not to)
 
-Worth an A/B (`STEERABLE_PROMPT_CC_ALIGN=1`):
+Worth an A/B (`STEERABLE_READ_IMAGES=1` first, then `STEERABLE_PROMPT_CC_ALIGN=1`):
 
-1. Persist-if-long: we already demand completion, but not “don’t stop because the session is long”.
-2. Prefer `grep`/`glob` in the system prompt, not only in the tool blurb.
+1. Native PNG/JPEG pixels on `read_file` — CC Read supports images; GLM-5.3-Flash is multimodal; our ASCII preview is why `code-from-image` brute-forced. OpenAI tool messages are text-only, so pixels follow the tool JSON as a user turn. The default `_SYSTEM` sentence tells the model to OCR; the image arm swaps that sentence. Default off until the flaky arm.
+2. Persist-if-long: we already demand completion, but not “don’t stop because the session is long”.
+3. Prefer `grep`/`glob` in the system prompt, not only in the tool blurb.
 
 Land as facts, not as an A/B (descriptions were incomplete, not a hypothesis):
 

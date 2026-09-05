@@ -124,6 +124,195 @@ async def test_tool_round_then_completion() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_result_image_reaches_the_next_request() -> None:
+    """OpenAI tool messages are text-only; pixels follow as a user turn."""
+    from steerable_agent_runtime.llm.parts import ImagePart
+    from steerable_agent_runtime.llm.openai_compat import _encode_message
+
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("peek")]},
+            {"content": "saw it"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def peek() -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "path": "/app/code.png",
+                "content": "PNG 4x2 ASCII preview",
+                "kind": "png_ascii",
+                "_image": {"b64": "QUJD", "media_type": "image/png"},
+            },
+        )
+
+    router.register(peek)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    await collect(loop.run([LLMMessage.text_of("user", "look")]))
+    second = provider.calls[1]
+    tool_msgs = [m for m in second if m.role == "tool"]
+    assert len(tool_msgs) == 1
+    assert "_image" not in tool_msgs[0].content_text
+    assert "pixels" in tool_msgs[0].content_text
+    assert isinstance(_encode_message(tool_msgs[0])["content"], str)
+    image_msgs = [
+        m for m in second if m.role == "user" and any(isinstance(p, ImagePart) for p in m.content)
+    ]
+    assert len(image_msgs) == 1
+    tool_i = next(i for i, m in enumerate(second) if m.role == "tool")
+    img_i = next(i for i, m in enumerate(second) if m is image_msgs[0])
+    assert tool_i < img_i
+    encoded = _encode_message(image_msgs[0])
+    assert encoded["role"] == "user"
+    assert encoded["content"][-1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,QUJD"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_result_image_survives_spill() -> None:
+    """Pop ``_image`` before spill; a base64 PNG would always exceed 16 KB."""
+    from steerable_agent_runtime.llm.parts import ImagePart
+    from steerable_agent_runtime.spill import InMemorySpillStore, SpillHooks
+
+    b64 = "A" * 20_000
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("peek")]},
+            {"content": "saw it"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def peek() -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "path": "/app/code.png",
+                "content": "PNG ASCII preview",
+                "kind": "png_ascii",
+                "_image": {"b64": b64, "media_type": "image/png"},
+            },
+        )
+
+    router.register(peek)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        hooks=SpillHooks(InMemorySpillStore(), max_inline_bytes=16_000),
+    )
+    await collect(loop.run([LLMMessage.text_of("user", "look")]))
+    second = provider.calls[1]
+    tool_msgs = [m for m in second if m.role == "tool"]
+    assert "_image" not in tool_msgs[0].content_text
+    assert '"spilled": true' not in tool_msgs[0].content_text
+    image_msgs = [
+        m for m in second if m.role == "user" and any(isinstance(p, ImagePart) for p in m.content)
+    ]
+    assert len(image_msgs) == 1
+    image = next(p for p in image_msgs[0].content if isinstance(p, ImagePart))
+    assert image.source == b64
+
+
+@pytest.mark.asyncio
+async def test_two_read_images_share_one_user_message_after_tools() -> None:
+    """OpenAI pairing: all tool messages, then one user turn with both images."""
+    from steerable_agent_runtime.llm.parts import ImagePart
+
+    provider = make_provider(
+        [
+            {
+                "content": "",
+                "tool_calls": [
+                    tc("peek_a", call_id="c_a"),
+                    tc("peek_b", call_id="c_b"),
+                ],
+            },
+            {"content": "saw both"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def peek_a() -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "path": "/app/a.png",
+                "content": "A",
+                "_image": {"b64": "QQ==", "media_type": "image/png"},
+            },
+        )
+
+    async def peek_b() -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "path": "/app/b.png",
+                "content": "B",
+                "_image": {"b64": "Qg==", "media_type": "image/png"},
+            },
+        )
+
+    router.register(peek_a)
+    router.register(peek_b)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    await collect(loop.run([LLMMessage.text_of("user", "look")]))
+    second = provider.calls[1]
+    roles = [m.role for m in second]
+    tool_idxs = [i for i, role in enumerate(roles) if role == "tool"]
+    image_idxs = [
+        i
+        for i, m in enumerate(second)
+        if m.role == "user" and any(isinstance(p, ImagePart) for p in m.content)
+    ]
+    assert len(tool_idxs) == 2
+    assert len(image_idxs) == 1
+    assert tool_idxs[-1] < image_idxs[0]
+    images = [p for p in second[image_idxs[0]].content if isinstance(p, ImagePart)]
+    assert [p.source for p in images] == ["QQ==", "Qg=="]
+
+
+@pytest.mark.asyncio
+async def test_read_images_cap_at_four_per_round() -> None:
+    from steerable_agent_runtime.llm.parts import ImagePart
+
+    names = [f"peek{i}" for i in range(5)]
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc(n) for n in names]},
+            {"content": "saw it"},
+        ]
+    )
+    router = ToolRouter()
+    for i, name in enumerate(names):
+        async def peek(
+            path: str = f"/app/{i}.png", b64: str = f"IMG{i}"
+        ) -> ToolResult:
+            return ToolResult(
+                success=True,
+                data={
+                    "path": path,
+                    "content": "preview",
+                    "_image": {"b64": b64, "media_type": "image/png"},
+                },
+            )
+
+        router.register(peek, name=name)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    await collect(loop.run([LLMMessage.text_of("user", "look")]))
+    second = provider.calls[1]
+    image_msgs = [
+        m for m in second if m.role == "user" and any(isinstance(p, ImagePart) for p in m.content)
+    ]
+    assert len(image_msgs) == 1
+    images = [p for p in image_msgs[0].content if isinstance(p, ImagePart)]
+    assert [p.source for p in images] == ["IMG0", "IMG1", "IMG2", "IMG3"]
+
+
+@pytest.mark.asyncio
 async def test_loop_echoes_reasoning_details_after_tools() -> None:
     """OpenRouter GLM continues thinking only if the prior details come back."""
     details = [{"type": "reasoning.text", "text": "need add", "index": 0}]

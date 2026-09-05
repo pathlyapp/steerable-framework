@@ -256,6 +256,7 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     assert "STEERABLE_DELIVERY_VERIFY" in forwarded
     assert "STEERABLE_LIVELOCK_EMPTY_STREAK" in forwarded
     assert "STEERABLE_PROMPT_CC_ALIGN" in forwarded
+    assert "STEERABLE_READ_IMAGES" in forwarded
     assert "STEERABLE_REQUEST_RECORD_PATH" in forwarded
     # Host-only: the agent reads this in __init__ and uploads JSON. Forwarding
     # the repo-relative YAML path into the trial would make the container look
