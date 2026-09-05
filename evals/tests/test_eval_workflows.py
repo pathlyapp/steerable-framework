@@ -54,6 +54,7 @@ def test_flaky_gather_runs_the_paired_scorer() -> None:
     """Harbor Mean on a flaky dispatch is last-attempt overwrite; the
     verdict that decides a catalog run is flaky_score on every attempt."""
     assert "python3 -m evals.flaky_score --root statuses" in WEEKLY
+    assert '::warning::flaky_score failed' in WEEKLY
 
 
 def test_attribution_waits_for_every_scored_split() -> None:
