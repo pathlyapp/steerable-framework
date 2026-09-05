@@ -445,6 +445,9 @@ jobs:
             --label "$label" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             || echo "::warning::Feishu post failed"
+          if [ "$EVAL_SPLIT" = "flaky" ]; then
+            python3 -m evals.flaky_score --root statuses | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Fail if every live agent was skipped
         run: |
           shopt -s globstar nullglob

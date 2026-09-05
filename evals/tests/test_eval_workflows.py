@@ -50,6 +50,12 @@ def test_flaky_feishu_copy_matches_the_split() -> None:
     assert "25 题" not in WEEKLY
 
 
+def test_flaky_gather_runs_the_paired_scorer() -> None:
+    """Harbor Mean on a flaky dispatch is last-attempt overwrite; the
+    verdict that decides a catalog run is flaky_score on every attempt."""
+    assert "python3 -m evals.flaky_score --root statuses" in WEEKLY
+
+
 def test_attribution_waits_for_every_scored_split() -> None:
     """needs: [eval] ran the report before a flaky/catalog matrix finished."""
     assert "needs: [eval, flaky, spiral, catalog, failed-prev]" in WEEKLY

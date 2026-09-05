@@ -2,6 +2,7 @@
 
 Judge with `evals/flaky_score.py` (paired sign test + bootstrap 95% CI).
 Require p<0.05 and a CI that excludes 0. A mean bump alone is not a win.
+GHA gather on this split prints that report into the job summary.
 
 Dispatch (after the knobs are on the branch GHA checks out):
 
