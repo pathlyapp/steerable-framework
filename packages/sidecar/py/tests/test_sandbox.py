@@ -22,6 +22,7 @@ from steerable_sidecar.sandbox import (
     SeatbeltExecBackend,
     build_seatbelt_profile,
     bwrap_available,
+    linux_process_wrap,
     main,
     seatbelt_argv,
     seatbelt_available,
@@ -607,3 +608,51 @@ class TestSelectExecBackend:
             assert sandbox_mod.bwrap_path() is None
         finally:
             sandbox_mod._probe_bwrap.cache_clear()
+
+
+class TestLinuxProcessWrap:
+    def test_bwrap_wraps_argv_not_shell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.bwrap_path", lambda: "/usr/bin/bwrap"
+        )
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.landlock_available", lambda: False
+        )
+        plan = linux_process_wrap(
+            ["/opt/python", "-m", "steerable_sidecar"],
+            writable_roots=[],
+            network=True,
+        )
+        assert plan["backend"] == "bwrap"
+        assert plan["enforcement"] == "partial"
+        argv = plan["argv"]
+        assert isinstance(argv, list)
+        assert argv[0] == "/usr/bin/bwrap"
+        assert argv[-3:] == ["/opt/python", "-m", "steerable_sidecar"]
+        assert "-c" not in argv
+
+    def test_landlock_is_the_no_bwrap_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("steerable_sidecar.sandbox.bwrap_path", lambda: None)
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.landlock_available", lambda: True
+        )
+        plan = linux_process_wrap(["python", "-m", "steerable_sidecar"], network=True)
+        assert plan["backend"] == "landlock"
+        assert plan["enforcement"] == "partial"
+        argv = plan["argv"]
+        assert isinstance(argv, list)
+        assert "-m" in argv
+        assert "steerable_sidecar.landlock_run" in argv
+        assert argv[-3:] == ["python", "-m", "steerable_sidecar"]
+
+    def test_no_backend_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("steerable_sidecar.sandbox.bwrap_path", lambda: None)
+        monkeypatch.setattr(
+            "steerable_sidecar.sandbox.landlock_available", lambda: False
+        )
+        with pytest.raises(RuntimeError, match="unavailable"):
+            linux_process_wrap(["python", "-m", "steerable_sidecar"])

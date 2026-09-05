@@ -12,9 +12,13 @@ Seatbelt story without the host learning any sandbox mechanics.
 The backend is pluggable (``SandboxBackend``): Seatbelt on macOS today,
 E2B-class remote sandboxes on a server tomorrow. Enforcement is reported as
 a *value* — ``data["_sandbox"]["enforcement"]`` on the result — not a log
-line (dsh's ``SandboxEnforcement`` lesson): callers that require an absolute
-boundary set ``require_full`` and a call that would run with weaker
-enforcement is denied instead of passing through.
+line (dsh's ``SandboxEnforcement`` lesson). Two independent refuse knobs:
+
+- ``require_backend`` denies only ``enforcement == "none"`` (no OS
+  backend; the command would run unsandboxed). ``partial`` still runs —
+  the desktop's ``network: true`` makes every current backend honest-partial.
+- ``require_full`` denies anything weaker than ``full`` (including
+  ``partial``). Do not send this from a product that also asks for egress.
 """
 
 from __future__ import annotations
@@ -79,11 +83,12 @@ class SandboxedToolExecutor:
     and then delegated; the result gains a ``data["_sandbox"]`` marker with
     the backend name and the enforcement strength actually applied.
 
-    Fail-closed option: with ``require_full``, a call whose enforcement
-    would be weaker than ``full`` (no backend on this platform, or a
-    partial backend) is denied before execution instead of running
-    unsandboxed — the "callers requiring an absolute boundary can refuse"
-    half of the dsh contract.
+    Fail-closed options, checked before execution:
+
+    - ``require_backend``: refuse ``none`` (no backend). Partial backends
+      still run.
+    - ``require_full``: refuse anything other than ``full``. Stricter;
+      takes precedence when both are set.
     """
 
     def __init__(
@@ -94,12 +99,14 @@ class SandboxedToolExecutor:
         shell_tools: Collection[str] = DEFAULT_SHELL_TOOLS,
         command_arg: str = "command",
         require_full: bool = False,
+        require_backend: bool = False,
     ) -> None:
         self._inner = inner
         self._backend = backend
         self._shell_tools = frozenset(shell_tools)
         self._command_arg = command_arg
         self._require_full = require_full
+        self._require_backend = require_backend
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
@@ -130,6 +137,19 @@ class SandboxedToolExecutor:
                         f"Refused to run '{call.name}': this deployment "
                         f"requires full sandbox enforcement, got "
                         f"'{enforcement}'."
+                    ),
+                },
+            )
+        if self._require_backend and enforcement == "none":
+            return ToolResult(
+                success=False,
+                error="sandbox_unavailable",
+                needsFollowup=False,
+                data={
+                    "_sandbox": self._marker(enforcement, backend),
+                    "message": (
+                        f"Refused to run '{call.name}': this deployment "
+                        "requires a sandbox backend, got 'none'."
                     ),
                 },
             )

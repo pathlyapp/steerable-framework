@@ -319,6 +319,9 @@ class Sidecar:
             if close is not None:
                 close()
             self._serving = False
+            close_storage = getattr(self.storage, "close", None)
+            if close_storage is not None:
+                close_storage()
 
     async def _process_line(self, line: bytes, writer: Any) -> None:
         response = await self.server.handle_frame(line.decode("utf-8"))
@@ -1261,7 +1264,9 @@ class Sidecar:
         # layer so the approver reviews the ORIGINAL command, not the
         # sandboxed invocation. Absent → commands run unconfined (legacy
         # behavior); enabled with no available backend → enforcement "none"
-        # (requireFull refuses instead).
+        # (requireFull refuses anything short of full; requireBackend
+        # refuses only enforcement "none" — the desktop uses the latter so
+        # honest-partial Seatbelt/bwrap still runs).
         exec_sandbox = params.get("execSandbox")
         if isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled"):
             backend = select_exec_backend(
@@ -1308,6 +1313,7 @@ class Sidecar:
                     ),
                     command_arg=str(exec_sandbox.get("commandArg") or "command"),
                     require_full=bool(exec_sandbox.get("requireFull")),
+                    require_backend=bool(exec_sandbox.get("requireBackend")),
                 )
         # approval: opt-in approval algebra (Wave 3). ``{"mode": "auto"}`` is
         # the headless policy (safe modes auto-approve, the rest auto-deny —
@@ -1460,6 +1466,10 @@ class Sidecar:
                 *(tools or []),
                 *orchestration_tool_descriptors(orch_config),
             ]
+        if self.tools.get("run_code") is not None:
+            from .run_code import RunCodeBoundExecutor
+
+            executor = RunCodeBoundExecutor(executor)
         loop = CoreLoop(
             provider,
             executor,

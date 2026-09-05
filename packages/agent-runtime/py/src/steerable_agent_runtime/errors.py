@@ -18,6 +18,17 @@ class StorageError(RuntimeError):
     """Persistence layer failure."""
 
 
+class StoreAlreadyOwnedError(StorageError):
+    """Another process already holds the write lease for this database."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"store already owned: {path} "
+            "(another process has this sqlite database open for write)"
+        )
+        self.path = path
+
+
 class ToolDispatchError(RuntimeError):
     """Tool router could not satisfy a ToolCall."""
 

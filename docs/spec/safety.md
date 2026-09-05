@@ -157,10 +157,14 @@ Hosts integrating the sandbox must:
    write on `$HOME`, which the profile denies.
 2. **Set `PYTHONDONTWRITEBYTECODE=1`** — the profile denies `__pycache__`
    writes; skipping bytecode keeps boot clean.
-3. Treat sandboxing as hardening, never a correctness dependency: if the
-   platform lacks Seatbelt (Linux today — Landlock is a follow-up) or
-   profile generation fails, hosts should fall back to an unsandboxed
-   spawn with a loud log line, not brick the app.
+3. If confinement cannot be applied, **refuse spawn** — do not fall back
+   to an unsandboxed sidecar. macOS uses Seatbelt; Linux uses bwrap then
+   Landlock wrapping the whole `python -m steerable_sidecar` process
+   (`python -m steerable_sidecar.sandbox linux-wrap`); Windows uses
+   `win-spawn-helper --passthrough`. The only unconfined path is an
+   explicit opt-out (`STEERABLE_SIDECAR_SANDBOX=0` / `sandbox: false`).
+   Harbor / headless eval containers are themselves the boundary and
+   must not inherit this refuse-to-start rule.
 
 The reference integration is the desktop supervisor
 (`deeppath-agent/src/sidecar/supervisor.ts`, `STEERABLE_SIDECAR_SANDBOX=1`).
@@ -382,8 +386,10 @@ client. Two honest consequences:
 
 All three layers are **on by default** in the DeepPath desktop build:
 
-- **Layer 1 (sidecar process sandbox)** spawns under Seatbelt unless
-  `STEERABLE_SIDECAR_SANDBOX=0`; the egress allow-list is derived per boot
+- **Layer 1 (sidecar process sandbox)** spawns under Seatbelt (macOS),
+  bwrap then Landlock (Linux), or `win-spawn-helper --passthrough`
+  (Windows) unless `STEERABLE_SIDECAR_SANDBOX=0`; the egress allow-list
+  is derived per boot
   from the provider `baseUrl` **plus ambient proxy endpoints** (proxy env
   vars and, on macOS, the System Configuration proxy via `scutil`) —
   the sidecar's httpx stack honors ambient proxies, so a configured proxy
@@ -399,27 +405,27 @@ All three layers are **on by default** in the DeepPath desktop build:
   limitation documented above applies: remote entries degrade to port-only
   enforcement, which still breaks reverse shells / beacons / DNS
   tunnelling but not exfiltration to an attacker HTTPS endpoint on 443.
-  On a platform without Seatbelt (non-macOS, missing
-  `/usr/bin/sandbox-exec`, or profile-generation failure) the sidecar
-  process runs unconfined. The desktop records the spawn outcome as a
+  If confinement cannot be applied, the desktop **refuses to start** the
+  sidecar rather than running the key-holding process unsandboxed. The
+  desktop records the spawn outcome as a
   structured posture (`backend`/`enforcement`/`reason`, mirroring the
   layer-3 `partial | none` vocabulary) and the settings page's security
   section renders it as a durable row: an explicit `sandbox: false` /
-  `STEERABLE_SIDECAR_SANDBOX=0` opt-out is shown neutrally, while an
-  involuntary degradation warns that the key-holding process runs
-  unconfined and names the supported remedy on such platforms — running
-  the app / sidecar inside a container.
+  `STEERABLE_SIDECAR_SANDBOX=0` opt-out is shown neutrally, while a
+  refused start warns that the sidecar was not launched (copy: 无法收容、已拒绝启动)
+  rather than that it is running unconfined.
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as
   `execSandbox: {enabled, writableRoots: [project root], network: true,
-  allowedHosts: [provider endpoint], requireFull: false}`. The backend is
+  allowedHosts: [provider endpoint], requireFull: false,
+  requireBackend: true}`. The backend is
   picked per platform: Seatbelt on macOS, bwrap → Landlock on Linux (both
-  probe-gated), none on Windows — the call still runs where no backend
-  exists, marked `_sandbox.enforcement: "none"` in the result and on the
-  tool card — honest degradation over silently breaking the product. Note
-  the desktop's `network: true` + remote provider endpoint means `partial`
-  enforcement on every current backend (open egress on bwrap/Landlock,
-  port-only on Seatbelt); `requireFull` stays false until per-host egress
-  exists. `STEERABLE_EXEC_SANDBOX=0` restores unconfined execution.
+  probe-gated), Windows `hostSpawn` via `win-spawn-helper`. `requireBackend`
+  refuses `enforcement: "none"` so a command never runs unsandboxed when
+  confinement was requested. `requireFull` stays false: the desktop's
+  `network: true` makes every current backend honest-`partial` (open egress
+  on bwrap/Landlock, port-only on Seatbelt, network unenforced on Windows),
+  and `requireFull` would refuse shell even on macOS. `STEERABLE_EXEC_SANDBOX=0`
+  restores unconfined execution.
 - **Approval algebra** runs in host mode on every turn: the sidecar's
   `ApprovalExecutor` asks the Electron approval modal over the reverse
   channel (`approval.request`), the user picks among the seven variants

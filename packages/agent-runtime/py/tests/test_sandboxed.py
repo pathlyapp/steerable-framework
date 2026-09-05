@@ -2,8 +2,9 @@
 
 The decorator rewrites the shell tool's ``command`` argument into a
 sandboxed invocation and delegates; enforcement is reported as a value
-(``data["_sandbox"]``), and ``require_full`` denies calls that would run
-weaker than full confinement instead of passing through.
+(``data["_sandbox"]``), and ``require_full`` / ``require_backend`` deny
+calls that would run weaker than the requested floor instead of passing
+through.
 """
 
 from __future__ import annotations
@@ -90,6 +91,35 @@ async def test_no_backend_marks_none_and_runs() -> None:
     assert result.success
     assert inner.calls[0].arguments["command"] == "ls"  # unmodified
     assert result.data["_sandbox"]["enforcement"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_require_backend_denies_when_no_backend() -> None:
+    inner = _RecordingExecutor()
+    executor = SandboxedToolExecutor(inner, None, require_backend=True)
+
+    result = await executor.execute(_call("bash", command="ls"), LoopContext())
+
+    assert not result.success
+    assert result.error == "sandbox_unavailable"
+    assert result.data["_sandbox"]["enforcement"] == "none"
+    assert inner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_require_backend_allows_partial() -> None:
+    """The desktop's network:true makes every current backend partial.
+    require_backend must not treat that as 'none'."""
+    inner = _RecordingExecutor()
+    executor = SandboxedToolExecutor(
+        inner, _FakeBackend(enforcement="partial"), require_backend=True
+    )
+
+    result = await executor.execute(_call("bash", command="ls"), LoopContext())
+
+    assert result.success
+    assert result.data["_sandbox"]["enforcement"] == "partial"
+    assert inner.calls
 
 
 @pytest.mark.asyncio

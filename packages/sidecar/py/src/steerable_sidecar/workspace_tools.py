@@ -265,6 +265,7 @@ def workspace_tools_for_cwd(
     fs: WorkspaceFs = LOCAL_FS,
     run_command: BashRunner | None = None,
     web_tools: bool = True,
+    run_code: bool | None = None,
 ) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
@@ -283,6 +284,10 @@ def workspace_tools_for_cwd(
     container alone, and a reachable ``web_fetch`` both confounds a harness
     comparison and lets a trial answer from outside the environment under
     test.
+
+    ``run_code`` defaults to ``STEERABLE_RUN_CODE=1``. Harbor does not
+    special-case it the way web tools are omitted; leave the env unset
+    unless the trial wants programmatic tool calls.
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
@@ -745,6 +750,14 @@ def workspace_tools_for_cwd(
         from .web_tools import register_web_tools
 
         register_web_tools(router)
+    if run_code is None:
+        from .run_code import run_code_enabled as _run_code_enabled
+
+        run_code = _run_code_enabled()
+    if run_code:
+        from .run_code import register_run_code
+
+        register_run_code(router)
     return router
 
 

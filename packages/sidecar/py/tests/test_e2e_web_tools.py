@@ -20,16 +20,18 @@ loopback rather than escape to the internet.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from e2e_harness import child_env, sse_text
+from e2e_harness import (
+    child_env,
+    model_tool_names as _tool_names,
+    run_headless as _run_headless,
+    sse_text,
+)
 
 
 class _ProbeServer:
@@ -69,32 +71,6 @@ class _ProbeServer:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
-
-
-async def _run_headless(
-    args: list[str], env: dict[str, str], *, timeout: float = 90.0
-) -> tuple[int, str, str]:
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "steerable_sidecar.headless",
-        *args,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise
-    return proc.returncode, stdout.decode(), stderr.decode()
-
-
-def _tool_names(tool_list: list[dict[str, Any]]) -> set[str]:
-    return {(t.get("function") or {}).get("name") or "" for t in tool_list}
 
 
 async def test_default_sidecar_registers_web_fetch_only_without_search_key(

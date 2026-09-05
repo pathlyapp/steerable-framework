@@ -14,9 +14,13 @@ duplicated as real columns with indexes, so session enumeration and the
 resume tail-scan are indexed lookups, never a table scan over JSON.
 
 Concurrency: like ``InMemoryStorage``, all mutations run under one asyncio
-lock (safe under concurrent ``await`` in a single loop, not process-safe).
-The database runs in WAL mode so a reader (e.g. the maintenance CLI with
-``--read-only``) does not block the writer.
+lock (safe under concurrent ``await`` in a single loop). A sibling
+``*.lock`` file (``fcntl.flock`` / Windows named mutex) makes the writer
+process-exclusive: a second process opening the same path fails loud
+(``StoreAlreadyOwnedError``). Process death releases the kernel lock;
+there is no TTL steal; the lock file is never deleted. WAL remains so a
+reader (e.g. the maintenance CLI) does not block the writer and does not
+take the write lease.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from steerable_agent_protocol.generated import (
 )
 
 from ..errors import StorageError
+from .write_lease import WriteLease, acquire_write_lease
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -108,12 +113,18 @@ class SqliteStorage:
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.executescript(_SCHEMA)
+        self._lease: WriteLease = acquire_write_lease(path)
+        try:
+            self._db = sqlite3.connect(path, check_same_thread=False)
+            self._db.row_factory = sqlite3.Row
+            self._db.executescript(_SCHEMA)
+        except BaseException:
+            self._lease.release()
+            raise
 
     def close(self) -> None:
         self._db.close()
+        self._lease.release()
 
     # ------------------------------------------------------------------
     # Sessions

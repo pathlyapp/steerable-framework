@@ -6,8 +6,11 @@ import argparse
 import asyncio
 import logging
 
+from steerable_agent_runtime.errors import StoreAlreadyOwnedError
+
 from .sidecar import Sidecar, SidecarConfig
 from .web_tools import register_web_tools
+from .run_code import register_run_code, run_code_enabled
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,7 +44,11 @@ def main() -> int:
         quiet_stderr=args.quiet_ready,
         storage_path=args.storage_path,
     )
-    sidecar = Sidecar(config=config)
+    try:
+        sidecar = Sidecar(config=config)
+    except StoreAlreadyOwnedError as exc:
+        logging.getLogger("steerable_sidecar").error("%s", exc)
+        return 1
     # web_search / web_fetch on the RPC router: the desktop host delegates
     # these calls here over forward `tool.invoke` (single implementation —
     # the host carries schemas only). A malformed STEERABLE_WEB_* bound must
@@ -53,6 +60,8 @@ def main() -> int:
         logging.getLogger("steerable_sidecar").error(
             "web tools disabled: %s", exc
         )
+    if run_code_enabled():
+        register_run_code(sidecar.tools)
     try:
         asyncio.run(sidecar.serve())
     except KeyboardInterrupt:
