@@ -1,7 +1,9 @@
 # Loss taxonomy — 20 flaky + 9 stable red at `27d521a`
 
 Sources: `EVALS_TODO.md` (2.5.9–2.5.17), `evals/suite.yaml` four-run
-pass counts, `docs/evals.md`. No new catalog logs were invented here.
+pass counts, `docs/evals.md`, catalog 33497477757 shards 7/13/16/17/20/35/42/46,
+and the in-flight flaky A/B 33951133679 (partial). Gateway-side Claude Code GLM
+transcripts for the 83.1% run are not in this repo. Rerun recipe: `evals/README.md`.
 Gateway-side Claude Code GLM transcripts for the 83.1% run are not in
 this repo (no GHA run id). Rerun recipe: `evals/README.md`.
 
@@ -20,7 +22,7 @@ one. Arm decisions follow the mechanism, not the 0/4 label.
 | `raman-fitting` | Wrong x unit | 33497477757: fitted native-file x (G=6328, 2D=3745) vs Raman cm⁻¹ (1580 / 2670) | Not 20a854d |
 | `regex-chess` | Live-lock | `tool_choice=required` ~62% compliance; 16 empty wrap-up retries ate the window; spiral-red | **Live-lock (2.5.10)** — mechanism, do not score the arm on this one task |
 | `sanitize-git-repo` | Over-rewrote git history | 33497477757: secret tests passed; `test_no_other_files_changed` needs pinned SHA `d6987af…` and `commit.diff(None)`. Agent `filter-branch` + `gc --prune` deleted it. Oracle only `sed`s the working tree | **Landed in `_SYSTEM`**. Not an A/B |
-| `winning-avg-corewars` | Reasoning spiral / timeout | spiral-red; hard kill historically | Live-lock is the wrap-up half; spiral itself is 2.5.11 |
+| `winning-avg-corewars` | Reasoning spiral / timeout | Catalog 33497477757: `[hard_timeout]` after 12 tools; win-rate assert. spiral-red | Live-lock is the wrap-up half; spiral itself is 2.5.11 |
 
 The Pi-pass / we-0/4 triple is not one mechanism: timeout (`gcode-to-text`),
 wrong inference (`pytorch-model-cli`), wrong unit (`raman-fitting`).
@@ -35,26 +37,26 @@ is older than the four-run split; used only when it names a flaky id.
 
 | Task | 4-run | Closest mechanism | Arm? |
 | ---- | ----- | ---------------- | ---- |
-| `circuit-fibsqrt` | 1/4 | Hard kill (10201s) historically | Live-lock if wrap-up empty; otherwise spiral |
+| `circuit-fibsqrt` | 1/4 | Catalog 33497477757: 2 tools then 1.3 MB reasoning, `[hard_timeout]`. Not empty wrap-up | Spiral. Live-lock empty-streak will not see this |
 | `make-mips-interpreter` | 1/4 | — | Flaky A/B only |
 | `path-tracing-reverse` | 1/4 | Soft timeout then wrap | Live-lock |
 | `video-processing` | 1/4 | — | Flaky A/B only |
-| `code-from-image` | 2/4 | — | Flaky A/B only |
+| `code-from-image` | 2/4 | Flaky A/B B 3/3 (gate off; A still running) | Flaky A/B only |
 | `dna-assembly` | 2/4 | Hard kill historically | Live-lock / timeout |
-| `extract-elf` | 2/4 | Early wrong, no timeout | **20a854d** candidate |
+| `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — retry copy no longer names that command (`72e1776`). Do not call the arm until the full 20-task pair |
 | `install-windows-3.11` | 2/4 | Wrong answer historically | Flaky A/B; VM domain notes already in `_SYSTEM` |
 | `model-extraction-relu-logits` | 2/4 | 180 min timeout on pi-glm | Timeout, not verify |
-| `mteb-retrieve` | 2/4 | Wrong answer historically | Flaky A/B |
+| `mteb-retrieve` | 2/4 | A/B: 1/3 both arms; gate never fired | Wrong answer, not the gate |
 | `protein-assembly` | 2/4 | Wrong answer historically | Flaky A/B |
-| `bn-fit-modify` | 3/4 | — | **Primary 20a854d / persist target** |
-| `build-pov-ray` | 3/4 | Early wrong, no timeout | **20a854d** candidate |
-| `chess-best-move` | 3/4 | — | **Primary 20a854d / persist target** |
-| `largest-eigenval` | 3/4 | `unverified_output` fired then passed (n=1) | **Delivery gate** — already in 20a854d |
-| `modernize-scientific-stack` | 3/4 | — | **Primary 20a854d / persist target** |
-| `path-tracing` | 3/4 | Hard kill historically | Live-lock |
-| `sam-cell-seg` | 3/4 | — | **Primary 20a854d / persist target** |
-| `torch-tensor-parallelism` | 3/4 | Early wrong | **20a854d** candidate |
-| `train-fasttext` | 3/4 | — | **Primary 20a854d / persist target** |
+| `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Not shown as a gate win on the partial sample |
+| `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B B (gate off) 3/3 | Do **not** add a POV-Ray `_SYSTEM` clause. Instruction already names `/app/povray-2.2` |
+| `chess-best-move` | 3/4 | Catalog 33497477757: pass, 31 tools, no gate | Flaky A/B; not a scoring-fact hole on the pass trial |
+| `largest-eigenval` | 3/4 | Catalog 33497477757: `unverified_output` at round 53 then passed | **Delivery gate** — already in 20a854d |
+| `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Partial sample leans B; not a verdict |
+| `path-tracing` | 3/4 | Catalog 33497477757: `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. Named file already existed, so wrap-up inspect-block did not fire | Not 20a854d. ReminderHooks zero-write will not fire either (they were writing). Live-lock empty-streak will not see this |
+| `sam-cell-seg` | 3/4 | Catalog 33497477757: pass, 70 tools, no gate | Flaky A/B |
+| `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. Domain note already in `_SYSTEM` | Implementation, not verify. Do not add another tensor clause |
+| `train-fasttext` | 3/4 | Catalog 33497477757: pass, 46 tools, no gate | Flaky A/B |
 
 `unverified_output` fired **8 times** in catalog 33369888461, 7/8 then
 passed. The 8 task names were not kept; `largest-eigenval` is the one
@@ -65,7 +67,7 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Target: 3/4 flaky + unverified_output |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (4 paired tasks): B better on 2, A on 0, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses so far |
 | ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` match recorded modes; unwired until this branch |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |
