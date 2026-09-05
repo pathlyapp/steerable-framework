@@ -42,11 +42,12 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    `tool_choice=required`; the model kept designing until
    `[hard_timeout]` (0 tools after the fire). Same on flaky
    `circuit-fibsqrt__NyFMSat`. Ignore [33964691558](https://github.com/pathlyapp/steerable-framework/actions/runs/33964691558) (402).
-3b. **Live-lock pre-wrap + keep-required** — same env on B, after the
-   next SHA. Detector now also counts pre-wrap `empty_round` while
-   `writes == 0`. After WRITE_NOW, keep `tool_choice=required` until
-   wrap-up quality gates pass (prefix / raster / example / missing), not
-   until `writes > 0` — catalog 70 already had a wrong digest on disk.
+3b. **Live-lock pre-wrap + keep-required** — same env on B.
+   **In flight** on `de45915`: GHA [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219).
+   Detector also counts pre-wrap `empty_round` while `writes == 0`.
+   After WRITE_NOW, keep `tool_choice=required` until wrap-up quality
+   gates pass (prefix / raster / example / missing), not until
+   `writes > 0` — catalog 70 already had a wrong digest on disk.
    Wrap-up itself re-asserts required every remaining round for those
    gates (default on; `post_tool_result` used to clear `_force_tool`).
    Mechanism task is `circuit-fibsqrt`. Do not skip to self_critique.
