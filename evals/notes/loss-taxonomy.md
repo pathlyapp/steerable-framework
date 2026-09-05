@@ -37,9 +37,9 @@ is older than the four-run split; used only when it names a flaky id.
 | Task | 4-run | Closest mechanism | Arm? |
 | ---- | ----- | ---------------- | ---- |
 | `circuit-fibsqrt` | 1/4 | Catalog 33497477757: 2 tools then 1.3 MB reasoning, `[hard_timeout]`. Not empty wrap-up | Spiral. Live-lock empty-streak will not see this |
-| `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 bash tools, never `write_file`, `/tmp/frame.bmp` missing. Instruction never names that path (only `vm.js`). Named-output retry never ran because they never completed. | ReminderHooks runaway (arm 2), not a named-output regex |
-| `path-tracing-reverse` | 1/4 | 33497477757: 0.464 vs 0.995, `empty_round` then `[soft_timeout]`, kept disassembling. 33547943349: 0.957 vs 0.995 after they `cmp`'d images; `empty_round` ×2 + `named_gzip_cap` | Live-lock is the empty half. The near-miss is a named `> 0.995` bar they already checked |
-| `video-processing` | 1/4 | 33497477757 pass. 33547943349: landing frame 61 vs inclusive `[62, 64]`; `jump_analyzer.py` also crashed | Off-by-one on a named range. Not the verify gate |
+| `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 bash tools, never `write_file`, `/tmp/frame.bmp` missing. A/B 33951133679 A 0/3: they did write (3–12 `write_file`) then 60–168 bash; gate never fired. B still running | ReminderHooks runaway after a write (arm 2), not the verify gate |
+| `path-tracing-reverse` | 1/4 | 33497477757: 0.464 vs 0.995, `empty_round` then `[soft_timeout]`, kept disassembling. 33547943349: 0.957 vs 0.995 after they `cmp`'d images; `empty_round` ×2 + `named_gzip_cap`. A/B A 1/3; B still running | Live-lock is the empty half. The near-miss is a named `> 0.995` bar they already checked |
+| `video-processing` | 1/4 | 33497477757 pass. 33547943349: landing frame 61 vs inclusive `[62, 64]`; `jump_analyzer.py` also crashed. A/B B 2/3; A still running | Off-by-one on a named range. Not the verify gate |
 | `code-from-image` | 2/4 | A/B 33951133679 both arms 3/3. Arm A wall ~134m vs B 25m (same hang family as pov-ray: hard timeout wait_for then executor/bash thread) | Not the verify gate |
 | `dna-assembly` | 2/4 | 33497477757: primers written; forward Tm 73.64 > 72; `[soft_timeout]` then `[hard_timeout]` while iterating. Primer length note already in `_SYSTEM` | Timeout + named Tm bar. Do not add a Tm clause |
 | `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — retry copy no longer names that command (`72e1776`). Do not call the arm until the full 20-task pair |
@@ -49,13 +49,13 @@ is older than the four-run split; used only when it names a flaky id.
 | `protein-assembly` | 2/4 | 33497477757 pass. 33547943349: wrong fusion order (flag-donor-dhfr-acceptor-snap). A/B 33951133679 both arms 1/3; gate never fired | Wrong answer. Order is in the instruction |
 | `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Not shown as a gate win on the partial sample |
 | `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B 33951133679 both arms 3/3. Arm A wall 117m vs B 41m: one A trial 115 min; `_file_ready` treated `/app/povray-2.2` as a missing file after the tree existed (versioned dir looks like an extension). Not `STEERABLE_DELIVERY_VERIFY` — `unverified_output` did not fire | Do **not** add a POV-Ray `_SYSTEM` clause. Directory `_file_ready` is the harness fix; it is not in the running A/B tree |
-| `chess-best-move` | 3/4 | 33497477757 pass. 33530806570: wrote `g2g4` to `/app/move.txt`; "File is wrong". One `empty_round`. Gate did not fire | Wrong move. Not a scoring-fact hole |
+| `chess-best-move` | 3/4 | 33497477757 pass. 33530806570: wrote `g2g4` to `/app/move.txt`; "File is wrong". One `empty_round`. A/B 33951133679 both arms 2/3; gate did not fire | Wrong move. Not a scoring-fact hole |
 | `largest-eigenval` | 3/4 | Catalog 33497477757: `unverified_output` at round 53 then passed | **Delivery gate** — already in 20a854d |
 | `modernize-scientific-stack` | 3/4 | A/B: 2/3 gate on, 3/3 gate off. A loss is wrong station mean (−19.8 vs −15.5); gate did not fire | Partial sample leans B; not a verdict |
-| `path-tracing` | 3/4 | Catalog 33497477757 (pre-20a854d): `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. A/B 33951133679 Arm A (gate on) 3/3, gate never fired; Arm B still running | Catalog fail is not the gate. ReminderHooks consecutive-non-write will not fire on the fit loop (they were writing) |
-| `sam-cell-seg` | 3/4 | 33497477757 pass. 33530806570: 252 tools (235 bash / 16 edit), polyline scored as a rectangle, IoU 0.44 | Implementation. ReminderHooks bash-as-non-write would nudge; not the verify gate |
+| `path-tracing` | 3/4 | Catalog 33497477757 (pre-20a854d): `image.ppm` at 0.963 vs 0.99; `[soft_timeout]` then nine `fitN.py` writes until `[hard_timeout]`. A/B 33951133679 **both arms 3/3**; gate never fired | Catalog fail is not the gate. Persist is on both arms here |
+| `sam-cell-seg` | 3/4 | 33497477757 pass. 33530806570: 252 tools (235 bash / 16 edit), polyline scored as a rectangle, IoU 0.44. A/B A 3/3; B still running | Implementation. ReminderHooks bash-as-non-write would nudge; not the verify gate |
 | `torch-tensor-parallelism` | 3/4 | Catalog 33497477757: 20 tools, local test ran; hidden TP `RuntimeError` 48 vs 64 on dim 1. A/B 33951133679 A 3/3 (one trial 135m), B 1/1 (two `VerifierTimeoutError`, skipped by `flaky_score`) | Implementation, not verify. Do not add another tensor clause |
-| `train-fasttext` | 3/4 | 33497477757 pass. 33547943349: local acc 0.6153 vs 0.62, they were retuning, `[hard_timeout]`. Hidden test 0.617 | Named bar + clock. Persist prompt already demands a visible margin. Not a new clause |
+| `train-fasttext` | 3/4 | 33497477757 pass. 33547943349: local acc 0.6153 vs 0.62, they were retuning, `[hard_timeout]`. Hidden test 0.617. A/B B 2/3; A still running | Named bar + clock. Persist prompt already demands a visible margin. Not a new clause |
 
 `unverified_output` fired **8 times** in catalog 33369888461, 7/8 then
 passed. The 8 task names were not kept; `largest-eigenval` is the one
@@ -66,7 +66,7 @@ on a guessed 8-id list.
 
 | Arm | Do it? | Why |
 | --- | ------ | --- |
-| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Only change with a replay estimate. Partial A/B (8 paired tasks): B better on 2, A on 0, tied 6, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `build-pov-ray`, `code-from-image`, and `torch-tensor-parallelism` (A 3/3 vs B 1/1 after skipping verifier timeouts) |
+| 20a854d verify gate (`STEERABLE_DELIVERY_VERIFY=0` on B) | **Yes, first** | Partial A/B (10 paired tasks): B better on 2 (`extract-elf`, `modernize-scientific-stack`), A on 0, tied 8, p=0.50, **not a verdict**. `unverified_output` has fired only on the two Arm A `extract-elf` losses. `path-tracing` 3/3 both arms. See `ab-arms.md` for how to apply this |
 | ReminderHooks (`STEERABLE_REMINDERS=1`) | Yes, after (1) | `error_streak_ratio=0.5` and `runaway_calls=12` consecutive non-writes, including after a write. make-mips 256-bash tail is this mode |
 | Live-lock (`STEERABLE_LIVELOCK_EMPTY_STREAK=3`) | Yes | 2.5.10; 16 empty wrap-up retries. Judge on flaky paired test, not `regex-chess` alone |
 | `validator: self_critique` | Yes | Narrate third state is dead while `validator: null`. Empty wrap-up is the 16-retry family |

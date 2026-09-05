@@ -72,7 +72,7 @@ Claude Code on the same model and protocol: **83.1% (74/89), 1 run**. Catalog sh
 
 Score of record stays `27d521a` until three full catalog runs on the synthesized arm each post ≥72/89, with their GHA run ids in the table above.
 
-Flaky A/B of the `20a854d` verify gate is in flight: GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) (`STEERABLE_DELIVERY_VERIFY=0` on B). Judge with `evals/flaky_score.py` (p<0.05 and bootstrap CI excluding 0). A partial 8-task pair is not a verdict. HEAD also has the unverified-retry copy that forbids re-running the generator (`72e1776`); that tree is not the running A/B. Remaining arms: `evals/notes/ab-arms.md`.
+Flaky A/B of the `20a854d` verify gate is in flight: GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) (`STEERABLE_DELIVERY_VERIFY=0` on B). Judge with `evals/flaky_score.py` (p<0.05 and bootstrap CI excluding 0). A partial 10-task pair is not a verdict. HEAD also has the unverified-retry copy that forbids re-running the generator (`72e1776`); that tree is not the running A/B. Remaining arms: `evals/notes/ab-arms.md`.
 
 ## What runs
 
