@@ -72,7 +72,7 @@ Claude Code on the same model and protocol: **83.1% (74/89), 1 run**. Catalog sh
 
 Score of record stays `27d521a` until three full catalog runs on the synthesized arm each post ≥72/89, with their GHA run ids in the table above.
 
-Flaky A/B of the `20a854d` verify gate is done: GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) (`STEERABLE_DELIVERY_VERIFY=0` on B). 20 paired tasks, p=0.7539, CI includes 0 — **no separation; keep the gate on**. The only gate-fire-then-fail is `extract-elf` (old retry copy, already fixed on HEAD). Next arm is ReminderHooks (`STEERABLE_REMINDERS=1`). Remaining arms: `evals/notes/ab-arms.md`.
+Flaky A/B of the `20a854d` verify gate is done: GHA [33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679) (`STEERABLE_DELIVERY_VERIFY=0` on B). 20 paired tasks, p=0.7539, CI includes 0 — **no separation; keep the gate on**. The only gate-fire-then-fail is `extract-elf` (old retry copy, already fixed on HEAD). ReminderHooks A/B is in flight: GHA [33959644133](https://github.com/pathlyapp/steerable-framework/actions/runs/33959644133) (`STEERABLE_REMINDERS=1` on B). Remaining arms: `evals/notes/ab-arms.md`.
 
 ## What runs
 
