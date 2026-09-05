@@ -62,6 +62,14 @@ _BASH_RUN_ENTRYPOINT = re.compile(r"\bnode\s+\S+")
 _BASH_RUN_PYTHON = re.compile(
     r"\b(?:python3?|pypy3?)\s+(['\"]?)([^'\"\s]+\.py)\1"
 )
+# ``bash /tmp/rewrite.sh`` after the inline ``git filter-branch`` veto: the
+# catalog sanitize trials inlined the rewrite, so the next attempt is a
+# helper script. ``sh -c`` stays on the command-string matcher.
+_BASH_RUN_SHELL_SCRIPT = re.compile(
+    r"(?:^|[;&\n]|\|\||&&)\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
+    r"(?:(?:ba)?sh|source)\s+(?:-[a-zA-Z]+\s+)*(['\"]?)([^'\"\s;|&]+)\1",
+    re.IGNORECASE,
+)
 _BASH_MUTATE_FILE = re.compile(
     r"(?:>>|(?<![12])>)\s*(?:/|\./|[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*|[A-Za-z0-9._-]+\.[A-Za-z0-9]+)"
     r"|\btee\b"
@@ -645,13 +653,19 @@ class DeliveryHooks(NoopHooks):
         filter-branch`` then ``git gc --prune`` left pinned SHA ``d6987af``
         missing. Oracle only ``sed``s the working tree. Also refuse the
         hyphenated ``git-filter-repo`` binary and ``python -m git_filter_repo``.
+        Also refuse ``bash``/``python3`` of an on-disk helper whose source
+        is the rewrite (the command string then has no subcommand).
         Allow the command when the instruction itself names a history rewrite.
         """
         if call.name != "bash":
             return None
         if _HISTORY_REWRITE_ALLOWED.search(self._instruction or ""):
             return None
-        if not _GIT_REWRITE.search(_bash_command(call)):
+        command = _bash_command(call)
+        if not (
+            _GIT_REWRITE.search(command)
+            or _invoked_script_rewrites_history(command)
+        ):
             return None
         return ToolResult(
             success=False,
@@ -2678,6 +2692,35 @@ def _python_script_paths(command: str) -> list[str]:
     if not raw.startswith("/"):
         out.append(f"/app/{raw.lstrip('./')}")
     return out
+
+
+def _invoked_script_paths(command: str) -> list[str]:
+    """``bash /tmp/rewrite.sh`` / ``python3 rewrite.py`` paths, if they exist."""
+    paths: list[str] = []
+    for match in _BASH_RUN_SHELL_SCRIPT.finditer(command):
+        raw = match.group(2)
+        if not raw or raw.startswith("-"):
+            continue
+        paths.append(raw)
+        if not raw.startswith("/"):
+            paths.append(f"/app/{raw.lstrip('./')}")
+    paths.extend(_python_script_paths(command))
+    return paths
+
+
+def _invoked_script_rewrites_history(command: str) -> bool:
+    """True when an invoked helper's source is itself a history rewrite."""
+    for raw in _invoked_script_paths(command):
+        path = Path(raw)
+        if not path.is_file():
+            continue
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")[:64_000]
+        except OSError:
+            continue
+        if _GIT_REWRITE.search(src):
+            return True
+    return False
 
 
 def _bash_runs_helper_writing_missing(
