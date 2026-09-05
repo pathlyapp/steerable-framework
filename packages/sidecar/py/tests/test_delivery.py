@@ -2230,6 +2230,14 @@ async def test_wrap_up_instruction_example_when_starter_mismatches() -> None:
             arguments={"command": f"cat > {dest} <<'EOF'\nfixed\nEOF"},
         )
         assert hooks.inspect_block_result(write) is None
+        scratch = ToolCall(
+            id="t",
+            name="bash",
+            arguments={
+                "command": "cat > /tmp/steerable-example-gen.py <<'EOF'\nprint(1)\nEOF"
+            },
+        )
+        assert hooks.inspect_block_result(scratch) is None
         helper = dest.parent / "gen.py"
         helper.write_text(
             "from pathlib import Path\n"

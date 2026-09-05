@@ -688,8 +688,12 @@ class DeliveryHooks(NoopHooks):
         ``node …`` (side-effect frames), runs an on-disk named ``.py``,
         runs a helper ``.py`` whose source mutates a still-missing named
         path, or mutates a still-missing named path still runs.
-        ``python3 gen.py`` that only inspects, and ``cat > explore.py``,
-        do not. After wrap-up shown-text, a helper whose source rewrites
+        ``python3 gen.py`` that only inspects still does not. ``cat > explore.py``
+        after missing-named nudges does not. After wrap-up shown-text,
+        prefix, or instruction-example, ``cat > gen.py`` does run: the
+        prompt tells the model to write long files that way, and the
+        inspect spiral is reading the starter/dump, not creating a
+        generator. After wrap-up shown-text, a helper whose source rewrites
         an existing raster dump is also blocked: the dump already exists,
         so regenerating it is the inspect spiral (catalog 69
         ``python3 parse.py``). ``cat >`` / ``write_file`` of the dump
@@ -749,6 +753,15 @@ class DeliveryHooks(NoopHooks):
                 and self._wrap_up_example_nudges < 1
                 and _bash_reads_existing(command)
                 and viewed not in prefix_named
+            )
+            or (
+                (
+                    self._wrap_up_example_nudges >= 1
+                    or self._wrap_up_prefix_nudges >= 1
+                    or self._wrap_up_shown_nudges >= 1
+                )
+                and bool(_BASH_MUTATE_FILE.search(command))
+                and _BASH_RUN_PYTHON.search(command) is None
             )
         ):
             return None
