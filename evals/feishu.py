@@ -392,6 +392,21 @@ def build_message(
     return ok, title, body
 
 
+def paired_ab_report(root: Path) -> str | None:
+    """Paired sign-test report when both flaky arms are present.
+
+    Harbor Mean on this split overwrites attempts; the catalog-go/no-go
+    verdict is ``evals.flaky_score``.
+    """
+    from evals.flaky_score import collect, report
+
+    data = collect(root)
+    arms = {arm for byarm in data.values() for arm in byarm}
+    if "a" not in arms or "b" not in arms:
+        return None
+    return report(data)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Post Harbor eval results to Feishu")
     parser.add_argument("--root", type=Path, required=True, help="artifact / jobs directory")
@@ -405,6 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_USAGE
     rows = collect_rows(args.root)
     ok, title, body = build_message(rows, label=args.label, run_url=args.run_url)
+    extra = paired_ab_report(args.root)
+    if extra:
+        body = f"{body}\n\n{extra}"
     payload = card_payload(ok=ok, title=title, body=body)
     print(title)
     print(body)
