@@ -1,11 +1,9 @@
 # Loss taxonomy — 20 flaky + 9 stable red at `27d521a`
 
 Sources: `EVALS_TODO.md` (2.5.9–2.5.17), `evals/suite.yaml` four-run
-pass counts, `docs/evals.md`, catalog 33497477757 shards 7/13/16/17/20/35/42/46,
-and the in-flight flaky A/B 33951133679 (partial). Gateway-side Claude Code GLM
-transcripts for the 83.1% run are not in this repo. Rerun recipe: `evals/README.md`.
-Gateway-side Claude Code GLM transcripts for the 83.1% run are not in
-this repo (no GHA run id). Rerun recipe: `evals/README.md`.
+pass counts, `docs/evals.md`, catalog 33497477757 (73/89) and 33547943349
+(69/89), and the in-flight flaky A/B 33951133679 (partial). Claude Code GLM
+transcripts for the 83.1% run are not in this repo. Recipe: `evals/README.md`.
 
 The four buckets are failure *mechanisms*. A task can sit in more than
 one. Arm decisions follow the mechanism, not the 0/4 label.
@@ -38,16 +36,16 @@ is older than the four-run split; used only when it names a flaky id.
 | Task | 4-run | Closest mechanism | Arm? |
 | ---- | ----- | ---------------- | ---- |
 | `circuit-fibsqrt` | 1/4 | Catalog 33497477757: 2 tools then 1.3 MB reasoning, `[hard_timeout]`. Not empty wrap-up | Spiral. Live-lock empty-streak will not see this |
-| `make-mips-interpreter` | 1/4 | — | Flaky A/B only |
-| `path-tracing-reverse` | 1/4 | Soft timeout then wrap | Live-lock |
-| `video-processing` | 1/4 | — | Flaky A/B only |
+| `make-mips-interpreter` | 1/4 | 33497477757 pass. 33547943349: 256 tools, `/tmp/frame.bmp` missing, verifier TimeoutError. `_SYSTEM` already names that side-effect file | Named-output / VM; not a new prompt clause |
+| `path-tracing-reverse` | 1/4 | 33497477757: 0.464 vs 0.995, `empty_round` then `[soft_timeout]`, kept disassembling. 33547943349: 0.957 vs 0.995 after they `cmp`'d images; `empty_round` ×2 + `named_gzip_cap` | Live-lock is the empty half. The near-miss is a named `> 0.995` bar they already checked |
+| `video-processing` | 1/4 | 33497477757 pass. 33547943349: landing frame 61 vs inclusive `[62, 64]`; `jump_analyzer.py` also crashed | Off-by-one on a named range. Not the verify gate |
 | `code-from-image` | 2/4 | Flaky A/B B 3/3 (gate off; A still running) | Flaky A/B only |
-| `dna-assembly` | 2/4 | Hard kill historically | Live-lock / timeout |
+| `dna-assembly` | 2/4 | 33497477757: primers written; forward Tm 73.64 > 72; `[soft_timeout]` then `[hard_timeout]` while iterating. Primer length note already in `_SYSTEM` | Timeout + named Tm bar. Do not add a Tm clause |
 | `extract-elf` | 2/4 | A/B 33951133679: gate on 1/3, gate off 3/3. Both A losses fired `unverified_output` then re-ran `node extract.js > out.json` | **20a854d** — retry copy no longer names that command (`72e1776`). Do not call the arm until the full 20-task pair |
-| `install-windows-3.11` | 2/4 | Wrong answer historically | Flaky A/B; VM domain notes already in `_SYSTEM` |
-| `model-extraction-relu-logits` | 2/4 | 180 min timeout on pi-glm | Timeout, not verify |
+| `install-windows-3.11` | 2/4 | 33497477757 and 33547943349 both pass. VM domain notes already in `_SYSTEM` | Flaky A/B; losses are on the other two catalog runs |
+| `model-extraction-relu-logits` | 2/4 | 33497477757 pass. 33547943349: 0 tools, 1.4 MB round-0 reasoning, `[hard_timeout]`, `stolen_A1.npy` never written | Spiral on the first stream. Live-lock empty-streak and ReminderHooks never see a tool. Do not re-enable stream cuts |
 | `mteb-retrieve` | 2/4 | A/B: 1/3 both arms; gate never fired | Wrong answer, not the gate |
-| `protein-assembly` | 2/4 | Wrong answer historically | Flaky A/B |
+| `protein-assembly` | 2/4 | 33497477757 pass. 33547943349: wrong fusion order (flag-donor-dhfr-acceptor-snap) | Wrong answer. Order is in the instruction |
 | `bn-fit-modify` | 3/4 | A/B: 2/3 both arms. The A loss is a wrong DAG; gate did not fire | Not shown as a gate win on the partial sample |
 | `build-pov-ray` | 3/4 | Catalog 33497477757: binary + SSIM pass; `file_id.diz` missing (wrong/incomplete 2.2 tree). A/B B (gate off) 3/3 | Do **not** add a POV-Ray `_SYSTEM` clause. Instruction already names `/app/povray-2.2` |
 | `chess-best-move` | 3/4 | Catalog 33497477757: pass, 31 tools, no gate | Flaky A/B; not a scoring-fact hole on the pass trial |
