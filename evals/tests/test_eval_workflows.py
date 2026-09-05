@@ -44,6 +44,18 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
     assert "**/agent/headless.log" in workflow
 
 
+def test_flaky_feishu_copy_matches_the_split() -> None:
+    """The start card still said 25 ids after suite.yaml shrank flaky to 20."""
+    assert "20 题 × 2 臂" in WEEKLY
+    assert "25 题" not in WEEKLY
+
+
+def test_attribution_waits_for_every_scored_split() -> None:
+    """needs: [eval] ran the report before a flaky/catalog matrix finished."""
+    assert "needs: [eval, flaky, spiral, catalog, failed-prev]" in WEEKLY
+    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev]") >= 2
+
+
 def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
     the same-model pi comparison has to be dispatchable there."""

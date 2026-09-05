@@ -40,6 +40,7 @@ from evals.harbor_helpers import (
     rewrite_forwarded_env_value as _rewrite_forwarded_env_value,
     rewrite_loopback_host as _rewrite_loopback_host,
     spec_as_json as _spec_as_json,
+    usage_from_headless_log as _usage_from_headless_log,
     trial_python_ok as _trial_python_ok,
     trial_python_tag as _trial_python_tag,
     trial_python_venv as _trial_python_venv,
@@ -554,6 +555,28 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # pytest. Re-point python at python3 after the agent in case a
             # trial retargeted the symlink.
             await self._align_verifier_python(environment)
+            await self._record_token_usage(environment, context, log)
+
+    async def _record_token_usage(
+        self,
+        environment: BaseEnvironment,
+        context: AgentContext,
+        log: str,
+    ) -> None:
+        """Copy ``STEERABLE_RUN_SUMMARY`` onto Harbor ``agent_result`` token fields."""
+        result = await environment.exec(
+            command=f"tail -n 8 {shlex.quote(log)}",
+            user="root",
+        )
+        if result.return_code != 0:
+            return
+        inp, out, cache = _usage_from_headless_log(result.stdout or "")
+        if inp is not None:
+            context.n_input_tokens = inp
+        if out is not None:
+            context.n_output_tokens = out
+        if cache is not None:
+            context.n_cache_tokens = cache
 
     def _forwarded_env(self, keys: tuple[str, ...]) -> dict[str, str]:
         env: dict[str, str] = {}

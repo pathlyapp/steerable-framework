@@ -613,6 +613,7 @@ async def _run(
                     "rounds": summary_rounds or None,
                     "input_tokens": summary_usage.get("promptTokens"),
                     "output_tokens": summary_usage.get("completionTokens"),
+                    "cache_tokens": summary_usage.get("cachedPromptTokens"),
                     "peak_context_tokens": summary_peak_context or None,
                     "tool_errors": summary_tool_errors,
                     "tool_recoveries": summary_tool_recoveries,

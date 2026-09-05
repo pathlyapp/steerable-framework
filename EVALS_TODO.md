@@ -635,7 +635,7 @@ Run A 按实际完成 trial 计 **61/86 = 0.7093**，缺 `install-windows-3.11`�
 - [x] **2.5.14** 9 道稳定红已裂成 **harness 损耗 3 道**（`gcode-to-text`、`pytorch-model-cli`、`raman-fitting`）+ **能力墙候选 6 道**，见上节。同时产出 9 道反向名单（我们赢 pi）作为回归风险清单
 - [x] **2.5.16** 逐题读 33497477757 的 steerable 轨迹（pi/CC 轨迹仍只有 result.json）。`gcode-to-text`：硬超时后交出 `nseg` 可视化而非 flag。`pytorch-model-cli`：C 推理在隐藏图上错类（7 vs 2），不是门禁。`raman-fitting`：在文件原生 x 上拟合，答案要 Raman cm⁻¹。另读了 CC 过、我们 0/4 的 `sanitize-git-repo`：密钥替换已过，`filter-branch`+`gc --prune` 删掉了测试钉死的原始 SHA；oracle 只改工作区。评分事实已写进 `_SYSTEM`。详见 `evals/notes/loss-taxonomy.md`
 - [ ] **2.5.17** 那 6 道能力墙候选里，`filter-js-from-html` 和 `regex-chess` 已知是跑飞机制（撞 token 上限或墙上时钟），归到 2.5.11。其余 4 道尚未看过失败方式
-- [ ] **2.5.18** `harbor_steerable` 填上 `agent_result` 的三个 token 字段（`n_input_tokens` / `n_cache_tokens` / `n_output_tokens`）。现在 89/89 全空，导致 2.5.11 想验证的"每步吐多少字"只能靠数日志正文，且跨 harness 完全比不了。**这是量化"文本产生方式"改动的前提**，不补上 2.5.11 就没有验收指标
+- [x] **2.5.18** `harbor_steerable` 从 `STEERABLE_RUN_SUMMARY` 填 `agent_result.n_input_tokens` / `n_cache_tokens` / `n_output_tokens`。headless 摘要带 `cache_tokens`。attribution job 现在 `needs` flaky/catalog，不再在 cheap-12 被 skip 时立刻空跑。
 - [ ] **2.5.19** 复核"反方向 9 道"回归风险清单。其中 4 道（`polyglot-rust-c`、`feal-linear-cryptanalysis`、`dna-assembly`、`torch-pipeline-parallelism`）pi 是第一个请求就烧光 65536 输出上限、零工具调用而挂的，属于 pi 撞上限而非我们有优势，**不该计入我们的既有优势**。剩 5 道待核
 - [ ] **2.5.20** catalog job 超时必须高于单题 agent 最大预算，并留出建环境、安装和 verifier 的余量。Run A 三个 shard 在 360 分钟被取消，3 道 trial 没有结果；`if: always()` 只保住了取消前已经落盘的 86 道，不能把偶然保住当成完整性设计
 - [ ] **2.5.21** 限制或拆分 `pi.txt` artifact。Run A 的 shard 7 单包 406 MB、下载超过 20 分钟；分数聚合只需要 `result.json`，异常 transcript 应限长或按需保存
