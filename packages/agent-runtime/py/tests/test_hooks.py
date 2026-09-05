@@ -15,6 +15,8 @@ from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from steerable_agent_runtime import (
     ChainHooks,
+    CompletionAction,
+    CompletionDraft,
     CoreLoop,
     LoopEvent,
     NoopHooks,
@@ -252,6 +254,60 @@ async def test_chain_hooks_appends_only_compose_in_order() -> None:
     assert action.rewrite is None
     assert action.appends is not None
     assert [a.message.content_text for a in action.appends] == ["A", "B"]
+
+
+# ---------------------------------------------------------------------------
+# before_completion
+# ---------------------------------------------------------------------------
+
+
+def _draft(**overrides: Any) -> CompletionDraft:
+    values = dict(
+        status="failed",
+        reason="empty",
+        content="",
+        round_index=3,
+        had_tool_calls=False,
+        tool_calls_used=4,
+        tool_successes=2,
+    )
+    values.update(overrides)
+    return CompletionDraft(**values)
+
+
+class _Narrate(NoopHooks):
+    async def before_completion(self, draft, ctx):
+        return CompletionAction(kind="narrate", reason="narration")
+
+
+class _RetryWrite(NoopHooks):
+    async def before_completion(self, draft, ctx):
+        return CompletionAction(kind="retry", reason="empty_round")
+
+
+@pytest.mark.asyncio
+async def test_chain_before_completion_retry_outranks_earlier_narrate() -> None:
+    hooks = ChainHooks(_Narrate(), _RetryWrite())
+    action = await hooks.before_completion(_draft(), ctx=None)  # type: ignore[arg-type]
+    assert action == CompletionAction(kind="retry", reason="empty_round")
+
+
+@pytest.mark.asyncio
+async def test_chain_before_completion_retry_outranks_later_narrate() -> None:
+    hooks = ChainHooks(_RetryWrite(), _Narrate())
+    action = await hooks.before_completion(_draft(), ctx=None)  # type: ignore[arg-type]
+    assert action == CompletionAction(kind="retry", reason="empty_round")
+
+
+@pytest.mark.asyncio
+async def test_chain_before_completion_later_retry_wins_same_kind() -> None:
+    class _FirstRetry(NoopHooks):
+        async def before_completion(self, draft, ctx):
+            return CompletionAction(kind="retry", reason="deferred_execution")
+
+    hooks = ChainHooks(_FirstRetry(), _RetryWrite())
+    action = await hooks.before_completion(_draft(), ctx=None)  # type: ignore[arg-type]
+    assert action == CompletionAction(kind="retry", reason="empty_round")
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,8 @@ _ARM = re.compile(r"^eval-steerable-flaky-([ab])-\d+$")
 _TOOL = re.compile(r"\[tool \w+ ")
 #: ReminderHooks ``pre_step`` label in headless logs (Python dict repr).
 _REMINDER_HOOK = re.compile(r"'action': 'reminder'")
+#: Delivery wrap-up livelock (``STEERABLE_LIVELOCK_EMPTY_STREAK``).
+_LIVELOCK_HOOK = re.compile(r"'reason': 'forced_empty_livelock'")
 
 EXIT_OK = 0
 EXIT_USAGE = 1
@@ -82,34 +84,43 @@ def _calls(result: Path) -> int | None:
 
 
 def extras(root: Path) -> str:
-    """Incomplete trials and ReminderHooks fires, which the verdict ignores.
+    """Incomplete trials and hook wiring, which the verdict ignores.
 
     ``collect`` drops ``reward is None`` so a GHA-killed hang cannot flip
     the sign test. Those trials still need a line: an arm whose remaining
-    1/1 looks like a win may just have lost two verifier timeouts. The
-    reminder count is the wiring check for ``STEERABLE_REMINDERS=1`` —
-    zero fires on B means the arm never reached the model.
+    1/1 looks like a win may just have lost two verifier timeouts. Harbor
+    compose deaths never write ``headless.log``; those count from trial
+    ``result.json``. Reminder and livelock counts are the wiring checks
+    for ``STEERABLE_REMINDERS=1`` and ``STEERABLE_LIVELOCK_EMPTY_STREAK``
+    — zero fires on B means the arm never reached wrap-up on the
+    downloaded shards.
     """
     incomplete: dict[str, int] = defaultdict(int)
     reminders: dict[str, int] = defaultdict(int)
+    livelock: dict[str, int] = defaultdict(int)
+    for result in sorted(root.rglob("jobs/steerable/*/*/result.json")):
+        if _passed(result) is None:
+            incomplete[_arm_of(result, root)] += 1
     for log in sorted(root.rglob("agent/headless.log")):
         arm = _arm_of(log, root)
         result = log.parent.parent / "result.json"
-        if not result.exists() or _passed(result) is None:
+        if not result.exists():
             incomplete[arm] += 1
         try:
             text = log.read_text(errors="replace")
         except OSError:
             continue
         reminders[arm] += len(_REMINDER_HOOK.findall(text))
-    arms = sorted(set(incomplete) | set(reminders))
+        livelock[arm] += len(_LIVELOCK_HOOK.findall(text))
+    arms = sorted(set(incomplete) | set(reminders) | set(livelock))
     if not arms:
         return ""
     lines = []
     for arm in arms:
         lines.append(
             f"arm {arm}: {incomplete[arm]} incomplete (no reward)  "
-            f"{reminders[arm]} reminder hook_action"
+            f"{reminders[arm]} reminder hook_action  "
+            f"{livelock[arm]} livelock"
         )
     return "\n".join(lines)
 
