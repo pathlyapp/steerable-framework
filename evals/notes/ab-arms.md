@@ -46,6 +46,15 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
 
 Kill a losing arm; do not stack losers into the catalog three-run.
 
+## Applying the 20a854d verdict
+
+The running A/B ([33951133679](https://github.com/pathlyapp/steerable-framework/actions/runs/33951133679)) is the `4d6e801` tree: persist prompt on both arms, gate on A / off on B. It does **not** include the retry copy (`72e1776`), directory `_file_ready` (`53d5402`), or hard-timeout process abandon (`9221f19`). GHA 180 may truncate the slow shards; judge on whatever pairs finish.
+
+- **B wins (p<0.05 and CI excludes 0) and the disagreed tasks are mostly gate fires** → default `STEERABLE_DELIVERY_VERIFY` off. Persistence stays in `_SYSTEM`. Then arm 2's A is gate-off defaults (needs that commit first).
+- **B wins only on `extract-elf`** (old copy named `node extract.js > out.json`) **and variance** (`modernize-scientific-stack` 2/3 vs 3/3, gate never fired) → **keep the gate on**. The copy is already fixed. Do not treat that as a gate-off win.
+- **A wins** → keep the gate; copy and directory fixes already on HEAD.
+- **No separation** → keep the committed default (gate on) and dispatch arm 2 on HEAD. Do not queue arm 2 while this run occupies `evals-flaky-steerable`.
+
 ## Already falsified (do not rerun)
 
 Stream cuts (default off), compaction 0.8→0.9 (p=0.623), named-output
