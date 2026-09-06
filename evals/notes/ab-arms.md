@@ -64,18 +64,20 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    1/3 vs 3/3, `train-fasttext` 1/3 vs 3/3 — screenshot/frame attaches
    are the plausible harm. Default stays ASCII. BMP stays ASCII.
 5. **self_critique** — `STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml`
-   on B. Enables `validator: self_critique` and therefore
-   AntiHallucinationHooks (discipline retry + grounding + narrate).
-   Headless must pass the TB instruction as `user_question`; without it
-   claimed/eager-deferred see no exec intent and the grounding judge is
-   prompted with an empty question. [34003565140](https://github.com/pathlyapp/steerable-framework/actions/runs/34003565140)
-   on `ddce50c` was that no-op — cancel and redispatch after the wiring
-   fix. `ChainHooks(assembled, delivery)` still runs assembled first for
-   `pre_step` (compaction before wrap-up appends). `before_completion`
-   now prefers `retry` over `narrate`, so an empty wrap-up still hits
-   DeliveryHooks `empty_round` / missing-named instead of a no-tools
-   summary. Measures discipline/grounding, not a stolen write-forcing
-   path.
+   on B. **Done. No separation. Keep off.** GHA
+   [34003963766](https://github.com/pathlyapp/steerable-framework/actions/runs/34003963766)
+   (`7ad0b26`, headless passes the TB instruction as `user_question`;
+   [34003565140](https://github.com/pathlyapp/steerable-framework/actions/runs/34003565140)
+   on `ddce50c` was the empty-question no-op). 20 paired. B better 6,
+   A better 5, tied 9, p=1.0000, mean +0.0000, 95% CI [−0.1500, +0.1500].
+   A 39/60 vs B 40/60. Both 3h-cancelled shards were arm B
+   (`model-extraction-relu-logits`, `torch-tensor-parallelism`) — the
+   grounding judge adds turns at the tail. B wins were wrong-answer
+   variance (`install-windows-3.11` 0/3→2/3, `extract-elf` 2/3→3/3);
+   B losses the same (`protein-assembly` 2/3→0/3,
+   `modernize-scientific-stack` 3/3→2/3). Discipline retry +
+   grounding converts nothing the delivery gates do not already catch.
+   Wiring kept for the desktop, default stays off for Harbor.
 6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
    + grep/glob preference. Tool-description fact fixes (`bash` cwd vs
    shell state, `grep` over bash grep) are committed defaults, not this arm.
@@ -145,7 +147,8 @@ passes; livelock did not buy the B loss (`ZdwsGff`). `code-from-image`
 tied 3/3, both arms still OCR'd. `train-fasttext` A 0/3 vs B 2/3 is
 variance, not a fire. **Keep the detector off.** Keep-required
 until wrap-up quality gates is already default on this SHA. Native
-image-read is done and lost (33985962466). Next arm is self_critique.
+image-read is done and lost (33985962466). self_critique is done and
+flat (34003963766). Next arm is CC-align prompt.
 
 ## Native image-read verdict (33985962466)
 
@@ -157,7 +160,7 @@ A OCR'd (9–31 tesseract hits) and still passed. The flaky 75 min wrap
 is long enough for OCR; catalog 69/70 were not. B's harm is not cfi:
 `install-windows-3.11` 1/3 vs 3/3, `build-pov-ray` 1/3 vs 3/3,
 `train-fasttext` 1/3 vs 3/3. Those tasks `read_file` screenshots or
-do not need pixels. Do not enable for catalog. Next is self_critique.
+do not need pixels. Do not enable for catalog. Next is CC-align.
 
 ## Already falsified (do not rerun)
 
@@ -165,4 +168,5 @@ Stream cuts (default off), compaction 0.8→0.9 (p=0.623), named-output
 regex (no-op on 89), widening timeouts (ours are already the widest),
 wrap-up-only livelock (33966115606, p=1.0; regex-chess 0/3),
 pre-wrap livelock (33976774219, p=1.0; circuit A 3/3 vs B 2/3),
-native image read (33985962466, p=0.0225; A wins, cfi tied 3/3).
+native image read (33985962466, p=0.0225; A wins, cfi tied 3/3),
+self_critique (34003963766, p=1.0; both 3h-cancelled shards on B).
