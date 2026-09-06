@@ -2,9 +2,11 @@
 
 # Identical to default.harness.yaml except `validator: self_critique`.
 # That is the only dimension this arm varies: AntiHallucinationHooks
-# (discipline retry + grounding). Empty wrap-up still hits DeliveryHooks
-# because `before_completion` prefers `retry` over `narrate`. Delivery
-# stays the transport's outer layer in headless, not a harness field.
+# (discipline retry + grounding). Headless fills `user_question` from
+# the TB instruction (runtime_params). Empty wrap-up still hits
+# DeliveryHooks because `before_completion` prefers `retry` over
+# `narrate`. Delivery stays the transport's outer layer in headless,
+# not a harness field.
 context:
   - impl: pressure_compaction
   - impl: spill

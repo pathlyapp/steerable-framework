@@ -66,12 +66,16 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
 5. **self_critique** — `STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml`
    on B. Enables `validator: self_critique` and therefore
    AntiHallucinationHooks (discipline retry + grounding + narrate).
-   `ChainHooks(assembled, delivery)` still runs assembled first for
+   Headless must pass the TB instruction as `user_question`; without it
+   claimed/eager-deferred see no exec intent and the grounding judge is
+   prompted with an empty question. [34003565140](https://github.com/pathlyapp/steerable-framework/actions/runs/34003565140)
+   on `ddce50c` was that no-op — cancel and redispatch after the wiring
+   fix. `ChainHooks(assembled, delivery)` still runs assembled first for
    `pre_step` (compaction before wrap-up appends). `before_completion`
    now prefers `retry` over `narrate`, so an empty wrap-up still hits
    DeliveryHooks `empty_round` / missing-named instead of a no-tools
    summary. Measures discipline/grounding, not a stolen write-forcing
-   path. Dispatch after the image-read wave (queue is free).
+   path.
 6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
    + grep/glob preference. Tool-description fact fixes (`bash` cwd vs
    shell state, `grep` over bash grep) are committed defaults, not this arm.
