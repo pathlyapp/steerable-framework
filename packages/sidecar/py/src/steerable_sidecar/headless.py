@@ -291,6 +291,7 @@ def _assemble_harness(
     provider: Any,
     executor: Any,
     tools: Any,
+    instruction: str = "",
 ) -> tuple[Any, Any, Any, list[dict[str, Any]], Any]:
     """W1.2.2: assemble the declarative spec into the loop's seams.
 
@@ -344,6 +345,7 @@ def _assemble_harness(
                 "max_inline_bytes": 100_000 if large else 16_000,
                 "preview_bytes": 8_000 if large else 2_000,
             },
+            "self_critique": {"user_question": instruction},
         },
     )
     # Router-backed tools strategies (progressive) register their discovery
@@ -489,6 +491,7 @@ async def _run(
             provider=provider,
             executor=executor,
             tools=tools,
+            instruction=instruction,
         )
     # `--max-rounds` overrides the spec; the spec overrides the baseline. Same
     # rule as the chat and ACP entrypoints (see loop_limits).

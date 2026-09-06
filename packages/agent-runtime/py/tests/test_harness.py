@@ -164,6 +164,31 @@ async def test_null_validator_accepts() -> None:
     assert action.kind == "accept"
 
 
+def test_self_critique_passes_the_instruction_into_the_judge() -> None:
+    """Harbor's self_critique arm is a silent no-op if user_question stays
+    empty: claimed/eager-deferred need exec intent, and the grounding judge
+    is prompted with an empty 用户提问."""
+    from steerable_agent_runtime.harness import SelfCritique
+
+    class _Provider:
+        name = "fake"
+        model = "fake-model"
+
+    hooks = SelfCritique(user_question="Write /app/out.txt").hooks(
+        provider=_Provider()
+    )
+    config = hooks._inner._config
+    assert config.user_question.startswith("Execute the following.")
+    assert "Write /app/out.txt" in config.user_question
+    assert config.tools_available is True
+    assert config.enable_routing is False
+
+    already = SelfCritique(user_question="execute the hidden tests").hooks(
+        provider=_Provider()
+    )
+    assert already._inner._config.user_question == "execute the hidden tests"
+
+
 # -- tools -------------------------------------------------------------------
 
 

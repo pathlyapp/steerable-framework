@@ -371,6 +371,10 @@ class NullValidator:
 class SelfCritique:
     """The existing discipline-retry + grounding stack (AntiHallucinationHooks)."""
 
+    #: Headless fills this from the TB instruction. Empty leaves claimed /
+    #: eager-deferred blind (``detect_execution_intent_in_user_message``
+    #: is false on "") and the grounding judge sees no user question.
+    user_question: str = ""
     name: str = "self_critique"
     assumes: str = (
         "the model sometimes claims executions it did not perform; a "
@@ -380,9 +384,27 @@ class SelfCritique:
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
         if provider is None:
             raise ValueError("SelfCritique requires the turn's LLM provider")
-        from .antihallucination import AntiHallucinationHooks
+        from .antihallucination import (
+            AntiHallucinationConfig,
+            AntiHallucinationHooks,
+            detect_execution_intent_in_user_message,
+        )
 
-        return _BeforeCompletionOnly(AntiHallucinationHooks(provider))
+        question = self.user_question
+        # Desktop exec-intent is chat ("跑一下" / "execute"). TB instructions
+        # are unattended execution even when they never say "run".
+        if question and not detect_execution_intent_in_user_message(question):
+            question = f"Execute the following.\n{question}"
+        return _BeforeCompletionOnly(
+            AntiHallucinationHooks(
+                provider,
+                AntiHallucinationConfig(
+                    user_question=question,
+                    tools_available=True,
+                    enable_routing=False,
+                ),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

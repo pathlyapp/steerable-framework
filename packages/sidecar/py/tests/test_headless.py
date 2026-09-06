@@ -365,6 +365,49 @@ def test_assemble_harness_single_adds_no_delegation_tools(tmp_path: Path) -> Non
     assert not {"agent_spawn", "agent_send", "agent_wait", "agent_close"} & names
 
 
+def test_assemble_harness_self_critique_gets_the_instruction(tmp_path: Path) -> None:
+    """``STEERABLE_HARNESS=.../self_critique.harness.yaml`` used to construct
+    AntiHallucinationHooks() with an empty user_question. Pass the TB
+    instruction through runtime_params so the judge sees the task."""
+    from steerable_agent_runtime.antihallucination import AntiHallucinationHooks
+    from steerable_agent_runtime.hooks import ChainHooks
+
+    spec_path = tmp_path / "self_critique.harness.yaml"
+    spec_path.write_text(
+        "context:\n  - impl: observation_aging\n"
+        "retry:\n  - impl: simple\n"
+        "validator: self_critique\n"
+        "tools: full\nmemory: stateless\norchestration: single\n",
+        encoding="utf-8",
+    )
+
+    class _Provider:
+        name = "fake"
+        model = "fake-model"
+
+    hooks, *_rest = headless_mod._assemble_harness(
+        spec_path,
+        {"model": "fake"},
+        provider=_Provider(),
+        executor=object(),
+        tools=_FakeTools(),
+        instruction="Write the hash to /app/output.txt",
+    )
+
+    def _flatten(h: object) -> list[object]:
+        if isinstance(h, ChainHooks):
+            return [x for sub in h._hooks for x in _flatten(sub)]
+        inner = getattr(h, "_inner", None)
+        if inner is not None:
+            return _flatten(inner)
+        return [h]
+
+    ah = [h for h in _flatten(hooks) if isinstance(h, AntiHallucinationHooks)]
+    assert len(ah) == 1
+    assert "Write the hash to /app/output.txt" in ah[0]._config.user_question
+    assert ah[0]._config.user_question.startswith("Execute the following.")
+
+
 def test_assemble_harness_progressive_wires_tool_search(tmp_path: Path) -> None:
     """The progressive arm's discovery tool is registered on the router
     during assembly — the offered descriptor always dispatches — and the
