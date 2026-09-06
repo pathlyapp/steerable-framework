@@ -1,4 +1,10 @@
-# Loss taxonomy — 20 flaky + 9 stable red at `27d521a`
+# Loss taxonomy — 15 flaky + 9 stable red at `8e260de`
+
+Rebuilt on the three `8e260de` catalog runs (70/71/77). The `27d521a`
+set was 20 flaky + 9 stable red; `raman-fitting` and `sanitize-git-repo`
+left stable red, `protein-assembly` and `video-processing` fell in, and
+nine flaky graduated to 3/3. Mechanism labels below keep the old set's
+entries where the mechanism still applies.
 
 Sources: `EVALS_TODO.md` (2.5.9–2.5.17), `evals/suite.yaml` four-run
 pass counts, `docs/evals.md`, catalogs 33497477757 (73/89), 33530806570
@@ -73,6 +79,7 @@ on a guessed 8-id list.
 | Native PNG/JPEG on `read_file` (`STEERABLE_READ_IMAGES=1`) | **No. Keep off** | GHA [33985962466](https://github.com/pathlyapp/steerable-framework/actions/runs/33985962466) (`ea81b77`). 20 paired, p=0.0225, CI excludes 0, A wins. `code-from-image` tied 3/3 (B vision, A OCR). B lost windows/POV-Ray/fasttext |
 | `validator: self_critique` | **No. Keep off** | GHA [34003963766](https://github.com/pathlyapp/steerable-framework/actions/runs/34003963766) (`7ad0b26`, instruction wired as `user_question`). 20 paired, p=1.0000, CI includes 0. Both 3h-cancelled shards on B — the grounding judge adds tail turns. [34003565140](https://github.com/pathlyapp/steerable-framework/actions/runs/34003565140) on `ddce50c` was the empty-question no-op |
 | CC-align prompt (`STEERABLE_PROMPT_CC_ALIGN=1`) | **No. Keep off** | GHA [34011962039](https://github.com/pathlyapp/steerable-framework/actions/runs/34011962039) (`81f682d`). 20 paired, p=0.5078, CI includes 0. Arm A swung 39/60→30/60 between runs on identical default code — same-arm variance swamps two prompt sentences. Tool-description facts stay as defaults |
+| Reasoning effort `high` (`STEERABLE_REASONING_EFFORT=high`) | **No. Keep `max`** | Spiral-red [34040196148](https://github.com/pathlyapp/steerable-framework/actions/runs/34040196148) 0/9 — no unlock (100–420 K output tokens per trial at `high`). Flaky paired [34040202706](https://github.com/pathlyapp/steerable-framework/actions/runs/34040202706), p=0.4240, CI includes 0, mean −0.05. Lower budget neither starves the spiral nor lifts coin tosses |
 | Keep pinned git SHA (`_SYSTEM` + bash gate) | Landed | `sanitize-git-repo` over-prune. Grading fact, not a flaky A/B. Prompt was absent on the 0/4 run; bash refuses `filter-branch` / `git-filter-repo` / `gc --prune` in the command **or** in an invoked helper script unless the instruction requires a rewrite (`rewriting history` / recover-then-purge). `rewrite history` alone does not match official git-leak-recovery |
 | Named `.txt` prefix / stub (`starts with`) | Landed | `code-from-image` official hint. Shared 69+70 miss. Completion veto converts 69 (they finished). 70 `[hard_timeout]` never completed — wrap-up prefix + inspect-block, and wrap-up re-asserts `tool_choice=required` every remaining round while the prefix misses (`post_tool_result` used to clear it; `writes > 0` used to stand down). Product matchers do not hardcode the hash |
 | Shown-text raster (no stand-down + wrap-up) | Landed | Completion veto converts a dump only if they complete. 69 `gcode-to-text__9WfWgdj` left a labelled XY dump in `out.txt` (dot/hash rows, ≫4KB) and kept inspecting (~3M log lines) plus `python3 parse.py`. Wrap-up named skipped because the file existed; wrap-up shown-text + inspect-block of dump reads **and** helper rewrite is the timeout path. Does **not** convert short OCR misses (`{ragi…}`, `top left and a b c`). Does not invent the flag |
@@ -82,7 +89,9 @@ on a guessed 8-id list.
 
 ## Left tail (69/89 and 70/89)
 
-The gate is every catalog run ≥72, not the 80% mean. Feishu pass lists
+Historical: the gate was every catalog run ≥72. The `8e260de` three-run
+posted 70/71/77 — gate missed, mean 0.8165 locked as the score of record
+(`docs/evals.md`). Feishu pass lists
 from the four gather jobs (complete 73/70/73/69 ids, not the truncated
 card lines):
 

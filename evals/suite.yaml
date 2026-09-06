@@ -260,29 +260,28 @@ splits:
   # Run with n-attempts 3: at one attempt a flapper's outcome is a coin toss
   # and the mean carries a ±0.19 band, wide enough to swallow any real effect.
   flaky:
-    # 1/4
+    # Rebuilt on the three `8e260de` catalog runs (34031313764 / 34031319806 /
+    # 34040053173): x/3 tiers. Dropped as 3/3: bn-fit-modify, build-pov-ray,
+    # chess-best-move, code-from-image, modernize-scientific-stack,
+    # path-tracing, sam-cell-seg, torch-tensor-parallelism, train-fasttext.
+    # Dropped as 0/3 (stable red): protein-assembly, video-processing.
+    # 1/3
     - circuit-fibsqrt
-    - make-mips-interpreter
-    - path-tracing-reverse
-    - video-processing
-    # 2/4
-    - code-from-image
     - dna-assembly
-    - extract-elf
-    - install-windows-3.11
+    - dna-insert
+    - make-mips-interpreter
     - model-extraction-relu-logits
-    - mteb-retrieve
-    - protein-assembly
-    # 3/4
-    - bn-fit-modify
-    - build-pov-ray
-    - chess-best-move
+    - path-tracing-reverse
+    - raman-fitting
+    # 2/3
+    - caffe-cifar-10
+    - db-wal-recovery
+    - extract-elf
+    - git-multibranch
+    - install-windows-3.11
     - largest-eigenval
-    - modernize-scientific-stack
-    - path-tracing
-    - sam-cell-seg
-    - torch-tensor-parallelism
-    - train-fasttext
+    - mteb-retrieve
+    - sanitize-git-repo
   # Stable reds that lose their trial to unbounded reasoning: catalog runs
   # produced >=50 KB of reasoning per tool call, a regime that passes at
   # 0.071 against 0.889 below 3 KB. They are absent from `flaky` because that
@@ -298,44 +297,42 @@ splits:
   # dna-assembly and circuit-fibsqrt flip (2/4 and 1/4), so they belong to
   # `flaky`. Leaving them would have handed the next run two guaranteed
   # "passes" against a baseline that was never zero. Re-audit this list
-  # whenever the stable-red set is recomputed.
+  # whenever the stable-red set is recomputed. Re-audited on the three
+  # `8e260de` runs: all three ids are still 0-for-N (0/3 each; the
+  # reasoning_effort=high probe, GHA 34040196148, went 0/9).
   spiral-red:
     - extract-moves-from-video
     - regex-chess
     - winning-avg-corewars
-  # 20 flaky + 9 stable-red at `27d521a`. Claude Code GLM reruns use this
-  # split instead of catalog-89. Not a GHA shard matrix — local / one job.
-  loss-29:
+  # 15 flaky + 9 stable-red at `8e260de` (three runs: 34031313764 /
+  # 34031319806 / 34040053173). Claude Code GLM reruns use this split
+  # instead of catalog-89. Not a GHA shard matrix — local / one job.
+  loss-24:
     # flaky
     - circuit-fibsqrt
-    - make-mips-interpreter
-    - path-tracing-reverse
-    - video-processing
-    - code-from-image
     - dna-assembly
-    - extract-elf
-    - install-windows-3.11
+    - dna-insert
+    - make-mips-interpreter
     - model-extraction-relu-logits
-    - mteb-retrieve
-    - protein-assembly
-    - bn-fit-modify
-    - build-pov-ray
-    - chess-best-move
+    - path-tracing-reverse
+    - raman-fitting
+    - caffe-cifar-10
+    - db-wal-recovery
+    - extract-elf
+    - git-multibranch
+    - install-windows-3.11
     - largest-eigenval
-    - modernize-scientific-stack
-    - path-tracing
-    - sam-cell-seg
-    - torch-tensor-parallelism
-    - train-fasttext
-    # stable red 0/4
+    - mteb-retrieve
+    - sanitize-git-repo
+    # stable red 0/3
     - extract-moves-from-video
     - filter-js-from-html
     - gcode-to-text
     - make-doom-for-mips
+    - protein-assembly
     - pytorch-model-cli
-    - raman-fitting
     - regex-chess
-    - sanitize-git-repo
+    - video-processing
     - winning-avg-corewars
   cheap-12:
     - fix-git

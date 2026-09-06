@@ -135,22 +135,22 @@ def test_iteration_splits_are_catalog_subsets_that_do_not_overlap() -> None:
     assert not flaky & spiral
 
 
-def test_loss_29_is_flaky_plus_stable_reds() -> None:
+def test_loss_24_is_flaky_plus_stable_reds() -> None:
     suite = load_suite()
     flaky = set(suite.splits["flaky"])
-    loss = set(suite.splits["loss-29"])
+    loss = set(suite.splits["loss-24"])
     stable_red = {
         "extract-moves-from-video",
         "filter-js-from-html",
         "gcode-to-text",
         "make-doom-for-mips",
+        "protein-assembly",
         "pytorch-model-cli",
-        "raman-fitting",
         "regex-chess",
-        "sanitize-git-repo",
+        "video-processing",
         "winning-avg-corewars",
     }
-    assert len(loss) == 29
+    assert len(loss) == 24
     assert loss == flaky | stable_red
     assert flaky <= loss
     assert set(suite.splits["spiral-red"]) <= loss

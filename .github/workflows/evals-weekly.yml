@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       split:
-        description: cheap-12 smoke, flaky A/B (20 ids × 2 arms × 3 attempts), spiral-red unblock check (3 ids × 1 arm × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
+        description: cheap-12 smoke, flaky A/B (15 ids × 2 arms × 3 attempts), spiral-red unblock check (3 ids × 1 arm × 3 attempts), failed-prev iteration (~31 ids), or full catalog (89 ids)
         type: choice
         options:
           - cheap-12
@@ -220,7 +220,7 @@ jobs:
   # only in the forwarded tunables, which keeps the task set, the model, and
   # the sampling identical between them.
   flaky:
-    name: TB 2.1 flaky arm ${{ matrix.arm }} shard ${{ matrix.shard }}/20
+    name: TB 2.1 flaky arm ${{ matrix.arm }} shard ${{ matrix.shard }}/15
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'flaky' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -228,7 +228,7 @@ jobs:
       fail-fast: false
       matrix:
         arm: [a, b]
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
@@ -269,7 +269,7 @@ jobs:
           STEERABLE_HARD_TIMEOUT_SEC: "5100"
         run: |
           set +e
-          uv run python -m evals.run --agent steerable --split flaky --shard "${{ matrix.shard }}" --shards 20 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          uv run python -m evals.run --agent steerable --split flaky --shard "${{ matrix.shard }}" --shards 15 --skip-missing-env --n-attempts 3 --n-concurrent 3 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > eval-status-steerable.txt
@@ -395,7 +395,7 @@ jobs:
               title = "开始 · GHA flaky A/B"
               overrides = (os.environ.get("ARM_B_ENV") or "").strip() or "(none)"
               body = (
-                  "20 题 × 2 臂 × 3 次，单题 85 分钟上限。判断 harness 改动，不是正式分。"
+                  "15 题 × 2 臂 × 3 次，单题 85 分钟上限。判断 harness 改动，不是正式分。"
                   f"\nArm B:\n{overrides}"
               )
           else:

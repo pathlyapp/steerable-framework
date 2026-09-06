@@ -45,8 +45,9 @@ def test_agent_logs_are_uploaded_for_efficiency_metrics(workflow: str) -> None:
 
 
 def test_flaky_feishu_copy_matches_the_split() -> None:
-    """The start card still said 25 ids after suite.yaml shrank flaky to 20."""
-    assert "20 题 × 2 臂" in WEEKLY
+    """The start card still said 25 ids after suite.yaml shrank flaky to 20,
+    then 20 after the `8e260de` rebuild shrank it to 15."""
+    assert "15 题 × 2 臂" in WEEKLY
     assert "25 题" not in WEEKLY
 
 
