@@ -45,25 +45,24 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
 3b. **Live-lock pre-wrap + keep-required** — same env on B.
    **Done. No conversion. Keep off.** GHA
    [33976774219](https://github.com/pathlyapp/steerable-framework/actions/runs/33976774219)
-   (`de45915`). 19 paired (A-2 `train-fasttext` still running at score).
-   B better 3, A on 5, tied 11, p=0.7266, mean −0.0175, 95% CI
-   [−0.1228, +0.1053]. **7 B fires, 0 A.** Mechanism `circuit-fibsqrt`
+   (`de45915`). 20 paired. B better 4, A on 5, tied 11, p=1.0000,
+   mean +0.0167, 95% CI [−0.1000, +0.1500]. **7 B fires, 0 A.** Mechanism `circuit-fibsqrt`
    A 3/3 vs B 2/3: A's three passes used instruction-example, 0 livelock.
    B `FuSgtPw` fired and passed; `ZdwsGff` fired then `[hard_timeout]`
    (reward 0). The other five fires all reward 0 (`make-mips`
    `ZGFfojS`, model-extraction `cG5CC2T` / `ms688u9`, dna-assembly
    `DqmtAib` / `i8zbF7r`). Keep-required until wrap-up quality gates
    pass is already default; the detector stays 0.
-4. **Native image read** — `STEERABLE_READ_IMAGES=1` on B. Claude Code's
-   Read tool sends PNG/JPEG pixels; we only returned an ASCII preview.
-   GLM-5.3-Flash is natively multimodal. CC `code-from-image` was a 600-token
-   pass; our left-tail brute-forced a hash that missed `bee26a`. OpenAI
-   tool messages are text-only, so pixels follow as a user turn after the
-   tool JSON. The image arm also swaps the `_SYSTEM` sentence that told
-   the model to OCR. OpenRouter lists the model as `text+image+video→text`;
-   Harbor already has `require_parameters=0`. Default stays off until this
-   arm. Dispatch when `evals-flaky-steerable` is free. BMP stays
-   ASCII (vision endpoints take PNG/JPEG).
+4. **Native image read** — `STEERABLE_READ_IMAGES=1` on B.
+   **Done. Arm A wins. Keep off.** GHA
+   [33985962466](https://github.com/pathlyapp/steerable-framework/actions/runs/33985962466)
+   (`ea81b77`). 20 paired. B better 2, A on 11, tied 7, p=0.0225,
+   mean −0.2000, 95% CI [−0.3167, −0.0667]. Mechanism `code-from-image`
+   tied 3/3: B transcribed the PNG (0 tesseract); A OCR'd and still
+   passed on the 75 min flaky clock. Catalog 69/70 failed that OCR on
+   a 30 min wrap. B lost `install-windows-3.11` 1/3 vs 3/3, `build-pov-ray`
+   1/3 vs 3/3, `train-fasttext` 1/3 vs 3/3 — screenshot/frame attaches
+   are the plausible harm. Default stays ASCII. BMP stays ASCII.
 5. **self_critique** — `STEERABLE_HARNESS=evals/harnesses/self_critique.harness.yaml`
    on B. Enables `validator: self_critique` and therefore
    AntiHallucinationHooks (discipline retry + grounding + narrate).
@@ -72,7 +71,7 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    now prefers `retry` over `narrate`, so an empty wrap-up still hits
    DeliveryHooks `empty_round` / missing-named instead of a no-tools
    summary. Measures discipline/grounding, not a stolen write-forcing
-   path. Dispatch after the image-read wave.
+   path. Dispatch after the image-read wave (queue is free).
 6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
    + grep/glob preference. Tool-description fact fixes (`bash` cwd vs
    shell state, `grep` over bash grep) are committed defaults, not this arm.
@@ -133,20 +132,33 @@ Do not rerun A-10 / spiral-2 for this verdict. Ignore [33964691558](https://gith
 
 ## Pre-wrap livelock verdict (33976774219)
 
-Done. `de45915`, `STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B. 19 paired
-(A-2 `train-fasttext` still in flight at local score; B is 2/3). B
-better on 3, A on 5, tied on 11. Sign test p = 0.7266. Mean −0.0175,
-95% CI [−0.1228, +0.1053]. **No separation.** 7 livelock fires on B,
+Done. `de45915`, `STEERABLE_LIVELOCK_EMPTY_STREAK=3` on B. 20 paired.
+B better on 4, A on 5, tied on 11. Sign test p = 1.0000. Mean +0.0167,
+95% CI [−0.1000, +0.1500]. **No separation.** 7 livelock fires on B,
 0 on A. Six of seven reward 0. Mechanism `circuit-fibsqrt` A 3/3 vs
 B 2/3: instruction-example already compiled sibling `.c` on A's
 passes; livelock did not buy the B loss (`ZdwsGff`). `code-from-image`
-tied 3/3, both arms still OCR'd. **Keep the detector off.** Keep-required
-until wrap-up quality gates is already default on this SHA. Next arm
-is native image read.
+tied 3/3, both arms still OCR'd. `train-fasttext` A 0/3 vs B 2/3 is
+variance, not a fire. **Keep the detector off.** Keep-required
+until wrap-up quality gates is already default on this SHA. Native
+image-read is done and lost (33985962466). Next arm is self_critique.
+
+## Native image-read verdict (33985962466)
+
+Done. `ea81b77`, `STEERABLE_READ_IMAGES=1` on B. 20 paired. B better
+on 2, A on 11, tied on 7. Sign test p = 0.0225. Mean −0.2000, 95% CI
+[−0.3167, −0.0667]. **Arm A wins.** Keep ASCII. Mechanism
+`code-from-image` tied 3/3: B saw the PNG (0 tesseract, 4–15 tools);
+A OCR'd (9–31 tesseract hits) and still passed. The flaky 75 min wrap
+is long enough for OCR; catalog 69/70 were not. B's harm is not cfi:
+`install-windows-3.11` 1/3 vs 3/3, `build-pov-ray` 1/3 vs 3/3,
+`train-fasttext` 1/3 vs 3/3. Those tasks `read_file` screenshots or
+do not need pixels. Do not enable for catalog. Next is self_critique.
 
 ## Already falsified (do not rerun)
 
 Stream cuts (default off), compaction 0.8→0.9 (p=0.623), named-output
 regex (no-op on 89), widening timeouts (ours are already the widest),
 wrap-up-only livelock (33966115606, p=1.0; regex-chess 0/3),
-pre-wrap livelock (33976774219, p=0.7266; circuit A 3/3 vs B 2/3).
+pre-wrap livelock (33976774219, p=1.0; circuit A 3/3 vs B 2/3),
+native image read (33985962466, p=0.0225; A wins, cfi tied 3/3).
