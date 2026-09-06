@@ -31,10 +31,13 @@ existing behavior.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .history import ContextFragment
@@ -193,6 +196,25 @@ class LoopHooks(Protocol):
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction: ...
 
+    def on_stream_chunk(self, chunk: Any, ctx: LoopContext) -> None:
+        """Observe one raw provider stream chunk, before the loop digests it.
+
+        Synchronous and side-effect-only: the loop calls it for every chunk
+        as it arrives, so a product can run incremental renderers (e.g. a
+        streaming UI-tag parser over tool-call argument fragments) that need
+        sub-``ToolCall`` granularity. The loop does not wait on the result
+        and ignores the return value; implementations must be cheap and must
+        not raise (wrap risky work defensively).
+
+        ``chunk`` is the provider's ``LLMStreamChunk``. Note that tool-call
+        argument fragments only survive here if the provider forwards them —
+        providers that buffer fragments into a complete ``ToolCall`` (the
+        default OpenAI-compat behaviour) expose nothing incremental. Providers
+        that want streaming UI must additionally surface per-fragment chunks
+        (e.g. via ``raw`` or a dedicated delta field).
+        """
+        ...
+
     def tool_made_progress(self, result: ToolResult, call: ToolCall) -> bool:
         """Whether this call advanced the task, resetting the loop's
         ``reasoning_without_progress_chars`` budget.
@@ -226,6 +248,10 @@ class NoopHooks:
         self, draft: CompletionDraft, ctx: LoopContext
     ) -> CompletionAction:
         return CompletionAction(kind="accept")
+
+    def on_stream_chunk(self, chunk: Any, ctx: LoopContext) -> None:
+        """Default no-op; see ``LoopHooks.on_stream_chunk``."""
+        return None
 
     def wrap_up_may_drop_tools(self) -> bool:
         """False keeps offering tools after ``wrap_up_max_tool_rounds``.
@@ -343,6 +369,17 @@ class ChainHooks:
             if action.kind != "accept":
                 return action
         return CompletionAction(kind="accept")
+
+    def on_stream_chunk(self, chunk: Any, ctx: LoopContext) -> None:
+        """Fan the chunk out to every hook; one bad hook must not break the rest."""
+        for hook in self._hooks:
+            callback = getattr(hook, "on_stream_chunk", None)
+            if not callable(callback):
+                continue
+            try:
+                callback(chunk, ctx)
+            except Exception:  # noqa: BLE001 — observation must not break the loop
+                logger.exception("chain_hooks_on_stream_chunk_failed")
 
     def wrap_up_may_drop_tools(self) -> bool:
         for hook in self._hooks:

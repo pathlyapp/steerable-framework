@@ -48,6 +48,7 @@ itself.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -87,6 +88,8 @@ from .replay import (
     build_step_decision_event,
 )
 from .tools import ToolRouter
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # LoopEvent
@@ -1215,6 +1218,16 @@ class CoreLoop:
                             # 3.11+; on 3.10 wait_for raises the asyncio one.
                             stream_budget_cut = True
                             break
+                        # Observation hook: products running incremental
+                        # renderers (streaming UI tags over tool-call argument
+                        # fragments) need every chunk as it arrives. Guarded —
+                        # a misbehaving hook must not break the stream.
+                        _on_chunk = getattr(self._hooks, "on_stream_chunk", None)
+                        if callable(_on_chunk):
+                            try:
+                                _on_chunk(chunk, ctx)
+                            except Exception:  # noqa: BLE001
+                                logger.exception("on_stream_chunk_hook_failed")
                         if chunk.content_delta:
                             content_parts.append(chunk.content_delta)
                             emit, content_carry = split_trailing_high_surrogate(
