@@ -68,7 +68,18 @@ wait_dpkg() {
   kill_apt
 }
 wait_dpkg
-apt-get update && apt-get install -y python3 python3-pip python3-venv
+apt_update_install() {
+  apt-get update && apt-get install -y python3 python3-pip python3-venv
+}
+# A "Hit" keeps the image's stale index while the pool has moved on
+# (deb.debian.org bullseye-security 404s after EOL). Purge the lists so
+# the retry resolves versions the mirror still serves.
+apt_update_install || {
+  rm -rf /var/lib/apt/lists
+  wait_dpkg
+  apt-get update || true
+  apt-get install -y --fix-missing python3 python3-pip python3-venv
+}
 """.strip()
 # Packages require Python >=3.10. qemu-alpine-ssh (and Debian 11 images)
 # ship 3.9.2; pip then fails with NonZeroAgentExitCodeError before the

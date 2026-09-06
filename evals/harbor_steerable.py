@@ -220,12 +220,19 @@ class SteerableHarborAgent(BaseInstalledAgent):
                 timeout_sec=900,
             )
         except Exception:
-            await self.exec_as_root(
-                environment,
-                command=_APT_PYTHON_INSTALL,
-                env=apt_env or None,
-                timeout_sec=900,
-            )
+            try:
+                await self.exec_as_root(
+                    environment,
+                    command=_APT_PYTHON_INSTALL,
+                    env=apt_env or None,
+                    timeout_sec=900,
+                )
+            except Exception:
+                # apt is best-effort: EOL images (Debian 11 qemu tasks) 404
+                # on the security pool. The host-uv injection next in
+                # install() brings up Python 3.12 without apt, and
+                # _ensure_python_310 raises if no >=3.10 interpreter lands.
+                return
         pip_check = await environment.exec(
             command="python3 -m pip --version", user="root"
         )
