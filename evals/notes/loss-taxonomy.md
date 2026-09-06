@@ -15,7 +15,7 @@ are not in this repo. Recipe: `evals/README.md`.
 The four buckets are failure *mechanisms*. A task can sit in more than
 one. Arm decisions follow the mechanism, not the 0/4 label.
 
-## Stable red (0/4)
+## Stable red (0/4 at `27d521a`; current 0/3 set in `suite.yaml`)
 
 | Task | Mechanism | Evidence | Arm? |
 | ---- | --------- | -------- | ---- |
@@ -34,10 +34,11 @@ wrong inference (`pytorch-model-cli`), wrong unit (`raman-fitting`).
 `sanitize-git-repo` is the 0/4 with a harness-side fix (keep the pinned SHA).
 Do not count the other three toward ≥72/round.
 
-## Flaky (20)
+## Flaky (20 at `27d521a`; current 15-id set in `suite.yaml`)
 
 These are the only ids a harness change can win or lose. Four-run counts
-in `suite.yaml`. Historical timeout table (one catalog, 16 then-reds)
+below are the `27d521a` samples; the `8e260de` x/3 tiers live in
+`suite.yaml`. Historical timeout table (one catalog, 16 then-reds)
 is older than the four-run split; used only when it names a flaky id.
 
 | Task | 4-run | Closest mechanism | Arm? |
@@ -67,6 +68,45 @@ is older than the four-run split; used only when it names a flaky id.
 passed. The 8 task names were not kept; `largest-eigenval` is the one
 named. That is why the gate is measured on the whole flaky split, not
 on a guessed 8-id list.
+
+## Flaky-layer variance anatomy (`8e260de` three-run)
+
+Paired pass/fail trajectory audit of all 45 flaky trials (15 ids × 3
+runs: 34031313764 / 34031319806 / 34040053173), run to answer "does any
+generic harness signal still separate a pass from a fail?" 23 pass /
+22 fail. Three loss populations:
+
+1. **Spiral deaths — 4/22.** `circuit-fibsqrt` A+B, `dna-assembly` A,
+   `model-extraction-relu-logits` A. Signature: 2–3 rounds, ≤110 output
+   tokens, 170-min `[hard_timeout]` — the trial dies inside the first
+   mega-reasoning stream before any tool call. `circuit-fibsqrt` C
+   proves the same task passes at 46 rounds / 330 K tokens when the
+   first stream completes. Every direct lever is falsified: stream cuts
+   (starve more than they save), livelock ×2 (p=1.0), reminders
+   (p=0.3438), `reasoning_effort=high` (spiral-red 0/9, flaky p=0.4240).
+2. **Slow-grind timeouts — 2/22.** `make-mips-interpreter` A (78 rounds,
+   413 K output tokens) and `path-tracing-reverse` A (20 rounds, 390 K).
+   Real work that runs out of clock; the same task's pass trial is not
+   faster by a controllable margin (make-mips B passed at 160 min).
+   Budget-bound, not a harness signal.
+3. **Clean-finish wrong answers — 16/22.** No timeout, no exception, no
+   trajectory discriminator: pass median 28 rounds / 143 K output /
+   56 min vs fail distributions overlap on every feature (rounds,
+   tokens, duration, tool errors). Examples: `sanitize-git-repo` B chose
+   placeholder text in 3.8 min (A/C passed with the same shape);
+   `db-wal-recovery` B wandered 94 min while A found the short path in
+   1.4 min; `install-windows-3.11` B did *more* work than its passes
+   (88 rounds) and still failed. Gate fires confirm the left-tail stack
+   is active but not decisive here: `named_output` markers in 7 fail vs
+   2 pass trials, `unverified_output` in 2 fail vs 3 pass.
+
+The only clean pass/fail discriminator is `[hard_timeout]` itself
+(0/23 pass, 6/22 fail) — and both timeout populations above map to
+falsified or budget-bound levers. **Conclusion: at this sample size the
+flaky floor is model quality (16/22 clean wrong answers) plus the
+falsified spiral regime (4/22). No generic harness lever remains in the
+flaky layer; moving the every-run floor to ≥72 requires converting
+stable-red mechanisms or a model change, not an eighth flaky arm.**
 
 ## Arm go / no-go
 
