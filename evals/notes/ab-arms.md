@@ -91,6 +91,17 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    variance, not the two prompt sentences. Tool-description fact fixes
    (`bash` cwd vs shell state, `grep` over bash grep) stay as committed
    defaults; the `_SYSTEM_CC_ALIGN` sentences stay off.
+7. **Reasoning effort high** — `STEERABLE_REASONING_EFFORT=high` on B
+   (default `max`). The untested knob named in the spiral-starvation
+   comment: `max` produces the 450 KB–1.3 MB single-round reasoning;
+   ≥50 KB per tool call passes 0.071 vs 0.889 below 3 KB. Spiral-red
+   half is **done, no unlock**: GHA
+   [34040196148](https://github.com/pathlyapp/steerable-framework/actions/runs/34040196148)
+   (`8e260de`), all three tasks 0/3 — `extract-moves-from-video`,
+   `regex-chess`, `winning-avg-corewars` still spiral at `high`
+   (100–420 K output tokens per trial). Flaky paired half: GHA
+   [34040202706](https://github.com/pathlyapp/steerable-framework/actions/runs/34040202706)
+   pending at this writing.
 
 Kill a losing arm; do not stack losers into the catalog three-run.
 
