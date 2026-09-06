@@ -78,9 +78,19 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
    `modernize-scientific-stack` 3/3→2/3). Discipline retry +
    grounding converts nothing the delivery gates do not already catch.
    Wiring kept for the desktop, default stays off for Harbor.
-6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B. Extra persist-if-long
-   + grep/glob preference. Tool-description fact fixes (`bash` cwd vs
-   shell state, `grep` over bash grep) are committed defaults, not this arm.
+6. **CC-align prompt** — `STEERABLE_PROMPT_CC_ALIGN=1` on B.
+   **Done. No separation. Keep off.** GHA
+   [34011962039](https://github.com/pathlyapp/steerable-framework/actions/runs/34011962039)
+   (`81f682d`). 20 paired. B better 6, A better 3, tied 11, p=0.5078,
+   mean +0.0833, 95% CI [−0.0333, +0.2167]. Two arm-B shards exited 2
+   after all trials finished (Harbor trial exceptions); artifacts were
+   complete, 0 no-reward on either arm. Same-arm variance across runs
+   swamps the arm effect: arm A scored 39/60 on the self_critique run
+   and 30/60 here on identical default code. B's wins
+   (`bn-fit-modify` 0/3→3/3, `mteb-retrieve` 0/3→1/3) read as that
+   variance, not the two prompt sentences. Tool-description fact fixes
+   (`bash` cwd vs shell state, `grep` over bash grep) stay as committed
+   defaults; the `_SYSTEM_CC_ALIGN` sentences stay off.
 
 Kill a losing arm; do not stack losers into the catalog three-run.
 
@@ -148,7 +158,8 @@ tied 3/3, both arms still OCR'd. `train-fasttext` A 0/3 vs B 2/3 is
 variance, not a fire. **Keep the detector off.** Keep-required
 until wrap-up quality gates is already default on this SHA. Native
 image-read is done and lost (33985962466). self_critique is done and
-flat (34003963766). Next arm is CC-align prompt.
+flat (34003963766). CC-align is done and flat (34011962039). The arm
+queue is empty; next is the catalog three-run on the current stack.
 
 ## Native image-read verdict (33985962466)
 
@@ -160,7 +171,7 @@ A OCR'd (9–31 tesseract hits) and still passed. The flaky 75 min wrap
 is long enough for OCR; catalog 69/70 were not. B's harm is not cfi:
 `install-windows-3.11` 1/3 vs 3/3, `build-pov-ray` 1/3 vs 3/3,
 `train-fasttext` 1/3 vs 3/3. Those tasks `read_file` screenshots or
-do not need pixels. Do not enable for catalog. Next is CC-align.
+do not need pixels. Do not enable for catalog. The arm queue is empty.
 
 ## Already falsified (do not rerun)
 
@@ -169,4 +180,6 @@ regex (no-op on 89), widening timeouts (ours are already the widest),
 wrap-up-only livelock (33966115606, p=1.0; regex-chess 0/3),
 pre-wrap livelock (33976774219, p=1.0; circuit A 3/3 vs B 2/3),
 native image read (33985962466, p=0.0225; A wins, cfi tied 3/3),
-self_critique (34003963766, p=1.0; both 3h-cancelled shards on B).
+self_critique (34003963766, p=1.0; both 3h-cancelled shards on B),
+CC-align prompt (34011962039, p=0.5078; arm A swung 39/60→30/60
+between runs on identical code).
