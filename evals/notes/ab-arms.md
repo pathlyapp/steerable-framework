@@ -94,14 +94,18 @@ Arm A is always the committed defaults. Arm B is `STEERABLE_*` lines only
 7. **Reasoning effort high** — `STEERABLE_REASONING_EFFORT=high` on B
    (default `max`). The untested knob named in the spiral-starvation
    comment: `max` produces the 450 KB–1.3 MB single-round reasoning;
-   ≥50 KB per tool call passes 0.071 vs 0.889 below 3 KB. Spiral-red
-   half is **done, no unlock**: GHA
+   ≥50 KB per tool call passes 0.071 vs 0.889 below 3 KB. **Done. No
+   separation, no unlock. Keep `max`.** Spiral-red GHA
    [34040196148](https://github.com/pathlyapp/steerable-framework/actions/runs/34040196148)
-   (`8e260de`), all three tasks 0/3 — `extract-moves-from-video`,
+   (`8e260de`): all three tasks 0/3 — `extract-moves-from-video`,
    `regex-chess`, `winning-avg-corewars` still spiral at `high`
-   (100–420 K output tokens per trial). Flaky paired half: GHA
-   [34040202706](https://github.com/pathlyapp/steerable-framework/actions/runs/34040202706)
-   pending at this writing.
+   (100–420 K output tokens per trial). Flaky paired GHA
+   [34040202706](https://github.com/pathlyapp/steerable-framework/actions/runs/34040202706):
+   A 42/60 vs B 39/60, B better 5, A better 9, tied 6, p=0.4240,
+   mean −0.0500, 95% CI [−0.2000, +0.1167]. B's one big flip
+   (`install-windows-3.11` 0/3→3/3) is variance against nine A-better
+   pairs. Lowering the budget neither starves the spiral nor lifts the
+   coin tosses.
 
 Kill a losing arm; do not stack losers into the catalog three-run.
 
@@ -193,4 +197,6 @@ pre-wrap livelock (33976774219, p=1.0; circuit A 3/3 vs B 2/3),
 native image read (33985962466, p=0.0225; A wins, cfi tied 3/3),
 self_critique (34003963766, p=1.0; both 3h-cancelled shards on B),
 CC-align prompt (34011962039, p=0.5078; arm A swung 39/60→30/60
-between runs on identical code).
+between runs on identical code),
+reasoning effort high (34040202706, p=0.4240; spiral-red 34040196148
+0/9 — no unlock either).
