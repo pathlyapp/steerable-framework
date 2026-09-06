@@ -604,7 +604,7 @@ part of this work rather than as part of a freeze.
 
 ## Related
 
-- [Evals](evals.md) — Terminal-Bench 2.1 catalog-89 score of record (80% on GLM-5.3-Flash)
+- [Evals](evals.md) — Terminal-Bench 2.1 catalog-89 score of record (81.7% on GLM-5.3-Flash)
 - [Framework Comparison](comparison.md) — where Steerable sits against the field
 - [CoreLoop spec](spec/core-loop.md) — the loop and its event taxonomy
 - [Safety spec](spec/safety.md) — the two-layer model this page critiques

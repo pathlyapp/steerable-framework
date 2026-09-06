@@ -24,7 +24,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 
 [Docs](https://steerableframework.com/) · [Storybook](https://steerableframework.com/storybook/) · [Live demo](https://steerableframework.com/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable-framework/releases) · [Discussions](https://github.com/pathlyapp/steerable-framework/discussions)
 
-> **80% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, four-run mean. [Numbers and protocol](#terminal-bench-21).
+> **81.7% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, three-run mean. [Numbers and protocol](#terminal-bench-21).
 
 > **Want to see it running before reading anything?**
 > `git clone … && pnpm install && pnpm shell:dev` (or open the [hosted live demo](https://steerableframework.com/demo/)).
@@ -71,18 +71,18 @@ Every layer is independently published. Use just the protocol types, just the UI
 
 ## Terminal-Bench 2.1
 
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, three independent full runs: mean **81.7%** (SD 4.3 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
 
 **Same model · GLM-5.3-Flash** — identical cheap model, different harness:
 
 | Agent | TB 2.1 | Notes |
 | ----- | ------ | ----- |
-| **Steerable** | **80%** | this repo, 4× catalog-89 · **+7 vs Pi**, in the frontier band |
+| **Steerable** | **81.7%** | this repo, 3× catalog-89 · **+8 vs Pi**, in the frontier band |
 | Pi | 73% | this repo, 3 catalog runs · same model, default harness |
 
 Same Flash model on Claude Code is 84.3% under [Z.AI](https://z.ai/blog/glm-5.3-flash)'s 6-hour protocol (Claude Code 2.1.207) — a different protocol, not this comparison.
 
-**Frontier CLIs · public board** — different models and harnesses; shows the band 80% sits in:
+**Frontier CLIs · public board** — different models and harnesses; shows the band 81.7% sits in:
 
 | Agent | Model | TB 2.1 | Source |
 | ----- | ----- | ------ | ------ |
@@ -313,7 +313,7 @@ Full open-follow-up list: [`TODO.md`](./TODO.md). Pre-1.0 contract: minor (`0.X`
 ## Documentation
 
 - **[Getting Started](./docs/getting-started.md)** — full walkthrough, ~5 minutes
-- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 catalog-89 score of record (Steerable + GLM-5.3-Flash **80%**) plus Harbor cheap-12 (`claude-code` / `codex` / `pi`)
+- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 catalog-89 score of record (Steerable + GLM-5.3-Flash **81.7%**) plus Harbor cheap-12 (`claude-code` / `codex` / `pi`)
 - **[Specs](./docs/spec/)** — wire-level reference for every event/envelope shape
 - **[Examples](./examples)** — 3 runnable end-to-end smoke tests:
   - [`py-minimal`](./examples/py-minimal) — protocol + harness + tool dispatch

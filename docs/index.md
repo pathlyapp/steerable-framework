@@ -36,12 +36,12 @@ Pick any subset, skip the rest — every layer ships on its own.
 
 <div class="sf-score-strip" markdown>
 <div class="sf-score sf-score--ours" markdown>
-<span class="sf-score-value">80%</span>
+<span class="sf-score-value">81.7%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">TB 2.1 · 4-run mean · this repo</span>
+<span class="sf-score-meta">TB 2.1 · 3-run mean · this repo</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">+7</span>
+<span class="sf-score-value">+8</span>
 <span class="sf-score-label">vs Pi on the same Flash model</span>
 <span class="sf-score-meta">Pi + GLM-5.3-Flash · 73%</span>
 </div>
@@ -89,7 +89,7 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <h2 class="sf-section">Terminal-Bench 2.1</h2>
 
 <p class="sf-lede" markdown>
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, four independent full runs: mean **80%** (SD 2.3 points). We report 80, not the 82 high-water mark. Protocol and run list: [Evals](evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **81.7%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, three independent full runs: mean **81.7%** (SD 4.3 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -105,11 +105,11 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <span class="sf-bench-agent">Steerable <span class="sf-bench-badge">ours</span></span>
 <span class="sf-bench-model">GLM-5.3-Flash</span>
 </div>
-<span class="sf-bench-pct">80%</span>
-<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80%"></span></span>
+<span class="sf-bench-pct">81.7%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:81.7%"></span></span>
 <div class="sf-bench-meta">
-<span class="sf-bench-delta">ties Claude Code within noise · ⅓ less $ per solve</span>
-<span class="sf-bench-src">this repo, 4× catalog-89</span>
+<span class="sf-bench-delta">ties Claude Code within noise · 15% less $ per solve</span>
+<span class="sf-bench-src">this repo, 3× catalog-89</span>
 </div>
 </div>
 
@@ -152,7 +152,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 </div>
 
-<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.11 · Claude Code $0.16 · Codex $0.81. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
+<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.14 · Claude Code $0.16 · Codex $0.81. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
@@ -186,9 +186,9 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt" cx="86.7" cy="118.6" r="11.7"/>
 <text class="lbl" x="86.7" y="140" text-anchor="middle">Pi</text>
 <text class="sub" x="86.7" y="150" text-anchor="middle">73% · $0.06 · 20 min</text>
-<circle class="pt pt--ours" cx="141.7" cy="75.5" r="15.6"/>
-<text class="lbl" x="158" y="46" text-anchor="end">Steerable · ours</text>
-<text class="sub" x="158" y="56" text-anchor="end">80% · $0.11 · 36 min</text>
+<circle class="pt pt--ours" cx="169.3" cy="65.4" r="16.6"/>
+<text class="lbl" x="169.3" y="95" text-anchor="middle">Steerable · ours</text>
+<text class="sub" x="169.3" y="105" text-anchor="middle">81.7% · $0.14 · 41 min</text>
 <circle class="pt" cx="184.7" cy="56.2" r="8.9"/>
 <text class="lbl" x="197" y="51">Claude Code</text>
 <text class="sub" x="197" y="61">83% · $0.16 · 12 min</text>
@@ -207,7 +207,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 
 <div class="sf-bench-group">
 <div class="sf-bench-kicker">Frontier CLIs · public board</div>
-<p class="sf-bench-blurb">Different models and harnesses. Shows the band 80% sits in, not a controlled A/B.</p>
+<p class="sf-bench-blurb">Different models and harnesses. Shows the band 81.7% sits in, not a controlled A/B.</p>
 
 <div class="sf-bench-row">
 <div class="sf-bench-who">
@@ -297,7 +297,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 
 <p class="sf-lede" markdown>
-Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — about **$7.50 per full 89-task run** — usable as a coding agent, not a demo loop.
+Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — about **$10 per full 89-task run** — usable as a coding agent, not a demo loop.
 </p>
 
 <h2 class="sf-section">Quickstart — pick your path</h2>
