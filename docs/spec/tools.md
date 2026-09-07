@@ -121,12 +121,22 @@ protocol's `AskUserQuestionsPayload`, so the desktop renders the arguments as
 the question card unchanged. Each question is `select` / `text` / `password`
 with optional `options` and `multiSelect`.
 
+Models do not always follow the schema literally (observed: gpt-oss via
+Ollama emits Inquirer-style `name` / `message` / `choices`). The tool
+normalizes those aliases onto the canonical fields at the model-JSON
+boundary, so hosts only ever render the canonical payload; a question still
+missing a non-empty `id` or `text` after normalization fails the tool call
+with an error naming the fix, and the model retries within the same turn.
+
 The tool **blocks**: dispatch awaits the product-injected handler, and the
 answers (`{questionId: value}`) return as the tool result, landing in the
 durable record and the model's next context. On the desktop path the sidecar
 routes it over the reverse channel (`ask_user.request`) to the host UI; an
 unreachable host or a user cancel records an empty answers mapping rather
-than hanging the turn. The framework seam is `make_ask_user_tool(handler)` in
+than hanging the turn. Under `toolsViaHost` the sidecar answers `ask_user`
+locally from its own router (same interception as `run_code`) — the host's
+`tool.invoke` surface has no `ask_user`, so forwarding it would fail with
+`Unknown tool`. The framework seam is `make_ask_user_tool(handler)` in
 `steerable_agent_runtime.ask_user` — a CLI or ACP embedder injects its own
 handler (an ACP elicitation, a terminal prompt) instead of the host-routed
 one.
@@ -171,6 +181,52 @@ discovery tool. Selecting `progressive` without wiring raises: the model is
 never offered a tool that cannot dispatch. Paths whose tools arrive over
 the wire (the sidecar's host-tools chat path) have no router to bind and
 must use `full` or `minimal`.
+
+## File tools: read-before-write state
+
+`read_file` returns a `version` (SHA-256 of the full content) alongside the
+(clipped) preview; `write_file` / `edit_file` accept an optional
+`expectedVersion` that rejects the write when the file changed since. On top
+of that explicit token, the workspace keeps a session-scoped
+**readFileState** (path → version) that the tools maintain themselves:
+`read_file` records it, and every successful `write_file` / `edit_file` /
+`apply_patch` refreshes it to the post-write version (without the refresh, a
+second write would reject against the pre-write version — iterative editing
+is the norm). When the model passes no `expectedVersion`, writes and edits
+automatically CAS against the tracked state, so a file modified outside the
+session (another tool, a human, a crashed write's partial state) is rejected
+with a conflict instead of silently overwritten. A file that vanished since
+the read is a plain create, not a conflict; brand-new files are never gated.
+
+The state lives in the tool-owning process (the `workspace_tools_for_cwd`
+caller's dict, the desktop's `LocalExecutor`), not in the transcript — context
+compaction cannot fold it away. The loss point is process restart + session
+resume, so resume re-seeds it from the durable record, whose tool messages
+carry the result JSON with `data.path` / `data.version` (`apply_patch`
+carries `data.versions`): the sidecar pushes the rebuilt mapping to the host
+over `read_state.seed` on a `toolsViaHost` resume, and the ACP adapter seeds
+its session on hydration (`read_file_state_from_messages`). Unparseable
+entries (spilled/folded bodies) are skipped — a missing entry means one fewer
+CAS check, never a wrong write.
+
+The hard gate is ON by default (CC `read-before-write` parity): overwriting
+an existing file the session never read is rejected outright with an error
+naming the fix ("read it first, then write with the read version"), and the
+model recovers within the same turn. Creating a new file is never gated.
+`STEERABLE_REQUIRE_READ_BEFORE_WRITE=0` opts out.
+
+Two deliberate refinements over a plain mtime check:
+
+- The CAS token is a **content hash**, not an mtime — a touch that leaves
+  content identical does not false-positive, and a same-mtime content change
+  does not false-negative.
+- A read whose display was clipped at `_MAX_OUTPUT` is a **partial view**
+  (CC `isPartialView` parity): the result carries `partial: true`, and a
+  blind full-file `write_file` overwrite is rejected because the model never
+  saw the tail it would destroy. A CAS-checked targeted `edit_file` stays
+  allowed; a full (unclipped) read or an own write clears the flag. The
+  desktop's `local_read_file` rejects oversized files instead of truncating,
+  so partial views only arise from the sidecar's display clip.
 
 ## Web tools (sidecar)
 
@@ -237,6 +293,8 @@ without the web pair, so a typo'd optional-feature var cannot brick chat).
 | `fetch_max_redirects` | `STEERABLE_WEB_FETCH_MAX_REDIRECTS`  | 5         | 20          |
 | `search_timeout_ms`   | `STEERABLE_WEB_SEARCH_TIMEOUT_MS`    | 30 000    | 600 000     |
 | `search_max_results`  | `STEERABLE_WEB_SEARCH_MAX_RESULTS`   | 8         | 20          |
+| `session_search_cap`  | `STEERABLE_WEB_SESSION_SEARCH_CAP`   | 200       | 1 000 000   |
+| `session_fetch_cap`   | `STEERABLE_WEB_SESSION_FETCH_CAP`    | 0 (off)   | 1 000 000   |
 
 The byte cap bounds what a page can push into the process; the
 transcript-side bound is the existing spill hook (`SpillHooks`
@@ -245,6 +303,25 @@ followed same-origin only and re-validated per hop; a cross-origin
 redirect is reported (`redirect_to` in `data`), not followed, so the model
 re-issues the call against the new origin and the approval prompt names
 it. Non-text content types are refused with a pointer at `bash` + `curl`.
+
+The session caps are per-sidecar-process counters (one sidecar serves one
+session); the search default of 200 mirrors Claude Code's per-session
+WebSearch limit, and 0 disables a cap. Exceeding one fails the call with a
+followup-able error naming the limit and its env var.
+
+### Domain policy
+
+`allowed_domains` / `blocked_domains` (comma-separated
+`STEERABLE_WEB_ALLOWED_DOMAINS` / `STEERABLE_WEB_BLOCKED_DOMAINS`) are the
+Claude Code WebSearch `allowed_domains`/`blocked_domains` parity knobs. An
+entry matches its exact host and every subdomain (`example.com` covers
+`docs.example.com`); blocked wins over allowed on a tie; an empty
+allow-list allows every public host. `web_fetch` refuses a disallowed
+target before any DNS or network work (redirects are same-origin, so the
+initial check covers the chain). `web_search` both passes the lists to
+providers with native support (Tavily's `include_domains` /
+`exclude_domains`, so ranking happens inside the policy) and filters
+returned hits post-hoc, so the policy holds for every provider.
 
 ### SSRF policy
 

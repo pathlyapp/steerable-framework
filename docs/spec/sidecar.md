@@ -87,7 +87,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
 
-`config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → `STEERABLE_*` env → per-request RPC override — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud.
+`config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → selected profile → `STEERABLE_*` env → per-request RPC override → managed file — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud. The defaults dict doubles as the schema: a value whose type doesn't match the declared default fails the load naming the key, the layer, and the expected type (env strings coerce). The user file may carry named `profiles` blocks, selected by `STEERABLE_PROFILE`; an unknown profile name fails loud listing the available ones. `STEERABLE_MANAGED_CONFIG_PATH` points at an enterprise-managed file applied after every other layer, so its pins (e.g. a restrictive sandbox posture) cannot be loosened from below — CC managed-settings parity.
 
 Notifications emitted by the sidecar:
 
