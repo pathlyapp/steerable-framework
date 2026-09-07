@@ -432,3 +432,247 @@ async def test_compaction_preserves_system_and_first_user_message() -> None:
     for call in provider.calls[1:]:
         assert call[0].role == "system" and call[0].content_text == "you are helpful"
         assert call[1].role == "user" and call[1].content_text == "the original goal"
+
+
+@pytest.mark.asyncio
+async def test_micro_compact_trigger_schedule() -> None:
+    """Periodic prune fires on interval multiples (never round 0), and an
+    already-folded transcript is a no-op — folding is idempotent."""
+    from types import SimpleNamespace
+
+    hooks = CompactionHooks(
+        max_context_tokens=1_000_000,  # pressure never fires
+        micro_compact_interval_rounds=2,
+    )
+    transcript = [
+        LLMMessage.text_of("user", "goal"),
+        *[
+            LLMMessage.text_of("tool", "x" * 500, name="emit", tool_call_id=f"c{i}")
+            for i in range(4)
+        ],
+        LLMMessage.text_of("assistant", "working"),
+    ]
+    assert (
+        await hooks.pre_step(transcript, SimpleNamespace(round_index=0))
+    ).rewrite is None
+    assert (
+        await hooks.pre_step(transcript, SimpleNamespace(round_index=1))
+    ).rewrite is None
+    action = await hooks.pre_step(transcript, SimpleNamespace(round_index=2))
+    assert action.rewrite is not None
+    assert action.rewrite.action == "micro_compact"
+    assert hooks.micro_compactions == 1
+    assert hooks.compactions == 1
+    # Second fire on the pruned transcript: nothing left to fold → no rewrite
+    # (and no pointless prompt-cache invalidation).
+    again = await hooks.pre_step(
+        action.rewrite.messages, SimpleNamespace(round_index=4)
+    )
+    assert again.rewrite is None
+    assert hooks.micro_compactions == 1
+
+
+@pytest.mark.asyncio
+async def test_micro_compact_default_off() -> None:
+    from types import SimpleNamespace
+
+    hooks = CompactionHooks(max_context_tokens=1_000_000)
+    transcript = [
+        LLMMessage.text_of("user", "goal"),
+        *[
+            LLMMessage.text_of("tool", "x" * 500, name="emit", tool_call_id=f"c{i}")
+            for i in range(4)
+        ],
+    ]
+    action = await hooks.pre_step(transcript, SimpleNamespace(round_index=4))
+    assert action.rewrite is None
+    assert hooks.micro_compactions == 0
+
+
+@pytest.mark.asyncio
+async def test_micro_compact_folds_periodically_under_no_pressure() -> None:
+    """Loop level: with the interval set, old tool results get folded on
+    schedule even though pressure never crosses the threshold."""
+    big = "y" * 3_000
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 3})]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit(n: int) -> str:
+        return big
+
+    router.register(emit)
+    hooks = CompactionHooks(
+        max_context_tokens=1_000_000,  # pressure never fires
+        keep_last_tool_results=1,
+        micro_compact_interval_rounds=2,
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    await collect(loop.run([LLMMessage.text_of("user", "go")]))
+
+    assert hooks.micro_compactions >= 1
+    # Every compaction here was the periodic one — pressure stayed under.
+    assert hooks.compactions == hooks.micro_compactions
+    seen_folded = any(
+        "[tool output folded" in m.content_text
+        for call in provider.calls[1:]
+        for m in call
+        if m.role == "tool"
+    )
+    assert seen_folded
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_three_ineffective_compactions() -> None:
+    # A kept-last tool result bigger than the threshold makes every pressure
+    # compaction ineffective (fold+summarize still lands over). Three in a
+    # row open the circuit; the pressure path then stops firing.
+    hooks = CompactionHooks(
+        max_context_tokens=200,
+        threshold_ratio=0.8,
+        keep_last_messages=2,
+        keep_last_tool_results=1,
+        recompact_margin_ratio=0.0,  # fire every round while over
+    )
+
+    class _Ctx:
+        round_index = 0
+
+    big_tool = LLMMessage.text_of("tool", "y" * 3_000, name="emit", tool_call_id="t1")
+    transcript = [LLMMessage.text_of("user", "go"), big_tool]
+
+    for round_index in range(1, 5):
+        _Ctx.round_index = round_index
+        action = await hooks.pre_step(list(transcript), _Ctx())
+        if round_index <= 3:
+            # Each pass rewrites (best effort) but stays over threshold.
+            assert action.rewrite is not None
+            assert action.rewrite.pre_tokens is not None
+            assert action.rewrite.post_tokens is not None
+            assert action.rewrite.post_tokens >= 0.8 * 200
+        else:
+            # Breaker open: no more pointless rewrites.
+            assert action.rewrite is None
+    assert hooks.circuit_open is True
+    assert hooks.compactions == 3
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_resets_on_a_healthy_round() -> None:
+    hooks = CompactionHooks(
+        max_context_tokens=200,
+        threshold_ratio=0.8,
+        keep_last_messages=2,
+        keep_last_tool_results=1,
+        recompact_margin_ratio=0.0,
+    )
+
+    class _Ctx:
+        round_index = 0
+
+    big = [LLMMessage.text_of("user", "go"), LLMMessage.text_of("tool", "y" * 3_000, name="e", tool_call_id="t")]
+    small = [LLMMessage.text_of("user", "go"), LLMMessage.text_of("tool", "ok", name="e", tool_call_id="t")]
+
+    await hooks.pre_step(list(big), _Ctx())
+    await hooks.pre_step(list(big), _Ctx())
+    assert hooks._consecutive_failures == 2
+    await hooks.pre_step(list(small), _Ctx())  # under threshold → reset
+    assert hooks._consecutive_failures == 0
+    assert hooks.circuit_open is False
+
+
+@pytest.mark.asyncio
+async def test_compact_now_manual_bypasses_threshold_and_breaker() -> None:
+    hooks = CompactionHooks(
+        max_context_tokens=1_000_000,  # pressure never fires on its own
+        keep_last_messages=2,
+        keep_last_tool_results=1,
+    )
+    hooks.circuit_open = True  # manual compact ignores the breaker
+
+    class _Ctx:
+        round_index = 0
+        last_prompt_tokens = None
+        last_prompt_transcript_len = 0
+
+    transcript = [LLMMessage.text_of("user", "go")]
+    for i in range(4):
+        transcript.append(
+            LLMMessage.text_of("tool", f"result-{i} " + "x" * 500, name="emit", tool_call_id=f"t{i}")
+        )
+    action = await hooks.compact_now(list(transcript), _Ctx())
+    assert action.rewrite is not None
+    assert action.rewrite.action == "compact"
+    assert action.rewrite.reason == "manual compact"
+    assert action.rewrite.pre_tokens is not None
+    assert action.rewrite.post_tokens is not None
+    assert action.rewrite.post_tokens < action.rewrite.pre_tokens
+    # Fold ran (old results carry the fold marker inside the summary span or
+    # in the tail) and the middle was summarized away: 5 messages shrink to
+    # head + summary + tail.
+    assert len(action.rewrite.messages) < len(transcript)
+    assert any(
+        m.role == "user" and m.content_text.startswith("[context compacted")
+        for m in action.rewrite.messages
+    )
+    assert hooks.compactions == 1
+
+
+@pytest.mark.asyncio
+async def test_compact_now_on_a_minimal_transcript_is_a_noop() -> None:
+    hooks = CompactionHooks(max_context_tokens=1_000_000)
+
+    class _Ctx:
+        round_index = 0
+        last_prompt_tokens = None
+        last_prompt_transcript_len = 0
+
+    transcript = [LLMMessage.text_of("user", "go")]
+    action = await hooks.compact_now(list(transcript), _Ctx())
+    assert action.rewrite is None
+    assert hooks.compactions == 0
+
+
+@pytest.mark.asyncio
+async def test_hook_action_event_carries_boundary_token_counts() -> None:
+    # The loop threads the rewriter's estimates onto the hook_action event
+    # (and the recorded boundary) — CC compact_boundary pre/post parity.
+    big = "y" * 3_000
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 3})]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit(n: int) -> str:
+        return big
+
+    router.register(emit)
+    hooks = CompactionHooks(
+        max_context_tokens=2_000,
+        threshold_ratio=0.8,
+        keep_last_messages=4,
+        keep_last_tool_results=1,
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router), hooks=hooks)
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+
+    compactions = [
+        e for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "compact"
+    ]
+    assert compactions
+    for event in compactions:
+        assert isinstance(event.data["pre_tokens"], int)
+        assert isinstance(event.data["post_tokens"], int)
+        assert event.data["post_tokens"] < event.data["pre_tokens"]

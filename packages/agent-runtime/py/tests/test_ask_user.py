@@ -148,3 +148,107 @@ async def test_ask_user_blocks_and_injects_answers() -> None:
     ]
     assert tool_messages, "ask_user result should reach the model"
     assert "blue" in tool_messages[0].content_text
+
+
+@pytest.mark.asyncio
+async def test_ask_user_normalizes_inquirer_style_aliases() -> None:
+    """Real models (gpt-oss via Ollama) answer the schema with Inquirer-style
+    name/message/choices. The tool normalizes them at the model-JSON boundary
+    so the host only ever renders the canonical payload."""
+    router = ToolRouter()
+    asked: list[dict[str, Any]] = []
+
+    async def handler(intro: str, questions: list[dict[str, Any]]) -> dict[str, Any]:
+        asked.append({"intro": intro, "questions": questions})
+        return {"environment": "staging"}
+
+    _register(router, handler)
+
+    provider = _provider(
+        [
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="q1",
+                        name=ASK_USER_TOOL_NAME,
+                        arguments={
+                            "intro": "部署前确认",
+                            "questions": [
+                                {
+                                    "name": "environment",
+                                    "message": "目标环境",
+                                    "type": "select",
+                                    "choices": ["staging", "prod"],
+                                }
+                            ],
+                        },
+                    )
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = [
+        e
+        async for e in loop.run(
+            [_msg("user", "deploy")],
+            tools=router.describe_model(),
+        )
+    ]
+
+    assert events[-1].kind == "completion"
+    question = asked[0]["questions"][0]
+    assert question["id"] == "environment"
+    assert question["text"] == "目标环境"
+    assert question["options"] == ["staging", "prod"]
+    assert "name" not in question and "message" not in question and "choices" not in question
+
+
+@pytest.mark.asyncio
+async def test_ask_user_rejects_a_question_without_an_id() -> None:
+    """A question the card cannot key comes back as a tool error naming the
+    fix, and the loop continues in the same turn."""
+    router = ToolRouter()
+
+    async def handler(intro: str, questions: list[dict[str, Any]]) -> dict[str, Any]:
+        raise AssertionError("handler must not run for an invalid question set")
+
+    _register(router, handler)
+
+    provider = _provider(
+        [
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="q1",
+                        name=ASK_USER_TOOL_NAME,
+                        arguments={
+                            "intro": "?",
+                            "questions": [{"text": "Keyless question"}],
+                        },
+                    )
+                ]
+            },
+            {"content": "recovered"},
+        ]
+    )
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = [
+        e
+        async for e in loop.run(
+            [_msg("user", "ask")],
+            tools=router.describe_model(),
+        )
+    ]
+
+    assert events[-1].kind == "completion"
+    tool_messages = [
+        m
+        for call in provider.calls
+        for m in call
+        if m.role == "tool" and m.name == ASK_USER_TOOL_NAME
+    ]
+    assert tool_messages
+    # The content is the JSON tool-result envelope, so the quote is escaped.
+    assert 'missing a non-empty string \\"id\\"' in tool_messages[0].content_text

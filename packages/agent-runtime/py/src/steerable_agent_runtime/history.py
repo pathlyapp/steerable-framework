@@ -95,6 +95,13 @@ class CompactionBoundary:
     keeps its compaction instead of discarding it as a spurious
     ``host_revision`` (W6-10). ``None`` for records written before this
     field existed — those fall back to treating the boundary as opaque.
+
+    ``pre_tokens`` / ``post_tokens`` are the rewriter's token estimates
+    immediately before and after the rewrite (CC ``compact_boundary``
+    parity): traces can chart compaction effectiveness and spot a rewriter
+    that stops shrinking (the circuit-breaker signal) without re-estimating
+    from message bodies. ``None`` on records written before this field
+    existed and on rewriters that do not estimate.
     """
 
     seq: int
@@ -103,6 +110,8 @@ class CompactionBoundary:
     turn_id: str | None = None
     kind: str = KIND_COMPACTION_BOUNDARY
     replacement_count: int | None = None
+    pre_tokens: int | None = None
+    post_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,6 +420,8 @@ class ContextManager:
         reason: str,
         action: str = "compact",
         turn_id: str | None = None,
+        pre_tokens: int | None = None,
+        post_tokens: int | None = None,
     ) -> CompactionBoundary:
         """The single declared rewrite path — itself append-only.
 
@@ -425,6 +436,8 @@ class ContextManager:
             action=action,
             turn_id=turn_id or self.turn_id,
             replacement_count=len(replacements),
+            pre_tokens=pre_tokens,
+            post_tokens=post_tokens,
         )
         self._record.append(boundary)
         self._pending.append(boundary)
@@ -635,6 +648,10 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
         # ignore unknown keys) and older records (which lack it) both work.
         if entry.replacement_count is not None:
             out["replacement_count"] = entry.replacement_count
+        if entry.pre_tokens is not None:
+            out["pre_tokens"] = entry.pre_tokens
+        if entry.post_tokens is not None:
+            out["post_tokens"] = entry.post_tokens
         return out
     if isinstance(entry, HistorySeed):
         return {
@@ -728,6 +745,8 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
         )
     if envelope == "boundary":
         replacement_count = data.get("replacement_count")
+        pre_tokens = data.get("pre_tokens")
+        post_tokens = data.get("post_tokens")
         return CompactionBoundary(
             seq=int(data["seq"]),
             reason=str(data.get("reason") or ""),
@@ -736,6 +755,8 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             replacement_count=(
                 int(replacement_count) if replacement_count is not None else None
             ),
+            pre_tokens=int(pre_tokens) if pre_tokens is not None else None,
+            post_tokens=int(post_tokens) if post_tokens is not None else None,
         )
     if envelope == "seed":
         return HistorySeed(

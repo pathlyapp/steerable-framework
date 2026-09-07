@@ -85,7 +85,7 @@ async def test_wrapper_stamps_tools_and_tail_anchor() -> None:
     )
     call = inner.calls[0]
     assert call["tools"][-1]["cache_control"] == {"type": "ephemeral"}
-    assert call["_cache_tail_anchor"] is True
+    assert call["_cache_tail_anchor"] == {"type": "ephemeral"}
 
 
 @pytest.mark.asyncio
@@ -125,7 +125,7 @@ async def test_wrapper_stream_path_applies_the_same_shaping() -> None:
         pass
     call = inner.calls[0]
     assert call["tools"][-1]["cache_control"] == {"type": "ephemeral"}
-    assert call["_cache_tail_anchor"] is True
+    assert call["_cache_tail_anchor"] == {"type": "ephemeral"}
 
 
 def test_openai_to_anthropic_transform_preserves_a_stamped_breakpoint() -> None:
@@ -183,3 +183,104 @@ def test_anthropic_body_builder_without_anchor_keeps_legacy_shapes() -> None:
     assert body["system"] == "you are helpful"
     assert body["messages"][-1]["content"] == "hello"
     assert all("cache_control" not in t for t in body["tools"])
+
+
+class TestRetentionTtl:
+    """STEERABLE_PROMPT_CACHE_TTL parity with CC's CLAUDE_CODE_PROMPT_CACHE_TTL:
+    the retention class maps onto the breakpoint marker's TTL, and all three
+    anchors of one request share it."""
+
+    def test_short_retention_is_the_5m_default(self) -> None:
+        inner = _RecordingInner()
+        provider = CacheControlProvider(inner, retention="short")
+        tools, kwargs = provider._apply([{"type": "function"}], {})
+        assert kwargs["_cache_tail_anchor"] == {"type": "ephemeral"}
+        assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_long_retention_opts_into_the_1h_ttl(self) -> None:
+        inner = _RecordingInner()
+        provider = CacheControlProvider(inner, retention="long")
+        tools, kwargs = provider._apply([{"type": "function"}], {})
+        assert kwargs["_cache_tail_anchor"] == {"type": "ephemeral", "ttl": "1h"}
+        assert tools[-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+    def test_per_request_retention_overrides_the_default(self) -> None:
+        inner = _RecordingInner()
+        provider = CacheControlProvider(inner, retention="long")
+        tools, kwargs = provider._apply(
+            [{"type": "function"}], {"cache_retention": "short"}
+        )
+        assert kwargs["_cache_tail_anchor"] == {"type": "ephemeral"}
+        assert tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+    def test_anthropic_body_carries_the_ttl_on_all_three_anchors(self) -> None:
+        provider = AnthropicProvider(name="anthropic", model="claude-test")
+        body = provider._build_body(
+            messages=[
+                LLMMessage.text_of("system", "sys"),
+                LLMMessage.text_of("user", "hi"),
+            ],
+            tools=[{"type": "function", "function": {"name": "t"}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            temperature=None,
+            max_tokens=None,
+            extra={"_cache_tail_anchor": {"type": "ephemeral", "ttl": "1h"}},
+        )
+        assert body["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        assert body["messages"][-1]["content"][-1]["cache_control"] == {
+            "type": "ephemeral",
+            "ttl": "1h",
+        }
+        assert body["tools"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+        assert "_cache_tail_anchor" not in body
+
+
+class TestCacheDriftMonitor:
+    """The deliberate loop logic over the raw stage_complete cache numbers."""
+
+    class _Ctx:
+        def __init__(self, prompt: int | None, cached: int | None) -> None:
+            self.last_prompt_tokens = prompt
+            self.last_cached_prompt_tokens = cached
+
+    @pytest.mark.asyncio
+    async def test_never_arms_without_cache_accounting(self) -> None:
+        from steerable_agent_runtime import CacheDriftMonitor
+
+        monitor = CacheDriftMonitor(consecutive_rounds=2)
+        for _ in range(5):
+            await monitor.pre_step([], self._Ctx(10_000, 0))
+        assert monitor.armed is False
+        assert monitor.drift_detected is False
+
+    @pytest.mark.asyncio
+    async def test_arms_on_first_hit_and_flags_a_sustained_collapse(self) -> None:
+        from steerable_agent_runtime import CacheDriftMonitor
+
+        monitor = CacheDriftMonitor(min_prompt_tokens=1000, min_hit_rate=0.5, consecutive_rounds=3)
+        await monitor.pre_step([], self._Ctx(10_000, 9_000))  # cache working → armed
+        assert monitor.armed is True
+        for round_index in range(3):
+            await monitor.pre_step([], self._Ctx(10_000, 1_000))  # 10% hit rate
+            assert monitor.consecutive_low_hit_rounds == round_index + 1
+        assert monitor.drift_detected is True
+        assert monitor.last_hit_rate == 0.1
+
+    @pytest.mark.asyncio
+    async def test_one_low_round_is_not_drift_and_recovery_clears(self) -> None:
+        from steerable_agent_runtime import CacheDriftMonitor
+
+        monitor = CacheDriftMonitor(min_prompt_tokens=1000, min_hit_rate=0.5, consecutive_rounds=3)
+        await monitor.pre_step([], self._Ctx(10_000, 9_000))
+        await monitor.pre_step([], self._Ctx(10_000, 100))  # post-compaction re-warm round
+        await monitor.pre_step([], self._Ctx(10_000, 9_500))  # recovered
+        assert monitor.consecutive_low_hit_rounds == 0
+        assert monitor.drift_detected is False
+
+    @pytest.mark.asyncio
+    async def test_small_prompts_are_ignored(self) -> None:
+        from steerable_agent_runtime import CacheDriftMonitor
+
+        monitor = CacheDriftMonitor(min_prompt_tokens=1024, consecutive_rounds=1)
+        await monitor.pre_step([], self._Ctx(10_000, 9_000))  # arm
+        await monitor.pre_step([], self._Ctx(500, 0))  # below min_prompt_tokens
+        assert monitor.drift_detected is False

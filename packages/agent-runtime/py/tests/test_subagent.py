@@ -9,6 +9,7 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     SubagentConfig,
     SubagentExecutor,
+    SubagentRegistry,
     ToolRouter,
     subagent_tool_descriptor,
 )
@@ -231,3 +232,173 @@ def test_descriptor_is_openai_tool_schema() -> None:
     assert d["type"] == "function"
     assert d["function"]["name"] == "delegate_subagent"
     assert d["function"]["parameters"]["required"] == ["task"]
+
+
+def test_descriptor_with_registry_advertises_subagent_type_enum() -> None:
+    registry = SubagentRegistry()
+    registry.register("researcher", SubagentConfig(tool_filter=frozenset({"read_file"})))
+    registry.register("writer", SubagentConfig())
+    d = subagent_tool_descriptor(registry=registry)
+    prop = d["function"]["parameters"]["properties"]["subagent_type"]
+    assert prop["enum"] == ["researcher", "writer"]
+
+
+def test_descriptor_without_registry_has_no_subagent_type() -> None:
+    d = subagent_tool_descriptor(registry=SubagentRegistry())
+    assert "subagent_type" not in d["function"]["parameters"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_registered_profile_governs_the_child() -> None:
+    # The "tight" profile bounds the child to 1 round; a child that keeps
+    # calling tools ends budget_exhausted, which only the profile's
+    # max_rounds can explain (the default profile would allow 8).
+    router = ToolRouter()
+
+    async def ping() -> str:
+        return "pong"
+
+    router.register(ping)
+    registry = SubagentRegistry()
+    registry.register("tight", SubagentConfig(max_rounds=1))
+
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "loop", "subagent_type": "tight"})
+                ]
+            },
+            {"tool_calls": [tc("ping")]},
+            {"tool_calls": [tc("ping")]},
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(router), provider, registry=registry
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    results = _tool_results(events)
+    assert results[0]["success"] is False
+    assert "budget_exhausted" in results[0].get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_unknown_subagent_type_fails_closed_naming_registered() -> None:
+    registry = SubagentRegistry()
+    registry.register("researcher", SubagentConfig())
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "ghost"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()), provider, registry=registry
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    results = _tool_results(events)
+    assert results[0]["success"] is False
+    assert "unknown subagent_type" in results[0].get("error", "")
+    assert "researcher" in results[0].get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_subagent_type_without_registry_fails_closed() -> None:
+    events = await _run_parent(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "any"})
+                ]
+            },
+            {"content": "parent done"},
+        ],
+        ToolRouter(),
+    )
+    results = _tool_results(events)
+    assert results[0]["success"] is False
+    assert "no profiles are registered" in results[0].get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_model_profile_uses_the_provider_factory() -> None:
+    calls: list[str] = []
+
+    def factory(model: str):
+        calls.append(model)
+        return make_provider([{"content": "cheap-model answer"}])
+
+    registry = SubagentRegistry()
+    registry.register("cheap", SubagentConfig(model="gpt-4o-mini"))
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "cheap"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        registry=registry,
+        provider_factory=factory,
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    assert calls == ["gpt-4o-mini"]
+    results = _tool_results(events)
+    assert results[0]["success"] is True
+    assert "cheap-model answer" in results[0].get("resultPreview", "")
+
+
+@pytest.mark.asyncio
+async def test_model_profile_without_factory_fails_closed() -> None:
+    registry = SubagentRegistry()
+    registry.register("cheap", SubagentConfig(model="gpt-4o-mini"))
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "cheap"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()), provider, registry=registry
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    results = _tool_results(events)
+    assert results[0]["success"] is False
+    assert "no provider factory" in results[0].get("error", "")
+
+
+def test_concurrency_safe_follows_the_resolved_profile() -> None:
+    router = ToolRouter()
+    registry = SubagentRegistry()
+    registry.register("fast", SubagentConfig(concurrent=True))
+    executor = SubagentExecutor(
+        RouterToolExecutor(router),
+        make_provider([]),
+        registry=registry,
+    )
+    default_call = tc("delegate_subagent", {"task": "x"})
+    typed_call = tc("delegate_subagent", {"task": "x", "subagent_type": "fast"})
+    assert executor.concurrency_safe(default_call) is False
+    assert executor.concurrency_safe(typed_call) is True

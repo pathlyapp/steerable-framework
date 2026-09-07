@@ -57,6 +57,7 @@ from .branch import (
 )
 from .cache_control import (
     CacheControlProvider,
+    CacheDriftMonitor,
     CacheRetention,
     place_cache_breakpoints,
     system_blocks_with_cache,
@@ -213,6 +214,7 @@ from .subagent import (
     FilteredToolsExecutor,
     SubagentConfig,
     SubagentExecutor,
+    SubagentRegistry,
     subagent_tool_descriptor,
 )
 from .tokens import (
@@ -271,6 +273,7 @@ __all__ = [
     "BranchPoint",
     "BudgetExhaustedError",
     "CacheControlProvider",
+    "CacheDriftMonitor",
     "CacheRetention",
     "CalibratingProvider",
     "ChainHooks",
@@ -354,6 +357,7 @@ __all__ = [
     "StorageError",
     "SubagentConfig",
     "SubagentExecutor",
+    "SubagentRegistry",
     "TextPart",
     "ToolDispatchError",
     "ToolExecutor",
