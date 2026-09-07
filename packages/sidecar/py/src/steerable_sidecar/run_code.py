@@ -15,10 +15,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
+import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+import threading
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -66,11 +70,23 @@ _CHILD_ENV_ALLOWLIST = (
 
 def _child_environ(environ: Mapping[str, str]) -> dict[str, str]:
     """The scrubbed environment the ``run_code`` child runs with."""
-    child = {
-        key: value
-        for key, value in environ.items()
-        if key in _CHILD_ENV_ALLOWLIST or key.startswith("LC_")
-    }
+    if sys.platform == "win32":
+        # Windows env names are case-insensitive but stored with their
+        # original case (``SystemRoot``, ``Path``); an exact-match allowlist
+        # silently drops them and the child then fails Winsock init
+        # (WinError 10106) or DLL resolution. Match case-insensitively.
+        allowed = {key.upper() for key in _CHILD_ENV_ALLOWLIST}
+        child = {
+            key: value
+            for key, value in environ.items()
+            if key.upper() in allowed or key.upper().startswith("LC_")
+        }
+    else:
+        child = {
+            key: value
+            for key, value in environ.items()
+            if key in _CHILD_ENV_ALLOWLIST or key.startswith("LC_")
+        }
     # The driver resolves the relay script relative to its own file; it must
     # not re-read the parent's bytecode cache or write one into a confined
     # filesystem.
@@ -196,6 +212,29 @@ def _sidecar_confined(environ: Mapping[str, str]) -> bool:
     return (environ.get(_CONFINED_ENV) or "").strip() in {"1", "true", "yes", "on"}
 
 
+def _mkdtemp_inheritable(prefix: str) -> str:
+    """``tempfile.mkdtemp`` that keeps parent ACL inheritance on Windows.
+
+    ``tempfile.mkdtemp`` hardcodes ``os.mkdir(dir, 0o700)``; on CPython 3.12+
+    for Windows the ``0o700`` mode materialises an owner-only DACL that drops
+    the inherited ACEs. Under win-spawn-helper confinement the sidecar's
+    capability SID then loses write access inside the fresh directory
+    (``Errno 13`` on ``program.py``). Creating with the default mode lets the
+    writable-root grant flow down. POSIX keeps the stock ``0o700`` semantics.
+    """
+    if sys.platform != "win32":
+        return tempfile.mkdtemp(prefix=prefix)
+    base = tempfile.gettempdir()
+    for _ in range(100):
+        candidate = os.path.join(base, f"{prefix}{secrets.token_hex(6)}")
+        try:
+            os.mkdir(candidate)  # default mode: inherit the parent's ACEs
+        except FileExistsError:
+            continue
+        return candidate
+    raise FileNotFoundError("no usable run_code temp dir")
+
+
 def _result_payload(result: ToolResult) -> dict[str, Any]:
     dumped = result.model_dump(exclude_none=True)
     return dumped
@@ -236,7 +275,7 @@ async def _drive_child(
             error="run_code source exceeds the size cap",
             needsFollowup=True,
         )
-    tmpdir = tempfile.mkdtemp(prefix="steerable-run-code-")
+    tmpdir = _mkdtemp_inheritable(prefix="steerable-run-code-")
     program_path = Path(tmpdir) / "program.py"
     try:
         program_path.write_text(source, encoding="utf-8")
@@ -278,117 +317,250 @@ async def _drive_child(
                 "enforcement": getattr(backend, "enforcement", "partial"),
             }
         )
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_child_environ(environ),
+        pump = _pump_child_win32 if sys.platform == "win32" else _pump_child_asyncio
+        return await pump(
+            argv,
+            description=description,
+            environ=environ,
+            sandbox_marker=sandbox_marker,
         )
-        calls: list[dict[str, Any]] = []
-        logs: list[str] = []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
-        async def _run() -> ToolResult:
-            assert proc.stdout is not None and proc.stdin is not None
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    stderr = b""
-                    if proc.stderr is not None:
-                        stderr = await proc.stderr.read()
-                    err = stderr.decode("utf-8", errors="replace").strip()
-                    return ToolResult(
-                        success=False,
-                        error=err or "run_code child exited without a result",
-                        needsFollowup=True,
-                        data={"description": description, "calls": calls, "logs": logs},
-                    )
-                try:
-                    frame = json.loads(line.decode("utf-8"))
-                except json.JSONDecodeError:
-                    logs.append(line.decode("utf-8", errors="replace").rstrip())
-                    continue
-                kind = frame.get("type")
-                if kind == "log":
-                    text = str(frame.get("text") or "")
-                    if text:
-                        logs.append(text)
-                    continue
-                if kind == "done":
-                    ok = bool(frame.get("ok"))
-                    if not ok:
-                        return ToolResult(
-                            success=False,
-                            error=str(frame.get("error") or "run_code failed"),
-                            needsFollowup=True,
-                            data={
-                                "description": description,
-                                "calls": calls,
-                                "logs": logs,
-                            },
-                        )
-                    return ToolResult(
-                        success=True,
-                        data={
-                            "description": description,
-                            "value": frame.get("value"),
-                            "calls": calls,
-                            "logs": logs,
-                            "_sandbox": dict(sandbox_marker),
-                        },
-                    )
-                if kind != "call":
-                    continue
-                if len(calls) >= _MAX_CALLS:
-                    return ToolResult(
-                        success=False,
-                        error=f"run_code exceeded {_MAX_CALLS} nested tool calls",
-                        needsFollowup=True,
-                        data={"description": description, "calls": calls, "logs": logs},
-                    )
-                tool_name = str(frame.get("tool") or "")
-                arguments = frame.get("arguments")
-                if not isinstance(arguments, dict):
-                    arguments = {}
-                nested_id = f"run_code-{frame.get('id')}"
-                result = await _invoke_nested(tool_name, arguments, nested_id)
-                calls.append(
-                    {
-                        "tool": tool_name,
-                        "arguments": arguments,
-                        "result": _result_payload(result),
-                    }
-                )
-                reply = {
-                    "v": 1,
-                    "id": frame.get("id"),
-                    "ok": result.success,
-                    "result": _result_payload(result) if result.success else None,
-                    "error": None if result.success else (result.error or "tool failed"),
-                }
-                proc.stdin.write(
-                    (json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8")
-                )
-                await proc.stdin.drain()
 
-        try:
-            return await asyncio.wait_for(_run(), timeout=_timeout_s(environ))
-        except TimeoutError:
+async def _pump_frames(
+    *,
+    readline: Callable[[], Awaitable[bytes]],
+    write_reply: Callable[[bytes], Awaitable[None]],
+    read_stderr: Callable[[], Awaitable[bytes]],
+    description: str,
+    sandbox_marker: dict[str, Any],
+    calls: list[dict[str, Any]],
+    logs: list[str],
+) -> ToolResult:
+    """The line-framed JSON protocol with the driver child, shared by the
+    asyncio transport (POSIX) and the threaded transport (Windows)."""
+    while True:
+        line = await readline()
+        if not line:
+            stderr = await read_stderr()
+            err = stderr.decode("utf-8", errors="replace").strip()
             return ToolResult(
                 success=False,
-                error="run_code timed out",
+                error=err or "run_code child exited without a result",
                 needsFollowup=True,
                 data={"description": description, "calls": calls, "logs": logs},
             )
-        finally:
-            if proc.returncode is None:
-                proc.kill()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=2)
-                except (TimeoutError, ProcessLookupError):
-                    pass
+        try:
+            frame = json.loads(line.decode("utf-8"))
+        except json.JSONDecodeError:
+            logs.append(line.decode("utf-8", errors="replace").rstrip())
+            continue
+        kind = frame.get("type")
+        if kind == "log":
+            text = str(frame.get("text") or "")
+            if text:
+                logs.append(text)
+            continue
+        if kind == "done":
+            ok = bool(frame.get("ok"))
+            if not ok:
+                return ToolResult(
+                    success=False,
+                    error=str(frame.get("error") or "run_code failed"),
+                    needsFollowup=True,
+                    data={
+                        "description": description,
+                        "calls": calls,
+                        "logs": logs,
+                    },
+                )
+            return ToolResult(
+                success=True,
+                data={
+                    "description": description,
+                    "value": frame.get("value"),
+                    "calls": calls,
+                    "logs": logs,
+                    "_sandbox": dict(sandbox_marker),
+                },
+            )
+        if kind != "call":
+            continue
+        if len(calls) >= _MAX_CALLS:
+            return ToolResult(
+                success=False,
+                error=f"run_code exceeded {_MAX_CALLS} nested tool calls",
+                needsFollowup=True,
+                data={"description": description, "calls": calls, "logs": logs},
+            )
+        tool_name = str(frame.get("tool") or "")
+        arguments = frame.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        nested_id = f"run_code-{frame.get('id')}"
+        result = await _invoke_nested(tool_name, arguments, nested_id)
+        calls.append(
+            {
+                "tool": tool_name,
+                "arguments": arguments,
+                "result": _result_payload(result),
+            }
+        )
+        reply = {
+            "v": 1,
+            "id": frame.get("id"),
+            "ok": result.success,
+            "result": _result_payload(result) if result.success else None,
+            "error": None if result.success else (result.error or "tool failed"),
+        }
+        await write_reply((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))
+
+
+async def _pump_child_asyncio(
+    argv: list[str],
+    *,
+    description: str,
+    environ: Mapping[str, str],
+    sandbox_marker: dict[str, Any],
+) -> ToolResult:
+    """POSIX transport: Proactor-free platforms drive the child with
+    ``asyncio.create_subprocess_exec`` directly."""
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=_child_environ(environ),
+    )
+    calls: list[dict[str, Any]] = []
+    logs: list[str] = []
+
+    async def readline() -> bytes:
+        assert proc.stdout is not None
+        return await proc.stdout.readline()
+
+    async def write_reply(data: bytes) -> None:
+        assert proc.stdin is not None
+        proc.stdin.write(data)
+        await proc.stdin.drain()
+
+    async def read_stderr() -> bytes:
+        return await proc.stderr.read() if proc.stderr is not None else b""
+
+    try:
+        return await asyncio.wait_for(
+            _pump_frames(
+                readline=readline,
+                write_reply=write_reply,
+                read_stderr=read_stderr,
+                description=description,
+                sandbox_marker=sandbox_marker,
+                calls=calls,
+                logs=logs,
+            ),
+            timeout=_timeout_s(environ),
+        )
+    except TimeoutError:
+        return ToolResult(
+            success=False,
+            error="run_code timed out",
+            needsFollowup=True,
+            data={"description": description, "calls": calls, "logs": logs},
+        )
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except (TimeoutError, ProcessLookupError):
+                pass
+
+
+async def _pump_child_win32(
+    argv: list[str],
+    *,
+    description: str,
+    environ: Mapping[str, str],
+    sandbox_marker: dict[str, Any],
+) -> ToolResult:
+    """Windows transport: synchronous ``subprocess.Popen`` + daemon reader.
+
+    asyncio's ProactorEventLoop builds subprocess pipes from *named* pipes
+    (``CreateNamedPipeW`` + ``CreateFileW``); a restricted-token sidecar is
+    denied on the ``CreateFileW`` (WinError 5). Anonymous ``CreatePipe``
+    handles from the synchronous ``subprocess`` module work under confinement,
+    so a daemon thread pumps stdout frames into a queue the event loop drains
+    (same pattern as the sidecar's own threaded stdio transport).
+    """
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_child_environ(environ),
+    )
+    frames: queue.Queue[bytes] = queue.Queue()
+
+    def _pump_stdout() -> None:
+        try:
+            assert proc.stdout is not None
+            while True:
+                chunk = proc.stdout.readline()
+                if not chunk:
+                    break
+                frames.put(chunk)
+        except Exception:
+            pass
+        finally:
+            frames.put(b"")  # EOF sentinel
+
+    threading.Thread(
+        target=_pump_stdout, name="run-code-stdout-pump", daemon=True
+    ).start()
+
+    calls: list[dict[str, Any]] = []
+    logs: list[str] = []
+
+    async def readline() -> bytes:
+        return await asyncio.to_thread(frames.get)
+
+    async def write_reply(data: bytes) -> None:
+        assert proc.stdin is not None
+        proc.stdin.write(data)
+        proc.stdin.flush()
+
+    async def read_stderr() -> bytes:
+        await asyncio.to_thread(proc.wait)
+        return proc.stderr.read() if proc.stderr is not None else b""
+
+    try:
+        return await asyncio.wait_for(
+            _pump_frames(
+                readline=readline,
+                write_reply=write_reply,
+                read_stderr=read_stderr,
+                description=description,
+                sandbox_marker=sandbox_marker,
+                calls=calls,
+                logs=logs,
+            ),
+            timeout=_timeout_s(environ),
+        )
+    except TimeoutError:
+        return ToolResult(
+            success=False,
+            error="run_code timed out",
+            needsFollowup=True,
+            data={"description": description, "calls": calls, "logs": logs},
+        )
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            try:
+                await asyncio.wait_for(asyncio.to_thread(proc.wait), timeout=2)
+            except (TimeoutError, ProcessLookupError):
+                pass
 
 
 def register_run_code(
