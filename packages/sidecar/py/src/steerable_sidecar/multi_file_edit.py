@@ -8,7 +8,7 @@ matching as ``edit_file`` (exact → whitespace-tolerant → unicode-normalized,
 line numbers — LLM-generated line numbers are wrong often enough that
 content-anchored matching is the reliable primitive.
 
-Atomicity is the other half: every file's edits are planned against the
+Atomicity is the other half: every file's edits are resolved against the
 original bytes first; any locate failure aborts the whole patch with
 nothing written. A failure during the write phase (disk, permissions)
 restores the files already written, so the workspace never holds a

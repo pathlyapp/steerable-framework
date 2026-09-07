@@ -14,7 +14,7 @@ written to help you decide, not to declare a winner.
 
 Most agent frameworks answer one of two questions: *"how do I orchestrate
 agent logic?"* (LangGraph, OpenAI Agents SDK, Claude Agent SDK) or *"how do
-I ship a coding agent product?"* (Codex, DeepSeek Harness). Steerable
+I ship a coding agent product?"* (Codex, DeepSeek Harness, Pi). Steerable
 answers a third: *"how do I ship the same agent loop into a desktop app and
 a server, over one typed protocol, without rewriting the plumbing twice?"*
 It is a layered library — protocol, harness, runtime/sidecar, UI — where
@@ -22,17 +22,17 @@ each tier is independently adoptable.
 
 ## At a glance
 
-| Dimension | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Agent SDK |
-| --- | --- | --- | --- | --- | --- | --- |
-| **What it is** | Layered library (4 tiers, independently published) | Product family: CLI/TUI, IDE, desktop, cloud — Rust core | Plugin-based harness (TS) on vendored Cordis; everything is a plugin | Low-level orchestration library (Py/JS): state graphs | Lightweight agent framework (Py/TS) over the Responses API | The Claude Code agent loop as a library (Py/TS) |
-| **Loop control / steering** | `CoreLoop` single-agent step loop; structured `LoopEvent` taxonomy (13 kinds, 5 categories); `agent.chat.steer` RPC mid-turn; fork | Session-owned turn loop; interrupt/abort; 12-event hook engine | Inbox-driven ReactLoop; steer / inject / followup delivery | You design the graph; interrupts at node boundaries | Handoffs + guardrails; no mid-run steer | Steer via messages; hooks intercept tool calls |
-| **Tool execution** | `ToolRouter` + `@tool`; host **reverse channel** — desktop tools run in the host process (visible terminal); MCP host-mediated today | Unified exec (PTY), MCP, parallel gating | Concurrency-safe tool pool, MCP client | `ToolNode` inside your graph | Function tools, MCP, hosted tools | Built-in file/bash/web tools, MCP |
-| **Safety model** | Two layers: OS sandbox for the sidecar (macOS Seatbelt, deny-by-default write whitelist; Linux Landlock planned) + a command classifier with dozens of rules, consent gate, plan-mode hard block | Approval policies + ExecPolicy + platform sandbox (Seatbelt/Landlock) + Guardian second-pass review | `sandbox.confine` (bwrap/Landlock/Seatbelt), fail-closed | None built-in — your infrastructure | Guardrails; no sandbox | Permission modes + hooks; sandboxed bash in Claude Code |
-| **Protocol surface** | One JSON Schema → codegen TS types + Pydantic models, lockstep-released; sidecar JSON-RPC (15 methods); conformance suite keeps both SDKs byte-compatible | app-server JSON-RPC (v2) with generated TS types; single-language (Rust) core | JSON-RPC SDK + ACP server; typed session-event map | LangGraph Platform REST/SDK | OpenAI Responses / Realtime APIs | Anthropic API; SDK spawns the Claude Code process |
-| **Skills ecosystem** | Layered disclosure: eager base skills in the system prompt, catalog skills loaded on demand via a `skill` tool; `SKILL.md`-compatible frontmatter (`disable-model-invocation` interop) | Skill files (`.codex/skills`) | Skill provider registry + catalog/loader tool | None built-in | None built-in | Agent Skills (shared with Claude Code) |
-| **Persistence / sessions** | `TraceRecorder` + resume projection + fork (`untilSequence` truncation); cancelled turns still persist traces | Rollout files as source of truth; resume + fork | Event-sourced session log (SQLite); fork | Checkpointers (SQLite/Postgres/…) | Sessions (memory) | Session resume |
-| **Deployment form** | **Dual form**: embeddable signed sidecar binary (desktop: Electron/Tauri/Wails) + in-process FastAPI (server) | Local CLI/desktop + hosted cloud | Library + headless/ACP binaries | Self-host or LangGraph Platform | Your infra + OpenAI platform | Local / CI agents |
-| **Maturity** | `0.2.x`; one production consumer ([DeepPath](https://deeppath.cc)); small traffic | Massive real-world usage | Pre-release (`0.1.x` RC); internal use | Widely adopted in production | Production, OpenAI-tied | Production (powers Claude Code), Anthropic-only |
+| Dimension | Steerable | OpenAI Codex | DeepSeek Harness | Pi | LangGraph | OpenAI Agents SDK | Claude Agent SDK |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **What it is** | Layered library (4 tiers, independently published) | Product family: CLI/TUI, IDE, desktop, cloud — Rust core | Plugin-based harness (TS) on vendored Cordis; everything is a plugin | Minimal-core coding agent CLI (TS, 11 lockstep packages); deliberately omits MCP, subagents, and a permission system — extensions add them | Low-level orchestration library (Py/JS): state graphs | Lightweight agent framework (Py/TS) over the Responses API | The Claude Code agent loop as a library (Py/TS) |
+| **Loop control / steering** | `CoreLoop` single-agent step loop; structured `LoopEvent` taxonomy (13 kinds, 5 categories); `agent.chat.steer` RPC mid-turn; fork | Session-owned turn loop; interrupt/abort; 12-event hook engine | Inbox-driven ReactLoop; steer / inject / followup delivery | `agent-loop.ts` turn loop; steering and follow-up queues polled between turns; tool calls parallel by default, per-tool sequential opt-out | You design the graph; interrupts at node boundaries | Handoffs + guardrails; no mid-run steer | Steer via messages; hooks intercept tool calls |
+| **Tool execution** | `ToolRouter` + `@tool`; host **reverse channel** — desktop tools run in the host process (visible terminal); native stdio MCP client wired on sidecar (`chat.stream` `mcp`), headless (`--mcp`), and ACP paths | Unified exec (PTY), MCP, parallel gating | Concurrency-safe tool pool, MCP client | 8 built-in tools; extensions register tools at runtime with no reload; **no MCP** | `ToolNode` inside your graph | Function tools, MCP, hosted tools | Built-in file/bash/web tools, MCP |
+| **Safety model** | Two layers: OS sandbox for the sidecar (macOS Seatbelt with a deny-by-default write whitelist; Linux bwrap, falling back to Landlock; no Windows rewriter) + a command classifier with dozens of rules, consent gate, plan-mode hard block | Approval policies + ExecPolicy + platform sandbox (Seatbelt/Landlock) + Guardian second-pass review | `sandbox.confine` (bwrap/Landlock/Seatbelt), fail-closed | None built-in — tools run with host user permissions; project trust gate only; containerization documented externally | None built-in — your infrastructure | Guardrails; no sandbox | Permission modes + hooks; sandboxed bash in Claude Code | <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
+| **Protocol surface** | One JSON Schema → codegen TS types + Pydantic models, lockstep-released; sidecar JSON-RPC (23 methods); conformance suite keeps both SDKs byte-compatible | app-server JSON-RPC (v2) with generated TS types; single-language (Rust) core | JSON-RPC SDK + ACP server; typed session-event map | CBOR-framed `pi-protocol` (experimental server/client) plus `--mode rpc` JSONL over stdio; no cross-language codegen | LangGraph Platform REST/SDK | OpenAI Responses / Realtime APIs | Anthropic API; SDK spawns the Claude Code process |
+| **Skills ecosystem** | Layered disclosure: eager base skills in the system prompt, catalog skills loaded on demand via a `skill` tool; `SKILL.md`-compatible frontmatter (`disable-model-invocation` interop) | Skill files (`.codex/skills`) | Skill provider registry + catalog/loader tool | Agent Skills (`SKILL.md`) from `~/.pi/agent/skills/` and `.pi/skills/`, exposed as `/skill:name` | None built-in | None built-in | Agent Skills (shared with Claude Code) |
+| **Persistence / sessions** | `TraceRecorder` + resume projection + fork (`untilSequence` truncation); cancelled turns still persist traces | Rollout files as source of truth; resume + fork | Event-sourced session log (SQLite); fork | JSONL session tree keyed by cwd; `-c` / `-r` / `--fork`; in-session `/tree` branch UI; optional SQLite backend on the library path | Checkpointers (SQLite/Postgres/…) | Sessions (memory) | Session resume |
+| **Deployment form** | **Dual form**: embeddable signed sidecar binary (desktop: Electron/Tauri/Wails) + in-process FastAPI (server) | Local CLI/desktop + hosted cloud | Library + headless/ACP binaries | npm packages + Bun standalone binaries; library SDK via `createAgentSession` | Self-host or LangGraph Platform | Your infra + OpenAI platform | Local / CI agents |
+| **Maturity** | `0.2.x`; one production consumer ([DeepPath](https://deeppath.cc)); small traffic | Massive real-world usage | Pre-release (`0.1.x` RC); internal use | Lockstep `0.85.1` across 11 packages; patch = fixes/additions, minor = breaking, no majors | Widely adopted in production | Production, OpenAI-tied | Production (powers Claude Code), Anthropic-only |
 
 ## Where Steerable is genuinely different
 
@@ -63,12 +63,20 @@ each tier is independently adoptable.
   deployed across the industry. Steerable has one production consumer and a
   fraction of the mileage.
 - **Ecosystem.** LangGraph's integration catalog and community dwarf ours.
-  MCP support is currently host-mediated (tools execute in the host over
-  the reverse channel); a framework-native MCP client is deliberately
-  deferred.
-- **Sandbox coverage.** Layer-1 OS confinement is macOS-only today
-  (Seatbelt). Linux Landlock is a planned follow-up; Windows relies on the
-  layer-2 classifier plus consent.
+  The framework-native stdio MCP client (`McpStdioClient`) is now wired on
+  the sidecar (`chat.stream` `mcp` param), headless (`--mcp`), and ACP
+  paths, so MCP tools reach the `ToolRouter` directly; desktop hosts may
+  still prefer the reverse channel. What we lack is LangGraph's breadth of
+  prebuilt integrations, not the wiring.
+- **Extension runtime is minimal.** Third-party tools register through the
+  `steerable.tools` `importlib.metadata` entry point, loaded at sidecar boot
+  into the `ToolRouter`. That is a deliberate, smaller surface than Codex's
+  contributor traits + marketplace, DeepSeek Harness's Cordis plugins, or
+  Pi's runtime TypeScript extension loading — declare-and-register, no
+  plugin lifecycle or hot reload.
+- **Sandbox coverage.** Layer-1 OS confinement covers macOS (Seatbelt) and
+  Linux (bwrap, falling back to Landlock). Windows has no rewriter and relies <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
+  on the layer-2 classifier plus consent.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream (post-hoc OTLP export only).
 - **Multi-agent orchestration is out of scope by design.** CoreLoop is the

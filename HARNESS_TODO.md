@@ -606,17 +606,19 @@ Anthropic 的交接文件式完整 context reset），而这些服务成立的�
 与 3.2 同属「让别人调用我们」，只是粒度不同：**MCP 服务端暴露我们的工具，
 ACP 暴露我们的整个 agent**。两者都在 3.1 协议补全的下游。
 
-**现状不是「没有」，是「只有骨架」**：`acp_adapter.py` 311 行，
+**现状（2026-09-07 复核）**：`acp_adapter.py` 已 789 行，
 `SteerableAcpAgent(acp.Agent)`，SDK 为 `agent-client-protocol 0.12.1`，
-入口 `steerable-sidecar-acp`。SDK 的 `acp.Agent` 定义 13 个方法，我们实现 5 个：
+入口 `steerable-sidecar-acp`。SDK 的 `acp.Agent` 定义 13 个方法，我们实现 11 个：
 
 | 已实现 | 未实现 |
 | --- | --- |
-| `initialize`、`new_session`、`prompt`、`cancel`、`close_session` | `load_session`、`resume_session`、`fork_session`、`list_sessions`、`set_session_mode`、`set_config_option`、`authenticate`、`ext_method` |
+| `initialize`、`new_session`、`prompt`、`cancel`、`close_session`、`list_sessions`、`load_session`、`resume_session`、`fork_session`、`set_session_mode`、`set_config_option` | `authenticate`、`ext_method` |
 
-反向的 `acp.Client` 有 15 个回调，我们只用 `session_update` 一个。
-未用的包括 `request_permission`（见 P0）、`create_elicitation`、
-`read_text_file` / `write_text_file`、以及 5 个 `terminal/*`。
+反向的 `acp.Client` 回调里，`session_update`、`request_permission`（经
+`ApprovalExecutor` + `AcpApprover`）、`read_text_file` / `write_text_file`
+（`acp_fs.py` 编辑器桥）、以及 `terminal/*` 五个（`acp_terminal.py` 的
+`AcpTerminalRunner`）都已接上；未用的是 `create_elicitation`。
+下方 3.4.1–3.4.3 各子项均已落地并逐条勾选。
 
 **边界立场照搬 dsh**：它的 ACP 是 **automation-only**——只暴露标准 ACP v1 面，
 绝不外泄私有展示数据（plans、titles、todos、terminal views、elicitation 一律不走 ACP），

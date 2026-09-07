@@ -87,6 +87,8 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
 
+`config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → `STEERABLE_*` env → per-request RPC override — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud.
+
 Notifications emitted by the sidecar:
 
 | Notification         | When                                           | Params                                                  |
@@ -180,6 +182,18 @@ lifecycle lands as `agent.child` notifications; every spawn/wait result
 carries the child id as structured JSON, so the delegation is
 reconstructable from the session record alone. Children still running
 when the parent ends are wound down cooperatively.
+
+Per-turn MCP servers mount via `mcp: [{name?, command, args?, env?}]` in
+`params` (CoreLoop, sidecar-local path only). Each entry spawns one stdio
+MCP server subprocess; its tools are registered on the turn's router under
+the `mcp__<name>__<tool>` prefix and are callable by the model like any
+local tool. Every entry needs a non-empty `command` — a malformed entry
+fails the request with `invalid_params` before any provider call. Clients
+are closed when the stream ends (completion, error, or cancel), so no
+server subprocess outlives its turn. The param is ignored under
+`toolsViaHost` (the host owns tool execution there) and when an embedder
+replaces the harness via a hooks factory. This mirrors the ACP adapter's
+`mcpServers` wiring; HTTP/SSE MCP transports remain an honest gap.
 
 ## Health snapshot
 

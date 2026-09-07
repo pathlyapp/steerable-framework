@@ -3,11 +3,15 @@
 ACP (JSON-RPC over stdio, editor↔agent) is precisely the sidecar's
 transport and problem statement — this adapter is the peer that lets any
 ACP client (Zed, JetBrains, …) drive a Steerable loop instead of the
-bespoke 15-method surface. It implements the stable core of ``acp.Agent``:
+bespoke 23-method surface. It implements the stable core of ``acp.Agent``:
 ``initialize`` / ``new_session`` / ``prompt`` / ``cancel`` /
-``close_session``. Session loading, forking, and mode/config RPCs are
-deliberately unimplemented (the SDK's default ``None`` answers advertise
-that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
+``close_session``, plus the session-lifecycle and configuration RPCs
+``list_sessions`` / ``load_session`` / ``resume_session`` / ``fork_session``
+/ ``set_session_mode`` / ``set_config_option``.
+anchor: packages/sidecar/py/src/steerable_sidecar/acp_adapter.py :: def (authenticate|ext_method)
+Only ``authenticate`` and ``ext_method`` are unimplemented (the SDK's
+default ``None`` answers
+advertise that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
 ``write_file`` scoped to the session cwd (see ``workspace_tools``). When
 the client advertises the fs/terminal capabilities, the same tools are
 served through editor bridges instead (3.4.3): file content flows through
@@ -782,7 +786,9 @@ class SteerableAcpAgent(acp.Agent):
 
 def main() -> None:
     """Serve the ACP agent on stdio (how editors spawn agents)."""
-    acp.run_agent(SteerableAcpAgent())
+    import asyncio
+
+    asyncio.run(acp.run_agent(SteerableAcpAgent()))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -84,6 +84,53 @@ has a relevance floor: a document containing no query term scores zero and
 is dropped, so an off-vocabulary query returns an empty result rather than
 irrelevant tools.
 
+## Third-party tools (entry points)
+
+An installed Python package adds tools without any host code change by
+declaring the `steerable.tools` entry-point group in its own packaging
+metadata:
+
+```toml
+# pyproject.toml of the extension package
+[project.entry-points."steerable.tools"]
+my_tools = "my_package.tools:register"
+```
+
+```python
+# my_package/tools.py
+from steerable_agent_runtime import tool
+
+def register(router):
+    @tool(router=router, description="Greet by name")
+    async def greet(name: str) -> str:
+        return f"hello {name}"
+```
+
+The sidecar calls `load_tool_entry_points(router)` at boot; each entry point
+resolves to a callable that receives the router and registers its `@tool`
+functions. This is a discovery seam, not a plugin system — no lifecycle, no
+config schema, no isolation. A broken entry point (import failure or a
+non-callable target) fails the boot loud with a `PluginLoadError` naming the
+offender rather than silently dropping an installed tool.
+
+## `ask_user` (structured user questions)
+
+Opt-in per request (`askUser: true` on `agent.chat.stream`). The model calls
+`ask_user` with `{intro, questions[], outro?}` — field names mirror the
+protocol's `AskUserQuestionsPayload`, so the desktop renders the arguments as
+the question card unchanged. Each question is `select` / `text` / `password`
+with optional `options` and `multiSelect`.
+
+The tool **blocks**: dispatch awaits the product-injected handler, and the
+answers (`{questionId: value}`) return as the tool result, landing in the
+durable record and the model's next context. On the desktop path the sidecar
+routes it over the reverse channel (`ask_user.request`) to the host UI; an
+unreachable host or a user cancel records an empty answers mapping rather
+than hanging the turn. The framework seam is `make_ask_user_tool(handler)` in
+`steerable_agent_runtime.ask_user` — a CLI or ACP embedder injects its own
+handler (an ACP elicitation, a terminal prompt) instead of the host-routed
+one.
+
 ## `run_code` (programmatic tool calls)
 
 Opt-in (`STEERABLE_RUN_CODE=1`). The model still sees native tools; `run_code`

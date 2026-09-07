@@ -18,7 +18,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from steerable_agent_runtime import CoreLoop, LoopConfig, RouterToolExecutor
+from steerable_agent_runtime import (
+    CoreLoop,
+    LoopConfig,
+    McpStdioClient,
+    RouterToolExecutor,
+    mcp_invoker,
+    register_mcp_catalog,
+)
 from steerable_agent_runtime.hooks import ChainHooks
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
@@ -253,6 +260,18 @@ def main(argv: list[str] | None = None) -> int:
             "under test and confounds a harness comparison."
         ),
     )
+    parser.add_argument(
+        "--mcp",
+        metavar="JSON",
+        default=None,
+        help=(
+            'Per-run MCP servers as a JSON list: '
+            '\'[{"name","command","args":[],"env":{}}]\'. Each spawns a stdio '
+            "MCP server; its tools are registered under the "
+            "mcp__<name>__<tool> prefix. Mirrors the sidecar chat path's "
+            "'mcp' param."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.version:
         print(__version__)
@@ -260,6 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     instruction = _load_instruction(args.instruction, args.instruction_file)
     if not instruction:
         parser.error("pass --instruction or --instruction-file")
+    mcp_servers: list[dict[str, Any]] | None = None
+    if args.mcp is not None:
+        try:
+            mcp_servers = json.loads(args.mcp)
+        except json.JSONDecodeError as exc:
+            parser.error(f"--mcp is not valid JSON: {exc}")
+        if not isinstance(mcp_servers, list):
+            parser.error("--mcp must be a JSON list of server objects")
     try:
         asyncio.run(
             _run(
@@ -268,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_rounds=args.max_rounds,
                 harness_path=args.harness,
                 web_tools=not args.no_web_tools,
+                mcp_servers=mcp_servers,
             )
         )
     except ValueError as exc:
@@ -450,12 +478,35 @@ async def _run(
     max_rounds: int | None = None,
     harness_path: Path | None = None,
     web_tools: bool = True,
+    mcp_servers: list[dict[str, Any]] | None = None,
 ) -> None:
     params = _env_provider_params()
     if not params.get("model"):
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
     tools = workspace_tools_for_cwd(cwd, jailed=True, web_tools=web_tools)
     provider = default_llm_provider_factory(params)
+    # mcp: per-run MCP servers, mounted after the workspace tools so their
+    # catalogs register on the same router under the mcp__<name>__<tool>
+    # prefix. Clients are closed in the run's finally so no server subprocess
+    # outlives the run (completion, error, or hard timeout).
+    mcp_clients: list[McpStdioClient] = []
+    if mcp_servers:
+        for index, server in enumerate(mcp_servers):
+            if not isinstance(server, dict) or not server.get("command"):
+                raise ValueError(f"mcp[{index}] requires a non-empty 'command'")
+            name = str(server.get("name") or f"mcp{index}")
+            client = McpStdioClient(
+                str(server["command"]),
+                [str(a) for a in server.get("args") or []],
+                env={str(k): str(v) for k, v in (server.get("env") or {}).items()}
+                or None,
+            )
+            await client.start()
+            mcp_clients.append(client)
+            catalog = await client.list_tools()
+            register_mcp_catalog(
+                tools, server=name, tools=catalog, invoker=mcp_invoker(client)
+            )
     # consent_granted=True is deliberate and scoped to this entrypoint:
     # headless runs (Harbor evals, CI) are unattended — nobody answers an
     # approval prompt, and AutoApprover would auto-deny bash (mode
@@ -643,6 +694,9 @@ async def _run(
         sys.stdout.write(f"\n[loop_error {type(exc).__name__}: {exc}]\n")
         sys.stdout.flush()
     finally:
+        # Close per-run MCP clients so no server subprocess outlives the run.
+        for client in mcp_clients:
+            await client.aclose()
         # Interactive sessions are real processes; a headless run must not
         # leak them past its own lifetime.
         sessions = getattr(tools, "shell_sessions", None)

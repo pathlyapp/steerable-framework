@@ -675,7 +675,7 @@ def test_acp_main_serves_stdio(monkeypatch) -> None:
 
     called = {}
 
-    def _run_agent(agent) -> None:
+    async def _run_agent(agent) -> None:
         called["agent"] = agent
 
     monkeypatch.setattr(acp_adapter.acp, "run_agent", _run_agent)

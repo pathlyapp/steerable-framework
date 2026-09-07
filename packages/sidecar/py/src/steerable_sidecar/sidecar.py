@@ -64,6 +64,7 @@ from steerable_agent_runtime import (
     JsonApprovalStore,
     LoopConfig,
     LoopHooks,
+    McpStdioClient,
     OrchestrationConfig,
     OrchestrationExecutor,
     PolicyDeniedError,
@@ -96,6 +97,8 @@ from steerable_agent_runtime import (
     skill_to_dict,
     skill_tool_descriptor,
     subagent_tool_descriptor,
+    mcp_invoker,
+    register_mcp_catalog,
 )
 from steerable_agent_runtime.llm import (
     ContentPart,
@@ -114,7 +117,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 )
 
 from .file_edit import EditError, EditOp, apply_edits
-from .host_tools import HostApprover, HostToolExecutor
+from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
 from .loop_limits import resolve_loop_limits
 from .sandbox import select_exec_backend
 
@@ -598,14 +601,30 @@ class Sidecar:
         return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
 
     async def _handle_config_get(
-        self, _params: dict[str, Any] | None
+        self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
-        return {
+        base = {
             "logLevel": self.config.log_level,
             "gracePeriodSeconds": self.config.grace_period_seconds,
             "version": SIDECAR_VERSION,
             "protocolVersion": PROTOCOL_VERSION,
         }
+        # ``{"merged": true}`` previews the layered user config (default →
+        # ~/.steerable/config.json → STEERABLE_* env), reporting each key's
+        # value and where it came from — the ``--dump-config`` counterpart.
+        # A malformed user file fails loud instead of serving stale defaults.
+        if isinstance(params, dict) and params.get("merged"):
+            from steerable_agent_runtime import resolve_config
+
+            resolved = resolve_config(
+                {
+                    "log_level": self.config.log_level,
+                    "grace_period_seconds": self.config.grace_period_seconds,
+                    "storage_path": self.config.storage_path,
+                }
+            )
+            base["merged"] = resolved.describe()
+        return base
 
     async def _handle_config_set(self, params: dict[str, Any] | None) -> None:
         params = _require_params(params)
@@ -784,6 +803,19 @@ class Sidecar:
                 code=-32602,
                 kind="invalid_params",
             )
+        # Validate the mcp param up front (foreground, so a malformed entry
+        # fails the request with a clean invalid_params rather than surfacing
+        # as an unretrieved exception inside the background stream task).
+        # Spawning/registration happens in _run_chat_stream_coreloop.
+        mcp_param = params.get("mcp")
+        if isinstance(mcp_param, list):
+            for index, server in enumerate(mcp_param):
+                if not isinstance(server, dict) or not server.get("command"):
+                    raise JsonRpcError(
+                        f"mcp[{index}] requires a non-empty 'command'",
+                        code=-32602,
+                        kind="invalid_params",
+                    )
         if use_coreloop:
             task = asyncio.create_task(
                 self._run_chat_stream_coreloop(
@@ -1187,7 +1219,53 @@ class Sidecar:
         draft, and a tool call discards that request's narration. Only the
         terminal tool-free response reaches the host; the durable record and
         trace still retain every intermediate assistant turn.
+
+        ``mcp`` mounts per-turn MCP servers on the sidecar-local path:
+        ``[{"name", "command", "args"?, "env"?}]`` spawns one
+        ``McpStdioClient`` per entry, registers its catalog under the
+        ``mcp__<name>__<tool>`` prefix on this turn's router, and closes the
+        clients when the stream ends (completion, error, or cancel). It is
+        the sidecar-local counterpart of the ACP adapter's ``mcpServers``
+        wiring (``acp_adapter``); over ``toolsViaHost`` the host owns tool
+        execution, so MCP mounting is a desktop concern instead.
         """
+
+        # mcp: per-turn MCP servers on the sidecar-local path. Each entry
+        # spawns one McpStdioClient; its catalog is registered on this turn's
+        # router under the ``mcp__<name>__<tool>`` prefix. Clients are closed
+        # in this method's ``finally`` so a completion, error, or cancel never
+        # leaks a subprocess. Skipped under toolsViaHost (the host owns
+        # execution there) and when an embedder replaces the whole harness
+        # (the hooks factory owns the tool surface).
+        mcp_clients: list[McpStdioClient] = []
+        mcp_param = params.get("mcp")
+        if (
+            isinstance(mcp_param, list)
+            and mcp_param
+            and not params.get("toolsViaHost")
+            and self._loop_hooks_factory is None
+        ):
+            # Entries were shape-validated in _handle_chat_stream.
+            for index, server in enumerate(mcp_param):
+                name = str(server.get("name") or f"mcp{index}")
+                client = McpStdioClient(
+                    str(server["command"]),
+                    [str(a) for a in server.get("args") or []],
+                    env={
+                        str(k): str(v)
+                        for k, v in (server.get("env") or {}).items()
+                    }
+                    or None,
+                )
+                await client.start()
+                mcp_clients.append(client)
+                catalog = await client.list_tools()
+                register_mcp_catalog(
+                    self.tools,
+                    server=name,
+                    tools=catalog,
+                    invoker=mcp_invoker(client),
+                )
 
         if self._loop_hooks_factory is not None:
             # An embedder-supplied hooks factory replaces the whole default
@@ -1478,6 +1556,37 @@ class Sidecar:
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # askUser: opt-in structured user questions (W8). The host renders the
+        # question card and answers over the reverse channel
+        # (``ask_user.request``); the tool blocks until the reply. Registered
+        # on the router so dispatch works on both the host path (toolsViaHost)
+        # and the sidecar-local path — the handler is host-routed either way.
+        if params.get("askUser"):
+            from steerable_agent_runtime import make_ask_user_tool
+
+            ask_fn = make_ask_user_tool(HostAskUserHandler(self.server))
+            meta = ask_fn.__steerable_tool_meta__
+            self.tools.register(
+                ask_fn,
+                name=meta["name"],
+                mode=meta["mode"],
+                description=meta["description"],
+                schema=meta["schema"],
+                require_consent=meta["require_consent"],
+                concurrency_safe=meta["concurrency_safe"],
+                exposure=meta["exposure"],
+            )
+            tools = [
+                *(tools or []),
+                {
+                    "type": "function",
+                    "function": {
+                        "name": meta["name"],
+                        "description": meta["description"],
+                        "parameters": meta["schema"],
+                    },
+                },
+            ]
         loop = CoreLoop(
             provider,
             executor,
@@ -1557,6 +1666,10 @@ class Sidecar:
             )
         finally:
             self._coreloops.pop(stream_id, None)
+            for client in mcp_clients:
+                # Close every per-turn MCP client (completion, error, or
+                # cancel) so no server subprocess outlives its stream.
+                await client.aclose()
             if orchestration is not None:
                 # Wind down any children still running when the parent ends
                 # (completion, error, or cancel) — cooperative first.
