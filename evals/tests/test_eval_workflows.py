@@ -85,11 +85,21 @@ def test_catalog_feishu_label_names_the_agent() -> None:
 
 def test_catalog_concurrency_separates_the_agents() -> None:
     """The group holds one running plus one pending run. Sharing it across
-    agents makes a second dispatch cancel the first's pending run."""
+    agents makes a second dispatch cancel the first's pending run. The model
+    is in the group so a qwen catalog does not queue behind a GLM catalog."""
     assert (
         "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
-        "${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+        "${{ github.event.inputs.agent || 'steerable' }}-"
+        "${{ github.event.inputs.model || 'default' }}" in WEEKLY
     )
+
+
+def test_catalog_forwards_model_override() -> None:
+    """A catalog Mean without `--model` is the suite.yaml default, so a
+    qwen/glm comparison has to be an explicit dispatch input, not a silent
+    suite.yaml edit that also moves the product default."""
+    assert "EVAL_MODEL: ${{ github.event.inputs.model }}" in WEEKLY
+    assert 'extra+=(--model "$EVAL_MODEL")' in WEEKLY
 
 
 def test_weekly_uploads_the_pi_transcript() -> None:

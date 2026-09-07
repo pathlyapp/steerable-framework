@@ -22,6 +22,10 @@ on:
           - steerable
           - pi-glm
         default: steerable
+      model:
+        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
+        type: string
+        default: ""
       arm_b_env:
         description: "flaky arm B overrides, `KEY=VALUE` per line. Arm A always runs the committed defaults."
         type: string
@@ -37,7 +41,7 @@ concurrency:
   # The agent is part of the group so a pi-glm catalog and a steerable catalog
   # are separate queues: the group holds one running plus one pending run, and
   # sharing it would make a second dispatch cancel the pending one.
-  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}
+  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}-${{ github.event.inputs.model || 'default' }}
   cancel-in-progress: false
 
 jobs:
@@ -158,7 +162,7 @@ jobs:
           if-no-files-found: ignore
 
   catalog:
-    name: TB 2.1 catalog × ${{ github.event.inputs.agent }} shard ${{ matrix.shard }}/49
+    name: TB 2.1 catalog × ${{ github.event.inputs.agent }} × ${{ github.event.inputs.model || 'default' }} shard ${{ matrix.shard }}/49
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -175,6 +179,7 @@ jobs:
       - name: Harbor catalog shard
         env:
           AGENT: ${{ github.event.inputs.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           # Same gateway as the product leg, so pi differs from steerable only
@@ -184,7 +189,14 @@ jobs:
           OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
-          uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2
+          extra=()
+          if [ -n "$EVAL_MODEL" ]; then
+            extra+=(--model "$EVAL_MODEL")
+            case "$EVAL_MODEL" in
+              *qwen*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-medium}" ;;
+            esac
+          fi
+          uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2 "${extra[@]}"
           code=$?
           if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-$AGENT.txt"
@@ -376,6 +388,7 @@ jobs:
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
           ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
         run: |
           python3 - << 'PY'
@@ -386,8 +399,12 @@ jobs:
               raise SystemExit(0)
           split = os.environ.get("EVAL_SPLIT") or "cheap-12"
           if split == "catalog":
+              model = (os.environ.get("EVAL_MODEL") or "").strip()
               title = "开始 · GHA catalog 89"
               body = "产品 steerable × 全量 89 题，49 分片并行。"
+              if model:
+                  title = f"开始 · GHA catalog 89 × {model}"
+                  body = f"产品 steerable × {model} × 全量 89 题，49 分片并行。"
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"
@@ -434,12 +451,17 @@ jobs:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
         run: |
           label="GHA cheap-12"
           if [ "$EVAL_SPLIT" = "catalog" ]; then
             # Naming the agent keeps a pi-glm catalog Mean from being read as
-            # the product score.
+            # the product score. Naming the model keeps a qwen Mean from being
+            # read as the GLM product score.
             label="GHA catalog 89 × $EVAL_AGENT"
+            if [ -n "$EVAL_MODEL" ]; then
+              label="$label × $EVAL_MODEL"
+            fi
           elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
             label="GHA failed-prev"
           elif [ "$EVAL_SPLIT" = "flaky" ]; then
