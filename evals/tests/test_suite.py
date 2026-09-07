@@ -397,6 +397,19 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
         "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
         "&& secrets.STEERABLE_API_KEY || '' }}" in catalog_env
     )
+    # All 49 shards draw on one gateway balance, and `fail-fast: false` means
+    # nothing else stops them: without the cancel, the shards that outlive the
+    # balance score 0 for lack of an LLM and the catalog reports that as a Mean.
+    assert "EXIT_CREDITS" not in weekly
+    assert '[ "$code" -eq 4 ]' in catalog_job
+    assert "gh run cancel" in catalog_job
+    assert "echo credits >" in catalog_job
+    assert "GH_TOKEN: ${{ github.token }}" in catalog_env
+    # Cancelling needs a scope the read-only workflow default does not carry,
+    # and a job-level block replaces that default rather than adding to it.
+    catalog_head = weekly.split("\n  catalog:\n", 1)[1].split("\n    steps:", 1)[0]
+    assert "actions: write" in catalog_head
+    assert "contents: read" in catalog_head
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
     assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly

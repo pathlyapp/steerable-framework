@@ -54,6 +54,41 @@ def test_overall_ok_requires_a_clean_run() -> None:
     assert overall_ok([errored]) is False
 
 
+def test_credits_status_withholds_the_partial_mean(tmp_path: Path) -> None:
+    """Shards that ran before the balance emptied cover only part of the split,
+    so their Mean is not the agent's score and must not reach the title."""
+    for shard, status in (("0", "ran"), ("1", "credits")):
+        art = tmp_path / f"eval-steerable-{shard}"
+        job = art / "evals" / "jobs" / "steerable" / f"2026-09-07__08-05-0{shard}"
+        job.mkdir(parents=True)
+        (art / "eval-status-steerable.txt").write_text(f"{status}\n")
+        (job / "result.json").write_text(
+            json.dumps(
+                {
+                    "stats": {
+                        "n_completed_trials": 1,
+                        "n_errored_trials": 0,
+                        "evals": {
+                            "steerable": {
+                                "metrics": [{"mean": 1.0}],
+                                "reward_stats": {
+                                    "reward": {"1.0": [f"fix-git-{shard}__x"]}
+                                },
+                            }
+                        },
+                    }
+                }
+            )
+        )
+    rows = collect_rows(tmp_path)
+    assert [(agent, status) for agent, status, _ in rows] == [("steerable", "credits")]
+    ok, title, body = build_message(rows, label="GHA catalog 89", run_url="")
+    assert ok is False
+    assert title == "失败 · GHA catalog 89"
+    assert "1.000" not in title
+    assert "steerable: 网关余额耗尽，本次不计分（仅 2 题跑完）" in body
+
+
 def test_title_starts_with_success_or_failure() -> None:
     rows = [
         (

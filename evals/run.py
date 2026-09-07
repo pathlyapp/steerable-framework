@@ -28,6 +28,7 @@ EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_HARBOR = 2
 EXIT_SKIPPED = 3
+EXIT_CREDITS = 4
 # GHA catalog jobs are 360 min. The first Harbor wave can already use
 # ~180 min; a TLS retry that also uses multiplier 12 would be killed
 # before protein-assembly finishes. Cap the retry at 90 min (6×900s).
@@ -49,6 +50,26 @@ _ENV_START_MARKERS = (
     "net/http: tls handshake timeout",
     "remoteprotocolerror",
     "connectionterminated",
+)
+# A gateway balance hits zero mid-catalog: the remaining trials still run,
+# still get a reward of 0, and the Mean reads as an agent score. Every shard
+# shares one balance, so the run is unscoreable from the first hit and has to
+# stop rather than spend six hours producing a number nobody can compare.
+# OpenRouter answers 402 both ways; LiteLLM re-raises the body verbatim.
+_CREDIT_MARKERS = (
+    "insufficient credits",
+    "requires more credits",
+    "http 402",
+    '"code":402',
+)
+# Trial-local files a credit refusal can land in: the steerable sidecar logs
+# it as an `[error ...]` round, terminus writes the LiteLLM body into the
+# trajectory, and a refusal before the first round surfaces as an exception.
+_CREDIT_SCAN_NAMES = (
+    "exception.txt",
+    "result.json",
+    "agent/headless.log",
+    "agent/trajectory.json",
 )
 
 
@@ -138,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         completed = subprocess.run(
             argv_harbor, cwd=REPO_ROOT, env=_harbor_child_env(env)
         )
-        retry_ids = env_start_error_tasks(jobs_dir)
+        starved = credit_exhausted_tasks(jobs_dir)
+        retry_ids = () if starved else env_start_error_tasks(jobs_dir)
         if retry_ids:
             argv_retry = harbor_argv(
                 suite,
@@ -165,7 +187,11 @@ def main(argv: list[str] | None = None) -> int:
             completed = subprocess.run(
                 argv_retry, cwd=REPO_ROOT, env=_harbor_child_env(env)
             )
-        elif completed.returncode != 0 and not any_verifier_reward(jobs_dir):
+        elif (
+            not starved
+            and completed.returncode != 0
+            and not any_verifier_reward(jobs_dir)
+        ):
             # Dataset resolve can RemoteProtocolError before any trial dir exists.
             print("harbor pre-trial retry", flush=True)
             print(shlex.join(argv_harbor), flush=True)
@@ -174,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
             )
     finally:
         stop.set()
+    if starved:
+        print(
+            f"gateway credits exhausted ({len(starved)}): {', '.join(starved)}",
+            file=sys.stderr,
+        )
+        return EXIT_CREDITS
     if completed.returncode != 0:
         print(f"harbor exited {completed.returncode}", file=sys.stderr)
         return EXIT_HARBOR
@@ -322,6 +354,28 @@ def env_start_error_tasks(jobs_dir: Path) -> tuple[str, ...]:
         if _env_start_hit(text):
             add(name.rsplit("__", 1)[0])
     return tuple(found)
+
+
+def credit_exhausted_tasks(jobs_dir: Path) -> tuple[str, ...]:
+    """Catalog ids whose LLM call was refused for gateway balance."""
+    found: list[str] = []
+    if not jobs_dir.is_dir():
+        return ()
+    for trial_dir in sorted(jobs_dir.glob("*/*")):
+        if not trial_dir.is_dir() or "__" not in trial_dir.name:
+            continue
+        if not _JOB_STAMP.match(trial_dir.parent.name):
+            continue
+        for name in _CREDIT_SCAN_NAMES:
+            path = trial_dir / name
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace").lower()
+            except OSError:
+                continue
+            if any(marker in text for marker in _CREDIT_MARKERS):
+                found.append(trial_dir.name.rsplit("__", 1)[0])
+                break
+    return tuple(dict.fromkeys(found))
 
 
 def any_verifier_reward(jobs_dir: Path) -> bool:

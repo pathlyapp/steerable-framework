@@ -167,6 +167,12 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'catalog' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # `fail-fast: false` lets one unsolved task run its course, but all 49
+    # shards spend one gateway balance: a credit refusal has to cancel the
+    # siblings, so the step below needs to act on the run it belongs to.
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -193,6 +199,7 @@ jobs:
           # gateway key into Codex the way a cheap-12 OPENAI_* map would.
           OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           extra=()
@@ -213,6 +220,16 @@ jobs:
             echo ran > "eval-status-$AGENT.txt"
             echo "shard ${{ matrix.shard }}: ran" >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+          if [ "$code" -eq 4 ]; then
+            # Every sibling draws on the balance that just ran out, so their
+            # remaining trials would score 0 for lack of an LLM and the Mean
+            # would read as an agent result. Cancel instead of scoring.
+            echo credits > "eval-status-$AGENT.txt"
+            echo "shard ${{ matrix.shard }}: gateway credits exhausted; cancelling run" >> "$GITHUB_STEP_SUMMARY"
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              || echo "::warning::could not cancel run $GITHUB_RUN_ID"
+            exit "$code"
           fi
           echo failed > "eval-status-$AGENT.txt"
           echo "shard ${{ matrix.shard }}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
