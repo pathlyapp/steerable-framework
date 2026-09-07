@@ -40,7 +40,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - run: uv run python scripts/generate_py.py
+      # STEERABLE_E2E_REQUIRED=1: the real-process e2e tier (run_code, web
+      # tools, tool exposure, …) must hard-fail when its environment is broken
+      # (sidecar not importable) instead of silently skipping — a silent skip
+      # would let a sandbox/tool regression land green.
       - run: uv run pytest
+        env:
+          STEERABLE_E2E_REQUIRED: "1"
       - run: uv run python scripts/check_drift.py
       - run: uv run python scripts/check_docs_drift.py
       # D1 (codegen idempotency): same as the TS job, scoped to the Py
