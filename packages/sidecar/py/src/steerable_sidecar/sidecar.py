@@ -1467,9 +1467,16 @@ class Sidecar:
                 *orchestration_tool_descriptors(orch_config),
             ]
         if self.tools.get("run_code") is not None:
-            from .run_code import RunCodeBoundExecutor
+            from .run_code import RunCodeBoundExecutor, run_code_tool_descriptor
 
-            executor = RunCodeBoundExecutor(executor)
+            # Pass the router so run_code is answered locally — under
+            # toolsViaHost the inner executor forwards to the host, which has
+            # no run_code (it is a sidecar tool).
+            executor = RunCodeBoundExecutor(executor, router=self.tools)
+            # Advertise the tool to the model: registration on the router only
+            # enables dispatch; the descriptor must also reach the tools array
+            # (mirrors subagent/skills above) or the model never sees run_code.
+            tools = [*(tools or []), run_code_tool_descriptor()]
         loop = CoreLoop(
             provider,
             executor,

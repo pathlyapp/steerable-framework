@@ -35,13 +35,47 @@ __all__ = [
     "RunCodeBoundExecutor",
     "register_run_code",
     "run_code_enabled",
+    "run_code_tool_descriptor",
 ]
 
 _ENV = "STEERABLE_RUN_CODE"
 _TIMEOUT_ENV = "STEERABLE_RUN_CODE_TIMEOUT_MS"
+_CONFINED_ENV = "STEERABLE_SIDECAR_CONFINED"
 _MAX_CALLS = 32
 _MAX_SOURCE = 100_000
 _DEFAULT_TIMEOUT_MS = 60_000
+
+#: The child interpreter inherits only these variables from the sidecar's
+#: environment. An allowlist — not a denylist — so a credential introduced
+#: tomorrow (a new ``*_API_KEY`` / ``*_TOKEN``) is excluded by default. The
+#: sidecar itself may hold ``STEERABLE_API_KEY`` and friends; without this
+#: scrub the model-written child could read them via ``os.environ`` (the
+#: import guard blocks ``import os`` but not the ``__subclasses__`` route).
+_CHILD_ENV_ALLOWLIST = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "PYTHONPATH",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+)
+
+
+def _child_environ(environ: Mapping[str, str]) -> dict[str, str]:
+    """The scrubbed environment the ``run_code`` child runs with."""
+    child = {
+        key: value
+        for key, value in environ.items()
+        if key in _CHILD_ENV_ALLOWLIST or key.startswith("LC_")
+    }
+    # The driver resolves the relay script relative to its own file; it must
+    # not re-read the parent's bytecode cache or write one into a confined
+    # filesystem.
+    child["PYTHONDONTWRITEBYTECODE"] = "1"
+    return child
 
 _SCHEMA = {
     "type": "object",
@@ -65,6 +99,29 @@ _SCHEMA = {
     "additionalProperties": False,
 }
 
+_DESCRIPTION = (
+    "Run a short Python program that can call other tools in this "
+    "turn (tools.call / tools.<name>). Use it to chain several tool "
+    "calls without extra model rounds. Native tools remain available."
+)
+
+
+def run_code_tool_descriptor() -> dict[str, Any]:
+    """OpenAI tool schema to append to the model's tools list.
+
+    The sidecar registers ``run_code`` on its router (so the RPC fallback can
+    dispatch it) but the model only sees it when the descriptor is appended to
+    the ``tools`` array — mirroring how subagent/skills advertise themselves.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "run_code",
+            "description": _DESCRIPTION,
+            "parameters": _SCHEMA,
+        },
+    }
+
 
 class _Dispatch:
     __slots__ = ("executor", "ctx")
@@ -83,10 +140,18 @@ _router_for_rpc: ContextVar[ToolRouter | None] = ContextVar(
 
 
 class RunCodeBoundExecutor:
-    """Bind the live executor so nested ``run_code`` calls reuse it."""
+    """Bind the live executor so nested ``run_code`` calls reuse it.
 
-    def __init__(self, inner: ToolExecutor) -> None:
+    ``run_code`` itself is answered locally from the sidecar's router — under
+    ``toolsViaHost`` the inner executor forwards every call to the host, which
+    has no ``run_code`` (it is a sidecar tool), so without the interception the
+    desktop path fails with ``Unknown tool: run_code``. Nested calls inside the
+    program still go through ``self._inner`` (the host) via ``_dispatch``.
+    """
+
+    def __init__(self, inner: ToolExecutor, router: ToolRouter | None = None) -> None:
         self._inner = inner
+        self._router = router
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
@@ -95,6 +160,8 @@ class RunCodeBoundExecutor:
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         token = _dispatch.set(_Dispatch(self._inner, ctx))
         try:
+            if call.name == "run_code" and self._router is not None:
+                return await self._router.dispatch(call)
             return await self._inner.execute(call, ctx)
         finally:
             _dispatch.reset(token)
@@ -114,6 +181,19 @@ def _timeout_s(environ: Mapping[str, str]) -> float:
     except ValueError:
         return _DEFAULT_TIMEOUT_MS / 1000.0
     return max(1.0, ms / 1000.0)
+
+
+def _sidecar_confined(environ: Mapping[str, str]) -> bool:
+    """True when the sidecar itself already runs under an OS sandbox.
+
+    The desktop sets ``STEERABLE_SIDECAR_CONFINED=1`` when it wraps the
+    sidecar in layer-1 confinement (Seatbelt/bwrap/Landlock). A confined
+    sidecar cannot apply a *second* sandbox to its own child — macOS denies a
+    nested ``sandbox_apply`` once the outer profile allows outbound network —
+    so ``run_code`` lets the child inherit the layer-1 boundary instead of
+    wrapping it again.
+    """
+    return (environ.get(_CONFINED_ENV) or "").strip() in {"1", "true", "yes", "on"}
 
 
 def _result_payload(result: ToolResult) -> dict[str, Any]:
@@ -160,34 +240,50 @@ async def _drive_child(
     program_path = Path(tmpdir) / "program.py"
     try:
         program_path.write_text(source, encoding="utf-8")
-        backend = select_exec_backend(writable_roots=[tmpdir], network=False)
-        if backend is None:
-            return ToolResult(
-                success=False,
-                error="sandbox_unavailable",
-                needsFollowup=False,
-                data={
-                    "_sandbox": {"backend": "none", "enforcement": "none"},
-                    "message": (
-                        "Refused to run run_code: no OS sandbox backend to confine "
-                        "the child interpreter."
-                    ),
-                },
-            )
-        argv = backend.argv_for_exec(
-            [
-                sys.executable,
-                "-m",
-                "steerable_sidecar.run_code_driver",
-                "--program",
-                str(program_path),
-            ]
+        inherited = _sidecar_confined(environ)
+        if inherited:
+            # The sidecar is already layer-1 confined; a nested wrap would fail
+            # (macOS denies a second ``sandbox_apply`` under an outer profile
+            # that allows outbound network). The child inherits the outer
+            # boundary — a documented ``partial`` posture, not a dedicated one.
+            backend = None
+        else:
+            backend = select_exec_backend(writable_roots=[tmpdir], network=False)
+            if backend is None:
+                return ToolResult(
+                    success=False,
+                    error="sandbox_unavailable",
+                    needsFollowup=False,
+                    data={
+                        "_sandbox": {"backend": "none", "enforcement": "none"},
+                        "message": (
+                            "Refused to run run_code: no OS sandbox backend to "
+                            "confine the child interpreter."
+                        ),
+                    },
+                )
+        driver_argv = [
+            sys.executable,
+            "-m",
+            "steerable_sidecar.run_code_driver",
+            "--program",
+            str(program_path),
+        ]
+        argv = driver_argv if inherited else backend.argv_for_exec(driver_argv)
+        sandbox_marker = (
+            {"backend": "inherited", "enforcement": "partial", "via": "layer1"}
+            if inherited
+            else {
+                "backend": getattr(backend, "name", "unknown"),
+                "enforcement": getattr(backend, "enforcement", "partial"),
+            }
         )
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_child_environ(environ),
         )
         calls: list[dict[str, Any]] = []
         logs: list[str] = []
@@ -238,10 +334,7 @@ async def _drive_child(
                             "value": frame.get("value"),
                             "calls": calls,
                             "logs": logs,
-                            "_sandbox": {
-                                "backend": getattr(backend, "name", "unknown"),
-                                "enforcement": getattr(backend, "enforcement", "partial"),
-                            },
+                            "_sandbox": dict(sandbox_marker),
                         },
                     )
                 if kind != "call":
@@ -319,11 +412,7 @@ def register_run_code(
         run_code,
         name="run_code",
         mode="local",
-        description=(
-            "Run a short Python program that can call other tools in this "
-            "turn (tools.call / tools.<name>). Use it to chain several tool "
-            "calls without extra model rounds. Native tools remain available."
-        ),
+        description=_DESCRIPTION,
         schema=_SCHEMA,
         require_consent=False,
         concurrency_safe=False,

@@ -100,6 +100,22 @@ sandbox rewrite, host `tool.invoke`). Nested `run_code` is refused.
 the way `--no-web-tools` omits fetch — leave the env unset unless the trial
 wants it.
 
+**Child environment.** The child inherits only an allowlist (`PATH`, `HOME`,
+`TMPDIR`/`TEMP`/`TMP`, `LANG`, `LC_*`, `PYTHONPATH`, Windows `SYSTEMROOT`/
+`SYSTEMDRIVE`) plus `PYTHONDONTWRITEBYTECODE=1`. Everything else — including
+`STEERABLE_API_KEY` and any `*_API_KEY` / `*_TOKEN` the sidecar holds — is
+scrubbed, because the import guard blocks `import os` but not the
+`__subclasses__` route to `os.environ`.
+
+**Inheriting layer-1.** When the host already runs the sidecar under an OS
+sandbox it sets `STEERABLE_SIDECAR_CONFINED=1`; a confined sidecar cannot
+apply a *second* sandbox to its own child (macOS denies a nested
+`sandbox_apply` once the outer profile allows outbound network). In that
+posture `run_code` skips the layer-2 wrap and lets the child inherit the
+layer-1 boundary; the result's `data._sandbox` reads
+`{backend: "inherited", enforcement: "partial", via: "layer1"}` instead of
+naming a dedicated backend.
+
 The `progressive` harness strategy (`harness.py`) builds on the tiers: the
 offered list is the direct tier plus the `tool_search` descriptor. It needs
 the run's `ToolRouter` — the entrypoint calls

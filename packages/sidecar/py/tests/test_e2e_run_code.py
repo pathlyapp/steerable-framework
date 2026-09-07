@@ -186,3 +186,52 @@ async def test_import_refusal_survives_the_process_boundary(
     assert payload["success"] is False
     assert "os" in payload["error"]
     assert "not allowed" in payload["error"]
+
+
+async def test_confined_sidecar_child_inherits_layer1(
+    e2e_gate: None, mock_openai: Any, tmp_path: Path
+) -> None:
+    """The desktop path: the sidecar is layer-1 confined, so run_code must
+    not attempt a nested OS wrap (macOS denies it under an outer profile with
+    outbound network). The child runs unwrapped, inherits the outer boundary,
+    and the result is honestly marked ``backend: inherited``."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    def responder(body: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        if index == 0:
+            return sse_tool_call(
+                "run_code",
+                {
+                    "code": "tools.call('write_file', path='n.txt', content='x')\nreturn 1",
+                    "description": "inherit layer-1",
+                },
+                call_id="call_inherit",
+            )
+        return sse_text("E2E_INHERIT_OK")
+
+    mock = mock_openai(responder)
+    code, out, err = await run_headless(
+        [
+            "--cwd",
+            str(workspace),
+            "--instruction",
+            "Write n.txt.",
+            "--no-web-tools",
+        ],
+        _headless_env(
+            tmp_path,
+            mock,
+            STEERABLE_RUN_CODE="1",
+            STEERABLE_SIDECAR_CONFINED="1",
+        ),
+    )
+    assert code == 0, err[-2000:]
+    assert "E2E_INHERIT_OK" in out
+
+    tool_messages = _tool_messages(mock.requests[1])
+    payload = json.loads(tool_messages[0]["content"])
+    assert payload["success"] is True
+    sandbox = payload["data"]["_sandbox"]
+    assert sandbox["backend"] == "inherited"
+    assert sandbox["enforcement"] == "partial"
