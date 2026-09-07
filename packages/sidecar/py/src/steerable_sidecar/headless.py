@@ -515,6 +515,13 @@ async def _run(
     # the router's critical-command blocklist, and the disposable eval
     # sandbox around the whole process. Interactive transports (ACP,
     # desktop sidecar) must NOT copy this — they wire ApprovalExecutor.
+    #
+    # STEERABLE_EVAL_CONFINED=1 (CC CLAUDE_CODE_EVAL_CONFINED parity): the
+    # eval runner declares the isolated posture. Headless is confined by
+    # construction — consent_granted=True with no ApprovalExecutor, and no
+    # host approval rules (approvals.json / config.json) are read — so the
+    # flag asserts that construction and discloses it in the run summary.
+    eval_confined = _env_flag("STEERABLE_EVAL_CONFINED", default=False)
     delivery = DeliveryHooks(instruction=instruction)
     executor: Any = DeliveryGatedExecutor(
         RouterToolExecutor(tools, consent_granted=True),
@@ -715,6 +722,9 @@ async def _run(
                     "peak_context_tokens": summary_peak_context or None,
                     "tool_errors": summary_tool_errors,
                     "tool_recoveries": summary_tool_recoveries,
+                    # Absent unless the runner declared the confined posture
+                    # (same convention as cost_usd: never zero-filled).
+                    **({"eval_confined": True} if eval_confined else {}),
                 }
             )
             + "\n"

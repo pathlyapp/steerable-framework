@@ -104,6 +104,10 @@ class _Session:
     task: asyncio.Task[None] | None = None
     stop_reason: str = "end_turn"
     history: list[LLMMessage] = field(default_factory=list)
+    #: Read-before-write evidence (path → version), session-scoped: prompt()
+    # rebuilds the tool router every turn, so the state must outlive it.
+    # Hydration re-seeds it from the durable record (CC seed_read_state).
+    read_file_state: dict[str, str] = field(default_factory=dict)
     approvals: SessionApprovalCache = field(default_factory=SessionApprovalCache)
     #: MCP servers the client asked to mount (W3.4.2.1); stdio-only today.
     mcp_servers: list[Any] = field(default_factory=list)
@@ -448,6 +452,8 @@ class SteerableAcpAgent(acp.Agent):
         """
         from steerable_agent_runtime.resume import load_history_items
 
+        from .workspace_tools import read_file_state_from_messages
+
         items = await load_history_items(self._storage, session_id)
         if items is None:
             return False
@@ -456,7 +462,13 @@ class SteerableAcpAgent(acp.Agent):
             for item in items
             if item.message.role in ("user", "assistant")
         ]
-        self._sessions[session_id] = _Session(cwd=cwd, history=history)
+        self._sessions[session_id] = _Session(
+            cwd=cwd,
+            history=history,
+            read_file_state=read_file_state_from_messages(
+                item.message for item in items
+            ),
+        )
         return True
 
     async def load_session(
@@ -621,6 +633,7 @@ class SteerableAcpAgent(acp.Agent):
                 session.cwd,
                 **({"fs": fs} if fs is not None else {}),
                 **({"run_command": run_command} if run_command is not None else {}),
+                read_file_state=session.read_file_state,
             )
         mcp_clients = await self._mount_mcp(router, session)
         from .sidecar import _assemble_default_harness

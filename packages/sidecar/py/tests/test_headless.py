@@ -732,6 +732,7 @@ async def test_run_emits_run_summary_terminal_line(
     assert summary["tool_recoveries"] == 1
     assert summary["cache_tokens"] == 0
     assert "cost_usd" not in summary  # absent, never zero-filled
+    assert "eval_confined" not in summary  # same convention: absent unless declared
 
 
 def test_hard_run_timeout_defaults_under_harbor_wrap(
@@ -932,3 +933,36 @@ def test_main_rejects_invalid_mcp_json(capsys) -> None:
         main(["--instruction", "hi", "--mcp", "{not json}"])
     with pytest.raises(SystemExit):
         main(["--instruction", "hi", "--mcp", '{"name":"x"}'])
+
+
+@pytest.mark.asyncio
+async def test_run_summary_discloses_eval_confined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """STEERABLE_EVAL_CONFINED=1 (CC EVAL_CONFINED parity): the run summary
+    discloses the confined posture; without the flag the key stays absent
+    (never false-filled)."""
+    import json
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    monkeypatch.setenv("STEERABLE_EVAL_CONFINED", "1")
+    await _run("say done", cwd=str(tmp_path), max_rounds=4)
+    lines = capsys.readouterr().out.splitlines()
+    summary_lines = [ln for ln in lines if ln.startswith("STEERABLE_RUN_SUMMARY ")]
+    assert len(summary_lines) == 1
+    summary = json.loads(summary_lines[0][len("STEERABLE_RUN_SUMMARY "):])
+    assert summary["eval_confined"] is True

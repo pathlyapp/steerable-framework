@@ -128,7 +128,8 @@ async def test_config_get_merged_previews_layered_config(
     response = await _call(sidecar, "config.get", {"merged": True})
     merged = response["result"]["merged"]
     assert merged["log_level"] == {"value": "DEBUG", "source": "file"}
-    assert merged["grace_period_seconds"] == {"value": "9", "source": "env"}
+    # Schema enforcement: env strings coerce to the declared default's type.
+    assert merged["grace_period_seconds"] == {"value": 9.0, "source": "env"}
     assert merged["storage_path"]["source"] == "default"
 
 

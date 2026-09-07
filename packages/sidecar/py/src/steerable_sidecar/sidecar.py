@@ -405,6 +405,45 @@ class Sidecar:
             )
         return session.model_dump(exclude_none=True)
 
+    async def _seed_host_read_state(self, record_id: str) -> None:
+        """Push the record's read-before-write evidence to the host.
+
+        Best-effort: a failed scan or push leaves the host's readFileState
+        empty, which only means fewer automatic CAS checks (or, with the
+        hard gate armed, a required re-read) — never a wrong write.
+        """
+        from steerable_agent_runtime.history import (
+            HistoryItem,
+            HistorySeed,
+            entry_from_dict,
+        )
+
+        from .workspace_tools import read_file_state_from_messages
+
+        try:
+            raw_entries = await self.storage.list_history(record_id)
+        except Exception as exc:  # noqa: BLE001 — seeding is best-effort
+            logger.warning("read_state seed scan failed for %s: %s", record_id, exc)
+            return
+        messages: list[LLMMessage] = []
+        for raw in raw_entries:
+            try:
+                entry = entry_from_dict(raw)
+            except Exception as exc:  # noqa: BLE001 — skip entries this build cannot read
+                logger.debug("skipping unreadable history entry: %s", exc)
+                continue
+            if isinstance(entry, HistoryItem):
+                messages.append(entry.message)
+            elif isinstance(entry, HistorySeed):
+                messages.extend(entry.messages)
+        state = read_file_state_from_messages(messages)
+        if not state:
+            return
+        try:
+            await self.server.call("read_state.seed", {"state": state}, timeout=10)
+        except Exception as exc:  # noqa: BLE001 — best-effort; see docstring
+            logger.warning("read_state.seed push failed for %s: %s", record_id, exc)
+
     async def _handle_session_list(
         self, params: dict[str, Any] | None
     ) -> list[dict[str, Any]]:
@@ -749,6 +788,13 @@ class Sidecar:
             # records free of dangling tool_calls, but the record is a
             # durable artifact other writers/versions may have produced.
             messages = close_dangling_tool_calls(resumed)
+            # seed_read_state (CC parity): under toolsViaHost the desktop's
+            # file tools own the write gate, but their readFileState is
+            # process-resident and empty after an app restart. Re-seed it
+            # from the record so the resumed session keeps its
+            # read-before-write evidence.
+            if params.get("toolsViaHost"):
+                await self._seed_host_read_state(str(record_id))
             # The host re-sends its freshly assembled systemPrompt on every
             # turn; the record's leading system message (written by the
             # interrupted turn) must yield to it or the mutual-exclusion
@@ -818,7 +864,7 @@ class Sidecar:
                     )
         if use_coreloop:
             task = asyncio.create_task(
-                self._run_chat_stream_coreloop(
+                self._run_chat_stream_coreloop_guarded(
                     provider, messages, params, stream_id, transport
                 )
             )
@@ -959,7 +1005,9 @@ class Sidecar:
 
         transport = self._transport
         task = asyncio.create_task(
-            self._run_chat_stream_coreloop(provider, seed, params, stream_id, transport)
+            self._run_chat_stream_coreloop_guarded(
+                provider, seed, params, stream_id, transport
+            )
         )
         self._streams[stream_id] = task
         return {"streamId": stream_id, "seedMessages": len(seed)}
@@ -1198,6 +1246,42 @@ class Sidecar:
             )
         finally:
             self._streams.pop(stream_id, None)
+
+    async def _run_chat_stream_coreloop_guarded(
+        self,
+        provider: LLMProvider,
+        messages: list[LLMMessage],
+        params: dict[str, Any],
+        stream_id: str,
+        transport: StdioJsonRpcTransport,
+    ) -> None:
+        """Catch setup-phase failures the inner catch-all cannot reach.
+
+        ``_run_chat_stream_coreloop`` only starts converting exceptions into
+        ``stream.error`` once its ``try`` begins — a failure in the setup
+        region before it (tool registration, MCP client spawn, executor
+        wiring) would otherwise escape as an unretrieved task exception and
+        strand the host waiting for a terminal event that never comes.
+        """
+        try:
+            await self._run_chat_stream_coreloop(
+                provider, messages, params, stream_id, transport
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # last line before a stranded host
+            logger.exception("coreloop chat stream %s failed during setup", stream_id)
+            try:
+                await transport.emit_notification(
+                    "stream.error",
+                    {
+                        "streamId": stream_id,
+                        "kind": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — transport already broken
+                logger.warning("stream.error emit failed for %s", stream_id)
 
     async def _run_chat_stream_coreloop(
         self,
@@ -1545,13 +1629,16 @@ class Sidecar:
                 *(tools or []),
                 *orchestration_tool_descriptors(orch_config),
             ]
+        # Router-answered tools (run_code, ask_user): registered on the
+        # sidecar's router but unknown to the host — under toolsViaHost the
+        # inner executor forwards every call to the host, so they must be
+        # intercepted here and dispatched locally regardless of which subset
+        # is enabled.
+        local_names: list[str] = []
         if self.tools.get("run_code") is not None:
-            from .run_code import RunCodeBoundExecutor, run_code_tool_descriptor
+            from .run_code import run_code_tool_descriptor
 
-            # Pass the router so run_code is answered locally — under
-            # toolsViaHost the inner executor forwards to the host, which has
-            # no run_code (it is a sidecar tool).
-            executor = RunCodeBoundExecutor(executor, router=self.tools)
+            local_names.append("run_code")
             # Advertise the tool to the model: registration on the router only
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
@@ -1566,16 +1653,22 @@ class Sidecar:
 
             ask_fn = make_ask_user_tool(HostAskUserHandler(self.server))
             meta = ask_fn.__steerable_tool_meta__
-            self.tools.register(
-                ask_fn,
-                name=meta["name"],
-                mode=meta["mode"],
-                description=meta["description"],
-                schema=meta["schema"],
-                require_consent=meta["require_consent"],
-                concurrency_safe=meta["concurrency_safe"],
-                exposure=meta["exposure"],
-            )
+            # Registration is process-global while this block runs per
+            # request: the router rejects duplicates, so only the first
+            # askUser turn registers (the handler binds self.server, which
+            # is request-independent — re-registering would be identical).
+            if self.tools.get(meta["name"]) is None:
+                self.tools.register(
+                    ask_fn,
+                    name=meta["name"],
+                    mode=meta["mode"],
+                    description=meta["description"],
+                    schema=meta["schema"],
+                    require_consent=meta["require_consent"],
+                    concurrency_safe=meta["concurrency_safe"],
+                    exposure=meta["exposure"],
+                )
+            local_names.append(meta["name"])
             tools = [
                 *(tools or []),
                 {
@@ -1587,6 +1680,12 @@ class Sidecar:
                     },
                 },
             ]
+        if local_names:
+            from .run_code import RunCodeBoundExecutor
+
+            executor = RunCodeBoundExecutor(
+                executor, router=self.tools, local_names=local_names
+            )
         loop = CoreLoop(
             provider,
             executor,
@@ -2510,6 +2609,9 @@ def _wrap_with_cache_control(provider: LLMProvider) -> LLMProvider:
     implicit prefix caches (OpenAI-compatible, Ollama) the wrapper is a
     pass-through. ``STEERABLE_CACHE_CONTROL=0`` disables it (a debugging
     escape hatch, e.g. diffing wire bytes against a recorded fixture).
+    ``STEERABLE_PROMPT_CACHE_TTL=1h`` opts the breakpoints into Anthropic's
+    1-hour TTL (CC ``CLAUDE_CODE_PROMPT_CACHE_TTL`` parity); anything else
+    keeps the 5-minute default.
     """
 
     flag = os.environ.get("STEERABLE_CACHE_CONTROL", "1").strip().lower()
@@ -2517,4 +2619,6 @@ def _wrap_with_cache_control(provider: LLMProvider) -> LLMProvider:
         return provider
     from steerable_agent_runtime import CacheControlProvider
 
-    return CacheControlProvider(provider)
+    ttl = os.environ.get("STEERABLE_PROMPT_CACHE_TTL", "").strip().lower()
+    retention = "long" if ttl in {"1h", "3600", "3600s", "long"} else "short"
+    return CacheControlProvider(provider, retention=retention)
