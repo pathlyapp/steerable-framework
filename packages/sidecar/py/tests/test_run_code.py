@@ -171,3 +171,80 @@ async def test_two_stub_tools_one_coreloop_round(
     assert len(tool_msgs) == 1
     body = tool_msgs[0].content_text
     assert "stub_a" in body and "stub_b" in body
+
+
+def test_child_environ_is_an_allowlist() -> None:
+    from steerable_sidecar.run_code import _child_environ
+
+    parent = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/u",
+        "TMPDIR": "/tmp",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "PYTHONPATH": "/x",
+        "STEERABLE_API_KEY": "sk-secret",
+        "STEERABLE_RUN_CODE": "1",
+        "TAVILY_API_KEY": "tv-secret",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret",
+        "OPENAI_API_KEY": "oa-secret",
+    }
+    child = _child_environ(parent)
+    assert child["PATH"] == "/usr/bin"
+    assert child["HOME"] == "/home/u"
+    assert child["LC_ALL"] == "en_US.UTF-8"
+    assert child["PYTHONDONTWRITEBYTECODE"] == "1"
+    for leaked in (
+        "STEERABLE_API_KEY",
+        "STEERABLE_RUN_CODE",
+        "TAVILY_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "OPENAI_API_KEY",
+    ):
+        assert leaked not in child
+
+
+def test_run_code_tool_descriptor_shape() -> None:
+    from steerable_sidecar.run_code import run_code_tool_descriptor
+
+    d = run_code_tool_descriptor()
+    assert d["type"] == "function"
+    assert d["function"]["name"] == "run_code"
+    assert d["function"]["parameters"]["required"] == ["code", "description"]
+
+
+@pytest.mark.asyncio
+async def test_confined_sidecar_inherits_layer1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A layer-1-confined sidecar must not attempt a nested wrap.
+
+    macOS denies a second ``sandbox_apply`` under an outer profile that allows
+    outbound network, so the child runs unwrapped and the result is marked
+    ``backend: inherited`` / ``enforcement: partial``.
+    """
+    def _boom(**kw: Any) -> Any:
+        raise AssertionError("select_exec_backend must not run when confined")
+
+    monkeypatch.setattr("steerable_sidecar.run_code.select_exec_backend", _boom)
+    router = ToolRouter()
+
+    async def stub() -> ToolResult:
+        return ToolResult(success=True, data={"who": "stub"})
+
+    router.register(stub, name="stub", mode="read", description="s")
+    register_run_code(router, environ={"STEERABLE_SIDECAR_CONFINED": "1"})
+    result = await router.dispatch(
+        ToolCall(
+            id="c1",
+            name="run_code",
+            arguments={
+                "code": "return tools.call('stub')",
+                "description": "inherit layer-1",
+            },
+        )
+    )
+    assert result.success is True, result.error
+    sandbox = (result.data or {})["_sandbox"]
+    assert sandbox["backend"] == "inherited"
+    assert sandbox["enforcement"] == "partial"
