@@ -16,11 +16,12 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness, which bounds how much of the product score is the model's ceiling."
+        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness. `terminus-2` is Harbor's published TB harness (Qwen's 73.0% row)."
         type: choice
         options:
           - steerable
           - pi-glm
+          - terminus-2
         default: steerable
       model:
         description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
@@ -187,6 +188,11 @@ jobs:
           # cheap-12 job withholds it: only the leg that needs it gets it.
           OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
           OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          # Terminus-2 is host-side LiteLLM. It reads OPENAI_* and ignores
+          # STEERABLE_*. Catalog is one agent, so this does not leak the
+          # gateway key into Codex the way a cheap-12 OPENAI_* map would.
+          OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
         run: |
           set +e
           extra=()
@@ -221,6 +227,8 @@ jobs:
             evals/jobs/${{ github.event.inputs.agent }}/*/*/result.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/headless.log
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/pi.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.json
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.cont-*.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/verifier/test-stdout.txt
             evals/jobs/${{ github.event.inputs.agent }}/*/*/exception.txt
           if-no-files-found: ignore
@@ -388,6 +396,7 @@ jobs:
         env:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
+          EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
         run: |
@@ -399,12 +408,13 @@ jobs:
               raise SystemExit(0)
           split = os.environ.get("EVAL_SPLIT") or "cheap-12"
           if split == "catalog":
+              agent = (os.environ.get("EVAL_AGENT") or "steerable").strip()
               model = (os.environ.get("EVAL_MODEL") or "").strip()
-              title = "开始 · GHA catalog 89"
-              body = "产品 steerable × 全量 89 题，49 分片并行。"
+              title = f"开始 · GHA catalog 89 × {agent}"
+              body = f"{agent} × 全量 89 题，49 分片并行。"
               if model:
-                  title = f"开始 · GHA catalog 89 × {model}"
-                  body = f"产品 steerable × {model} × 全量 89 题，49 分片并行。"
+                  title = f"开始 · GHA catalog 89 × {agent} × {model}"
+                  body = f"{agent} × {model} × 全量 89 题，49 分片并行。"
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"

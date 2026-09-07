@@ -431,6 +431,19 @@ agents:
     reason: >-
       DeepSeek Harness has no Harbor BaseInstalledAgent. Headless
       `pnpm dsh --profile headless` is not the L2 capability gate.
+  # Harbor's first-party Terminus-2. Qwen's published TB 2.1 73.0% is this
+  # harness, not steerable. Catalog-only: not in LIVE_AGENTS / cheap-12, so
+  # the weekly matrix does not grow a sixth runner that needs OPENAI_*.
+  # LiteLLM reads OPENAI_API_KEY + OPENAI_BASE_URL; GHA catalog maps those
+  # from STEERABLE_* only when this agent is dispatched. Do not put the
+  # gateway key in OPENAI_API_KEY on cheap-12 — Codex would send it to
+  # api.openai.com.
+  terminus-2:
+    harbor: terminus-2
+    model: openai/z-ai/glm-5.3-flash
+    env_any:
+      - OPENAI_API_KEY
+    skipped: false
   steerable:
     harbor: evals.harbor_steerable:SteerableHarborAgent
     # Local / GHA product loop: OpenRouter `z-ai/glm-5.3-flash` (cheap).

@@ -88,7 +88,15 @@ def test_steerable_is_the_harness_aware_agent() -> None:
     suite = load_suite()
     assert suite.agents["steerable"].accepts_harness is True
     # Baselines run as shipped: varying their harness is not our variable.
-    for name in ("oracle", "claude-code", "codex", "pi", "pi-glm", "claude-code-glm"):
+    for name in (
+        "oracle",
+        "claude-code",
+        "codex",
+        "pi",
+        "pi-glm",
+        "claude-code-glm",
+        "terminus-2",
+    ):
         assert suite.agents[name].accepts_harness is False
 
 
@@ -215,6 +223,26 @@ def test_pi_glm_declares_the_wire_protocol_of_the_gateway() -> None:
     OPENROUTER_BASE_URL, so a missing kwarg fails every trial at setup."""
     suite = load_suite()
     assert dict(suite.agents["pi-glm"].kwargs)["model_api"] == "openai-completions"
+
+
+def test_terminus_2_is_stock_harbor_agent() -> None:
+    """Qwen's published 73.0% is vendor Terminus. Stock Harbor `terminus-2`
+    is that harness; a wrapper would make the Mean uncomparable."""
+    suite = load_suite()
+    spec = suite.agents["terminus-2"]
+    assert spec.skipped is False
+    assert spec.harbor == "terminus-2"
+    assert spec.model == "openai/z-ai/glm-5.3-flash"
+    assert spec.env_any == ("OPENAI_API_KEY",)
+    assert spec.kwargs == ()
+    argv = harbor_argv(
+        suite,
+        agent="terminus-2",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    assert argv[argv.index("--agent") + 1] == "terminus-2"
+    assert "--agent-kwarg" not in argv
 
 
 def test_pi_baseline_carries_no_gateway_kwargs() -> None:
@@ -360,7 +388,15 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "github.event.inputs.split == 'cheap-12'" in weekly
     assert "github.event.inputs.split != 'catalog'" not in weekly
     catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
-    assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
+    catalog_env = catalog_job.split("upload-artifact", 1)[0]
+    # Vendor OPENAI_API_KEY would send Codex (if it ever shared this job) to
+    # api.openai.com with the gateway key. Terminus-2 is host LiteLLM and
+    # needs OPENAI_* mapped from STEERABLE_*, gated on this agent.
+    assert "secrets.OPENAI_API_KEY" not in catalog_env
+    assert (
+        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in catalog_env
+    )
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
     assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly

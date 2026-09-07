@@ -15,6 +15,7 @@ Docs: [docs/evals.md](../docs/evals.md). Work order (TB then SWE-bench Verified)
 | `codex` | `codex` | `openai/gpt-5.5` | `OPENAI_API_KEY` or `CODEX_API_KEY` |
 | `pi` | `pi` | `anthropic/claude-sonnet-4-5` | `ANTHROPIC_API_KEY` |
 | `pi-glm` | `evals.harbor_pi_glm:PiGlmHarborAgent` | `openrouter/z-ai/glm-5.3-flash` | `OPENROUTER_API_KEY` (+ `OPENROUTER_BASE_URL` for a non-OpenRouter gateway) |
+| `terminus-2` | `terminus-2` | `openai/z-ai/glm-5.3-flash` | GHA catalog maps `STEERABLE_*` → `OPENAI_API_KEY` + `OPENAI_BASE_URL`. Local: those two. Not on cheap-12. |
 | `dsh` | — | — | skipped (no Harbor adapter) |
 
 `steerable` is the product agent: headless CoreLoop with in-process `bash` / `read_file` / `write_file` jailed to the trial cwd. It is not Electron and not Harbor's first-party CLI agents.
