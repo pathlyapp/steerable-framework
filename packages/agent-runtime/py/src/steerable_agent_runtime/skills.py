@@ -397,9 +397,12 @@ def _parse_skill_dir(skill_dir: Path) -> SkillDefinition | None:
     model_invocable = fm.get("disable-model-invocation") is not True
 
     # Same `{scripts}` resolution as the TS prompt assembly: point at the
-    # skill's own scripts/ directory with uniform separators.
+    # skill's own scripts/ directory with uniform separators. The re.sub
+    # replacement MUST be a lambda: on Windows scripts_path carries
+    # backslashes, and a plain-string replacement would have its `\U`, `\n`
+    # etc. interpreted as regex escapes (re.error: bad escape \U).
     scripts_path = str(skill_dir / "scripts")
-    content = re.sub(r"\{scripts\}[/\\]", scripts_path + "/", content)
+    content = re.sub(r"\{scripts\}[/\\]", lambda _m: scripts_path + "/", content)
     content = content.replace("{scripts}", scripts_path)
 
     return SkillDefinition(
