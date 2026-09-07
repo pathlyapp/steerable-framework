@@ -35,6 +35,7 @@ import logging
 import os
 import platform
 import sys
+import threading
 import time
 import uuid
 from collections import OrderedDict
@@ -1721,7 +1722,14 @@ class Sidecar:
             pass
 
     @staticmethod
-    async def _connect_stdio() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+    async def _connect_stdio() -> tuple[asyncio.StreamReader, Any]:
+        if sys.platform == "win32":
+            # ProactorEventLoop 的 connect_read/write_pipe 要求 IOCP 可关联
+            # 句柄；被 Node/Electron spawn 的子进程继承的是普通匿名管道句柄
+            # （控制台句柄亦然），注册即 OSError [WinError 6]，且读侧可能在
+            # connect 成功后才在回调里异步崩。SelectorEventLoop 在 Windows 上
+            # 根本不支持管道，因此走线程泵兜底（见 _connect_stdio_threaded）。
+            return _connect_stdio_threaded()
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader(limit=STDIO_STREAM_LIMIT)
         protocol = asyncio.StreamReaderProtocol(reader)
@@ -1745,6 +1753,82 @@ class Sidecar:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+class _ThreadedStdoutWriter:
+    """Duck-typed stdout writer for the Windows stdio fallback.
+
+    Matches the surface the JSON-RPC server/transport actually use:
+    synchronous ``write(bytes)`` plus optional ``drain()`` / ``close()`` /
+    ``is_closing()``. A lock keeps frames ordered when the event loop and a
+    reverse-call path write concurrently; every frame is flushed immediately
+    (line-delimited JSON-RPC). A blocking write backpressures the event loop
+    directly — acceptable here because the host always drains stdout.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._closing = False
+
+    def write(self, data: bytes) -> int:
+        with self._lock:
+            if self._closing:
+                raise RuntimeError("stdio writer is closed")
+            out = sys.stdout.buffer
+            written = out.write(data)
+            out.flush()
+            return written if written is not None else len(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        with self._lock:
+            self._closing = True
+            try:
+                sys.stdout.buffer.flush()
+            except Exception:
+                pass
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+
+def _connect_stdio_threaded() -> tuple[asyncio.StreamReader, Any]:
+    """Windows stdio transport: blocking stdin reader thread + sync writer.
+
+    A daemon thread runs blocking ``readline()`` on stdin and feeds a
+    ``StreamReader`` via ``call_soon_threadsafe``; EOF (parent closed the
+    pipe) surfaces as ``feed_eof`` so the serve loop shuts down normally.
+    No flow control on the read side — the host sends one request frame at a
+    time, so the buffer cannot grow unboundedly in practice.
+    """
+    loop = asyncio.get_running_loop()
+    reader: asyncio.StreamReader = asyncio.StreamReader(limit=STDIO_STREAM_LIMIT)
+
+    def _pump_stdin() -> None:
+        # 用裸 fd 读而非 sys.stdin.buffer：解释器退出时会关闭带锁的
+        # BufferedReader，守护线程若正阻塞在它的锁上，finalization 会抛
+        # "_enter_buffered_busy" fatal error。os.read 不持有该锁；fd 被
+        # 关闭后 read 返回错误，按 EOF 处理即可。StreamReader 自行重组行。
+        try:
+            while True:
+                chunk = os.read(0, 65536)
+                if not chunk:
+                    loop.call_soon_threadsafe(reader.feed_eof)
+                    return
+                loop.call_soon_threadsafe(reader.feed_data, chunk)
+        except Exception:
+            # stdin broken/closed: surface as EOF so the serve loop exits.
+            try:
+                loop.call_soon_threadsafe(reader.feed_eof)
+            except RuntimeError:
+                pass  # event loop already closed
+
+    threading.Thread(
+        target=_pump_stdin, name="sidecar-stdin-pump", daemon=True
+    ).start()
+    return reader, _ThreadedStdoutWriter()
 
 
 def _require_params(params: Any) -> dict[str, Any]:
@@ -2034,9 +2118,17 @@ def _spill_directory() -> str:
     with STEERABLE_SPILL_DIR."""
     import tempfile
 
-    return os.environ.get("STEERABLE_SPILL_DIR") or os.path.join(
-        tempfile.gettempdir(), "steerable-spill"
-    )
+    override = os.environ.get("STEERABLE_SPILL_DIR")
+    if override:
+        return override
+    try:
+        base = tempfile.gettempdir()
+    except FileNotFoundError:
+        # 受限沙箱（如 Windows restricted-token 只放行声明过的 writable
+        # root）下系统临时目录不可写，gettempdir() 探测失败。回落到
+        # ~/.steerable——宿主沙箱策略始终放行的根。
+        base = os.path.join(Path.home(), ".steerable")
+    return os.path.join(base, "steerable-spill")
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
