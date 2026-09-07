@@ -11,6 +11,7 @@ from steerable_agent_runtime.llm import LLMMessage
 
 from steerable_sidecar.run_code import (
     RunCodeBoundExecutor,
+    _mkdtemp_inheritable,
     register_run_code,
     run_code_enabled,
 )
@@ -74,6 +75,58 @@ def test_run_code_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert run_code_enabled() is False
     router = ToolRouter()
     assert router.get("run_code") is None
+
+
+def test_mkdtemp_inheritable_win32_avoids_0700(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """win32: the run_code tmpdir must inherit the writable-root ACEs.
+
+    tempfile.mkdtemp hardcodes os.mkdir(dir, 0o700); CPython 3.12+ on Windows
+    turns 0o700 into an owner-only DACL that drops inherited ACEs, so a
+    confined sidecar (capability SID, not the owner) can no longer write
+    program.py inside its own fresh dir. The helper must mkdir with the
+    default mode so the parent's grants flow down.
+    """
+    import os
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    seen_modes: list[int] = []
+    real_mkdir = os.mkdir
+
+    def spy_mkdir(path: Any, mode: int = 0o777, *args: Any, **kwargs: Any) -> None:
+        seen_modes.append(mode)
+        real_mkdir(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, "mkdir", spy_mkdir)
+
+    created = _mkdtemp_inheritable(prefix="steerable-run-code-")
+    assert created.startswith(str(tmp_path))
+    assert seen_modes and all(mode == 0o777 for mode in seen_modes)
+    (Path(created) / "program.py").write_text("x", encoding="utf-8")
+
+
+def test_mkdtemp_inheritable_posix_delegates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """POSIX keeps stock mkdtemp (0o700 semantics intact)."""
+    import sys
+    import tempfile
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    seen_prefixes: list[str | None] = []
+
+    def fake_mkdtemp(prefix: str | None = None, **kwargs: Any) -> str:
+        seen_prefixes.append(prefix)
+        return str(tmp_path / "posix-tmp")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
+    assert _mkdtemp_inheritable(prefix="p-") == str(tmp_path / "posix-tmp")
+    assert seen_prefixes == ["p-"]
 
 
 def test_driver_refuses_import_os() -> None:
@@ -204,6 +257,35 @@ def test_child_environ_is_an_allowlist() -> None:
         assert leaked not in child
 
 
+def test_child_environ_win32_matches_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows stores env names in original case (``SystemRoot``, ``Path``).
+
+    An exact-match allowlist drops them; the child then dies at Winsock init
+    (WinError 10106) or DLL resolution. The scrub must match
+    case-insensitively while still excluding credentials.
+    """
+    import sys
+
+    from steerable_sidecar.run_code import _child_environ
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    parent = {
+        "Path": "C:\\Windows\\System32",
+        "SystemRoot": "C:\\Windows",
+        "TEMP": "C:\\Users\\u\\AppData\\Local\\Temp",
+        "STEERABLE_API_KEY": "sk-secret",
+        "OPENAI_API_KEY": "oa-secret",
+    }
+    child = _child_environ(parent)
+    assert child["Path"] == "C:\\Windows\\System32"
+    assert child["SystemRoot"] == "C:\\Windows"
+    assert child["TEMP"] == "C:\\Users\\u\\AppData\\Local\\Temp"
+    assert "STEERABLE_API_KEY" not in child
+    assert "OPENAI_API_KEY" not in child
+
+
 def test_run_code_tool_descriptor_shape() -> None:
     from steerable_sidecar.run_code import run_code_tool_descriptor
 
@@ -233,7 +315,14 @@ async def test_confined_sidecar_inherits_layer1(
         return ToolResult(success=True, data={"who": "stub"})
 
     router.register(stub, name="stub", mode="read", description="s")
-    register_run_code(router, environ={"STEERABLE_SIDECAR_CONFINED": "1"})
+    # The stub environ must overlay the real one: a bare-dict environ strips
+    # SystemRoot/Path on Windows, and the child interpreter then dies at
+    # Winsock init (WinError 10106) before the program even runs.
+    import os
+
+    register_run_code(
+        router, environ={**os.environ, "STEERABLE_SIDECAR_CONFINED": "1"}
+    )
     result = await router.dispatch(
         ToolCall(
             id="c1",
