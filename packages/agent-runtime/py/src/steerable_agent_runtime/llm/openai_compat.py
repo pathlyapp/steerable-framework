@@ -65,6 +65,69 @@ def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
     return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
 
 
+def _model_leaf(model: str | None) -> str:
+    """Last path segment of a gateway-prefixed model id, lowercased."""
+    name = (model or "").strip().lower()
+    slash = name.rfind("/")
+    return name[slash + 1 :] if slash >= 0 else name
+
+
+def _deepseek_thinking_auto_only(model: str, base_url: str | None) -> bool:
+    """DeepSeek's thinking models reject ``tool_choice=required``.
+
+    ``deepseek-v4-flash`` does not carry a ``reasoner``/``thinking`` marker
+    in its id, so the host check is what pins it: official DeepSeek endpoint
+    plus a V4/reasoner model id.
+    """
+    if "api.deepseek.com" not in (base_url or "").lower():
+        return False
+    leaf = _model_leaf(model)
+    return leaf.startswith("deepseek-reasoner") or leaf.startswith("deepseek-v4")
+
+
+#: Models that already answered an HTTP 400 with "thinking mode does not
+#: support this tool_choice". Remembered per process so later rounds stop
+#: sending ``required`` before the provider rejects it again.
+_models_rejecting_forced_tool_choice: set[str] = set()
+
+
+def _remember_forced_tool_choice_rejected(model: str | None) -> None:
+    leaf = _model_leaf(model)
+    if leaf:
+        _models_rejecting_forced_tool_choice.add(leaf)
+
+
+def _rejects_required_tool_choice(model: str, base_url: str | None) -> bool:
+    """Whether this model/base-URL pair is known to reject ``tool_choice=required``."""
+    return (
+        _z_ai_tool_choice_auto_only(model, base_url)
+        or _deepseek_thinking_auto_only(model, base_url)
+        or _model_leaf(model) in _models_rejecting_forced_tool_choice
+    )
+
+
+def _is_forced_tool_choice_rejected(status: int, body: str) -> bool:
+    """True when a 400 is specifically the "thinking mode rejects this tool_choice" error."""
+    if status != 400:
+        return False
+    text = (body or "").lower()
+    if "tool_choice" not in text and "tool choice" not in text:
+        return False
+    return any(
+        phrase in text
+        for phrase in (
+            "thinking",
+            "reason",
+            "does not support",
+            "not support",
+            "not supported",
+            "unsupported",
+            "cannot be used",
+            "incompatible",
+        )
+    )
+
+
 def _env_flag(name: str) -> bool | None:
     raw = os.environ.get(name, "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
@@ -150,28 +213,42 @@ class OpenAICompatProvider:
             stream=False,
             extra=kwargs,
         )
-        try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(60.0),
-                **client_env_kwargs(self.base_url),
-            ) as client:
-                response = await client.post(
-                    f"{self.base_url.rstrip('/')}/chat/completions",
-                    headers=self._headers(),
-                    json=body,
-                )
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    raise self._http_error(exc, body_text=response.text) from exc
-                payload = response.json()
-        except httpx.TransportError as exc:
-            raise LLMError(
-                f"{self.name}: transport error: {exc}",
-                kind="transport",
-                provider=self.name,
-            ) from exc
+        max_attempts = 2 if body.get("tool_choice") == "required" else 1
+        payload: dict[str, Any] | None = None
+        for attempt in range(max_attempts):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(60.0),
+                    **client_env_kwargs(self.base_url),
+                ) as client:
+                    response = await client.post(
+                        f"{self.base_url.rstrip('/')}/chat/completions",
+                        headers=self._headers(),
+                        json=body,
+                    )
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        if attempt == 0 and self._tool_choice_400_should_retry(
+                            response, body
+                        ):
+                            continue
+                        raise self._http_error(exc, body_text=response.text) from exc
+                    payload = response.json()
+                    break
+            except httpx.TransportError as exc:
+                raise LLMError(
+                    f"{self.name}: transport error: {exc}",
+                    kind="transport",
+                    provider=self.name,
+                ) from exc
 
+        if payload is None:  # pragma: no cover - the loop raises on the last attempt
+            raise LLMError(
+                f"{self.name}: request failed",
+                kind="unknown",
+                provider=self.name,
+            )
         choice = payload["choices"][0]
         message = choice["message"]
         out = LLMMessage.text_of(
@@ -202,74 +279,106 @@ class OpenAICompatProvider:
             stream=True,
             extra=kwargs,
         )
-        try:
-            async with (
-                httpx.AsyncClient(
-                    timeout=_stream_timeout(),
-                    **client_env_kwargs(self.base_url),
-                ) as client,
-                client.stream(
-                    "POST",
-                    f"{self.base_url.rstrip('/')}/chat/completions",
-                    headers=self._headers(),
-                    json=body,
-                ) as response,
-            ):
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    await response.aread()
-                    raise self._http_error(exc, body_text=response.text) from exc
-                assembler = _OpenAIToolCallAssembler()
-                async for line in response.aiter_lines():
-                    if not line:
-                        continue
-                    if line.startswith(":"):  # comment/keepalive
-                        continue
-                    if line.startswith("data:"):
-                        line = line[5:].strip()
-                    if line == "[DONE]":
-                        for call in assembler.flush():
-                            yield LLMStreamChunk(tool_call_delta=call)
-                        return
+        max_attempts = 2 if body.get("tool_choice") == "required" else 1
+        for attempt in range(max_attempts):
+            try:
+                async with (
+                    httpx.AsyncClient(
+                        timeout=_stream_timeout(),
+                        **client_env_kwargs(self.base_url),
+                    ) as client,
+                    client.stream(
+                        "POST",
+                        f"{self.base_url.rstrip('/')}/chat/completions",
+                        headers=self._headers(),
+                        json=body,
+                    ) as response,
+                ):
                     try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    assembler.observe(chunk)
-                    parsed = _parse_stream_chunk(chunk, compat=self.compat)
-                    if parsed is None:
-                        continue
-                    # Fragments are assembled below; do not dispatch per chunk.
-                    if parsed.tool_call_delta is not None:
-                        parsed = LLMStreamChunk(
-                            content_delta=parsed.content_delta,
-                            reasoning_delta=parsed.reasoning_delta,
-                            reasoning_details=parsed.reasoning_details,
-                            finish_reason=parsed.finish_reason,
-                            usage=parsed.usage,
-                            raw=parsed.raw,
-                        )
-                    if (
-                        parsed.content_delta
-                        or parsed.reasoning_delta
-                        or parsed.reasoning_details
-                        or parsed.finish_reason
-                        or parsed.usage is not None
-                    ):
-                        yield parsed
-                for call in assembler.flush():
-                    yield LLMStreamChunk(tool_call_delta=call)
-        except httpx.TransportError as exc:
-            raise LLMError(
-                f"{self.name}: transport error: {exc}",
-                kind="transport",
-                provider=self.name,
-            ) from exc
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        await response.aread()
+                        if attempt == 0 and self._tool_choice_400_should_retry(
+                            response, body
+                        ):
+                            continue
+                        raise self._http_error(exc, body_text=response.text) from exc
+                    assembler = _OpenAIToolCallAssembler()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        if line.startswith(":"):  # comment/keepalive
+                            continue
+                        if line.startswith("data:"):
+                            line = line[5:].strip()
+                        if line == "[DONE]":
+                            for call in assembler.flush():
+                                yield LLMStreamChunk(tool_call_delta=call)
+                            return
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        assembler.observe(chunk)
+                        parsed = _parse_stream_chunk(chunk, compat=self.compat)
+                        if parsed is None:
+                            continue
+                        # Fragments are assembled below; do not dispatch per chunk.
+                        if parsed.tool_call_delta is not None:
+                            parsed = LLMStreamChunk(
+                                content_delta=parsed.content_delta,
+                                reasoning_delta=parsed.reasoning_delta,
+                                reasoning_details=parsed.reasoning_details,
+                                finish_reason=parsed.finish_reason,
+                                usage=parsed.usage,
+                                raw=parsed.raw,
+                            )
+                        if (
+                            parsed.content_delta
+                            or parsed.reasoning_delta
+                            or parsed.reasoning_details
+                            or parsed.finish_reason
+                            or parsed.usage is not None
+                        ):
+                            yield parsed
+                    for call in assembler.flush():
+                        yield LLMStreamChunk(tool_call_delta=call)
+                    return
+            except httpx.TransportError as exc:
+                raise LLMError(
+                    f"{self.name}: transport error: {exc}",
+                    kind="transport",
+                    provider=self.name,
+                ) from exc
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _tool_choice_400_should_retry(
+        self, response: Any, body: dict[str, Any]
+    ) -> bool:
+        """Handle a 400 that means "this thinking model rejects tool_choice=required".
+
+        Downgrades the wire body to ``auto`` and remembers the model so the
+        next round stops sending ``required`` pre-flight.
+        """
+        if body.get("tool_choice") != "required":
+            return False
+        try:
+            text = response.text or ""
+        except Exception:  # noqa: BLE001 - unreadable response body
+            text = ""
+        if not _is_forced_tool_choice_rejected(response.status_code, text):
+            return False
+        body["tool_choice"] = "auto"
+        _remember_forced_tool_choice_rejected(self.model)
+        logger.warning(
+            "tool_choice=required rejected by %s model=%s; retrying with auto",
+            self.name,
+            self.model,
+        )
+        return True
 
     def _http_error(self, exc: Any, *, body_text: str) -> LLMError:
         """Classify an httpx status failure into the error taxonomy."""
@@ -331,10 +440,12 @@ class OpenAICompatProvider:
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
-        # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
+        # Z.AI / GLM and DeepSeek thinking models 400 ``tool_choice=required``.
         # Harbor still logs the hook; the wire must send auto or the trial
-        # dies on round 0 (failed-prev 33335200327).
-        if body.get("tool_choice") == "required" and _z_ai_tool_choice_auto_only(
+        # dies on round 0 (failed-prev 33335200327). Models that already
+        # rejected ``required`` once are remembered per process and downgraded
+        # before the next attempt.
+        if body.get("tool_choice") == "required" and _rejects_required_tool_choice(
             self.model, self.base_url
         ):
             body["tool_choice"] = "auto"

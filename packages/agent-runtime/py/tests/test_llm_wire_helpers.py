@@ -15,6 +15,8 @@ from steerable_agent_runtime.llm.openai_compat import (
     _OpenAIToolCallAssembler,
     _decode_tool_calls,
     _encode_message,
+    _is_forced_tool_choice_rejected,
+    _models_rejecting_forced_tool_choice,
     _parse_stream_chunk,
     _sanitize_tool_name,
     _stream_timeout,
@@ -349,6 +351,118 @@ def test_openai_build_body_z_ai_coerces_required_tool_choice_to_auto() -> None:
         extra={"tool_choice": "required"},
     )
     assert kept["tool_choice"] == "required"
+
+
+def test_openai_build_body_deepseek_thinking_coerces_required_tool_choice_to_auto() -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    deepseek = OpenAICompatProvider(
+        name="t",
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com/v1",
+        api_key="k",
+    )
+    body = deepseek._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+
+    chat = OpenAICompatProvider(
+        name="t",
+        model="deepseek-chat",
+        base_url="https://api.deepseek.com/v1",
+        api_key="k",
+    )
+    kept = chat._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert kept["tool_choice"] == "required"
+
+
+def test_openai_build_body_remembers_models_that_rejected_required() -> None:
+    from steerable_agent_runtime.llm.openai_compat import (
+        OpenAICompatProvider,
+        _remember_forced_tool_choice_rejected,
+    )
+
+    _models_rejecting_forced_tool_choice.clear()
+    try:
+        provider = OpenAICompatProvider(
+            name="t",
+            model="acme-thinking-unknown",
+            base_url="https://example.com/v1",
+            api_key="k",
+        )
+        body = provider._build_body(
+            messages=[LLMMessage.text_of("user", "hi")],
+            tools=[{"type": "function", "function": {"name": "bash"}}],
+            temperature=None,
+            max_tokens=None,
+            stream=True,
+            extra={"tool_choice": "required"},
+        )
+        assert body["tool_choice"] == "required"
+
+        _remember_forced_tool_choice_rejected("acme-thinking-unknown")
+        body = provider._build_body(
+            messages=[LLMMessage.text_of("user", "hi")],
+            tools=[{"type": "function", "function": {"name": "bash"}}],
+            temperature=None,
+            max_tokens=None,
+            stream=True,
+            extra={"tool_choice": "required"},
+        )
+        assert body["tool_choice"] == "auto"
+    finally:
+        _models_rejecting_forced_tool_choice.clear()
+
+
+def test_is_forced_tool_choice_rejected_matches_thinking_400() -> None:
+    body = (
+        '{"error":{"message":"Thinking mode does not support this tool_choice",'
+        '"type":"invalid_request_error"}}'
+    )
+    assert _is_forced_tool_choice_rejected(400, body) is True
+    assert _is_forced_tool_choice_rejected(401, body) is False
+    assert _is_forced_tool_choice_rejected(400, "context length exceeded") is False
+
+
+def test_tool_choice_400_should_retry_downgrades_and_remembers() -> None:
+    from types import SimpleNamespace
+
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    _models_rejecting_forced_tool_choice.clear()
+    try:
+        provider = OpenAICompatProvider(
+            name="openai_compat",
+            model="acme-thinking-unknown",
+            base_url="https://example.com/v1",
+            api_key="k",
+        )
+        body = {"tool_choice": "required"}
+        response = SimpleNamespace(
+            status_code=400,
+            text='{"error":{"message":"Thinking mode does not support this tool_choice"}}',
+        )
+        assert provider._tool_choice_400_should_retry(response, body) is True
+        assert body["tool_choice"] == "auto"
+        assert "acme-thinking-unknown" in _models_rejecting_forced_tool_choice
+
+        body = {"tool_choice": "auto"}
+        assert provider._tool_choice_400_should_retry(response, body) is False
+    finally:
+        _models_rejecting_forced_tool_choice.clear()
 
 
 def test_http_error_copies_retry_after_header() -> None:
