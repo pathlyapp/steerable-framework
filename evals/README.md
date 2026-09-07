@@ -94,6 +94,17 @@ extract in `evals/notes/claude-code-vs-steerable.md` used 2.1.261.
 
 Arm A is committed defaults. Arm B is `STEERABLE_*` lines in the workflow `arm_b_env` input. Score with `python -m evals.flaky_score`. Arm order and kill rules: `evals/notes/ab-arms.md`.
 
+## Cross-run stratification
+
+One catalog run is one attempt per task; the tiers that gate regression runs and feed A/B pairs come from aggregating several runs of one commit. Download each run's shards into one directory per run id, then stratify:
+
+```bash
+gh run download <run-id> -p 'eval-steerable-*' -D /tmp/tb-runs/<run-id>   # per run
+python -m evals.stratify_catalog --root /tmp/tb-runs [--json strata.json]
+```
+
+The report sorts every task into stable-green (passed every run), stable-red (failed every run), and flaky (mixed), and classifies each failed trial by context pressure — `peak_context_tokens` from the trial's `STEERABLE_RUN_SUMMARY` against the model context window (`--context-window`, default 1_048_576 for `z-ai/glm-5.3-flash`; `--pressure-frac`, default 0.9). Trials with no verifier reward (GHA-killed hangs, compose deaths) are excluded from the tiers and counted separately. Rebuild `splits.flaky` / `splits.spiral-red` in `evals/suite.yaml` only from a multi-run table like this, never from a single dispatch.
+
 ## Layers
 
 | Layer | When | What |
