@@ -183,20 +183,20 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <text class="tick" x="39" y="263" text-anchor="end">50</text>
 <text class="axisTitle" x="216" y="290" text-anchor="middle">$ per solved task (log)</text>
 <text class="axisTitle" x="12" y="137" text-anchor="middle" transform="rotate(-90 12 137)">TB 2.1 score</text>
-<circle class="pt" cx="86.7" cy="118.6" r="11.7"/>
+<circle class="pt" cx="86.7" cy="118.6" r="10"/>
 <text class="lbl" x="86.7" y="140" text-anchor="middle">Pi</text>
-<text class="sub" x="86.7" y="150" text-anchor="middle">73% · $0.06 · 20 min</text>
-<circle class="pt pt--ours" cx="169.3" cy="65.4" r="16.6"/>
+<text class="sub" x="86.7" y="150" text-anchor="middle">73% · $0.06</text>
+<circle class="pt pt--ours" cx="169.3" cy="65.4" r="10"/>
 <text class="lbl" x="169.3" y="95" text-anchor="middle">Steerable · ours</text>
-<text class="sub" x="169.3" y="105" text-anchor="middle">81.7% · $0.14 · 41 min</text>
-<circle class="pt" cx="184.7" cy="56.2" r="8.9"/>
+<text class="sub" x="169.3" y="105" text-anchor="middle">81.7% · $0.14</text>
+<circle class="pt" cx="184.7" cy="56.2" r="10"/>
 <text class="lbl" x="197" y="51">Claude Code</text>
-<text class="sub" x="197" y="61">83% · $0.16 · 12 min</text>
-<circle class="pt" cx="348.9" cy="208.3" r="7.1"/>
-<text class="lbl" x="338" y="204" text-anchor="end">Codex CLI</text>
-<text class="sub" x="338" y="214" text-anchor="end">58% · $0.81 · 7 min</text>
+<text class="sub" x="197" y="61">83% · $0.16</text>
+<circle class="pt" cx="348.9" cy="208.3" r="10"/>
+<text class="lbl" x="335" y="204" text-anchor="end">Codex CLI</text>
+<text class="sub" x="335" y="214" text-anchor="end">58% · $0.81</text>
 </svg>
-<p class="sf-bench-foot">Bubble area = median minutes per task. Costs from OpenRouter analytics on the eval account; Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
+<p class="sf-bench-foot">Costs from OpenRouter analytics on the eval account; Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
 </div>
 
 </div>
