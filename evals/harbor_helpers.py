@@ -430,6 +430,18 @@ def is_zai_glm(model: str) -> bool:
     return model.strip().lower().startswith("z-ai/glm")
 
 
+def is_deepseek(model: str) -> bool:
+    """Whether DeepSeek's official TB effort default applies to this model.
+
+    Official Terminal-Bench 2.1 (82.7) used ``reasoning_effort=max``.
+    Unlike GLM, this must not pin OpenRouter to ``z-ai``.
+
+    :param model: OpenRouter model id, without the Harbor provider prefix.
+    :returns: True when the id names a DeepSeek model.
+    """
+    return "deepseek" in model.strip().lower()
+
+
 def ensure_github_no_proxy(env: dict[str, str]) -> None:
     """Clash GET of the GitHub uv tarball often stalls; apt still uses the proxy.
 

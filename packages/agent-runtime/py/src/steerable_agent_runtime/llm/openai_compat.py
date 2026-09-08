@@ -65,6 +65,19 @@ def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
     return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
 
 
+def _deepseek_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
+    """DeepSeek thinking mode 400s ``tool_choice=required``.
+
+    Native ``api.deepseek.com`` is already flagged off via host compat.
+    OpenRouter forwards the same restriction, so the model id has to trip
+    the downgrade when the host is the gateway (Harbor TB).
+    """
+    if "deepseek" not in (model or "").lower():
+        return False
+    host = (base_url or "").lower()
+    return _openrouter_host(base_url) or "api.deepseek.com" in host
+
+
 def _env_flag(name: str) -> bool | None:
     raw = os.environ.get(name, "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
@@ -341,6 +354,7 @@ class OpenAICompatProvider:
         if body.get("tool_choice") == "required" and (
             not compat.supports_forced_tool_choice
             or _z_ai_tool_choice_auto_only(self.model, self.base_url)
+            or _deepseek_tool_choice_auto_only(self.model, self.base_url)
         ):
             body["tool_choice"] = "auto"
         # W6-8: clamp the env-requested reasoning effort to a level the model

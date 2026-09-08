@@ -12,6 +12,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy,
+    is_deepseek,
     is_zai_glm,
     merge_trial_path,
     pip_install_command,
@@ -278,7 +279,25 @@ def test_zai_defaults_do_not_follow_a_model_switch() -> None:
     assert is_zai_glm("Z-AI/GLM-5.3")
     assert not is_zai_glm("openai/gpt-5.5")
     assert not is_zai_glm("anthropic/claude-sonnet-4-5")
+    assert not is_zai_glm("deepseek/deepseek-v4-flash-0731")
     assert not is_zai_glm("")
+
+
+def test_deepseek_defaults_effort_without_the_zai_pin() -> None:
+    """Official Flash-0731 TB used max; pinning z-ai 404s every trial."""
+    assert is_deepseek("deepseek/deepseek-v4-flash-0731")
+    assert is_deepseek("deepseek-v4-flash")
+    assert not is_deepseek("z-ai/glm-5.3-flash")
+    assert not is_deepseek("qwen/qwen3.8-27b")
+    src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
+    text = src.read_text()
+    run_body = text[text.index("    async def run(") :]
+    deepseek_at = run_body.index("elif _is_deepseek(model):")
+    glm_block = run_body[run_body.index("if _is_zai_glm(model):") : deepseek_at]
+    deepseek_block = run_body[deepseek_at : run_body.index("STEERABLE_HTTP_REFERER", deepseek_at)]
+    assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in glm_block
+    assert "STEERABLE_OPENROUTER_PROVIDER" not in deepseek_block
+    assert 'STEERABLE_REASONING_EFFORT", "max"' in deepseek_block
 
 
 def test_committed_steerable_model_still_takes_the_zai_path() -> None:

@@ -24,7 +24,7 @@ on:
           - terminus-2
         default: steerable
       model:
-        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
+        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b or openai/deepseek/deepseek-v4-flash-0731"
         type: string
         default: ""
       tasks:
@@ -212,6 +212,7 @@ jobs:
             extra+=(--model "$EVAL_MODEL")
             case "$EVAL_MODEL" in
               *qwen*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-medium}" ;;
+              *deepseek*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-max}" ;;
             esac
           fi
           if [ -n "$EVAL_TASKS" ]; then

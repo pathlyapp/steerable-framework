@@ -379,6 +379,33 @@ def test_openai_build_body_z_ai_coerces_required_tool_choice_to_auto() -> None:
     assert kept["tool_choice"] == "required"
 
 
+def test_openai_build_body_openrouter_deepseek_coerces_required_tool_choice_to_auto(
+    monkeypatch,
+) -> None:
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "max")
+    monkeypatch.delenv("STEERABLE_OPENROUTER_PROVIDER", raising=False)
+    provider = OpenAICompatProvider(
+        name="t",
+        model="deepseek/deepseek-v4-flash-0731",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+    assert body["reasoning_effort"] == "max"
+    assert body["reasoning"] == {"effort": "max", "exclude": False}
+    assert "provider" not in body
+
+
 def test_http_error_copies_retry_after_header() -> None:
     from types import SimpleNamespace
 

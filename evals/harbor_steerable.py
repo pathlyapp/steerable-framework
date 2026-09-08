@@ -32,6 +32,7 @@ from evals.harbor_helpers import (
     _UV_PIP_INSTALL,
     _UV_SEED,
     ensure_github_no_proxy as _ensure_github_no_proxy,
+    is_deepseek as _is_deepseek,
     is_zai_glm as _is_zai_glm,
     merge_trial_path as _merge_trial_path,
     musl_uv_binary as _musl_uv_binary,
@@ -539,6 +540,10 @@ class SteerableHarborAgent(BaseInstalledAgent):
             # Pinning it for any other model 404s, since z-ai serves only GLM.
             env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "z-ai")
             env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+        elif _is_deepseek(model):
+            # Official DeepSeek-V4-Flash-0731 TB 2.1 (82.7) used max.
+            # Do not pin z-ai: that provider serves only GLM.
+            env.setdefault("STEERABLE_REASONING_EFFORT", "max")
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",

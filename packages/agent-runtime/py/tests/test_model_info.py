@@ -175,6 +175,15 @@ def test_clamp_reasoning_effort_glm_supports_max() -> None:
     assert resolve_model_info("openai/z-ai/glm-5.3-flash").context_window == 1_048_576
 
 
+def test_clamp_reasoning_effort_deepseek_v4_flash_keeps_max() -> None:
+    """Official TB 2.1 used max. Harbor's OpenRouter id would otherwise match
+    the generic ``deepseek`` row (no knob) and drop the env."""
+    assert clamp_reasoning_effort("deepseek/deepseek-v4-flash-0731", "max") == "max"
+    assert clamp_reasoning_effort("deepseek-v4-flash-0731", "max") == "max"
+    assert clamp_reasoning_effort("deepseek-v4-flash", "high") == "high"
+    assert clamp_reasoning_effort("deepseek-chat", "max") is None
+
+
 def test_builtin_table_is_consistent() -> None:
     for info in MODEL_INFOS:
         assert info.pattern and info.pattern == info.pattern.lower()
