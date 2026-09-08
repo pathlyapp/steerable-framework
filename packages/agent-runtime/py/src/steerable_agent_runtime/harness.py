@@ -128,11 +128,26 @@ class OrchestrationStrategy(Protocol):
 
 
 class _PreStepOnly(NoopHooks):
-    def __init__(self, inner: LoopHooks) -> None:
+    """Project a hooks impl onto the pre_step slice.
+
+    ``forward`` names optional off-protocol capabilities (probed with
+    ``getattr``, e.g. ``compact_now``) that must stay reachable through the
+    projection — without it the wrapper would silently sever the sidecar's
+    ``agent.chat.compact`` path, which probes the assembled chain for the
+    one hook implementing manual compaction.
+    """
+
+    def __init__(self, inner: LoopHooks, *, forward: tuple[str, ...] = ()) -> None:
         self._inner = inner
+        self._forward = forward
 
     async def pre_step(self, transcript: Any, ctx: Any) -> Any:
         return await self._inner.pre_step(transcript, ctx)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._forward:
+            return getattr(self._inner, name)
+        raise AttributeError(name)
 
 
 class _OnRequestErrorOnly(NoopHooks):
@@ -217,7 +232,8 @@ class PressureCompaction:
                 model=self.model,
                 micro_compact_interval_rounds=self.micro_compact_interval_rounds,
                 **extra,
-            )
+            ),
+            forward=("compact_now",),
         )
 
 
