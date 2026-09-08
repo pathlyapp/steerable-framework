@@ -1,0 +1,28 @@
+name: budget-consume-cached
+# Prompt tokens the provider served from its cache are charged at
+# `cachedTokenWeight`, so an agentic turn re-sending a near-identical prefix
+# every round is not billed as if every round were a cache miss. Ops 1-5
+# raise 4500 raw tokens without exhausting a 1000-token budget; op 6 shows an
+# uncached request still bites; op 7 pins the clamp — a provider reporting
+# more cached than total tokens charges zero, never refunds.
+limits:
+  maxTokens: 1000
+  maxSteps: 100
+  maxToolCalls: 100
+  cachedTokenWeight: 0.1
+ops:
+  - { tokens: 900, cachedTokens: 800 }
+  - { tokens: 900, cachedTokens: 800 }
+  - { tokens: 900, cachedTokens: 800 }
+  - { tokens: 900, cachedTokens: 800 }
+  - { tokens: 900, cachedTokens: 800 }
+  - { tokens: 900, cachedTokens: 0 }
+  - { tokens: 100, cachedTokens: 999 }
+expected:
+  - { tokensUsed: 180, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 360, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 540, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 720, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 900, stepsUsed: 0, toolCallsUsed: 0, exhausted: false }
+  - { tokensUsed: 1800, stepsUsed: 0, toolCallsUsed: 0, exhausted: true }
+  - { tokensUsed: 1800, stepsUsed: 0, toolCallsUsed: 0, exhausted: true }

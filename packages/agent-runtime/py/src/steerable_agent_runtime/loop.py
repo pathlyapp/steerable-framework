@@ -1354,7 +1354,10 @@ class CoreLoop:
                             break
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
-                                budget_state, self._config.budget, tokens=chunk.usage.total_tokens
+                                budget_state,
+                                self._config.budget,
+                                tokens=chunk.usage.total_tokens,
+                                cached_tokens=chunk.usage.cached_prompt_tokens,
                             )
                             if exhausted:
                                 yield LoopEvent(
