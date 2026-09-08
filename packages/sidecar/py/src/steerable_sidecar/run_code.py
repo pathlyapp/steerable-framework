@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "RunCodeBoundExecutor",
+    "invoke_nested_tool",
     "register_run_code",
     "run_code_enabled",
     "run_code_tool_descriptor",
@@ -185,7 +186,13 @@ class RunCodeBoundExecutor:
         token = _dispatch.set(_Dispatch(self._inner, ctx))
         try:
             if call.name in self._local_names and self._router is not None:
-                return await self._router.dispatch(call)
+                # Router-answered tools get the run's chat context too —
+                # conversational tools (run_js/wait_js) bind their session to
+                # it. Mirrors the keys RouterToolExecutor passes.
+                return await self._router.dispatch(
+                    call,
+                    context={"chat_id": ctx.chat_id, "round": ctx.round_index},
+                )
             return await self._inner.execute(call, ctx)
         finally:
             _dispatch.reset(token)
@@ -248,27 +255,49 @@ def _result_payload(result: ToolResult) -> dict[str, Any]:
     return dumped
 
 
-async def _invoke_nested(
-    name: str, arguments: dict[str, Any], call_id: str
+async def invoke_nested_tool(
+    name: str,
+    arguments: dict[str, Any],
+    call_id: str,
+    *,
+    refused: Collection[str] = ("run_code",),
+    dispatch: _Dispatch | None = None,
+    router: ToolRouter | None = None,
 ) -> ToolResult:
-    if name == "run_code":
+    """Nested tool invocation shared by every PTC bridge.
+
+    ``run_code``'s driver and the ``run_js`` worker both relay their
+    program's tool calls here. Resolution order: the explicitly captured
+    ``dispatch`` (a cell outlives the tool call that started it, so the JS
+    worker pins one per cell), then the ContextVar ``RunCodeBoundExecutor``
+    sets around the in-flight call, then the registration router (RPC
+    fallback path). ``refused`` names the tools a program must not re-enter
+    (each surface bans its own recursion).
+    """
+    if name in refused:
         return ToolResult(
             success=False,
-            error="nested run_code is not allowed",
+            error=f"nested {name} is not allowed",
             needsFollowup=False,
         )
-    bound = _dispatch.get()
+    bound = dispatch if dispatch is not None else _dispatch.get()
     call = ToolCall(id=call_id, name=name, arguments=arguments)
     if bound is not None:
         return await bound.executor.execute(call, bound.ctx)
-    router = _router_for_rpc.get()
-    if router is None:
+    fallback = router if router is not None else _router_for_rpc.get()
+    if fallback is None:
         return ToolResult(
             success=False,
-            error="run_code has no tool executor",
+            error="no tool executor bound for nested calls",
             needsFollowup=False,
         )
-    return await router.dispatch(call)
+    return await fallback.dispatch(call)
+
+
+async def _invoke_nested(
+    name: str, arguments: dict[str, Any], call_id: str
+) -> ToolResult:
+    return await invoke_nested_tool(name, arguments, call_id)
 
 
 async def _drive_child(
