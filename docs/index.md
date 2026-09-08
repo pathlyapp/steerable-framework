@@ -157,8 +157,8 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 
 <div class="sf-bench-group sf-bench-group--focus">
 <div class="sf-bench-kicker">Cost × score · GLM plus official overlays</div>
-<p class="sf-bench-blurb">Circles are GLM-5.3-Flash on one OpenRouter account — Steerable is the cheapest seat in the frontier band. Diamonds are the same harness on two other vendors' models, where it clears each vendor's own published number: DeepSeek-V4-Flash <strong>84.3%</strong> vs official <strong>82.7%</strong>, Qwen3.8-27B <strong>75.3%</strong> vs published Terminus <strong>73.0%</strong>.</p>
-<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1: GLM-5.3-Flash cost versus score for four harnesses, DeepSeek-V4-Flash Steerable 84.3 percent versus official 82.7 percent, and Qwen3.8-27B Steerable 75.3 percent versus published Terminus 73.0 percent">
+<p class="sf-bench-blurb">Circles are GLM-5.3-Flash on one OpenRouter account — Steerable is the cheapest seat in the frontier band. Diamonds are the same harness on two other vendors' models, where it clears each vendor's own published number: DeepSeek-V4-Flash <strong>84.3%</strong> vs DeepSeek Harness <strong>82.7%</strong>, Qwen3.8-27B <strong>75.3%</strong> vs Terminus <strong>73.0%</strong>.</p>
+<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1: GLM-5.3-Flash cost versus score for four harnesses, DeepSeek-V4-Flash Steerable 84.3 percent versus DeepSeek Harness 82.7 percent, and Qwen3.8-27B Steerable 75.3 percent versus published Terminus 73.0 percent">
 <rect class="band" x="44" y="40" width="344" height="36"/>
 <text class="bandlbl" x="48" y="36">frontier band 79–84%</text>
 <line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
@@ -204,14 +204,14 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <polygon class="pt pt--ref" points="256,50.9 264,58.9 256,66.9 248,58.9"/>
 <text class="delta" x="270" y="46">+1.6 pts vs official</text>
 <text class="lbl" x="270" y="56.5">Steerable 84.3%</text>
-<text class="sub" x="270" y="66.5">official score 82.7%</text>
+<text class="sub" x="270" y="66.5">DeepSeek Harness 82.7%</text>
 <text class="qwenColTitle" x="246" y="88">Qwen3.8-27B · score overlay</text>
 <line class="connector" x1="256" y1="104.4" x2="256" y2="118.6"/>
 <polygon class="pt pt--ours" points="256,96.4 264,104.4 256,112.4 248,104.4"/>
 <polygon class="pt pt--ref" points="256,110.6 264,118.6 256,126.6 248,118.6"/>
 <text class="delta" x="270" y="103.5">+2.3 pts vs official</text>
 <text class="lbl" x="270" y="114">Steerable 75.3%</text>
-<text class="sub" x="270" y="124">official score 73.0%</text>
+<text class="sub" x="270" y="124">Terminus 73.0%</text>
 <text class="legend" x="44" y="302">Circles share one GLM-5.3-Flash gateway and sit on the $ axis.</text>
 <text class="legend" x="44" y="311">Diamonds are DeepSeek-V4-Flash and Qwen3.8-27B scores only — they are not a cost.</text>
 </svg>
