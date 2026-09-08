@@ -43,8 +43,10 @@ where = ["src"]
 
 # tool_contract.json is loaded via __file__ by tool_contract.py; ship it so the
 # canonical tool contract resolves from an installed wheel, not only from source.
+# ptc_js_worker.cjs is the run_js/wait_js Node worker, spawned by path from
+# ptc_js.py — same __file__-relative resolution, same shipping requirement.
 [tool.setuptools.package-data]
-steerable_sidecar = ["*.json"]
+steerable_sidecar = ["*.json", "*.cjs"]
 
 [tool.uv.sources]
 steerable-agent-protocol = { workspace = true }

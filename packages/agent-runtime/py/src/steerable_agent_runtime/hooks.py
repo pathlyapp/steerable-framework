@@ -309,6 +309,10 @@ class ChainHooks:
       so a trailing delivery gate still forces writes when an earlier
       validator would only ask for a no-tools summary.
     - ``wrap_up_may_drop_tools``: False if any hook forbids dropping tools.
+    - ``compact_now``: optional capability (not part of the ``LoopHooks``
+      protocol), probed with ``getattr`` like ``on_stream_chunk`` —
+      delegated to the first hook that implements it (CompactionHooks);
+      a chain without one returns a no-op proceed.
 
     This is how a product stacks e.g. compaction + spill + retry without the
     loop knowing about any of them.
@@ -361,6 +365,28 @@ class ChainHooks:
             reason=reason,
             tool_choice=tool_choice,
             append_action=append_action,
+        )
+
+    async def compact_now(
+        self, transcript: list[LLMMessage], ctx: LoopContext
+    ) -> PreStepAction:
+        """Manual compaction (CC ``/compact`` parity): delegate to the first
+        hook in the chain that implements ``compact_now`` (CompactionHooks).
+
+        ``compact_now`` is an optional capability, not a ``LoopHooks``
+        protocol method, so membership is probed with ``getattr`` — the same
+        pattern the loop uses for ``on_stream_chunk``. ``NoopHooks`` defines
+        no ``compact_now``, so the probe skips it (and any other hook that
+        only has the protocol surface) without a special case. A chain with
+        no compaction hook returns a no-op proceed: a manual compact request
+        must never fail the turn.
+        """
+        for hook in self._hooks:
+            callback = getattr(hook, "compact_now", None)
+            if callable(callback):
+                return await callback(transcript, ctx)
+        return PreStepAction(
+            kind="proceed", reason="compact: no compaction hook in chain"
         )
 
     async def post_tool_result(

@@ -921,3 +921,55 @@ async def test_resume_respects_the_parallel_cap() -> None:
     send = next(r for r in _tool_results(events) if r["name"] == "agent_send")
     assert send["success"] is False
     assert "orchestration_budget_exceeded" in _error(send)
+
+
+# ---------------------------------------------------------------------------
+# delegate-on-pool: the pool's synchronous-delegation surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pool_run_executes_synchronously_with_event_extra() -> None:
+    """The delegation seam's pool usage: no constructor loop factory, a
+    per-spawn factory override, ``event_extra`` merged into child_spawned,
+    and the terminal outcome awaited synchronously."""
+    from steerable_agent_runtime.orchestration import AgentPool
+
+    sink: list[tuple[str, dict[str, Any]]] = []
+    provider, _ = _content_provider({"child task": [{"content": "child answer"}]})
+
+    def factory(child_id, tool_filter):
+        return (
+            CoreLoop(provider, RouterToolExecutor(ToolRouter()), LoopConfig()),
+            None,
+        )
+
+    pool = AgentPool(
+        config=OrchestrationConfig(),
+        depth=0,
+        lineage="0",
+        event_sink=lambda kind, data: sink.append((kind, data)),
+    )
+    outcome = await pool.run(
+        "child task",
+        None,
+        loop_factory=factory,
+        event_extra={"profile": "general-purpose"},
+    )
+    assert outcome.status == "completed"
+    assert "child answer" in outcome.answer
+    spawned = dict(sink)["child_spawned"]
+    assert spawned["childId"] == "0.1"
+    assert spawned["profile"] == "general-purpose"
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_pool_spawn_without_any_factory_fails_loud() -> None:
+    """A pool with no constructor factory and no per-spawn override cannot
+    build a child — misconfiguration fails loud, never a silent no-op."""
+    from steerable_agent_runtime.orchestration import AgentPool
+
+    pool = AgentPool(config=OrchestrationConfig(), depth=0, lineage="0")
+    with pytest.raises(RuntimeError, match="loop factory"):
+        pool.spawn("task", None)

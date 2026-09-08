@@ -953,3 +953,60 @@ async def test_terminal_runner_cap_fails_loud() -> None:
     gate.set()
     assert (await first).success is True
     await runner.release_all()
+
+
+# ── W3.4.4: authenticate / ext_method ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_initialize_advertises_env_var_auth_method() -> None:
+    agent, _ = _agent(_ScriptedProvider([_text_round("hi")]))
+    resp = await agent.initialize(protocol_version=1)
+    methods = resp.auth_methods
+    assert methods is not None and len(methods) == 1
+    method = methods[0]
+    assert method.id == "steerable-api-key"
+    assert any(v.name == "STEERABLE_API_KEY" for v in method.vars)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_succeeds_when_key_resolvable() -> None:
+    agent = SteerableAcpAgent(
+        provider_params={
+            "provider": "openai_compat",
+            "model": "fake",
+            "apiKey": "sk-test",
+        },
+        llm_provider_factory=lambda _params: _ScriptedProvider([_text_round("hi")]),
+    )
+    resp = await agent.authenticate("steerable-api-key")
+    assert resp is not None
+
+
+@pytest.mark.asyncio
+async def test_authenticate_fails_loud_without_key() -> None:
+    import acp
+
+    agent, _ = _agent(_ScriptedProvider([_text_round("hi")]))  # no apiKey
+    with pytest.raises(acp.RequestError, match="no API key resolvable"):
+        await agent.authenticate("steerable-api-key")
+
+
+@pytest.mark.asyncio
+async def test_authenticate_rejects_unknown_method() -> None:
+    import acp
+
+    agent, _ = _agent(_ScriptedProvider([_text_round("hi")]))
+    with pytest.raises(acp.RequestError, match="unknown auth method"):
+        await agent.authenticate("oauth-login")
+
+
+@pytest.mark.asyncio
+async def test_ext_method_ping_and_unknown() -> None:
+    import acp
+
+    agent, _ = _agent(_ScriptedProvider([_text_round("hi")]))
+    pong = await agent.ext_method("_steerable/ping", {})
+    assert pong["pong"] is True
+    with pytest.raises(acp.RequestError, match="unknown extension method"):
+        await agent.ext_method("_steerable/nope", {})

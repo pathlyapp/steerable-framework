@@ -166,6 +166,19 @@ def _parse_host_entry(entry: str) -> tuple[str, tuple[int, ...]]:
     return host, (port,)
 
 
+#: Name resolution via the system resolver's UNIX socket — no IP reach of
+#: its own. Standalone use: deployments that pin egress to a local
+#: allow-listing proxy (the desktop's egress-proxy mode) still need
+#: in-sandbox DNS for ``web_fetch``'s SSRF pre-check — the fetch itself
+#: tunnels through the proxy, but the pre-check resolves locally, and
+#: without this rule every fetch dies there as ``cannot resolve <host>``
+#: (verified on macOS 26: a fail-closed profile without this rule fails
+#: getaddrinfo with EAI_NONAME).
+_RESOLVER_EGRESS_POLICY = """
+; name resolution only (no IP reach): the system resolver's UNIX socket.
+(allow network-outbound (literal "/private/var/run/mDNSResponder"))
+"""
+
 #: Extra egress the network-read tools (``web_fetch``/``web_search``) need on
 #: top of a fail-closed allow-list. Their targets are whatever the model asks
 #: for, so no host list can name them in advance.
@@ -240,6 +253,7 @@ def build_seatbelt_profile(
     network: bool = True,
     allowed_hosts: Sequence[str] | None = None,
     web_egress: bool = False,
+    resolver: bool = False,
 ) -> str:
     """Render a complete Seatbelt profile for the sidecar process.
 
@@ -262,6 +276,14 @@ def build_seatbelt_profile(
     only where those tools are actually offered — it grants reach to any host
     on ports 80 and 443. It is a no-op when ``allowed_hosts`` is ``None``
     (outbound is already open) or ``network`` is off.
+
+    ``resolver`` widens a fail-closed allow-list with name resolution only
+    (the system resolver's UNIX socket — no IP reach). Set it when egress is
+    pinned to a local allow-listing proxy but in-sandbox code must still
+    resolve names (``web_fetch``'s SSRF pre-check runs locally even though
+    the fetch tunnels through the proxy). No-op when ``web_egress`` is on
+    (its policy already grants the resolver), when ``allowed_hosts`` is
+    ``None``, or when ``network`` is off.
     """
 
     parts = [_BASE_POLICY]
@@ -278,6 +300,8 @@ def build_seatbelt_profile(
             parts.append(_egress_policy(allowed_hosts))
             if web_egress:
                 parts.append(_WEB_EGRESS_POLICY)
+            elif resolver:
+                parts.append(_RESOLVER_EGRESS_POLICY)
     return "\n".join(parts)
 
 
@@ -637,6 +661,16 @@ def main() -> int:
             "are offered; without it every fetch fails name resolution."
         ),
     )
+    profile_cmd.add_argument(
+        "--allow-resolver",
+        action="store_true",
+        help=(
+            "Also allow name resolution via the system resolver socket (no "
+            "IP reach). For deployments that pin egress to a local "
+            "allow-listing proxy but still resolve names in-sandbox "
+            "(web_fetch's SSRF pre-check). Implied by --allow-web-egress."
+        ),
+    )
     wrap_cmd = sub.add_parser(
         "linux-wrap",
         help="Print JSON argv that confines a Linux process (bwrap then Landlock).",
@@ -667,6 +701,7 @@ def main() -> int:
                 network=not args.no_network,
                 allowed_hosts=list(args.allow_host) or None,
                 web_egress=args.allow_web_egress,
+                resolver=args.allow_resolver,
             )
         )
         return 0

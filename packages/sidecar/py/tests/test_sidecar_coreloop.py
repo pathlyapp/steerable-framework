@@ -667,6 +667,73 @@ async def test_steer_unknown_stream_soft_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_compact_on_active_stream_ok() -> None:
+    """agent.chat.compact (CC /compact parity) arms the running loop's manual
+    compaction, consumed at its next pre_step boundary; the turn still
+    completes normally."""
+    tool_started = asyncio.Event()
+    proceed = asyncio.Event()
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        tool_started.set()
+        await proceed.wait()  # hold the turn open so compact can land mid-run
+        return a + b
+
+    sidecar.tools.register(add)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "add"}],
+                "useCoreLoop": True,
+            },
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+
+    await asyncio.wait_for(tool_started.wait(), timeout=2)
+    compact_resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.compact", {"streamId": stream_id})
+    )
+    assert compact_resp["result"] == {"ok": True}
+    proceed.set()
+
+    task = sidecar._streams.get(stream_id)
+    if task is not None:
+        await task
+    done = [p for m, p in sidecar._transport.events if m == "stream.done"]  # type: ignore[attr-defined]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_chat_compact_unknown_stream_soft_fails() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.chat.compact", {"streamId": "nope"})
+    )
+    assert resp["result"] == {"ok": False, "reason": "stream_not_active"}
+
+
+@pytest.mark.asyncio
+async def test_chat_compact_requires_stream_id() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(_frame("agent.chat.compact", {}))
+    assert "error" in resp
+
+
+@pytest.mark.asyncio
 async def test_coreloop_cancel_winds_down_cooperatively() -> None:
     """agent.chat.cancel on a CoreLoop stream is cooperative: the loop
     asyncio-cancels the in-flight tool, records the partial turn, and the
@@ -1070,7 +1137,10 @@ async def test_subagent_optin_advertises_and_executes_delegation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subagent_off_by_default() -> None:
+async def test_subagent_on_by_default() -> None:
+    """Delegate-on-pool unification: delegate_subagent is the default
+    multi-agent surface — no params needed for the descriptor to reach the
+    model."""
     provider = _ScriptedProvider([_text_round("plain")])
     sidecar = _make_sidecar(provider)
     await _run_stream(
@@ -1083,7 +1153,97 @@ async def test_subagent_off_by_default() -> None:
         },
     )
     first_tools = provider.stream_kwargs[0].get("tools") or []
+    assert any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
+
+
+@pytest.mark.asyncio
+async def test_subagent_disabled_with_explicit_false() -> None:
+    """``params.subagent: false`` turns the default delegation seam off."""
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "subagent": False,
+        },
+    )
+    first_tools = provider.stream_kwargs[0].get("tools") or []
     assert not any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
+
+
+@pytest.mark.asyncio
+async def test_subagent_profiles_advertise_subagent_type_enum() -> None:
+    """params.subagent.profiles builds a SubagentRegistry: the descriptor
+    advertises the registered names as a subagent_type enum (CC parity)."""
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "subagent": {
+                "profiles": {
+                    "researcher": {"toolFilter": ["read_file"]},
+                    "writer": {"maxRounds": 4},
+                }
+            },
+        },
+    )
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    descriptor = next(
+        t for t in first_tools if t["function"]["name"] == "delegate_subagent"
+    )
+    prop = descriptor["function"]["parameters"]["properties"]["subagent_type"]
+    assert prop["enum"] == ["researcher", "writer"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_unknown_profile_fails_closed_naming_registered() -> None:
+    """A subagent_type naming no registered profile fails closed listing the
+    registered ones — never a silent fall-back to the default profile."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "x", "subagent_type": "ghost"},
+                )
+            ),
+            _text_round("recovered"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "delegate"}],
+            "useCoreLoop": True,
+            "subagent": {"profiles": {"researcher": {}}},
+        },
+    )
+
+    chunks = [p for m, p in events if m == "stream.chunk"]
+    tool_results = [c for c in chunks if c.get("toolResult")]
+    assert any(
+        "unknown subagent_type" in str(tr) and "researcher" in str(tr)
+        for tr in tool_results
+    )
+    # No child loop ran for the unknown profile; the parent recovered.
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
 
 
 
@@ -1283,6 +1443,63 @@ async def test_session_branches_reports_lineage_and_children() -> None:
     assert resp["result"]["children"] == []
 
 
+@pytest.mark.asyncio
+async def test_session_tree_reports_full_family() -> None:
+    """agent.session.tree: the WHOLE family from the root in one call —
+    cousins and grandchild forks included, queried from any member."""
+    provider = _ScriptedProvider([_text_round("answer 0")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "question 0"}],
+            "useCoreLoop": True,
+            "chatId": "chat_1",
+        },
+    )
+    for source, branch_id in (
+        ("chat_1", "chat_1:r2"),
+        ("chat_1", "chat_1:r3"),
+        ("chat_1:r2", "chat_1:r2:x"),  # cousin of r3, one generation down
+    ):
+        resp = await sidecar.server.handle_frame(
+            _frame("agent.session.fork", {"recordId": source, "newRecordId": branch_id})
+        )
+        assert "error" not in resp, resp
+
+    # Query from the grandchild: the tree still roots at chat_1.
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.session.tree", {"recordId": "chat_1:r2:x"})
+    )
+    assert "error" not in resp, resp
+    result = resp["result"]
+    assert result["recordId"] == "chat_1:r2:x"
+    assert result["nodeCount"] == 4
+    assert result["truncated"] is False
+    tree = result["tree"]
+    assert tree["recordId"] == "chat_1"
+    assert tree["depth"] == 0
+    assert tree["label"] == "root"
+    assert [c["recordId"] for c in tree["children"]] == ["chat_1:r2", "chat_1:r3"]
+    r2, r3 = tree["children"]
+    assert (r2["sourceRecordId"], r2["depth"]) == ("chat_1", 1)
+    assert r2["label"] == "question 0"
+    assert [c["recordId"] for c in r2["children"]] == ["chat_1:r2:x"]
+    assert r2["children"][0]["depth"] == 2
+    assert r3["children"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_tree_unknown_record_errors() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("x")]))
+    resp = await sidecar.server.handle_frame(
+        _frame("agent.session.tree", {"recordId": "nope"})
+    )
+    assert "error" in resp
+
+
 class _ContentRoutedProvider:
     """Routes by the transcript's first user message — parent and child
     scripts stay deterministic no matter how their requests interleave."""
@@ -1346,7 +1563,7 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
             "model": "fake",
             "messages": [{"role": "user", "content": "parent-turn"}],
             "useCoreLoop": True,
-            "orchestration": {"maxDepth": 1, "maxParallel": 2},
+            "orchestration": {"enabled": True, "maxDepth": 1, "maxParallel": 2},
         },
     )
     # agent.child notifications are scheduled fire-and-forget; let them land.
@@ -1369,6 +1586,82 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
     spawned = next(p for p in child_events if p["kind"] == "child_spawned")
     assert spawned["childId"] == "0.1"
     assert spawned["streamId"] == stream_id
+
+
+@pytest.mark.asyncio
+async def test_orchestration_off_without_enabled_flag() -> None:
+    """Delegate-on-pool unification: the six-tool family is the opt-in
+    advanced mode — an orchestration dict without ``enabled: true`` does
+    not expose it (delegate_subagent stays on as the default surface)."""
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "orchestration": {"maxDepth": 1, "maxParallel": 2},
+        },
+    )
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    names = {t["function"]["name"] for t in first_tools}
+    assert not {"agent_spawn", "agent_send", "agent_wait", "agent_close"} & names
+    assert "delegate_subagent" in names
+
+
+@pytest.mark.asyncio
+async def test_delegate_emits_agent_child_events_over_rpc() -> None:
+    """The default delegation seam runs its child on the AgentPool: the
+    lifecycle lands as agent.child notifications carrying the profile
+    label, and the answer still returns as the delegate tool result."""
+    provider = _ContentRoutedProvider(
+        {
+            "parent-turn": [
+                _tool_round(
+                    ToolCall(
+                        id="d1",
+                        name="delegate_subagent",
+                        arguments={"task": "child-turn"},
+                    )
+                ),
+                _text_round("parent done"),
+            ],
+            "child-turn": [_text_round("child answer")],
+        }
+    )
+    sidecar = _make_sidecar(provider)
+
+    stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "parent-turn"}],
+            "useCoreLoop": True,
+        },
+    )
+    # agent.child notifications are scheduled fire-and-forget; let them land.
+    await asyncio.sleep(0.05)
+
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["ok"] is True and done[0]["status"] == "completed"
+    chunks = [p for m, p in events if m == "stream.chunk"]
+    tool_results = [c for c in chunks if c.get("toolResult")]
+    assert any("child answer" in str(tr) for tr in tool_results)
+
+    child_events = [p for m, p in events if m == "agent.child"]
+    kinds = [p["kind"] for p in child_events]
+    assert "child_spawned" in kinds
+    assert "child_completed" in kinds
+    spawned = next(p for p in child_events if p["kind"] == "child_spawned")
+    assert spawned["childId"] == "0.1"
+    assert spawned["streamId"] == stream_id
+    assert spawned["profile"] == "general-purpose"
+    assert spawned["task"] == "child-turn"
 
 
 # ─── W2.8.2: systemPrompt as a typed fragment param ──────────────────────────
@@ -1543,7 +1836,9 @@ def _spec_with_tools(impl: str):
 @pytest.mark.asyncio
 async def test_chat_path_full_spec_passes_host_tools_through() -> None:
     """No-behavior-change guard: the bundled `full` tools strategy offers
-    the host's tool list to the provider unchanged."""
+    the host's tool list to the provider unchanged. Delegation is switched
+    off here so the assertion isolates the tools dimension — the delegate
+    descriptor is an orthogonal addition advertised past selection."""
     provider = _ScriptedProvider([_text_round("ok")])
     sidecar = _make_sidecar(provider)
     host_tools = [
@@ -1559,6 +1854,7 @@ async def test_chat_path_full_spec_passes_host_tools_through() -> None:
             "messages": [{"role": "user", "content": "hi"}],
             "tools": host_tools,
             "useCoreLoop": True,
+            "subagent": False,
         },
     )
 
@@ -1591,6 +1887,9 @@ async def test_chat_path_honors_tools_dimension(monkeypatch) -> None:
                 },
             ],
             "useCoreLoop": True,
+            # Isolate the tools dimension from the default delegation seam
+            # (its descriptor is advertised past selection, orthogonally).
+            "subagent": False,
         },
     )
 
@@ -2034,3 +2333,97 @@ async def test_resume_pushes_read_state_seed_to_host() -> None:
     assert host.seeds == [{"state": {"/w/a.txt": "v1"}}]
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
+
+
+async def _flush_notifications() -> None:
+    """Let fire-and-forget notification tasks (rawChunk bridge) run."""
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_stream_raw_chunks_optin_forwards_pre_digestion_chunks() -> None:
+    """params.streamRawChunks bridges the loop's on_stream_chunk hook into
+    stream.chunk notifications: the rawChunk content keeps what the display
+    path strips (a <function_results> echo block), and the buffered tool
+    call arrives whole (OpenAI-compat gives no argument fragments)."""
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(
+                    content_delta=(
+                        'answer <function_results>{"fake": 1}</function_results> tail'
+                    )
+                ),
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})
+                ),
+                LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    usage=LLMUsage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+                ),
+            ],
+            _text_round("sum is 3"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add"}],
+            "useCoreLoop": True,
+            "streamRawChunks": True,
+        },
+    )
+    await _flush_notifications()
+
+    chunks = [p for m, p in events if m == "stream.chunk"]
+    raw_chunks = [c["rawChunk"] for c in chunks if "rawChunk" in c]
+    assert raw_chunks, "expected rawChunk notifications under streamRawChunks"
+    assert all(
+        c.get("streamId") == stream_id for c in chunks if "rawChunk" in c
+    )
+    # Pre-digestion: the echo block survives in rawChunk while the digested
+    # delta has it stripped by PseudoStreamStripper.
+    raw_content = "".join(c.get("contentDelta") or "" for c in raw_chunks)
+    assert "<function_results>" in raw_content
+    digested = "".join(c.get("delta") or "" for c in chunks)
+    assert "<function_results>" not in digested
+    assert "answer" in digested and "tail" in digested
+    # The buffered tool call and finish reason ride rawChunk too; usage and
+    # the provider's wire chunk (raw) never do.
+    assert {
+        "id": "c1",
+        "name": "add",
+        "arguments": {"a": 1, "b": 2},
+    } in [c.get("toolCallDelta") for c in raw_chunks]
+    assert "tool_calls" in [c.get("finishReason") for c in raw_chunks]
+    assert all("usage" not in c and "raw" not in c for c in raw_chunks)
+
+
+@pytest.mark.asyncio
+async def test_stream_raw_chunks_off_by_default() -> None:
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+        },
+    )
+    await _flush_notifications()
+
+    chunks = [p for m, p in events if m == "stream.chunk"]
+    assert chunks
+    assert all("rawChunk" not in c for c in chunks)

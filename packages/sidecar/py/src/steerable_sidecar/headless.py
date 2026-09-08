@@ -33,6 +33,7 @@ from steerable_agent_runtime.storage import InMemoryStorage
 from .acp_adapter import _env_provider_params
 from .delivery import DeliveryGatedExecutor, DeliveryHooks
 from .loop_limits import resolve_loop_limits
+from .stream_chunks import RawChunkStdoutHooks
 from .sidecar import (
     _assemble_default_harness,
     _summarizer_for,
@@ -557,6 +558,11 @@ async def _run(
     hooks: Any = _eval_hooks(
         assembled_hooks, delivery, resolved_limits.max_tool_errors or 16
     )
+    # STEERABLE_RAW_CHUNKS=1: debug the pre-digestion chunk stream (what the
+    # loop's on_stream_chunk hook sees before UI-tag stripping) as tagged
+    # [raw_chunk {...}] stdout lines — for incremental-renderer debugging.
+    if _env_flag("STEERABLE_RAW_CHUNKS", default=False):
+        hooks = ChainHooks(hooks, RawChunkStdoutHooks())
     timeout = _hard_run_timeout_sec()
     # Tool wall-clock must end before the process abandon below. A 175 min
     # cap sitting after the 170 min wait_for never shrank bash

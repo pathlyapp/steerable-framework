@@ -162,6 +162,55 @@ async def test_compat_describe_serves_the_framework_flag_vocabulary(
         OpenAICompatFlags.from_dict({f["key"]: value})
 
 
+async def test_presets_describe_serves_the_framework_table(
+    sidecar: Sidecar,
+) -> None:
+    # The host settings UI renders its preset picker from this payload;
+    # every row must round-trip through ProviderPreset.from_dict (unknown
+    # keys fail loud there, so a describe/from_dict skew cannot pass).
+    from steerable_agent_runtime.llm import PROVIDER_PRESETS, ProviderPreset
+
+    response = await _call(sidecar, "presets.describe")
+    presets = response["result"]["presets"]
+    assert len(presets) == len(PROVIDER_PRESETS)
+    for row in presets:
+        assert row["host"] or row["modelPrefix"]
+        ProviderPreset.from_dict(
+            {k: v for k, v in row.items() if k not in ("host", "modelPrefix") and v is not None}
+        )
+
+
+async def test_presets_resolve_reports_the_auto_match(sidecar: Sidecar) -> None:
+    response = await _call(
+        sidecar,
+        "presets.resolve",
+        {"baseUrl": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
+    )
+    assert response["result"]["preset"] == {"temperature": 0.0}
+    # No registry entry matches → null, so the UI can show "no preset applies".
+    response = await _call(
+        sidecar, "presets.resolve", {"baseUrl": "http://x/v1", "model": "m"}
+    )
+    assert response["result"]["preset"] is None
+
+
+def test_resolve_preset_param_mapping() -> None:
+    from steerable_agent_runtime.llm import ProviderPreset
+    from steerable_sidecar.sidecar import _resolve_preset_param
+
+    assert _resolve_preset_param({}) == "auto"
+    assert _resolve_preset_param({"presets": {"enabled": True}}) == "auto"
+    assert _resolve_preset_param({"presets": {"enabled": False}}) == "off"
+    pinned = _resolve_preset_param({"presets": {"override": {"temperature": 0.3}}})
+    assert pinned == ProviderPreset(temperature=0.3)
+    with pytest.raises(TypeError, match="presets param must be an object"):
+        _resolve_preset_param({"presets": "off"})
+    with pytest.raises(TypeError, match="presets.override must be an object"):
+        _resolve_preset_param({"presets": {"override": 1}})
+    with pytest.raises(ValueError, match="unknown provider-preset keys"):
+        _resolve_preset_param({"presets": {"override": {"bogus": 1}}})
+
+
 async def test_harness_describe_serves_registry_and_default(
     sidecar: Sidecar,
 ) -> None:
