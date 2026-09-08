@@ -40,11 +40,11 @@ each tier is independently adoptable.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | **What it is** | Layered library (4 tiers, independently published) | Product family: CLI/TUI, IDE, desktop, cloud — Rust core | Plugin-based harness (TS) on vendored Cordis; everything is a plugin | Minimal-core coding agent CLI (TS, 11 lockstep packages); omits MCP, subagents, and a permission system by design — extensions add them | Low-level orchestration library (Py/JS): state graphs | Lightweight agent framework (Py/TS) over the Responses API | Closed-source product shipped as one bundle behind both the CLI and the Agent SDK |
 | **Loop control / steering** | `CoreLoop` single-agent step loop; structured `LoopEvent` taxonomy (13 kinds, 5 categories); `agent.chat.steer` RPC mid-turn; fork | Session-owned turn loop; interrupt/abort; 12-event hook engine | Inbox-driven ReactLoop; steer / inject / followup delivery | `agent-loop.ts` turn loop; steering and follow-up queues polled between turns; tool calls parallel by default, per-tool sequential opt-out | You design the graph; interrupts at node boundaries | Handoffs + guardrails; no mid-run steer | Mid-turn "fold" queue absorbs messages between tool rounds, with a separate follow-up queue when folding is suspended; `Stop`/`PostToolUse`/`PreToolUse` hooks can return `preventContinuation` to veto turn completion, capped at 8 consecutive blocks; `--max-turns` |
-| **Tool execution** | `ToolRouter` + `@tool`; host **reverse channel** — desktop tools run in the host process (visible terminal); native stdio MCP client wired on sidecar (`chat.stream` `mcp`), headless (`--mcp`), and ACP paths | Unified exec (PTY), MCP, parallel gating | Concurrency-safe tool pool, MCP client | 8 built-in tools; extensions register tools at runtime with no reload; **no MCP** | `ToolNode` inside your graph | Function tools, MCP, hosted tools | 40 built-in tool types (`sdk-tools.d.ts`), lazy exposure via `ToolSearch` + `defer_loading`, tool concurrency capped at 10; MCP over stdio/SSE/HTTP with user/project/org scoping, OAuth, and a 25k-token output cap |
-| **Safety model** | Two layers: OS sandbox for the sidecar (macOS Seatbelt with a deny-by-default write whitelist; Linux bwrap, falling back to Landlock; no Windows rewriter) + a command classifier with dozens of rules, consent gate, plan-mode hard block | Approval policies + ExecPolicy + platform sandbox (Seatbelt/Landlock) + Guardian second-pass review | `sandbox.confine` (bwrap/Landlock/Seatbelt), fail-closed | None built-in — tools run with host user permissions; project trust gate only; containerization documented externally | None built-in — your infrastructure | Guardrails; no sandbox | Six permission modes (`default`/`plan`/`acceptEdits`/`auto`/`dontAsk`/`bypassPermissions`), `allow`/`deny`/`ask` rules from eight sources, `defer` as a fourth per-call state, headless fail-closed deny; real Seatbelt/bwrap confinement with a domain allowlist, but **opt-in and fail-open** — `failIfUnavailable` defaults to false, so a missing backend runs commands unconfined | <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
+| **Tool execution** | `ToolRouter` + `@tool`; host **reverse channel** — desktop tools run in the host process (visible terminal); native stdio MCP client wired on sidecar (`chat.stream` `mcp`), headless (`--mcp`), and ACP paths. Programmatic tool calling ships two ways: `run_code` (single-shot Python function body, sandboxed child, nested tools over stdio) and a session-style JS PTC (`run_js` / `wait_js` — a long-lived Node worker with per-session `store`/`load` KV, `yield`/`wait` cells, and a Promise tool bridge). The desktop adds two product families on top: cross-turn background Tasks (`task_run` / `task_status` / `task_result` on a host task table, with a task panel UI) and git-worktree isolation (`worktree_create` / `worktree_list` / `worktree_remove`, composable with tasks and mergeable/discarded from the UI) | Unified exec (PTY), MCP, parallel gating | Concurrency-safe tool pool, MCP client | 8 built-in tools; extensions register tools at runtime with no reload; **no MCP** | `ToolNode` inside your graph | Function tools, MCP, hosted tools | 40 built-in tool types (`sdk-tools.d.ts`), lazy exposure via `ToolSearch` + `defer_loading`, tool concurrency capped at 10; MCP over stdio/SSE/HTTP with user/project/org scoping, OAuth, and a 25k-token output cap |
+| **Safety model** | Two layers: OS sandbox for the sidecar (macOS Seatbelt with a deny-by-default write whitelist; Linux bwrap, falling back to Landlock; no Windows rewriter) + a command classifier with dozens of rules, consent gate, plan-mode hard block. **Egress is per-host by default**: a bundled CONNECT allow-list proxy (`steerable-egress-proxy`) starts on boot (auto-degrading to port-only Seatbelt when a system/ambient proxy is present), the sidecar and shell tools route HTTP(S) through it, and the web tools' domain allow-list and the proxy's CONNECT list are one source. With the proxy live, shell egress pins to the localhost proxy endpoint, so Seatbelt reports `full` enforcement and `requireFull` defaults on | Approval policies + ExecPolicy + platform sandbox (Seatbelt/Landlock) + Guardian second-pass review | `sandbox.confine` (bwrap/Landlock/Seatbelt), fail-closed | None built-in — tools run with host user permissions; project trust gate only; containerization documented externally | None built-in — your infrastructure | Guardrails; no sandbox | Six permission modes (`default`/`plan`/`acceptEdits`/`auto`/`dontAsk`/`bypassPermissions`), `allow`/`deny`/`ask` rules from eight sources, `defer` as a fourth per-call state, headless fail-closed deny; real Seatbelt/bwrap confinement with a domain allowlist, but **opt-in and fail-open** — `failIfUnavailable` defaults to false, so a missing backend runs commands unconfined | <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
 | **Protocol surface** | One JSON Schema → codegen TS types + Pydantic models, lockstep-released; sidecar JSON-RPC (23 methods); conformance suite keeps both SDKs byte-compatible | app-server JSON-RPC (v2) with generated TS types; single-language (Rust) core | JSON-RPC SDK + ACP server; typed session-event map | CBOR-framed `pi-protocol` (experimental server/client) plus `--mode rpc` JSONL over stdio; no cross-language codegen | LangGraph Platform REST/SDK | OpenAI Responses / Realtime APIs | `--print --input-format/--output-format stream-json` plus ~25 control-request subtypes, so a host can answer permission prompts (`can_use_tool`), interrupt, swap the model mid-session (`set_model`), and hot-reload plugins; typed via the published `sdk-tools.d.ts` (TypeScript only) |
 | **Skills ecosystem** | Layered disclosure: eager base skills in the system prompt, catalog skills loaded on demand via a `skill` tool; `SKILL.md`-compatible frontmatter (`disable-model-invocation` interop) | Skill files (`.codex/skills`) | Skill provider registry + catalog/loader tool | Agent Skills (`SKILL.md`) from `~/.pi/agent/skills/` and `.pi/skills/`, exposed as `/skill:name` | None built-in | None built-in | Agent Skills plus a plugin runtime: a plugin contributes commands, skills, agents, hooks, MCP and LSP servers, output styles, themes, workflows and background monitors, from six install sources, hot-reloadable via `reload_plugins`, with a marketplace schema, a blocklist and an impersonation check |
-| **Persistence / sessions** | Append-only JSONL record per session via `TraceRecorder` + resume projection; fork with seed provenance and cycle-guarded `lineage` walking (`fork_record` / `resolve_fork_seq` — regenerate forks at the last user turn, the old tail stays intact); `CompactionBoundary` carries pre/post token counts across compactions; cancelled turns still persist traces | Rollout files as source of truth; resume + fork | Event-sourced session log (SQLite); fork | JSONL session tree keyed by cwd; `-c` / `-r` / `--fork`; in-session `/tree` branch UI; optional SQLite backend on the library path | Checkpointers (SQLite/Postgres/…) | Sessions (memory) | JSONL transcript per session under `~/.claude/projects/<cwd>/`, `parentUuid` chain with `isSidechain` branches, `--fork-session`, `--resume-session-at`, and a `logical_parent_uuid` that survives compaction |
+| **Persistence / sessions** | Append-only JSONL record per session via `TraceRecorder` + resume projection; fork with seed provenance and cycle-guarded `lineage` walking (`fork_record` / `resolve_fork_seq` — regenerate forks at the last user turn, the old tail stays intact); `agent.session.tree` returns the full family tree (cousins and all, depth/node-capped) and the desktop renders it as a `/tree`-style modal branch view with single-hop switching to any node; `CompactionBoundary` carries pre/post token counts across compactions; cancelled turns still persist traces | Rollout files as source of truth; resume + fork | Event-sourced session log (SQLite); fork | JSONL session tree keyed by cwd; `-c` / `-r` / `--fork`; in-session `/tree` branch UI; optional SQLite backend on the library path | Checkpointers (SQLite/Postgres/…) | Sessions (memory) | JSONL transcript per session under `~/.claude/projects/<cwd>/`, `parentUuid` chain with `isSidechain` branches, `--fork-session`, `--resume-session-at`, and a `logical_parent_uuid` that survives compaction |
 | **Deployment form** | **Dual form**: embeddable signed sidecar binary (desktop: Electron/Tauri/Wails) + in-process FastAPI (server) | Local CLI/desktop + hosted cloud | Library + headless/ACP binaries | npm packages + Bun standalone binaries; library SDK via `createAgentSession` | Self-host or LangGraph Platform | Your infra + OpenAI platform | Eight platform-specific native binaries (~200 MB each) behind an installer stub; no user-visible runtime to install |
 | **Maturity** | `0.2.x`; one production consumer ([DeepPath](https://deeppath.cc)); small traffic | Massive real-world usage | Pre-release (`0.1.x` RC); internal use | Lockstep `0.85.1` across 11 packages; patch = fixes/additions, minor = breaking, no majors | Widely adopted in production | Production, OpenAI-tied | Production; Anthropic models only, routed across first-party, Bedrock, Vertex, Foundry and Gateway. Much of the surface sits behind server-side flags, so reading the binary tells you the default, not necessarily what is live for a given user |
 
@@ -90,13 +90,18 @@ each tier is independently adoptable.
   paths, so MCP tools reach the `ToolRouter` directly; desktop hosts may
   still prefer the reverse channel. What we lack is LangGraph's breadth of
   prebuilt integrations, not the wiring.
-- **Extension runtime is minimal.** Third-party tools register through the
-  `steerable.tools` `importlib.metadata` entry point, loaded at sidecar boot
-  into the `ToolRouter`. That is a chosen, smaller surface than Claude Code's
-  plugin runtime (six install sources, marketplace, hot reload), Codex's
-  contributor traits + marketplace, DeepSeek Harness's Cordis plugins, or
-  Pi's runtime TypeScript extension loading — declare-and-register, no
-  plugin lifecycle or hot reload.
+- **Extension runtime: lifecycle + hot reload, two install sources.** A
+  `PluginRegistry` tracks which tools each plugin registered (via a
+  recording router proxy), and supports `enable` / `disable` / `unload` /
+  `reload` per plugin — reload re-executes the module in place and swaps
+  its tool registrations without a sidecar restart. Two install sources
+  ship: the `steerable.tools` `importlib.metadata` entry point group and a
+  local directory source (`STEERABLE_PLUGIN_DIR`, each `.py` a plugin with a
+  top-level `register(router)`); the `PluginSource` protocol leaves room
+  for a remote/marketplace source. Name collisions fail closed (first
+  registration wins, the offender is named). What we still lack versus
+  Claude Code is the marketplace, blocklist, and impersonation check — the
+  runtime is there, the distribution trust layer is not.
 - **Context compaction now ships four paths** — pressure-triggered,
   overflow-reactive, periodic micro-compaction (tool-result pruning), and
   manual (`compact_now`, the host-command path) — with a circuit breaker
@@ -105,15 +110,16 @@ each tier is independently adoptable.
   `CompactionBoundary` (the `compact_boundary` observability pattern).
   What we still lack is Claude Code's partial-compaction variant that
   preserves named conversation sections.
-- **Structured questions reach the model end-to-end.** The `ask_user` tool
-  (schema'd select / text / password questions with multi-select and an
-  automatic custom-text path) registers sidecar-side per request, the
-  desktop answers over the reverse channel with a rendered question card
-  (Electron and browser-server modes alike), and answers land back in the
-  transcript as the tool result. Claude Code's `AskUserQuestion` remains
-  richer on constraints (1–4 questions, 2–4 options each, an automatic
-  "Other" option) — ours validates and normalizes model-emitted fields at
-  the tool boundary instead of constraining counts.
+- **Structured questions reach the model end-to-end, at Claude Code's
+  constraints.** The `ask_user` tool registers sidecar-side per request,
+  the desktop answers over the reverse channel with a rendered question
+  card (Electron and browser-server modes alike), and answers land back in
+  the transcript as the tool result. The schema is tightened to Claude
+  Code's `AskUserQuestion` spec: 1–4 questions, a `header` chip label (≤12
+  chars, derived from the question text when the model omits it), 2–4
+  options per select question, an explicit `multiSelect` (defaulted to
+  single-select when omitted), and an automatic "Other" free-text escape
+  the host appends. Out-of-range payloads fail closed at the tool boundary.
 - **Write-conflict detection is now a default-on hard gate.** Both the
   framework file tools and the desktop local executor refuse a write or
   edit to a file the model has not read this session (opt-out env var for
@@ -122,28 +128,48 @@ each tier is independently adoptable.
   external modification between read and write by content hash — a
   stronger check than Claude Code's mtime compare, in the spirit of
   DeepSeek Harness's versioned-handle CAS.
-- **Web tools carry the deployment policy knobs.** `web_search` /
-  `web_fetch` ship with domain allow/block lists (passed to Tavily's
-  native `include_domains`/`exclude_domains` and enforced post-hoc for
-  every provider, so the policy is provider-independent) and per-session
-  call caps (search defaults to 200, Claude Code's per-session WebSearch
-  limit parity). What we still lack is a first-party server-side search
-  backend with usage accounting — non-OpenAI providers still need a Tavily
-  key, and Harbor evals run `--no-web-tools` regardless.
+- **Web tools carry the deployment policy knobs, with two first-party
+  search backends.** `web_search` / `web_fetch` ship with domain
+  allow/block lists (passed to Tavily's native
+  `include_domains`/`exclude_domains` and enforced post-hoc for every
+  provider, so the policy is provider-independent) and per-session call
+  caps (search defaults to 200, Claude Code's per-session WebSearch limit
+  parity). Two search providers ship: Tavily and Brave Search (an
+  independent-index first-party backend — `STEERABLE_WEB_SEARCH_PROVIDER=brave`
+  with `BRAVE_SEARCH_API_KEY`), plus the host-delegated path. What we still
+  lack is a self-hosted usage-accounting service, and Harbor evals run
+  `--no-web-tools` regardless.
 - **Sandbox coverage.** Layer-1 OS confinement covers macOS (Seatbelt) and
   Linux (bwrap, falling back to Landlock). Windows has no rewriter and relies <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
-  on the layer-2 classifier plus consent.
+  on the layer-2 classifier plus consent. Egress control is productized: the
+  bundled `steerable-egress-proxy` (a CONNECT allow-list proxy) is on by
+  default and holds the per-host allow-list outside the sandbox, so per-host
+  enforcement survives sbpl's port-only limitation on macOS. On Linux the
+  layer-1 backends have no per-host pinning (bwrap's `allowed_hosts` is
+  interface-compatible only, Landlock has none), so per-host egress there is
+  enforced by the proxy plus the app-layer domain list, not the namespace —
+  the UI says so honestly. When the proxy is live, shell egress pins to its
+  localhost endpoint, Seatbelt reports `full`, and `requireFull` defaults on.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream (post-hoc OTLP export only).
-- **Multi-agent: delegation yes, orchestration no.** The `SubagentExecutor`
-  seam answers a `delegate_subagent` tool call with a bounded child
-  CoreLoop — depth-1 by construction, per-profile tool domains that fail
-  closed (`tool_not_delegated`), named `subagent_type` profiles with
-  per-profile models (via the host's provider factory) and opt-in
-  concurrency. What stays out of scope by design: planning, DAGs,
-  groupchat, and background task systems — those live above CoreLoop as
-  product concerns. If you want batteries-included orchestration,
-  LangGraph or the Agents SDK will get you there faster.
+- **Multi-agent: one delegate tool on a shared pool.** The model-facing
+  surface is a single `delegate_subagent` tool — depth-1 by construction,
+  named `subagent_type` profiles with per-profile tool domains that fail
+  closed (`tool_not_delegated`), per-profile models (via the host's
+  provider factory), and opt-in concurrency. Underneath, delegations run
+  on the framework's `AgentPool`, so concurrent profiles execute in
+  parallel under one budget and child lifecycle lands as `agent.child`
+  events hosts can render live. A six-tool orchestration family
+  (`agent_spawn` / `agent_send` / `agent_wait` / `agent_close` /
+  `agent_list` / `agent_interrupt`) remains available as an opt-in
+  advanced mode for explicit coordination, sharing the same pool. The
+  desktop additionally ships a cross-turn background Task family
+  (`task_run` / `task_status` / `task_result` on a host-side task table,
+  with a task panel UI) — tasks run on their own sidecar stream so they
+  outlive the parent turn, and compose with git-worktree isolation. What
+  stays out of scope by design in the framework: planning, DAGs, and
+  groupchat. If you want batteries-included orchestration, LangGraph or
+  the Agents SDK will get you there faster.
 
 ## Terminal-Bench 2.1
 
