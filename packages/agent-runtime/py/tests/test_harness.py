@@ -22,7 +22,7 @@ from steerable_agent_runtime.harness import (
     SingleAgent,
     Stateless,
     FilesystemState,
-    SubAgentDelegation,
+    PoolOrchestration,
     ToolSelection,
     ValidationStrategy,
 )
@@ -108,6 +108,23 @@ async def test_pressure_compaction_owns_only_the_pre_step_slice() -> None:
     error = LLMError("overflow", kind="context_overflow", provider="test")
     retry = await hooks.on_request_error(error, [], _Ctx())
     assert retry.kind == "fail"
+
+
+def test_pressure_compaction_wires_micro_compact_interval() -> None:
+    """The spec-facing ``micro_compact_interval_rounds`` param reaches the
+    CompactionHooks it builds (CC time-based microcompact parity); default 0
+    keeps it off so the prompt-cache prefix stays intact."""
+    assert (
+        PressureCompaction(max_context_tokens=1000).micro_compact_interval_rounds
+        == 0
+    )
+    hooks = PressureCompaction(
+        max_context_tokens=1000, micro_compact_interval_rounds=5
+    ).hooks()
+    # _PreStepOnly wraps the CompactionHooks; reach the inner instance.
+    inner = getattr(hooks, "_inner", None) or getattr(hooks, "_hooks", None)
+    assert inner is not None
+    assert inner._micro_compact_interval == 5
 
 
 # -- retry -------------------------------------------------------------------
@@ -265,7 +282,7 @@ def test_single_agent_wrap_is_identity() -> None:
 def test_subagent_delegation_wraps_with_orchestration_executor() -> None:
     from steerable_agent_runtime.orchestration import OrchestrationExecutor
 
-    wrapped = SubAgentDelegation().wrap(_FakeExecutor(), provider=_FakeProvider())
+    wrapped = PoolOrchestration().wrap(_FakeExecutor(), provider=_FakeProvider())
     assert isinstance(wrapped, OrchestrationExecutor)
 
 

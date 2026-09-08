@@ -39,6 +39,10 @@ the host's network position. Every hop (initial URL and each redirect
 target) is validated: http(s) only, no credentials-in-URL, and the host's
 DNS answers must ALL be globally reachable (``ipaddress.is_global``), with
 IPv4-mapped and NAT64 (64:ff9b::/96) forms unwrapped before the check.
+One exemption: the 198.18.0.0/15 fake-ip pool (Clash / sing-box fake-ip
+DNS) is allowed — reserved, non-routable, and intercepted by the proxy
+downstream, so refusing it only breaks fetching behind such proxies
+without protecting any real endpoint.
 Residual gap, documented honestly: the resolver check and httpx's own
 connect resolve twice, so a hostile authoritative DNS could rotate answers
 between them (classic TOCTOU). dsh pins the connection to the validated
@@ -46,11 +50,16 @@ address; httpx exposes no lookup hook, so per-hop re-validation plus the
 short window is the mitigation here.
 
 Egress confinement: when the desktop runs the framework's per-host egress
-proxy (``STEERABLE_EGRESS_PROXY=1``), the sidecar's outbound is confined to
-the proxy, which only tunnels the configured LLM provider endpoint. The
-desktop marks that posture with ``STEERABLE_EGRESS_CONFINED=1`` in the
-sidecar env; both tools then fail loud with an actionable error instead of
-hanging behind a proxy that 403/405s them.
+proxy (``STEERABLE_EGRESS_PROXY``, default-on in the desktop), the sidecar's
+outbound is confined to the proxy. The proxy's CONNECT allow-list covers the
+LLM provider endpoint plus the deployment's web domain list — one source
+(``STEERABLE_WEB_ALLOWED_DOMAINS``) feeds both this module's
+application-layer policy and the proxy's network-layer list. The desktop
+marks that posture with ``STEERABLE_EGRESS_CONFINED=1`` in the sidecar env
+and points ``HTTPS_PROXY`` at the proxy; both tools then run *through* it
+(httpx ``trust_env``), with the domain policy and the SSRF pre-check
+unchanged. A confinement marker without any proxy env is a misconfiguration
+(the proxy failed to start but the marker leaked) and fails loud.
 """
 
 from __future__ import annotations
@@ -95,6 +104,17 @@ _MAX_REDIRECTS_CEILING = 20
 #: — 169.254.169.254 in disguise).
 _NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
 
+#: Fake-IP pool (RFC 2544 benchmarking range) that Clash / sing-box /
+#: V2Ray-style fake-ip DNS hands out for proxied domains; the proxy's
+#: TUN/real-stack intercepts the connection downstream and maps it back to
+#: the real host. The range is reserved and non-routable, so no real
+#: metadata/internal endpoint lives here — allowing it does not widen the
+#: SSRF surface. Without the exemption every web_fetch behind a fake-ip
+#: proxy dies in the SSRF pre-check even though the network path itself
+#: works (live-verified 2026-09-08: wttr.in / weather.com.cn / example.com
+#: all resolved to 198.18.0.x under Clash fake-ip and were refused).
+_FAKE_IP_RANGE = ipaddress.ip_network("198.18.0.0/15")
+
 _USER_AGENT = "steerable-sidecar/0.1 (+https://github.com/deeppath/steerable-framework)"
 
 #: Env marker the desktop sets on the sidecar process when the framework's
@@ -103,20 +123,42 @@ _USER_AGENT = "steerable-sidecar/0.1 (+https://github.com/deeppath/steerable-fra
 #: leave the sidecar believing it is confined when it is not.
 _EGRESS_CONFINED_ENV = "STEERABLE_EGRESS_CONFINED"
 
+#: Appended to network-failure errors while egress is confined: behind the
+#: proxy the likely cause is the CONNECT allow-list, not the network.
+_CONFINED_PROXY_HINT = (
+    " (egress is confined to the per-host proxy — the target host must be on "
+    "the proxy's allow-list, which the host builds from "
+    "STEERABLE_WEB_ALLOWED_DOMAINS)"
+)
+
 
 def _egress_confined(environ: Mapping[str, str]) -> bool:
     return (environ.get(_EGRESS_CONFINED_ENV) or "").strip() == "1"
 
 
+def _egress_proxy_available(environ: Mapping[str, str]) -> bool:
+    """True when the confining host also pointed this process at the proxy.
+
+    The desktop sets ``HTTPS_PROXY`` (plus ``HTTP_PROXY`` in credential-
+    broker mode) together with ``STEERABLE_EGRESS_CONFINED``; httpx
+    (``trust_env``) then tunnels through the proxy and its CONNECT
+    allow-list enforces the per-host policy. The marker without any proxy
+    env means the confinement has no web path at all.
+    """
+    return any(
+        (environ.get(name) or "").strip()
+        for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
+    )
+
+
 def _confined_error(tool: str, target: str) -> str:
     return (
         f"{tool} is unavailable in this deployment: the sidecar's network "
-        f"egress is confined to the per-host egress proxy "
-        f"({_EGRESS_CONFINED_ENV}=1), which only tunnels the configured LLM "
-        f"provider endpoint — this call cannot reach {target!r}. Remedies: "
-        "restart the host without the egress proxy (the Seatbelt port-level "
-        "egress list still applies), or extend the proxy's allow-list to "
-        "include the target host."
+        f"egress is marked confined ({_EGRESS_CONFINED_ENV}=1) but no egress "
+        f"proxy is configured (HTTPS_PROXY/HTTP_PROXY unset), so this call "
+        f"cannot reach {target!r}. Remedies: restart the host without the "
+        "egress proxy (the Seatbelt port-level egress list still applies), "
+        "or restore the proxy env on the sidecar process."
     )
 
 
@@ -191,6 +233,7 @@ class WebToolsConfig:
         api_key = (
             (env.get("STEERABLE_WEB_SEARCH_API_KEY") or "").strip()
             or (env.get("TAVILY_API_KEY") or "").strip()
+            or (env.get("BRAVE_SEARCH_API_KEY") or "").strip()
             or None
         )
         return cls(
@@ -218,9 +261,16 @@ class WebToolsConfig:
                 (env.get("STEERABLE_WEB_SEARCH_PROVIDER") or "").strip() or "tavily"
             ),
             search_api_key=api_key,
+            # Default base URL follows the provider; an explicit
+            # STEERABLE_WEB_SEARCH_BASE_URL always wins (self-hosted proxy).
             search_base_url=(
                 (env.get("STEERABLE_WEB_SEARCH_BASE_URL") or "").strip()
-                or "https://api.tavily.com"
+                or (
+                    "https://api.search.brave.com"
+                    if (env.get("STEERABLE_WEB_SEARCH_PROVIDER") or "").strip()
+                    == "brave"
+                    else "https://api.tavily.com"
+                )
             ),
             allowed_domains=_domain_list(env, "STEERABLE_WEB_ALLOWED_DOMAINS"),
             blocked_domains=_domain_list(env, "STEERABLE_WEB_BLOCKED_DOMAINS"),
@@ -386,6 +436,113 @@ class TavilySearchProvider:
         return hits
 
 
+class BraveSearchProvider:
+    """Brave ``GET {base_url}/res/v1/web/search`` — an independent-index
+    first-party backend (no self-hosted usage metering required).
+
+    The key comes from ``STEERABLE_WEB_SEARCH_API_KEY`` /
+    ``BRAVE_SEARCH_API_KEY``. Unlike Tavily, Brave's domain filter is not a
+    request parameter, so the tool's allow/block lists are applied to the
+    returned hits post-hoc (``domain_policy_error`` already runs per-URL on
+    fetch; here it filters search hits the same way).
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str = "https://api.search.brave.com",
+        timeout_ms: int = 30_000,
+        allowed_domains: tuple[str, ...] = (),
+        blocked_domains: tuple[str, ...] = (),
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._endpoint = base_url.rstrip("/") + "/res/v1/web/search"
+        self._timeout = httpx.Timeout(timeout_ms / 1000)
+        self._allowed_domains = allowed_domains
+        self._blocked_domains = blocked_domains
+        self._client = client
+
+    async def search(self, query: str, *, max_results: int) -> list[WebSearchHit]:
+        if self._client is not None:
+            return await self._request(self._client, query, max_results)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            return await self._request(client, query, max_results)
+
+    def _policy_allows(self, url: str) -> bool:
+        host = (urlsplit(url).hostname or "").lower()
+        if not host:
+            return False
+        if any(_domain_matches(host, d) for d in self._blocked_domains):
+            return False
+        if self._allowed_domains and not any(
+            _domain_matches(host, d) for d in self._allowed_domains
+        ):
+            return False
+        return True
+
+    async def _request(
+        self, client: httpx.AsyncClient, query: str, max_results: int
+    ) -> list[WebSearchHit]:
+        try:
+            response = await client.get(
+                self._endpoint,
+                params={"q": query, "count": min(max_results, 20)},
+                headers={
+                    "Accept": "application/json",
+                    "X-Subscription-Token": self._api_key,
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise WebSearchBackendError(
+                f"web search timed out: {exc.__class__.__name__}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise WebSearchBackendError(f"web search request failed: {exc}") from exc
+        if response.status_code in (401, 403):
+            raise WebSearchBackendError(
+                f"search provider rejected the credential (HTTP "
+                f"{response.status_code}) — check STEERABLE_WEB_SEARCH_API_KEY"
+            )
+        if response.status_code == 429:
+            raise WebSearchBackendError(
+                "search provider rate-limited the request (HTTP 429)"
+            )
+        if response.status_code != 200:
+            raise WebSearchBackendError(
+                f"search provider returned HTTP {response.status_code}: "
+                f"{response.text[:200]}"
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WebSearchBackendError(
+                "search provider returned a non-JSON response"
+            ) from exc
+        hits: list[WebSearchHit] = []
+        web = payload.get("web") or {}
+        for item in web.get("results") or []:
+            if not isinstance(item, dict) or not item.get("url"):
+                continue
+            url = str(item["url"])
+            if not self._policy_allows(url):
+                continue
+            hits.append(
+                WebSearchHit(
+                    title=str(item.get("title") or ""),
+                    url=url,
+                    snippet=str(item.get("description") or ""),
+                    published_at=(
+                        str(item["age"]) if item.get("age") else None
+                    ),
+                )
+            )
+            if len(hits) >= max_results:
+                break
+        return hits
+
+
 class WebSearchBackendError(Exception):
     """A configured search backend failed (distinct from "not configured",
     which keeps the tool unregistered)."""
@@ -430,9 +587,20 @@ def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | N
                 blocked_domains=config.blocked_domains,
             )
         return HostDelegatedSearchProvider()
+    if name == "brave":
+        if not config.search_api_key:
+            return None
+        return BraveSearchProvider(
+            api_key=config.search_api_key,
+            base_url=config.search_base_url,
+            timeout_ms=config.search_timeout_ms,
+            allowed_domains=config.allowed_domains,
+            blocked_domains=config.blocked_domains,
+        )
     if name != "tavily":
         raise ValueError(
-            f"unknown web search provider {name!r} (available: 'tavily', 'host')"
+            f"unknown web search provider {name!r} "
+            "(available: 'tavily', 'brave', 'host')"
         )
     if not config.search_api_key:
         return None
@@ -466,6 +634,17 @@ async def _default_resolve_host(host: str, port: int) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
+def _is_fake_ip(candidate: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for fake-ip pool members, incl. their v4-mapped v6 wrappers."""
+    if candidate in _FAKE_IP_RANGE:
+        return True
+    if isinstance(candidate, ipaddress.IPv6Address):
+        mapped = candidate.ipv4_mapped
+        if mapped is not None and mapped in _FAKE_IP_RANGE:
+            return True
+    return False
+
+
 def _assert_public_address(address: str) -> None:
     """Reject any non-globally-reachable address, unwrapping v4-in-v6 forms."""
     try:
@@ -479,12 +658,13 @@ def _assert_public_address(address: str) -> None:
         if ip in _NAT64_WELL_KNOWN:
             candidates.append(ipaddress.IPv4Address(int(ip) & 0xFFFF_FFFF))
     for candidate in candidates:
-        if not candidate.is_global:
-            raise WebFetchPolicyError(
-                f"refusing to fetch a non-public address ({address}): "
-                "loopback, private, link-local (incl. 169.254.169.254-style "
-                "metadata endpoints), and reserved ranges are off-limits"
-            )
+        if candidate.is_global or _is_fake_ip(candidate):
+            continue
+        raise WebFetchPolicyError(
+            f"refusing to fetch a non-public address ({address}): "
+            "loopback, private, link-local (incl. 169.254.169.254-style "
+            "metadata endpoints), and reserved ranges are off-limits"
+        )
 
 
 def _parse_fetch_url(url: str) -> tuple[str, int]:
@@ -643,6 +823,7 @@ async def _fetch(
     config: WebToolsConfig,
     client_factory: ClientFactory,
     resolve_host: ResolveHost,
+    egress_confined: bool = False,
 ) -> ToolResult:
     timeout = httpx.Timeout(config.fetch_timeout_ms / 1000)
     current = url
@@ -692,7 +873,10 @@ async def _fetch(
             except httpx.HTTPError as exc:
                 return ToolResult(
                     success=False,
-                    error=f"web_fetch request failed for {current}: {exc}",
+                    error=(
+                        f"web_fetch request failed for {current}: {exc}"
+                        + (_CONFINED_PROXY_HINT if egress_confined else "")
+                    ),
                     needsFollowup=True,
                 )
         return ToolResult(
@@ -813,6 +997,11 @@ def register_web_tools(
     cfg = config or WebToolsConfig.resolve(env)
     make_client = client_factory or _default_client_factory
     resolve = resolve_host or _default_resolve_host
+    # Confined-with-a-proxy runs the tools through the proxy (the CONNECT
+    # allow-list + the app-layer domain policy both hold); confined WITHOUT
+    # a proxy is a misconfiguration and fails loud per call.
+    confined = _egress_confined(env)
+    confined_without_proxy = confined and not _egress_proxy_available(env)
     # Per-session call counters — this closure is per sidecar process, and
     # a sidecar process serves one session.
     session_counts = {"web_fetch": 0, "web_search": 0}
@@ -837,7 +1026,7 @@ def register_web_tools(
         url = (url or "").strip()
         if not url:
             return ToolResult(success=False, error="url is empty", needsFollowup=True)
-        if _egress_confined(env):
+        if confined_without_proxy:
             return ToolResult(
                 success=False,
                 error=_confined_error("web_fetch", url),
@@ -852,7 +1041,11 @@ def register_web_tools(
         if capped is not None:
             return capped
         return await _fetch(
-            url, config=cfg, client_factory=make_client, resolve_host=resolve
+            url,
+            config=cfg,
+            client_factory=make_client,
+            resolve_host=resolve,
+            egress_confined=confined,
         )
 
     router.register(
@@ -883,7 +1076,7 @@ def register_web_tools(
                 return ToolResult(
                     success=False, error="query is empty", needsFollowup=True
                 )
-            if _egress_confined(env):
+            if confined_without_proxy:
                 return ToolResult(
                     success=False,
                     error=_confined_error("web_search", cfg.search_base_url),
@@ -904,7 +1097,15 @@ def register_web_tools(
             try:
                 hits = await provider.search(query, max_results=cap)
             except WebSearchBackendError as exc:
-                return ToolResult(success=False, error=str(exc), needsFollowup=True)
+                message = str(exc)
+                # Behind the confining proxy a network-y backend failure most
+                # likely means the search endpoint is not on the CONNECT
+                # allow-list — name that, not just the transport error.
+                if confined and message.startswith(
+                    ("web search request failed", "web search timed out")
+                ):
+                    message += _CONFINED_PROXY_HINT
+                return ToolResult(success=False, error=message, needsFollowup=True)
             except Exception as exc:  # provider seam is external code
                 return ToolResult(
                     success=False,

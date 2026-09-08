@@ -20,7 +20,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from steerable_agent_protocol.generated import ToolCall
 
@@ -29,6 +29,7 @@ from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
+from .presets import ProviderPreset, preset_for
 from .system_proxy import client_env_kwargs
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,11 @@ class OpenAICompatProvider:
     api_key: str | None = None
     default_temperature: float | None = None
     compat: OpenAICompatFlags | None = None
+    #: Vendor-preset selection: ``"auto"`` matches ``llm.presets.preset_for``
+    #: on (base_url, model); ``"off"`` disables the layer for this provider;
+    #: a ``ProviderPreset`` instance pins that preset regardless of the
+    #: registry (host settings UIs send an explicit choice this way).
+    preset: ProviderPreset | Literal["auto", "off"] = "auto"
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -419,9 +425,20 @@ class OpenAICompatProvider:
         extra: dict[str, Any],
     ) -> dict[str, Any]:
         compat = self.compat or OpenAICompatFlags()
+        # Vendor-documented optimal parameters (llm.presets): defaults filled
+        # only where the caller left the field unset — explicit per-request
+        # fields, host extra kwargs, and default_temperature always win, and
+        # compat flags still gate what may be sent at all. The provider's
+        # `preset` field selects the source: auto-match, off, or pinned.
+        if self.preset == "off":
+            preset = None
+        elif self.preset == "auto":
+            preset = preset_for(self.base_url, self.model)
+        else:
+            preset = self.preset
         body: dict[str, Any] = {
             "model": self.model,
-            "messages": [_encode_message(m) for m in messages],
+            "messages": [_encode_message(m, compat=compat) for m in messages],
             "stream": stream,
         }
         if stream and compat.supports_usage_in_streaming:
@@ -431,30 +448,51 @@ class OpenAICompatProvider:
             # vLLM, DeepSeek; strict vendors flag out via compat.
             body["stream_options"] = {"include_usage": True}
         eff_temperature = temperature if temperature is not None else self.default_temperature
+        if eff_temperature is None and preset is not None:
+            eff_temperature = preset.temperature
         if eff_temperature is not None and compat.supports_temperature:
             body["temperature"] = eff_temperature
-        if max_tokens is not None:
-            body[compat.max_tokens_field] = max_tokens
+        eff_max_tokens = max_tokens
+        if eff_max_tokens is None and preset is not None:
+            eff_max_tokens = preset.max_tokens
+        if eff_max_tokens is not None:
+            body[compat.max_tokens_field] = eff_max_tokens
         if tools is not None:
             tools_list = list(tools)
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
-        # Z.AI / GLM and DeepSeek thinking models 400 ``tool_choice=required``.
-        # Harbor still logs the hook; the wire must send auto or the trial
-        # dies on round 0 (failed-prev 33335200327). Models that already
-        # rejected ``required`` once are remembered per process and downgraded
-        # before the next attempt.
-        if body.get("tool_choice") == "required" and _rejects_required_tool_choice(
-            self.model, self.base_url
+        if preset is not None:
+            # Fill-only-when-absent: anything in ``extra`` already won above.
+            if preset.top_p is not None and "top_p" not in body:
+                body["top_p"] = preset.top_p
+            for key, value in preset.extra_body.items():
+                if key not in body:
+                    body[key] = value
+        # ``tool_choice=required`` downgrade paths:
+        #  - compat flag: vendors whose thinking mode 400s the forced value
+        #    (DeepSeek: "Thinking mode does not support this tool_choice");
+        #  - Z.AI / GLM (direct or OpenRouter pin) 400s it outright —
+        #    model-name based, which host flags can't cover. Harbor still
+        #    logs the hook; the wire must send auto or the trial dies on
+        #    round 0 (failed-prev 33335200327). Models that already rejected
+        #    ``required`` once are remembered per process and downgraded
+        #    before the next attempt.
+        if body.get("tool_choice") == "required" and (
+            not compat.supports_forced_tool_choice
+            or _rejects_required_tool_choice(self.model, self.base_url)
         ):
             body["tool_choice"] = "auto"
-        # W6-8: clamp the env-requested reasoning effort to a level the model
+        # W6-8: clamp the requested reasoning effort to a level the model
         # actually supports (structured ModelInfo replaces the raw env
         # passthrough). A model with no reasoning knob gets no parameter at
-        # all — sending one would be an unsupported-field error on strict APIs.
+        # all — sending one would be an unsupported-field error on strict
+        # APIs. The env var is the explicit request; the preset's documented
+        # default applies only when the env is unset.
         effort = clamp_reasoning_effort(
-            self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            self.model,
+            os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            or (preset.reasoning_effort if preset is not None else ""),
         )
         if effort and compat.supports_reasoning_effort:
             # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
@@ -587,7 +625,10 @@ def _encode_content(message: LLMMessage) -> str | list[dict[str, Any]]:
     return out
 
 
-def _encode_message(message: LLMMessage) -> dict[str, Any]:
+def _encode_message(
+    message: LLMMessage, *, compat: OpenAICompatFlags | None = None
+) -> dict[str, Any]:
+    flags = compat or OpenAICompatFlags()
     out: dict[str, Any] = {"role": message.role, "content": _encode_content(message)}
     if message.name is not None:
         out["name"] = message.name
@@ -606,11 +647,13 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
             for tc in message.tool_calls
         ]
     # OpenRouter: echo reasoning_details unmodified so GLM continues after
-    # tools. Prefer the structured block; plaintext is the fallback.
+    # tools. Prefer the structured block; plaintext is the fallback. The
+    # plaintext echo key is compat data: DeepSeek thinking mode 400s unless
+    # the round-trip uses its own ``reasoning_content`` field.
     if message.reasoning_details:
         out["reasoning_details"] = message.reasoning_details
     elif message.reasoning:
-        out["reasoning"] = message.reasoning
+        out[flags.reasoning_echo_field] = message.reasoning
     return out
 
 

@@ -128,11 +128,26 @@ class OrchestrationStrategy(Protocol):
 
 
 class _PreStepOnly(NoopHooks):
-    def __init__(self, inner: LoopHooks) -> None:
+    """Project a hooks impl onto the pre_step slice.
+
+    ``forward`` names optional off-protocol capabilities (probed with
+    ``getattr``, e.g. ``compact_now``) that must stay reachable through the
+    projection — without it the wrapper would silently sever the sidecar's
+    ``agent.chat.compact`` path, which probes the assembled chain for the
+    one hook implementing manual compaction.
+    """
+
+    def __init__(self, inner: LoopHooks, *, forward: tuple[str, ...] = ()) -> None:
         self._inner = inner
+        self._forward = forward
 
     async def pre_step(self, transcript: Any, ctx: Any) -> Any:
         return await self._inner.pre_step(transcript, ctx)
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._forward:
+            return getattr(self._inner, name)
+        raise AttributeError(name)
 
 
 class _OnRequestErrorOnly(NoopHooks):
@@ -188,6 +203,12 @@ class PressureCompaction:
     keep_last_tool_results: int = 2
     fold_excerpt_chars: int | None = None
     model: str | None = None
+    # Proactive micro-compaction (CC time-based microcompact parity): fold old
+    # tool results every N rounds regardless of pressure. 0 (default) is off —
+    # each fold invalidates the provider prompt-cache prefix, so the interval
+    # trades cache hits for a bounded transcript. R16 found compaction does not
+    # move the eval score, so this stays opt-in capability, not a default.
+    micro_compact_interval_rounds: int = 0
     name: str = "pressure_compaction"
     assumes: str = (
         "long trajectories exceed the window; older detail is expendable "
@@ -209,8 +230,10 @@ class PressureCompaction:
                 keep_last_tool_results=self.keep_last_tool_results,
                 summarizer=provider,
                 model=self.model,
+                micro_compact_interval_rounds=self.micro_compact_interval_rounds,
                 **extra,
-            )
+            ),
+            forward=("compact_now",),
         )
 
 
@@ -805,8 +828,16 @@ class SingleAgent:
 
 
 @dataclass(frozen=True, slots=True)
-class SubAgentDelegation:
-    """The existing AgentPool six-tool delegation (OrchestrationExecutor)."""
+class PoolOrchestration:
+    """The six-tool orchestration family over AgentPool (OrchestrationExecutor).
+
+    This is the advanced, model-driven orchestration arm: the parent gets
+    ``agent_spawn``/``agent_send``/``agent_wait``/``agent_close``/
+    ``agent_list``/``agent_interrupt`` and drives parallel children
+    explicitly. (The single-tool ``delegate_subagent`` seam —
+    ``SubagentExecutor`` — is the default multi-agent surface on the
+    sidecar chat path; both run on the same AgentPool engine.)
+    """
 
     name: str = "subagent"
     assumes: str = (
@@ -852,5 +883,8 @@ STRATEGY_REGISTRY: dict[str, dict[str, type]] = {
         "progressive": ProgressiveDisclosure,
     },
     "memory": {"stateless": Stateless, "filesystem": FilesystemState},
-    "orchestration": {"single": SingleAgent, "subagent": SubAgentDelegation},
+    # The "subagent" key names the eval arm (harness specs predate the
+    # delegate-on-pool unification); the implementation is the six-tool
+    # pool orchestration family.
+    "orchestration": {"single": SingleAgent, "subagent": PoolOrchestration},
 }

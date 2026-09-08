@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
 from steerable_agent_runtime import (
+    ChainHooks,
     CompactionHooks,
     CoreLoop,
     LoopEvent,
@@ -637,6 +639,76 @@ async def test_compact_now_on_a_minimal_transcript_is_a_noop() -> None:
     action = await hooks.compact_now(list(transcript), _Ctx())
     assert action.rewrite is None
     assert hooks.compactions == 0
+
+
+@pytest.mark.asyncio
+async def test_loop_request_compact_rewrites_transcript_mid_run() -> None:
+    """CoreLoop.request_compact() (host /compact parity) is consumed at the
+    next pre_step boundary: the manual pass folds + summarizes regardless of
+    pressure and surfaces as a hook_action event with action="compact"."""
+    tool_started = asyncio.Event()
+    proceed = asyncio.Event()
+    big = "y" * 3_000
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("emit", {"n": 1})]},
+            {"content": "", "tool_calls": [tc("emit", {"n": 2})]},
+            {"content": "final"},
+        ]
+    )
+    router = ToolRouter()
+
+    async def emit(n: int) -> str:
+        if n == 2:
+            tool_started.set()
+            await proceed.wait()  # hold the turn open so the compact lands mid-run
+        return big
+
+    router.register(emit)
+    compaction = CompactionHooks(
+        max_context_tokens=1_000_000,  # pressure never fires on its own
+        keep_last_messages=2,
+        keep_last_tool_results=1,
+    )
+    loop = CoreLoop(
+        provider, RouterToolExecutor(router), hooks=ChainHooks(compaction)
+    )
+
+    task = asyncio.create_task(collect(loop.run([LLMMessage.text_of("user", "go")])))
+    await asyncio.wait_for(tool_started.wait(), timeout=2)
+    loop.request_compact()
+    proceed.set()
+    events = await asyncio.wait_for(task, timeout=2)
+
+    # Exactly one compaction happened, and it was the manual one.
+    assert compaction.compactions == 1
+    compact_events = [
+        e
+        for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "compact"
+    ]
+    assert len(compact_events) == 1
+    assert compact_events[0].data["reason"] == "manual compact"
+    # The final model call saw the compacted transcript (fold + summary).
+    assert any(
+        "[context compacted" in m.content_text
+        or "[tool output folded" in m.content_text
+        for m in provider.calls[-1]
+    )
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_loop_request_compact_without_compaction_hook_is_noop() -> None:
+    # Default NoopHooks has no compact_now: the request is consumed at the
+    # pre_step boundary and quietly does nothing.
+    provider = make_provider([{"content": "answer"}])
+    loop = CoreLoop(provider, RouterToolExecutor(ToolRouter()))
+    loop.request_compact()
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
+    assert events[-1].data["status"] == "completed"
+    assert provider.calls[0][0].content_text == "hi"
+    assert not [e for e in events if e.kind == "hook_action"]
 
 
 @pytest.mark.asyncio

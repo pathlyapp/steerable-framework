@@ -4,9 +4,10 @@ Steerable serves the [Agent Client Protocol](https://agentclientprotocol.com) �
 JSON-RPC over stdio, the editor↔agent wire — so any ACP client (Zed,
 JetBrains, Neovim, …) drives a Steerable loop instead of a vendor CLI. The
 adapter is `steerable_sidecar.acp_adapter`; it implements the stable core of
-`acp.Agent` plus the session-lifecycle and configuration RPCs (11 of 13
+`acp.Agent` plus the session-lifecycle and configuration RPCs (all 13
 <!-- anchor: packages/sidecar/py/src/steerable_sidecar/acp_adapter.py :: def (authenticate|ext_method) -->
-methods; only `authenticate` and `ext_method` are unimplemented).
+methods, including `authenticate` — which verifies the env-injected API key
+resolves — and `ext_method`, the `_`-prefixed extension RPC escape hatch).
 
 ## Install
 

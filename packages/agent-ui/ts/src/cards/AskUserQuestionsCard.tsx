@@ -219,6 +219,13 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
 
             return (
               <li key={q.id} className="space-y-2">
+                <div className="flex items-center gap-2">
+                  {q.header && (
+                    <span className="inline-flex items-center rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--agent-muted-foreground,#6b7280)]">
+                      {q.header}
+                    </span>
+                  )}
+                </div>
                 <p className="text-sm font-medium">
                   {idx + 1}. {q.text}
                   {!inputOnly && q.multiSelect && (

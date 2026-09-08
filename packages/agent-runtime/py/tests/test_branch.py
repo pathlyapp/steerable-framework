@@ -1,4 +1,4 @@
-"""Session branching: fork_record / branch_label / resolve_fork_seq / lineage."""
+"""Session branching: fork_record / branch_label / resolve_fork_seq / lineage / family_tree."""
 
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ from steerable_agent_runtime import (
     branch_label,
     entry_from_dict,
     entry_to_dict,
+    family_tree,
     fork_record,
     lineage,
     resolve_fork_seq,
 )
-from steerable_agent_runtime.branch import BranchPoint
+from steerable_agent_runtime.branch import BranchPoint, FamilyTreeNode
 from steerable_agent_runtime.history import HistorySeed
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
@@ -232,3 +233,100 @@ class TestLineage:
 
         with pytest.raises(ValueError, match="cycle"):
             await lineage(storage, "a")
+
+
+@pytest.mark.asyncio
+class TestFamilyTree:
+    async def test_full_family_from_any_member(self) -> None:
+        """Querying from a deep node returns the WHOLE family from the
+        root — cousins included, not just the queried record's lineage."""
+        storage = InMemoryStorage()
+        await _record_with_turns(storage, "chat_1")
+        await fork_record(storage, "chat_1", until_seq=3, new_record_id="a")
+        await fork_record(storage, "chat_1", until_seq=1, new_record_id="b")
+        await _append_turns(storage, "a", ("user", "variant question"))
+        await fork_record(storage, "a", new_record_id="c")
+
+        family = await family_tree(storage, "c")
+
+        assert family.node_count == 4
+        assert family.truncated is False
+        assert family.root.record_id == "chat_1"
+        assert family.root.depth == 0
+        assert family.root.label == "root"
+        # Children follow enumeration (insertion) order.
+        assert [n.record_id for n in family.root.children] == ["a", "b"]
+        a, b = family.root.children
+        assert (a.source_record_id, a.source_until_seq, a.depth) == ("chat_1", 3, 1)
+        assert a.label == "question 1"
+        assert (b.source_record_id, b.source_until_seq, b.depth) == ("chat_1", 1, 1)
+        assert [n.record_id for n in a.children] == ["c"]
+        assert a.children[0].depth == 2
+        assert a.children[0].label == "variant question"
+        assert b.children == ()
+
+    async def test_same_tree_from_root_and_from_leaf(self) -> None:
+        storage = InMemoryStorage()
+        await _record_with_turns(storage, "chat_1")
+        await fork_record(storage, "chat_1", new_record_id="a")
+
+        from_root = await family_tree(storage, "chat_1")
+        from_leaf = await family_tree(storage, "a")
+
+        assert from_root == from_leaf
+
+    async def test_unrelated_records_are_not_family(self) -> None:
+        """Another chat's records share no provenance — excluded."""
+        storage = InMemoryStorage()
+        await _record_with_turns(storage, "chat_1")
+        await _record_with_turns(storage, "chat_2")
+        await fork_record(storage, "chat_1", new_record_id="a")
+
+        family = await family_tree(storage, "a")
+
+        assert family.node_count == 2
+        assert [n.record_id for n in family.root.children] == ["a"]
+
+    async def test_unknown_record_raises(self) -> None:
+        storage = InMemoryStorage()
+        with pytest.raises(KeyError, match="record not found"):
+            await family_tree(storage, "nope")
+
+    async def test_node_cap_truncates(self) -> None:
+        storage = InMemoryStorage()
+        await _record_with_turns(storage, "chat_1")
+        for index in range(5):
+            await fork_record(storage, "chat_1", new_record_id=f"fork_{index}")
+
+        family = await family_tree(storage, "chat_1", max_nodes=3)
+
+        assert family.truncated is True
+        assert family.node_count == 3  # root + first two children
+        assert [n.record_id for n in family.root.children] == ["fork_0", "fork_1"]
+
+    async def test_depth_cap_truncates(self) -> None:
+        storage = InMemoryStorage()
+        await _record_with_turns(storage, "chat_1")
+        await fork_record(storage, "chat_1", new_record_id="a")
+        await fork_record(storage, "a", new_record_id="b")
+
+        family = await family_tree(storage, "b", max_depth=1)
+
+        assert family.truncated is True
+        assert family.node_count == 2  # root + a; b lies below the cut
+        assert [n.record_id for n in family.root.children] == ["a"]
+        assert family.root.children[0].children == ()
+
+    async def test_cycle_raises(self) -> None:
+        storage = InMemoryStorage()
+        for record, source in (("a", "b"), ("b", "a")):
+            seed = HistorySeed(
+                seq=0,
+                messages=(_user("x"),),
+                token_estimate=1,
+                source_record_id=source,
+            )
+            await storage.append_history(record, [entry_to_dict(seed)])
+
+        with pytest.raises(ValueError, match="cycle"):
+            await family_tree(storage, "a")

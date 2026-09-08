@@ -10,6 +10,8 @@ Methods (see spec/sidecar/README.md for the full catalog):
   agent.session.list       -> AgentSession[]
   agent.session.fork       -> BranchPoint  (fork a record, no turn run)
   agent.session.branches   -> { lineage, children } (branch-family view)
+  agent.session.tree       -> { recordId, tree, nodeCount, truncated }
+                                 (full branch family from the root)
   agent.chat.stream        -> { streamId } (chunks pushed via `stream.chunk`,
                                             terminator via `stream.done`)
   agent.chat.cancel        -> null         (best-effort cancel of an in-flight stream)
@@ -42,7 +44,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from steerable_agent_runtime.llm import ProviderPreset
 
 from steerable_agent_harness import BudgetLimit
 from steerable_agent_protocol.generated import (
@@ -59,6 +64,7 @@ from steerable_agent_runtime import (
     BudgetExhaustedError,
     ChainHooks,
     CoreLoop,
+    FamilyTreeNode,
     FilesystemSkillProvider,
     HistorySeed,
     JsonApprovalStore,
@@ -78,6 +84,7 @@ from steerable_agent_runtime import (
     StorageError,
     SubagentConfig,
     SubagentExecutor,
+    SubagentRegistry,
     ToolDispatchError,
     ToolRouter,
     TraceRecorder,
@@ -87,6 +94,7 @@ from steerable_agent_runtime import (
     entry_from_dict,
     estimate_cost_usd,
     export_trace,
+    family_tree,
     fork_record,
     lineage,
     load_history_transcript,
@@ -120,6 +128,7 @@ from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
 from .loop_limits import resolve_loop_limits
 from .sandbox import select_exec_backend
+from .stream_chunks import RawChunkBridgeHooks
 
 logger = logging.getLogger("steerable_sidecar")
 
@@ -251,13 +260,17 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("presets.describe", self._handle_presets_describe)
+        register("presets.resolve", self._handle_presets_resolve)
         register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
         register("agent.chat.steer", self._handle_chat_steer)
+        register("agent.chat.compact", self._handle_chat_compact)
         register("agent.chat.fork", self._handle_chat_fork)
         register("agent.session.fork", self._handle_session_fork)
         register("agent.session.branches", self._handle_session_branches)
+        register("agent.session.tree", self._handle_session_tree)
         register("agent.session.messages", self._handle_session_messages)
 
     # ------------------------------------------------------------------
@@ -684,6 +697,35 @@ class Sidecar:
         from steerable_agent_runtime.llm import describe_compat_flags
 
         return {"flags": describe_compat_flags()}
+
+    async def _handle_presets_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the provider-preset table to host settings UIs.
+
+        Same service pattern as ``compat.describe``: the framework owns the
+        preset data (`describe_provider_presets`), hosts render their preset
+        picker from this payload so a new table entry needs no host change.
+        """
+        from steerable_agent_runtime.llm import describe_provider_presets
+
+        return {"presets": describe_provider_presets()}
+
+    async def _handle_presets_resolve(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Resolve the preset a given (baseUrl, model) pair would auto-match.
+
+        Powers the settings UI's "what applies" preview without the host
+        reimplementing the matching rules. ``preset`` is the camelCase wire
+        form, or ``None`` when no entry matches (or the layer is disabled
+        via ``STEERABLE_PROVIDER_PRESETS=0``).
+        """
+        from steerable_agent_runtime.llm import preset_for
+
+        params = params or {}
+        preset = preset_for(params.get("baseUrl"), params.get("model"))
+        return {"preset": preset.to_dict() if preset is not None else None}
 
     async def _handle_harness_describe(
         self, _params: dict[str, Any] | None
@@ -1141,6 +1183,63 @@ class Sidecar:
             "children": children,
         }
 
+    async def _handle_session_tree(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Full branch family containing a record (session-tree view).
+
+        Params: ``{"recordId": "chat_..."}``. Returns ``{"recordId",
+        "tree", "nodeCount", "truncated"}`` where ``tree`` is the family
+        root as a recursive node::
+
+            {
+              "recordId", "sourceRecordId", "sourceUntilSeq",
+              "label", "depth",          # depth 0 on the root
+              "children": [...]          # same shape, recursively
+            }
+
+        This is the single-call tree a host needs to render a pi-style
+        full-tree branch view and to validate switching to ANY family
+        member (cousins included) — ``agent.session.branches`` only sees
+        the lineage plus direct children. Expansion is bounded (depth ≤
+        32, nodes ≤ 500 — see ``branch.family_tree``); a cut family comes
+        back with ``truncated: true``. Unknown record → invalid_request;
+        lineage corruption (cycle) → invalid_request, both fail loud.
+        """
+        params = _require_params(params)
+        record_id = params.get("recordId")
+        if not record_id:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+        try:
+            family = await family_tree(self.storage, str(record_id))
+        except KeyError:
+            raise JsonRpcError(
+                f"record not found: {record_id}",
+                code=-32004,
+                kind="invalid_request",
+            ) from None
+        except ValueError as exc:
+            raise JsonRpcError(
+                str(exc), code=-32004, kind="invalid_request"
+            ) from None
+
+        def node_to_dict(node: FamilyTreeNode) -> dict[str, Any]:
+            return {
+                "recordId": node.record_id,
+                "sourceRecordId": node.source_record_id,
+                "sourceUntilSeq": node.source_until_seq,
+                "label": node.label,
+                "depth": node.depth,
+                "children": [node_to_dict(child) for child in node.children],
+            }
+
+        return {
+            "recordId": str(record_id),
+            "tree": node_to_dict(family.root),
+            "nodeCount": family.node_count,
+            "truncated": family.truncated,
+        }
+
     async def _handle_session_messages(
         self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -1196,6 +1295,27 @@ class Sidecar:
         if loop is None:
             return {"ok": False, "reason": "stream_not_active"}
         loop.steer(content)
+        return {"ok": True}
+
+    async def _handle_chat_compact(self, params: dict[str, Any] | None) -> dict[str, Any]:
+        """Manually compact a running CoreLoop turn's transcript — the
+        host-command path (CC ``/compact`` parity).
+
+        The loop consumes the request at its next pre_step boundary: the
+        hook chain's ``compact_now`` folds old tool results and summarizes
+        the middle regardless of pressure, landing as a declared rewrite
+        plus a ``hook_action`` event. Soft-fails like steer — between the
+        host command and this RPC landing, the turn may legitimately have
+        completed.
+        """
+        params = _require_params(params)
+        stream_id = params.get("streamId")
+        if not stream_id:
+            raise JsonRpcError("streamId required", code=-32602, kind="invalid_params")
+        loop = self._coreloops.get(stream_id)
+        if loop is None:
+            return {"ok": False, "reason": "stream_not_active"}
+        loop.request_compact()
         return {"ok": True}
 
     async def _run_chat_stream(
@@ -1526,25 +1646,90 @@ class Sidecar:
                 store=JsonApprovalStore(store_path) if store_path else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
             )
-        # subagent: opt-in delegation seam — advertise the tool and answer it
-        # with a bounded child CoreLoop (depth-1 by construction). Products
-        # that don't want delegation (the desktop today) simply don't pass it.
-        # ``{"toolFilter": ["read_a", "read_b"]}`` narrows the child's tool
-        # domain (W4-5): filtered-out calls fail closed with
-        # tool_not_delegated, so a read-only research sub-agent cannot reach
-        # the parent's write/shell tools by construction.
-        if params.get("subagent"):
-            subagent_opts = params.get("subagent")
+        # subagent: the delegation seam is ON BY DEFAULT (delegate-on-pool
+        # unification) — delegate_subagent is the model's single multi-agent
+        # surface; the six-tool orchestration family below is the opt-in
+        # advanced mode. ``params.subagent: false`` turns delegation off;
+        # a dict configures it. ``{"toolFilter": ["read_a", "read_b"]}``
+        # narrows the child's tool domain (W4-5): filtered-out calls fail
+        # closed with tool_not_delegated, so a read-only research sub-agent
+        # cannot reach the parent's write/shell tools by construction.
+        # Children run as pooled AgentPool runs: lifecycle lands on the
+        # agent.child notification stream, and a concurrent profile's
+        # same-round delegations execute in parallel under the pool budget.
+        subagent_param = params.get("subagent", True)
+        subagent_executor: SubagentExecutor | None = None
+        if subagent_param:
+            subagent_opts = subagent_param if isinstance(subagent_param, dict) else {}
             tool_filter = (
                 frozenset(str(t) for t in subagent_opts.get("toolFilter"))
-                if isinstance(subagent_opts, dict)
-                and isinstance(subagent_opts.get("toolFilter"), list)
+                if isinstance(subagent_opts.get("toolFilter"), list)
                 else None
             )
-            executor = SubagentExecutor(
-                executor, provider, SubagentConfig(tool_filter=tool_filter)
+            # Named profiles (CC ``subagent_type`` parity): the host passes
+            # ``{"profiles": {"researcher": {"toolFilter": [...], "model":
+            # "...", "maxRounds": N, "concurrent": bool}}}`` and the tool
+            # schema advertises the names as a ``subagent_type`` enum. An
+            # unknown name fails closed listing the registered ones.
+            registry = None
+            profiles = subagent_opts.get("profiles")
+            if isinstance(profiles, dict) and profiles:
+                registry = SubagentRegistry()
+                for name, profile_opts in profiles.items():
+                    p = profile_opts if isinstance(profile_opts, dict) else {}
+                    p_filter = (
+                        frozenset(str(t) for t in p.get("toolFilter"))
+                        if isinstance(p.get("toolFilter"), list)
+                        else None
+                    )
+                    registry.register(
+                        str(name),
+                        SubagentConfig(
+                            max_rounds=int(p.get("maxRounds", 8)),
+                            tool_filter=p_filter,
+                            model=(
+                                str(p["model"]) if p.get("model") is not None else None
+                            ),
+                            concurrent=bool(p.get("concurrent", False)),
+                            description=(
+                                str(p["description"])
+                                if p.get("description") is not None
+                                else SubagentConfig().description
+                            ),
+                        ),
+                    )
+
+            # Per-profile models resolve through a provider factory that
+            # re-enters the host's own factory with the model overridden —
+            # a profile naming a model the host cannot serve fails closed
+            # rather than silently running the parent's model.
+            def _subagent_provider_factory(model: str) -> LLMProvider:
+                overridden = {**params, "model": model}
+                return self._llm_provider_factory(overridden)
+
+            subagent_executor = SubagentExecutor(
+                executor,
+                provider,
+                SubagentConfig(
+                    tool_filter=tool_filter,
+                    max_parallel=int(subagent_opts.get("maxParallel", 4)),
+                ),
+                registry=registry,
+                provider_factory=_subagent_provider_factory,
+                # Children advertise the host tool surface (minus the
+                # delegation tool itself), narrowed per profile; the
+                # descriptor appended below is deliberately not in the
+                # snapshot — a child never re-delegates (depth-1).
+                tools=list(tools or []),
+                event_sink=lambda kind, data: self._emit_child_event(
+                    transport, stream_id, kind, data
+                ),
             )
-            tools = [*(tools or []), subagent_tool_descriptor()]
+            executor = subagent_executor
+            tools = [
+                *(tools or []),
+                subagent_tool_descriptor(registry=registry),
+            ]
         # worldState: slow-changing host context (time, workspace, git
         # branch, …) as plain per-section data. The loop injects it once as
         # a <world-state> fragment; later turns diff against the snapshot
@@ -1601,15 +1786,35 @@ class Sidecar:
                         ignore_conditions=ignore_conditions,
                     )
                     tools = [*(tools or []), skill_tool_descriptor()]
-        # orchestration: opt-in multi-agent seam (P3.1) — the parent model
-        # drives parallel child CoreLoops through agent_spawn/send/wait/
-        # close/list/interrupt. Wrapped outermost so children inherit every
-        # gate below (approval, skills, subagent). Budgets fail closed
-        # (maxDepth/maxParallel); depth is structural — a child only has
-        # orchestration tools when its own pool is nested inside.
+        # orchestration: opt-in advanced multi-agent seam (P3.1) — the
+        # parent model drives parallel child CoreLoops through
+        # agent_spawn/send/wait/close/list/interrupt. OFF BY DEFAULT since
+        # the delegate-on-pool unification: delegate_subagent (above) is the
+        # single model-facing surface; the six tools ship only when the host
+        # passes ``orchestration: {"enabled": true, ...}``. Wrapped outermost
+        # so children inherit every gate below (approval, skills, subagent).
+        # Budgets fail closed (maxDepth/maxParallel); depth is structural —
+        # a child only has orchestration tools when its own pool is nested
+        # inside. When both surfaces are on the delegation seam ADOPTS this
+        # pool (attach_pool): one max_parallel budget, one lineage space,
+        # and delegate children appear in agent_list.
         orchestration_param = params.get("orchestration")
         orchestration: OrchestrationExecutor | None = None
-        if isinstance(orchestration_param, dict) and orchestration_param:
+        if (
+            isinstance(orchestration_param, dict)
+            and orchestration_param
+            and not orchestration_param.get("enabled")
+        ):
+            # Pre-unification hosts passed a bare config dict (e.g.
+            # {"maxDepth": 1}) to enable the six tools. That no longer
+            # enables them — say so loudly instead of silently dropping.
+            logger.warning(
+                "orchestration config passed without enabled:true; the six "
+                "orchestration tools stay off (delegate_subagent is the "
+                "default multi-agent surface). Set orchestration.enabled=true "
+                "to opt into agent_spawn/send/wait/close/list/interrupt."
+            )
+        if isinstance(orchestration_param, dict) and orchestration_param.get("enabled"):
             orch_config = OrchestrationConfig(
                 max_depth=int(orchestration_param.get("maxDepth", 1)),
                 max_parallel=int(orchestration_param.get("maxParallel", 4)),
@@ -1624,6 +1829,8 @@ class Sidecar:
                     transport, stream_id, kind, data
                 ),
             )
+            if subagent_executor is not None:
+                subagent_executor.attach_pool(orchestration.pool)
             executor = orchestration
             tools = [
                 *(tools or []),
@@ -1643,6 +1850,18 @@ class Sidecar:
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # run_js/wait_js: conversational JS PTC (the codex CodeModeHost
+        # counterpart). Same router-answered local dispatch as run_code; the
+        # session binds to this run's chatId inside the tool.
+        if self.tools.get("run_js") is not None:
+            from .ptc_js import run_js_tool_descriptor, wait_js_tool_descriptor
+
+            local_names.extend(["run_js", "wait_js"])
+            tools = [
+                *(tools or []),
+                run_js_tool_descriptor(),
+                wait_js_tool_descriptor(),
+            ]
         # askUser: opt-in structured user questions (W8). The host renders the
         # question card and answers over the reverse channel
         # (``ask_user.request``); the tool blocks until the reply. Registered
@@ -1686,6 +1905,16 @@ class Sidecar:
             executor = RunCodeBoundExecutor(
                 executor, router=self.tools, local_names=local_names
             )
+        # streamRawChunks: opt-in pre-digestion chunk forwarding. The loop's
+        # on_stream_chunk hook sees every raw LLMStreamChunk before UI-tag
+        # stripping and surrogate splitting turn it into display text — hosts
+        # running incremental renderers (streaming UI-tag parsers) need that
+        # stream; it rides stream.chunk under `rawChunk`, distinct from the
+        # digested delta/reasoningDelta. Default off: it costs one
+        # notification per chunk. (OpenAI-compat buffers tool arguments, so
+        # toolCallDelta arrives whole — no incremental argument fragments.)
+        if params.get("streamRawChunks"):
+            hooks = ChainHooks(hooks, RawChunkBridgeHooks(transport, stream_id))
         loop = CoreLoop(
             provider,
             executor,
@@ -1771,8 +2000,13 @@ class Sidecar:
                 await client.aclose()
             if orchestration is not None:
                 # Wind down any children still running when the parent ends
-                # (completion, error, or cancel) — cooperative first.
+                # (completion, error, or cancel) — cooperative first. The
+                # delegation seam shares this pool when both are on, so this
+                # covers delegate children too.
                 await orchestration.shutdown()
+            elif subagent_executor is not None:
+                # Delegation-only turn: wind down the delegate pool.
+                await subagent_executor.shutdown()
             await recorder.finalize()
             self._streams.pop(stream_id, None)
 
@@ -1783,11 +2017,13 @@ class Sidecar:
         kind: str,
         data: dict[str, Any],
     ) -> None:
-        """Forward a child-lifecycle event from the orchestration pool.
+        """Forward a child-lifecycle event from the agent pool.
 
-        The pool's sink is synchronous (it fires inside tool execution), so
-        the notification is scheduled fire-and-forget; ordering against the
-        surrounding stream events is not guaranteed, lineage ids are.
+        Fired by orchestration children and by delegate_subagent
+        delegations (both run on the pool). The pool's sink is synchronous
+        (it fires inside tool execution), so the notification is scheduled
+        fire-and-forget; ordering against the surrounding stream events is
+        not guaranteed, lineage ids are.
         """
         task = asyncio.ensure_future(
             transport.emit_notification(
@@ -2124,6 +2360,23 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
             raise JsonRpcError(
                 f"invalid role: {role!r}", code=-32602, kind="invalid_params"
             )
+        # Assistant 轮的工具调用/推理回传：host 历史里的 assistant 消息必须
+        # 把 toolCalls 一起带回来，否则下一轮 role:'tool' 被 OpenAI 严格协
+        # 议判为孤儿（400）；thinking 模型（DeepSeek）还要求 reasoning 回传
+        # （字段名由 provider compat 的 reasoningEchoField 决定）。
+        tool_calls = _coerce_tool_calls(entry.get("toolCalls"))
+        reasoning = entry.get("reasoning")
+        if reasoning is None:
+            reasoning = entry.get("reasoningContent")
+        if reasoning is not None and not isinstance(reasoning, str):
+            raise JsonRpcError(
+                "reasoning must be a string", code=-32602, kind="invalid_params"
+            )
+        reasoning_details = entry.get("reasoningDetails")
+        if reasoning_details is not None and not isinstance(reasoning_details, list):
+            raise JsonRpcError(
+                "reasoningDetails must be a list", code=-32602, kind="invalid_params"
+            )
         wire_parts = entry.get("parts")
         if wire_parts is not None:
             if not isinstance(wire_parts, list):
@@ -2136,6 +2389,9 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                     content=[_coerce_part(p) for p in wire_parts],
                     name=entry.get("name"),
                     tool_call_id=entry.get("toolCallId"),
+                    tool_calls=tool_calls,
+                    reasoning=reasoning,
+                    reasoning_details=reasoning_details,
                 )
             )
             continue
@@ -2145,9 +2401,41 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                 str(entry.get("content", "")),
                 name=entry.get("name"),
                 tool_call_id=entry.get("toolCallId"),
+                tool_calls=tool_calls,
+                reasoning=reasoning,
+                reasoning_details=reasoning_details,
             )
         )
     return out
+
+
+def _coerce_tool_calls(items: Any) -> list[ToolCall] | None:
+    """Validate the host-echoed assistant ``toolCalls`` array."""
+    if items is None:
+        return None
+    if not isinstance(items, list):
+        raise JsonRpcError(
+            "toolCalls must be a list", code=-32602, kind="invalid_params"
+        )
+    out: list[ToolCall] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise JsonRpcError(
+                "each toolCalls entry must be an object",
+                code=-32602,
+                kind="invalid_params",
+            )
+        arguments = item.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        out.append(
+            ToolCall(
+                id=str(item.get("id") or ""),
+                name=str(item.get("name") or ""),
+                arguments=arguments,
+            )
+        )
+    return out or None
 
 
 def _build_provider_kwargs(params: dict[str, Any]) -> dict[str, Any]:
@@ -2528,6 +2816,32 @@ _DEFAULT_HARNESS_SPEC_PATH = (
 )
 
 
+def _resolve_preset_param(
+    params: dict[str, Any],
+) -> ProviderPreset | Literal["auto", "off"]:
+    """Map the host's ``presets`` chat param onto the provider's ``preset`` field.
+
+    Absent or ``{"enabled": true}`` → ``"auto"`` (registry match on
+    base-URL+model); ``{"enabled": false}`` → ``"off"``; ``{"override": {...}}``
+    pins an explicit preset (parsed fail-loud by ``ProviderPreset.from_dict``).
+    A malformed payload raises ``ValueError`` rather than silently falling
+    back to auto — the host made a choice, it must apply or fail.
+    """
+    from steerable_agent_runtime.llm import ProviderPreset
+
+    raw = params.get("presets")
+    if raw is None:
+        return "auto"
+    if not isinstance(raw, dict):
+        raise TypeError("presets param must be an object")
+    override = raw.get("override")
+    if override is not None:
+        if not isinstance(override, dict):
+            raise TypeError("presets.override must be an object")
+        return ProviderPreset.from_dict(override)
+    return "auto" if raw.get("enabled", True) else "off"
+
+
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     """Construct an LLMProvider from a chat-stream request payload.
 
@@ -2581,6 +2895,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     compat=compat,
+                    preset=_resolve_preset_param(params),
                 )
             )
         )

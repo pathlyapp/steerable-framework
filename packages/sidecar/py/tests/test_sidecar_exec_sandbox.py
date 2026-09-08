@@ -303,6 +303,38 @@ async def test_require_full_denies_when_landlock_partial(
 
 @pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
 @pytest.mark.asyncio
+async def test_require_full_accepts_localhost_only_egress() -> None:
+    """P3.2 shell-via-proxy: an all-localhost allow-list (the egress proxy
+    endpoint) makes Seatbelt report enforcement "full", so require_full
+    accepts the call instead of refusing it. This is the desktop's
+    egress-proxy-mode posture."""
+    received: list[str] = []
+    provider = _ScriptedProvider(
+        [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
+         _text_round("done")]
+    )
+    sidecar = _sidecar_with_bash(received, provider)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            execSandbox={
+                "enabled": True,
+                "network": True,
+                "allowedHosts": ["127.0.0.1:8899"],
+                "requireFull": True,
+            }
+        ),
+    )
+
+    assert received  # wrapped command ran, not refused
+    payload = (await _tool_payloads(sidecar))[0]
+    assert payload["success"] is True
+    assert payload["data"]["_sandbox"] == {"enforcement": "full", "backend": "seatbelt"}
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+@pytest.mark.asyncio
 async def test_rewritten_command_actually_runs_confined(tmp_path) -> None:
     """End-to-end: the model's command runs under real sandbox-exec — it can
     write into a declared root and is kernel-denied outside it."""

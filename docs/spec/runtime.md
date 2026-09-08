@@ -199,7 +199,11 @@ compaction pass and retries), opt-in **micro-compaction**
 regardless of pressure — CC time-based-microcompact parity), and **manual**
 (`compact_now(transcript, ctx)` — the host-command path, CC `/compact`
 parity; bypasses threshold, hysteresis, and the breaker, and is a no-op
-when neither stage changes anything). Folding is
+when neither stage changes anything). The host reaches it through the
+sidecar's `agent.chat.compact` RPC: `CoreLoop.request_compact()` arms a
+flag the loop consumes at the next pre_step boundary, after the regular
+pre_step pass (a reject ends the turn first), applying the declared rewrite
+through the same `replace_all` + `hook_action` path with action `compact`. Folding is
 idempotent (already-folded results are skipped, and `keep_last_tool_results`
 counts *readable* results), so a periodic fire on a clean transcript is a
 no-op rather than a pointless prompt-cache invalidation. Micro-compaction is

@@ -414,6 +414,37 @@ async def test_token_budget_exhausted() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cache_served_prompt_tokens_are_discounted() -> None:
+    # Same 15 total tokens as the exhausting case above, but 10 of them came
+    # from the provider's prompt cache: at the default 0.1 weight the request
+    # bills 6, so the run completes. Charging cache hits at par is what made
+    # a tool-heavy turn — which re-sends the same prefix every round — stop
+    # long before its cost warranted it.
+    provider = make_provider(
+        [
+            {
+                "content": "hi",
+                "usage": LLMUsage(
+                    prompt_tokens=12,
+                    completion_tokens=3,
+                    total_tokens=15,
+                    cached_prompt_tokens=10,
+                ),
+            }
+        ]
+    )
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(budget=BudgetLimit(max_tokens=10, max_steps=100, max_tool_calls=100)),
+    )
+
+    events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
+    assert final_completion(events)["status"] == "completed"
+    assert not any(e.kind == "budget_exhausted" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_tool_exception_is_surfaced_not_raised() -> None:
     # An executor that raises must surface as a tool_error event + a failed
     # ToolResult fed back to the model, not crash the loop.

@@ -19,6 +19,8 @@ This module ties the existing primitives (``load_history_items`` +
   messages, not record seqs (regenerate = fork keeping the last user
   turn, dropping the assistant reply after it).
 - ``lineage`` — walk the seed-provenance chain upwards, cycle-guarded.
+- ``family_tree`` — the full family containing a record: lineage to the
+  root, then every descendant expanded from one storage-wide scan.
 
 Children discovery is deliberately host-side: ``StorageAdapter`` has no
 record enumeration, so stores that can list records implement
@@ -49,8 +51,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BranchPoint",
+    "FamilyTree",
+    "FamilyTreeNode",
     "ForkResult",
     "branch_label",
+    "family_tree",
     "fork_record",
     "lineage",
     "resolve_fork_seq",
@@ -59,6 +64,11 @@ __all__ = [
 #: Bound on the provenance walk — a cycle or runaway chain is data
 #: corruption, not a deep tree; fail loud past this depth.
 _MAX_LINEAGE_DEPTH = 32
+
+#: Bound on ``family_tree`` expansion — record enumeration is
+#: storage-wide, so a runaway family is cut off and reported
+#: (``FamilyTree.truncated``) rather than streamed unbounded to the host.
+_MAX_TREE_NODES = 500
 
 #: Reverse-scan page for ``resolve_fork_seq`` — the regen fork point is
 #: almost always in the tail page.
@@ -93,6 +103,32 @@ class ForkResult:
 
     point: BranchPoint
     messages: list["LLMMessage"]
+
+
+@dataclass(frozen=True, slots=True)
+class FamilyTreeNode:
+    """One node in a full branch-family tree — a ``BranchPoint`` plus its
+    children, recursively. ``depth`` is 0 on the family root, +1 per fork
+    hop, matching the depths ``lineage`` assigns along the chain."""
+
+    record_id: str
+    source_record_id: str | None
+    source_until_seq: int | None
+    label: str
+    depth: int
+    children: tuple["FamilyTreeNode", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FamilyTree:
+    """The full branch family containing one record, expanded from the
+    family root. ``truncated`` reports that a safety bound (depth or node
+    count) cut the expansion — the returned tree is still valid, just
+    incomplete below the cut."""
+
+    root: FamilyTreeNode
+    node_count: int
+    truncated: bool
 
 
 def branch_label(messages: list["LLMMessage"], *, max_chars: int = 60) -> str:
@@ -292,3 +328,92 @@ async def lineage(
         )
         for index, point in enumerate(chain)
     ]
+
+
+async def family_tree(
+    storage: "StorageAdapter",
+    record_id: str,
+    *,
+    max_depth: int = _MAX_LINEAGE_DEPTH,
+    max_nodes: int = _MAX_TREE_NODES,
+) -> FamilyTree:
+    """Full branch family containing ``record_id``, expanded from the root.
+
+    Walks seed provenance to the family root (``lineage``), then expands
+    every descendant from ONE storage-wide scan: parent edges live in each
+    record's first-entry seed, so reading that entry per enumerated record
+    (``list_history_records``) yields the children of every family member
+    at once — the same discovery ``agent.session.branches`` does for one
+    level, applied recursively without re-scanning per node.
+
+    Raises ``KeyError`` when the record has no entries (an empty record is
+    indistinguishable from a missing one — records are created by append)
+    and ``ValueError`` on lineage corruption (cycle / over-deep chain),
+    matching ``fork_record`` / ``lineage``. Expansion is bounded twice:
+    ``max_depth`` cuts descendants below that depth from the root (the
+    default matches the lineage corruption bound, so by default only
+    corrupt families are cut) and ``max_nodes`` caps the total — either
+    cut is reported via ``FamilyTree.truncated`` instead of streaming
+    unbounded data. ``max_depth`` does NOT relax the lineage walk itself:
+    a queried record whose own chain exceeds the corruption bound still
+    raises ``ValueError``.
+    """
+
+    if not await storage.list_history(record_id, limit=1):
+        raise KeyError(f"record not found: {record_id}")
+    chain = await lineage(storage, record_id)
+    root_point = chain[0]
+
+    children_of: dict[str, list[BranchPoint]] = {}
+    for candidate in await storage.list_history_records():
+        if candidate == root_point.record_id:
+            continue
+        first = await storage.list_history(candidate, limit=1)
+        if not first:
+            continue
+        entry = entry_from_dict(first[0])
+        if isinstance(entry, HistorySeed) and entry.source_record_id is not None:
+            children_of.setdefault(entry.source_record_id, []).append(
+                BranchPoint(
+                    record_id=candidate,
+                    source_record_id=entry.source_record_id,
+                    source_until_seq=entry.source_until_seq,
+                    label=branch_label(list(entry.messages)),
+                )
+            )
+
+    total = 0
+    truncated = False
+
+    def build(point: BranchPoint, depth: int) -> FamilyTreeNode:
+        nonlocal total, truncated
+        total += 1
+        children: list[FamilyTreeNode] = []
+        if depth >= max_depth:
+            if children_of.get(point.record_id):
+                truncated = True
+        else:
+            for child in children_of.get(point.record_id, []):
+                if total >= max_nodes:
+                    truncated = True
+                    break
+                children.append(build(child, depth + 1))
+        return FamilyTreeNode(
+            record_id=point.record_id,
+            source_record_id=point.source_record_id,
+            source_until_seq=point.source_until_seq,
+            label=point.label,
+            depth=depth,
+            children=tuple(children),
+        )
+
+    root = build(
+        BranchPoint(
+            record_id=root_point.record_id,
+            source_record_id=root_point.source_record_id,
+            source_until_seq=root_point.source_until_seq,
+            label=root_point.label,
+        ),
+        0,
+    )
+    return FamilyTree(root=root, node_count=total, truncated=truncated)

@@ -58,6 +58,18 @@ _FLAG_WIRE_SPEC: tuple[tuple[str, str, str, str], ...] = (
         "Delta keys read as reasoning text, in preference order",
     ),
     (
+        "reasoningEchoField",
+        "reasoning_echo_field",
+        "string",
+        "Message key for echoing plaintext reasoning back to the vendor",
+    ),
+    (
+        "supportsForcedToolChoice",
+        "supports_forced_tool_choice",
+        "bool",
+        "Accept tool_choice=required; disable to downgrade it to auto",
+    ),
+    (
         "cachedTokensFields",
         "cached_tokens_fields",
         "string-list",
@@ -109,11 +121,23 @@ class OpenAICompatFlags:
     #: Whether ``temperature`` may be sent. Reasoning-only model families
     #: (o-series class) reject it.
     supports_temperature: bool = True
+    #: Whether ``tool_choice: "required"`` is accepted. Thinking-mode
+    #: gateways (DeepSeek live-verified 2026-09-08: "Thinking mode does not
+    #: support this tool_choice") 400 the forced value while plain ``auto``
+    #: works — flagging off downgrades ``required`` → ``auto`` on the wire.
+    supports_forced_tool_choice: bool = True
 
     # ── response shape ───────────────────────────────────────────────
     #: Delta keys read as reasoning text, in preference order. DeepSeek uses
     #: ``reasoning_content``; OpenRouter's GLM path uses ``reasoning``.
     reasoning_delta_fields: tuple[str, ...] = ("reasoning_content", "reasoning")
+    #: Message key for echoing plaintext reasoning back on the next request.
+    #: OpenRouter normalizes to ``reasoning`` (the reference default);
+    #: DeepSeek thinking mode *requires* the round-trip under its own
+    #: ``reasoning_content`` key — echoing as ``reasoning`` is an HTTP 400
+    #: ("The `reasoning_content` in the thinking mode must be passed back to
+    #: the API.", live-verified 2026-09-08 with deepseek-v4-flash).
+    reasoning_echo_field: str = "reasoning"
     #: Usage locations read for cached prompt tokens, in preference order.
     #: Dotted paths resolve nested objects. OpenAI nests under
     #: ``prompt_tokens_details.cached_tokens``; DeepSeek reports top-level
@@ -142,6 +166,8 @@ class OpenAICompatFlags:
             value = data[wire]
             if field in ("reasoning_delta_fields", "cached_tokens_fields"):
                 kwargs[field] = tuple(str(v) for v in value)
+            elif field == "reasoning_echo_field":
+                kwargs[field] = str(value)
             elif field == "max_tokens_field":
                 if value not in _MAX_TOKENS_FIELDS:
                     raise ValueError(
@@ -162,13 +188,22 @@ class OpenAICompatFlags:
 #: as data — adding a vendor must not touch request-building or parsing.
 PROVIDER_COMPAT_HOSTS: list[tuple[str, OpenAICompatFlags]] = [
     # DeepSeek: reasoning arrives as ``reasoning_content`` and cache hits as
-    # top-level ``prompt_cache_hit_tokens``. The tolerant defaults already
-    # cover both — this entry pins that coverage as data so a future default
-    # change cannot silently regress it.
+    # top-level ``prompt_cache_hit_tokens``. Thinking mode additionally
+    # REQUIRES the reasoning round-trip under ``reasoning_content`` — the
+    # reference echo key ``reasoning`` is ignored and the follow-up request
+    # 400s (live-verified 2026-09-08, deepseek-v4-flash tool-turn: "The
+    # `reasoning_content` in the thinking mode must be passed back to the
+    # API."). The tolerant delta-field defaults already cover parsing; the
+    # echo key is the divergence pinned here.
     (
         "api.deepseek.com",
         OpenAICompatFlags(
             reasoning_delta_fields=("reasoning_content", "reasoning"),
+            reasoning_echo_field="reasoning_content",
+            # Thinking mode 400s ``tool_choice="required"`` ("Thinking mode
+            # does not support this tool_choice", live-verified 2026-09-08
+            # with deepseek-v4-flash); ``auto`` and omission both work.
+            supports_forced_tool_choice=False,
             cached_tokens_fields=(
                 "prompt_cache_hit_tokens",
                 "prompt_tokens_details.cached_tokens",

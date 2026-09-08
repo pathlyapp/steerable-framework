@@ -1,7 +1,8 @@
 """web_search / web_fetch: bounds, SSRF policy, provider seam, approval
-gating, and the egress-confined loud failure. All hermetic — HTTP goes
-through ``httpx.MockTransport`` and DNS through an injected resolver table;
-no test touches the real network.
+gating, and the egress-confined posture (through the proxy when one is
+configured, loud failure when the marker leaks without one). All hermetic —
+HTTP goes through ``httpx.MockTransport`` and DNS through an injected
+resolver table; no test touches the real network.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from steerable_agent_runtime.approval import (
 from steerable_agent_runtime.loop import LoopContext
 
 from steerable_sidecar.web_tools import (
+    BraveSearchProvider,
     HostDelegatedSearchProvider,
     TavilySearchProvider,
     WebSearchBackendError,
@@ -181,6 +183,14 @@ def test_public_addresses_pass() -> None:
     _assert_public_address("2606:2800:220:1:248:1893:25c8:1946")
 
 
+def test_fake_ip_addresses_pass() -> None:
+    # Clash / sing-box fake-ip pool (RFC 2544 benchmarking range): reserved
+    # but exempt — see _FAKE_IP_RANGE. Includes the v4-mapped v6 wrapper.
+    _assert_public_address("198.18.0.1")
+    _assert_public_address("198.19.255.254")
+    _assert_public_address("::ffff:198.18.0.23")
+
+
 @pytest.mark.parametrize(
     "url, fragment",
     [
@@ -218,6 +228,26 @@ async def test_hostname_resolving_to_private_ip_rejected() -> None:
     assert result.success is False
     assert "non-public" in result.error
     assert requests == []
+
+
+async def test_hostname_resolving_to_fake_ip_is_fetched() -> None:
+    """Fake-ip DNS answers (Clash-style) pass the SSRF pre-check and the
+    request proceeds — the proxy intercepts the connection downstream."""
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        requests=requests,
+        handler=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/html; charset=utf-8"},
+                content=b"<p>ok</p>",
+            )
+        ),
+        dns={"proxied.example": ["198.18.0.23"]},
+    )
+    result = await _call(router, "web_fetch", {"url": "https://proxied.example/"})
+    assert result.success is True
+    assert len(requests) == 1
 
 
 async def test_unresolvable_host_is_a_loud_error() -> None:
@@ -378,33 +408,132 @@ async def test_binary_content_type_refused() -> None:
     assert "unsupported content type" in result.error
 
 
-# ─── egress-confined loud failure ───────────────────────────────────────────
+# ─── egress-confined posture ────────────────────────────────────────────────
+#
+# Confined WITH a proxy env runs the tools through the proxy (its CONNECT
+# allow-list + the app-layer domain policy both hold). Confined WITHOUT a
+# proxy env is a misconfiguration and fails loud before any request.
 
 
-async def test_egress_confined_fetch_fails_loud_without_http() -> None:
+_CONFINED_NO_PROXY = {"STEERABLE_EGRESS_CONFINED": "1"}
+_CONFINED_WITH_PROXY = {
+    "STEERABLE_EGRESS_CONFINED": "1",
+    "HTTPS_PROXY": "http://127.0.0.1:8899",
+}
+
+
+async def test_egress_confined_fetch_fails_loud_without_proxy() -> None:
     requests: list[httpx.Request] = []
     router = _make_router(
         requests=requests,
         dns=_PUBLIC_DNS,
-        environ={"STEERABLE_EGRESS_CONFINED": "1"},
+        environ=_CONFINED_NO_PROXY,
     )
     result = await _call(router, "web_fetch", {"url": "https://example.com/"})
     assert result.success is False
-    assert "egress is confined" in result.error
+    assert "marked confined" in result.error
     assert "STEERABLE_EGRESS_CONFINED=1" in result.error
     assert "Remedies:" in result.error  # actionable, names the way out
     assert requests == []  # no request attempted behind the confining proxy
 
 
-async def test_egress_confined_search_fails_loud() -> None:
+async def test_egress_confined_search_fails_loud_without_proxy() -> None:
     provider = _FakeSearchProvider()
     router = _make_router(
-        search_provider=provider, environ={"STEERABLE_EGRESS_CONFINED": "1"}
+        search_provider=provider, environ=_CONFINED_NO_PROXY
     )
     result = await _call(router, "web_search", {"query": "x"})
     assert result.success is False
-    assert "egress is confined" in result.error
+    assert "marked confined" in result.error
     assert provider.calls == []
+
+
+async def test_egress_confined_fetch_with_proxy_runs_through() -> None:
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        handler=httpx.MockTransport(
+            lambda request: httpx.Response(200, text="<p>hi</p>")
+        ),
+        requests=requests,
+        dns=_PUBLIC_DNS,
+        environ=_CONFINED_WITH_PROXY,
+    )
+    result = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert result.success is True
+    # The request is attempted (httpx trust_env routes it to the proxy in
+    # production; the MockTransport stands in for the wire here).
+    assert [str(r.url) for r in requests] == ["https://example.com/"]
+
+
+async def test_egress_confined_fetch_with_proxy_keeps_domain_policy() -> None:
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        requests=requests,
+        dns=_PUBLIC_DNS,
+        environ=_CONFINED_WITH_PROXY,
+        config=WebToolsConfig(allowed_domains=("example.com",)),
+    )
+    result = await _call(router, "web_fetch", {"url": "https://outside.com/"})
+    assert result.success is False
+    assert "allowed-domains list" in result.error
+    assert requests == []  # app-layer policy still fires before any request
+
+
+async def test_egress_confined_fetch_with_proxy_keeps_ssrf_check() -> None:
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        requests=requests,
+        dns=_PUBLIC_DNS,
+        environ=_CONFINED_WITH_PROXY,
+    )
+    result = await _call(
+        router, "web_fetch", {"url": "http://169.254.169.254/latest/meta-data"}
+    )
+    assert result.success is False
+    assert "non-public address" in result.error
+    assert requests == []
+
+
+async def test_egress_confined_fetch_network_error_names_proxy_allow_list() -> None:
+    def refused(request: httpx.Request) -> httpx.Response:
+        # The proxy answers a disallowed CONNECT with 403; httpx surfaces
+        # that as ProxyError (an HTTPError subclass).
+        raise httpx.ProxyError("403 Forbidden", request=request)
+
+    router = _make_router(
+        handler=httpx.MockTransport(refused),
+        dns=_PUBLIC_DNS,
+        environ=_CONFINED_WITH_PROXY,
+    )
+    result = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert result.success is False
+    assert "web_fetch request failed" in result.error
+    assert "proxy's allow-list" in result.error
+    assert "STEERABLE_WEB_ALLOWED_DOMAINS" in result.error
+
+
+async def test_egress_confined_search_with_proxy_runs() -> None:
+    provider = _FakeSearchProvider()
+    router = _make_router(
+        search_provider=provider, environ=_CONFINED_WITH_PROXY
+    )
+    result = await _call(router, "web_search", {"query": "x"})
+    assert result.success is True
+    assert provider.calls == [("x", 8)]
+
+
+async def test_egress_confined_search_network_error_names_proxy_allow_list() -> None:
+    class _RefusedProvider:
+        async def search(self, query: str, *, max_results: int) -> list[WebSearchHit]:
+            raise WebSearchBackendError("web search request failed: 403 Forbidden")
+
+    router = _make_router(
+        search_provider=_RefusedProvider(), environ=_CONFINED_WITH_PROXY
+    )
+    result = await _call(router, "web_search", {"query": "x"})
+    assert result.success is False
+    assert "web search request failed" in result.error
+    assert "proxy's allow-list" in result.error
 
 
 # ─── web_search + provider seam ─────────────────────────────────────────────
@@ -525,6 +654,105 @@ async def test_tavily_wire_format_and_response_mapping() -> None:
 
 async def test_tavily_auth_failure_is_actionable() -> None:
     provider = TavilySearchProvider(
+        api_key="bad",
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(401, json={"error": "nope"})
+            )
+        ),
+    )
+    router = _make_router(search_provider=provider)
+    result = await _call(router, "web_search", {"query": "q"})
+    assert result.success is False
+    assert "STEERABLE_WEB_SEARCH_API_KEY" in result.error
+
+
+# ─── brave provider ─────────────────────────────────────────────────────────
+
+
+def test_default_provider_factory_resolves_brave() -> None:
+    provider = default_web_search_provider(
+        WebToolsConfig(search_provider="brave", search_api_key="bsa-k")
+    )
+    assert isinstance(provider, BraveSearchProvider)
+
+
+def test_brave_without_a_key_stays_unregistered() -> None:
+    assert (
+        default_web_search_provider(WebToolsConfig(search_provider="brave"))
+        is None
+    )
+
+
+async def test_brave_wire_format_and_response_mapping() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {
+                            "title": "T",
+                            "url": "https://example.com/a",
+                            "description": "snippet",
+                            "age": "2026-01-01",
+                        },
+                        {"title": "no-url"},  # dropped: no url
+                    ]
+                }
+            },
+        )
+
+    provider = BraveSearchProvider(
+        api_key="bsa-k",
+        timeout_ms=5_000,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    hits = await provider.search("hello", max_results=7)
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.url.path == "/res/v1/web/search"
+    assert request.headers["x-subscription-token"] == "bsa-k"
+    assert request.url.params["q"] == "hello"
+    assert request.url.params["count"] == "7"
+    assert hits == [
+        WebSearchHit(
+            title="T",
+            url="https://example.com/a",
+            snippet="snippet",
+            published_at="2026-01-01",
+        )
+    ]
+
+
+async def test_brave_filters_blocked_domains_post_hoc() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "web": {
+                    "results": [
+                        {"title": "blocked", "url": "https://evil.com/x"},
+                        {"title": "ok", "url": "https://example.com/y"},
+                    ]
+                }
+            },
+        )
+
+    provider = BraveSearchProvider(
+        api_key="bsa-k",
+        blocked_domains=("evil.com",),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    hits = await provider.search("q", max_results=8)
+    assert [h.url for h in hits] == ["https://example.com/y"]
+
+
+async def test_brave_auth_failure_is_actionable() -> None:
+    provider = BraveSearchProvider(
         api_key="bad",
         client=httpx.AsyncClient(
             transport=httpx.MockTransport(

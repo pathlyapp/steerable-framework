@@ -450,6 +450,11 @@ class CoreLoop:
         # instance — a CoreLoop is single-run in practice (the sidecar builds
         # one per stream), so a cancel issued before run() still applies.
         self._cancel_event = asyncio.Event()
+        # Manual compaction request token (see request_compact()): the host
+        # sets it via the sidecar's agent.chat.compact RPC; the loop consumes
+        # it at the next pre_step boundary by delegating to the hook chain's
+        # compact_now.
+        self._compact_event = asyncio.Event()
         # Compact trajectory recorded during run(); replayable via
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
@@ -513,6 +518,22 @@ class CoreLoop:
         responsibility (the in-flight run simply stops winding down).
         """
         self._cancel_event.clear()
+
+    def request_compact(self) -> None:
+        """Request a manual compaction of the running turn's transcript.
+
+        Called from the same event loop (e.g. a sidecar RPC handler for
+        ``agent.chat.compact``, the CC ``/compact`` parity path) while
+        ``run()`` is active. The loop consumes the request at the next
+        pre_step boundary: the hook chain's ``compact_now``
+        (CompactionHooks) folds old tool results and summarizes the middle
+        regardless of pressure, and the declared rewrite lands through the
+        same ``replace_all`` path as a pressure compaction. Without a
+        compaction hook in the chain the request is a no-op. Like steer(),
+        a request that arrives after the run has ended finds no boundary
+        left to consume it and has no effect.
+        """
+        self._compact_event.set()
 
     @property
     def last_run_usage(self) -> LLMUsage | None:
@@ -1131,6 +1152,42 @@ class CoreLoop:
                         "round": round_index,
                     },
                 )
+            # ── manual compact: host-requested (agent.chat.compact, CC ────
+            # ── /compact parity) ──
+            # Consumed AFTER the regular pre_step pass, on the projection
+            # that pass produced: routing (tool_choice) and context appends
+            # still run this step, a pressure rewrite lands first, and the
+            # manual pass then folds + summarizes on top — compact_now
+            # bypasses threshold/hysteresis/breaker by contract, and folding
+            # is idempotent, so a same-round pressure compaction degrades to
+            # a near no-op rather than a conflict. A pre_step reject ends
+            # the turn above before the request is consumed. The capability
+            # is probed (getattr, like on_stream_chunk): hooks without
+            # compact_now make the request a no-op.
+            if self._compact_event.is_set():
+                self._compact_event.clear()
+                compact_now = getattr(self._hooks, "compact_now", None)
+                if callable(compact_now):
+                    manual = await compact_now(manager.projection, ctx)
+                    if manual.rewrite is not None:
+                        manager.replace_all(
+                            manual.rewrite.messages,
+                            reason=manual.rewrite.reason,
+                            action=manual.rewrite.action,
+                            pre_tokens=manual.rewrite.pre_tokens,
+                            post_tokens=manual.rewrite.post_tokens,
+                        )
+                        yield LoopEvent(
+                            "hook_action",
+                            {
+                                "hook": "compact_now",
+                                "action": manual.rewrite.action,
+                                "reason": manual.rewrite.reason,
+                                "round": round_index,
+                                "pre_tokens": manual.rewrite.pre_tokens,
+                                "post_tokens": manual.rewrite.post_tokens,
+                            },
+                        )
             # tool_choice only makes sense when tools are actually offered.
             step_tool_choice = (
                 pre.tool_choice
@@ -1297,7 +1354,10 @@ class CoreLoop:
                             break
                         if chunk.usage is not None and self._config.budget is not None:
                             budget_state, exhausted = consume_budget(
-                                budget_state, self._config.budget, tokens=chunk.usage.total_tokens
+                                budget_state,
+                                self._config.budget,
+                                tokens=chunk.usage.total_tokens,
+                                cached_tokens=chunk.usage.cached_prompt_tokens,
                             )
                             if exhausted:
                                 yield LoopEvent(

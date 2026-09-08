@@ -7,11 +7,10 @@ bespoke 23-method surface. It implements the stable core of ``acp.Agent``:
 ``initialize`` / ``new_session`` / ``prompt`` / ``cancel`` /
 ``close_session``, plus the session-lifecycle and configuration RPCs
 ``list_sessions`` / ``load_session`` / ``resume_session`` / ``fork_session``
-/ ``set_session_mode`` / ``set_config_option``.
-anchor: packages/sidecar/py/src/steerable_sidecar/acp_adapter.py :: def (authenticate|ext_method)
-Only ``authenticate`` and ``ext_method`` are unimplemented (the SDK's
-default ``None`` answers
-advertise that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
+/ ``set_session_mode`` / ``set_config_option``. ``authenticate`` verifies the
+env-var key the editor spawned us with resolves; ``ext_method`` is the
+``_``-prefixed extension escape hatch (``_steerable/ping``). Headless /
+Harbor evals use in-process ``bash`` / ``read_file`` /
 ``write_file`` scoped to the session cwd (see ``workspace_tools``). When
 the client advertises the fs/terminal capabilities, the same tools are
 served through editor bridges instead (3.4.3): file content flows through
@@ -63,6 +62,9 @@ from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
     AllowedOutcome,
+    AuthenticateResponse,
+    AuthEnvVar,
+    EnvVarAuthMethod,
     Implementation,
     InitializeResponse,
     NewSessionResponse,
@@ -338,11 +340,73 @@ class SteerableAcpAgent(acp.Agent):
                     image=False, audio=False, embedded_context=False
                 ),
             ),
+            # Steerable authenticates via environment variables (the editor
+            # spawns the agent with them set). Advertise one env-var method so
+            # the client can surface a "configure your key" affordance and
+            # call ``authenticate`` to verify it resolves before first prompt.
+            auth_methods=[
+                EnvVarAuthMethod(
+                    type="env_var",
+                    id="steerable-api-key",
+                    name="Steerable API key",
+                    description=(
+                        "API key read from the environment the agent was "
+                        "spawned with (STEERABLE_API_KEY, OPENAI_API_KEY, "
+                        "ANTHROPIC_API_KEY, or the provider catalog's "
+                        "per-provider variable)."
+                    ),
+                    vars=[
+                        AuthEnvVar(name="STEERABLE_API_KEY"),
+                        AuthEnvVar(name="OPENAI_API_KEY"),
+                        AuthEnvVar(name="ANTHROPIC_API_KEY"),
+                    ],
+                )
+            ],
             agent_info=Implementation(
                 name="steerable-sidecar",
                 title="Steerable CoreLoop (ACP transport)",
                 version=pkg_version,
             ),
+        )
+
+    async def authenticate(
+        self, method_id: str, **kwargs: Any
+    ) -> AuthenticateResponse | None:
+        """Verify the advertised env-var auth method resolves to a key.
+
+        Steerable's auth is environment-injected (the editor spawned us with
+        the key set), so ``authenticate`` does not perform a login flow — it
+        confirms the key is resolvable and fails loud otherwise, so the client
+        surfaces "set STEERABLE_API_KEY" instead of a mid-prompt 401.
+        """
+        if method_id != "steerable-api-key":
+            raise acp.RequestError(
+                -32602,
+                f"unknown auth method {method_id!r}; this agent advertises "
+                "'steerable-api-key'",
+            )
+        if not (self._provider_params.get("apiKey") or "").strip():
+            raise acp.RequestError(
+                -32000,
+                "no API key resolvable from the environment; set "
+                "STEERABLE_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY, or "
+                "the provider catalog's variable) and restart the agent",
+            )
+        return AuthenticateResponse()
+
+    async def ext_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Extension RPC escape hatch (ACP ``_``-prefixed methods).
+
+        Steerable-specific surface that has no ACP core equivalent lives here
+        rather than as a bespoke method the SDK would reject. Unknown names
+        fail loud — a typo'd extension must never silently no-op.
+        """
+        if method == "_steerable/ping":
+            return {"pong": True, "agent": "steerable-sidecar"}
+        raise acp.RequestError(
+            -32601,
+            f"unknown extension method {method!r}; this agent serves "
+            "'_steerable/ping'",
         )
 
     async def new_session(

@@ -380,24 +380,37 @@ client. Two honest consequences:
   tool's own SSRF policy (per-hop DNS validation against
   `ipaddress.is_global`, v4-mapped/NAT64 unwrapping, same-origin redirect
   cap) is the real boundary, not the sandbox.
-- **Per-host proxy (`STEERABLE_EGRESS_PROXY=1`):** outbound is confined to
-  a proxy that tunnels only the provider endpoint, so an arbitrary
-  `web_fetch` cannot succeed. The desktop sets
-  `STEERABLE_EGRESS_CONFINED=1` in the sidecar env on exactly the
-  proxy-started path; both tools then fail loud with an actionable error
-  naming the remedies instead of hanging behind the proxy's 403/405. The
-  marker is deliberately distinct from the opt-in var so a proxy startup
-  failure (which falls back to port-level enforcement) never leaves the
-  sidecar believing it is confined when it is not.
+- **Per-host proxy (`STEERABLE_EGRESS_PROXY`, default-on in the desktop):**
+  outbound is confined to a proxy whose allow-list covers the provider
+  endpoint plus the deployment's web domain list —
+  `STEERABLE_WEB_ALLOWED_DOMAINS` feeds both the proxy's CONNECT list and
+  the tools' application-layer domain policy (one source, two layers). The
+  desktop sets `STEERABLE_EGRESS_CONFINED=1` in the sidecar env on exactly
+  the proxy-started path and points `HTTPS_PROXY` at the proxy; both tools
+  then run through it, with the domain policy and the SSRF pre-check
+  unchanged (the pre-check resolves locally, so the layer-1 profile adds a
+  resolver-only rule in this mode — the system resolver socket, no IP
+  reach). A target outside the proxy's list fails with an error naming the
+  list; the marker without any proxy env is a misconfiguration and fails
+  loud instead of hanging. The marker is deliberately distinct from the
+  opt-out var so a proxy startup failure (which falls back to port-level
+  enforcement) never leaves the sidecar believing it is confined when it is
+  not.
 
-## Current product posture (2026-08-29, Wave 4 wired)
+## Current product posture (2026-08-29, Wave 4 wired; egress proxy default-on since 2026-09-08)
 
 All three layers are **on by default** in the DeepPath desktop build:
 
 - **Layer 1 (sidecar process sandbox)** spawns under Seatbelt (macOS),
   bwrap then Landlock (Linux), or `win-spawn-helper --passthrough`
-  (Windows) unless `STEERABLE_SIDECAR_SANDBOX=0`; the egress allow-list
-  is derived per boot
+  (Windows) unless `STEERABLE_SIDECAR_SANDBOX=0`. Since 2026-09-08 egress
+  is per-host by default: the desktop runs the shipped allow-listing
+  egress proxy (`STEERABLE_EGRESS_PROXY=0` opts out), so the layer-1 list
+  is just `localhost:<proxy port>` plus any plain-HTTP provider endpoint
+  while the proxy owns the host list. A detected ambient/system proxy
+  (the proxy dials targets directly and cannot chain upstream) or a proxy
+  startup failure falls back to the port-level derivation: the egress
+  allow-list is derived per boot
   from the provider `baseUrl` **plus ambient proxy endpoints** (proxy env
   vars and, on macOS, the System Configuration proxy via `scutil`) —
   the sidecar's httpx stack honors ambient proxies, so a configured proxy
@@ -455,8 +468,8 @@ All three layers are **on by default** in the DeepPath desktop build:
   approval algebra as every other tool: category = tool name (an
   `allow_always` on `web_fetch` grants exactly that tool, nothing wider),
   mode `read`, and the target URL is the first key the approval modal
-  surfaces. Under the per-host egress proxy they fail loud instead of
-  hanging — see "Network-read tools under the proxy" above.
+  surfaces. Under the per-host egress proxy they run through the proxy's
+  allow-list — see "Network-read tools under the proxy" above.
 
 One wiring gap found and closed during Wave 4: the CoreLoop path used to
 drop `projectRoot` on reverse-channel tool calls, so the project-mode

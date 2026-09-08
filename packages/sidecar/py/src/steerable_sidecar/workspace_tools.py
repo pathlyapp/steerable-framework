@@ -323,6 +323,7 @@ def workspace_tools_for_cwd(
     run_command: BashRunner | None = None,
     web_tools: bool = True,
     run_code: bool | None = None,
+    ptc_js: bool | None = None,
     read_file_state: dict[str, str] | None = None,
 ) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
@@ -969,6 +970,14 @@ def workspace_tools_for_cwd(
         from .run_code import register_run_code
 
         register_run_code(router)
+    if ptc_js is None:
+        from .ptc_js import ptc_js_enabled as _ptc_js_enabled
+
+        ptc_js = _ptc_js_enabled()
+    if ptc_js:
+        from .ptc_js import register_ptc_js
+
+        register_ptc_js(router)
     return router
 
 
