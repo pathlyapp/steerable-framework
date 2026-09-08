@@ -95,6 +95,17 @@ def main(argv: list[str] | None = None) -> int:
                 pack_floor=suite.pack_floor_minutes,
             )
             if not tasks:
+                # A split has to fill every shard or its tail is silently
+                # dropped. An explicit task list is the opposite case: a
+                # credit-cancelled catalog leaves far fewer ids than the
+                # matrix has shards, and the spare shards have nothing to do.
+                if args.tasks:
+                    print(
+                        f"shard {args.shard}/{args.shards}: "
+                        f"no tasks in this slice of --tasks",
+                        flush=True,
+                    )
+                    return EXIT_SKIPPED
                 raise SuiteError(
                     f"shard {args.shard}/{args.shards} selected no tasks"
                 )

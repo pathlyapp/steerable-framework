@@ -27,6 +27,10 @@ on:
         description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
         default: ""
+      tasks:
+        description: "Catalog ids to run instead of the whole split, space separated. Use to finish a catalog the credit guard cancelled; shards with nothing to do report skipped."
+        type: string
+        default: ""
       arm_b_env:
         description: "flaky arm B overrides, `KEY=VALUE` per line. Arm A always runs the committed defaults."
         type: string
@@ -187,6 +191,7 @@ jobs:
         env:
           AGENT: ${{ github.event.inputs.agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
+          EVAL_TASKS: ${{ github.event.inputs.tasks }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           # Same gateway as the product leg, so pi differs from steerable only
@@ -208,6 +213,11 @@ jobs:
             case "$EVAL_MODEL" in
               *qwen*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-medium}" ;;
             esac
+          fi
+          if [ -n "$EVAL_TASKS" ]; then
+            # Deliberate word splitting: the input is a space-separated id list.
+            # shellcheck disable=SC2086
+            extra+=(--tasks $EVAL_TASKS)
           fi
           uv run python -m evals.run --agent "$AGENT" --split catalog --shard "${{ matrix.shard }}" --shards 49 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 12 --verifier-timeout-multiplier 2 "${extra[@]}"
           code=$?

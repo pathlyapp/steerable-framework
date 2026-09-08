@@ -410,6 +410,10 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     catalog_head = weekly.split("\n  catalog:\n", 1)[1].split("\n    steps:", 1)[0]
     assert "actions: write" in catalog_head
     assert "contents: read" in catalog_head
+    # Finishing a cancelled catalog reruns the ids it never scored, so the
+    # dispatch needs a way to name them; the matrix stays at 49 either way.
+    assert "EVAL_TASKS: ${{ github.event.inputs.tasks }}" in catalog_env
+    assert "extra+=(--tasks $EVAL_TASKS)" in catalog_job
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
     assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly

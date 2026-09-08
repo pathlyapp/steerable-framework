@@ -322,6 +322,32 @@ def test_env_start_error_tasks_detects_dataset_remote_protocol(tmp_path: Path) -
     assert any_verifier_reward(tmp_path) is False
 
 
+def test_empty_shard_is_skipped_only_for_an_explicit_task_list(capsys) -> None:
+    """Finishing a cancelled catalog dispatches fewer ids than the matrix has
+    shards. A split still has to fill every shard or its tail goes unnoticed."""
+    code = main(
+        [
+            "--agent",
+            "steerable",
+            "--tasks",
+            "fix-git",
+            "--shard",
+            "48",
+            "--shards",
+            "49",
+            "--dry-run",
+        ]
+    )
+    assert code == EXIT_SKIPPED
+    assert "no tasks in this slice of --tasks" in capsys.readouterr().out
+
+    code = main(
+        ["--agent", "steerable", "--split", "cheap-12", "--shard", "40", "--shards", "49", "--dry-run"]
+    )
+    assert code == EXIT_USAGE
+    assert "selected no tasks" in capsys.readouterr().err
+
+
 def test_credit_exhausted_tasks_reads_every_trial_surface(tmp_path: Path) -> None:
     """Each harness reports the gateway's 402 in a different trial file."""
     job = tmp_path / "2026-09-07__08-05-26"
