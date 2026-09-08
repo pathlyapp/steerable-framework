@@ -2360,6 +2360,23 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
             raise JsonRpcError(
                 f"invalid role: {role!r}", code=-32602, kind="invalid_params"
             )
+        # Assistant 轮的工具调用/推理回传：host 历史里的 assistant 消息必须
+        # 把 toolCalls 一起带回来，否则下一轮 role:'tool' 被 OpenAI 严格协
+        # 议判为孤儿（400）；thinking 模型（DeepSeek）还要求 reasoning 回传
+        # （字段名由 provider compat 的 reasoningEchoField 决定）。
+        tool_calls = _coerce_tool_calls(entry.get("toolCalls"))
+        reasoning = entry.get("reasoning")
+        if reasoning is None:
+            reasoning = entry.get("reasoningContent")
+        if reasoning is not None and not isinstance(reasoning, str):
+            raise JsonRpcError(
+                "reasoning must be a string", code=-32602, kind="invalid_params"
+            )
+        reasoning_details = entry.get("reasoningDetails")
+        if reasoning_details is not None and not isinstance(reasoning_details, list):
+            raise JsonRpcError(
+                "reasoningDetails must be a list", code=-32602, kind="invalid_params"
+            )
         wire_parts = entry.get("parts")
         if wire_parts is not None:
             if not isinstance(wire_parts, list):
@@ -2372,6 +2389,9 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                     content=[_coerce_part(p) for p in wire_parts],
                     name=entry.get("name"),
                     tool_call_id=entry.get("toolCallId"),
+                    tool_calls=tool_calls,
+                    reasoning=reasoning,
+                    reasoning_details=reasoning_details,
                 )
             )
             continue
@@ -2381,9 +2401,41 @@ def _coerce_messages(items: Any) -> list[LLMMessage]:
                 str(entry.get("content", "")),
                 name=entry.get("name"),
                 tool_call_id=entry.get("toolCallId"),
+                tool_calls=tool_calls,
+                reasoning=reasoning,
+                reasoning_details=reasoning_details,
             )
         )
     return out
+
+
+def _coerce_tool_calls(items: Any) -> list[ToolCall] | None:
+    """Validate the host-echoed assistant ``toolCalls`` array."""
+    if items is None:
+        return None
+    if not isinstance(items, list):
+        raise JsonRpcError(
+            "toolCalls must be a list", code=-32602, kind="invalid_params"
+        )
+    out: list[ToolCall] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise JsonRpcError(
+                "each toolCalls entry must be an object",
+                code=-32602,
+                kind="invalid_params",
+            )
+        arguments = item.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = {}
+        out.append(
+            ToolCall(
+                id=str(item.get("id") or ""),
+                name=str(item.get("name") or ""),
+                arguments=arguments,
+            )
+        )
+    return out or None
 
 
 def _build_provider_kwargs(params: dict[str, Any]) -> dict[str, Any]:

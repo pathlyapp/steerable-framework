@@ -96,6 +96,45 @@ def test_temperature_unsupported_suppresses_field() -> None:
     assert "temperature" not in body
 
 
+def test_forced_tool_choice_downgraded_when_flagged_off() -> None:
+    """DeepSeek thinking mode 400s ``tool_choice="required"`` ("Thinking mode
+    does not support this tool_choice", live-verified 2026-09-08 with
+    deepseek-v4-flash); the flag downgrades it to ``auto`` on the wire."""
+    from steerable_agent_runtime.llm import LLMMessage
+
+    provider = _provider(compat=OpenAICompatFlags(supports_forced_tool_choice=False))
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+
+
+def test_forced_tool_choice_kept_by_default() -> None:
+    from steerable_agent_runtime.llm import LLMMessage
+
+    provider = _provider()
+    body = provider._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=None,
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "required"
+
+
+def test_registry_deepseek_disables_forced_tool_choice() -> None:
+    entry = compat_for_base_url("https://api.deepseek.com")
+    assert entry is not None
+    assert entry.supports_forced_tool_choice is False
+
+
 # ---------------------------------------------------------------------------
 # Response-shape flags
 # ---------------------------------------------------------------------------

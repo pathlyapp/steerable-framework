@@ -154,6 +154,34 @@ def test_openai_parse_and_encode_reasoning_details() -> None:
     assert "reasoning_details" not in plaintext
 
 
+def test_openai_encode_reasoning_echo_field_from_compat() -> None:
+    """DeepSeek thinking mode 400s unless reasoning round-trips under its own
+    ``reasoning_content`` key (live-verified 2026-09-08, deepseek-v4-flash);
+    the echo field name is compat data, not a hardcoded constant."""
+    from steerable_agent_runtime.llm import OpenAICompatFlags, compat_for_base_url
+
+    msg = LLMMessage.text_of("assistant", "", reasoning="think step")
+
+    deepseek = compat_for_base_url("https://api.deepseek.com")
+    assert deepseek is not None
+    encoded = _encode_message(msg, compat=deepseek)
+    assert encoded["reasoning_content"] == "think step"
+    assert "reasoning" not in encoded
+
+    # Reference default (and OpenRouter) keep the ``reasoning`` echo key.
+    default = _encode_message(msg)
+    assert default["reasoning"] == "think step"
+    assert "reasoning_content" not in default
+
+    openrouter = compat_for_base_url("https://openrouter.ai/api/v1")
+    assert openrouter is not None
+    assert _encode_message(msg, compat=openrouter)["reasoning"] == "think step"
+
+    # Host-passed camelCase payload builds the same flags.
+    from_dict = OpenAICompatFlags.from_dict({"reasoningEchoField": "reasoning_content"})
+    assert _encode_message(msg, compat=from_dict)["reasoning_content"] == "think step"
+
+
 def test_openai_parse_stream_chunk_usage_only() -> None:
     chunk = {
         "choices": [],

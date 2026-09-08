@@ -149,10 +149,12 @@ async def test_compat_describe_serves_the_framework_flag_vocabulary(
         "supportsReasoningEffort",
         "supportsTemperature",
         "reasoningDeltaFields",
+        "reasoningEchoField",
+        "supportsForcedToolChoice",
         "cachedTokensFields",
     }
     for f in flags:
-        assert f["kind"] in ("bool", "string-list") or f["kind"].startswith("enum:")
+        assert f["kind"] in ("bool", "string", "string-list") or f["kind"].startswith("enum:")
         # Every described key builds flags without raising.
         value = (
             f["default"]

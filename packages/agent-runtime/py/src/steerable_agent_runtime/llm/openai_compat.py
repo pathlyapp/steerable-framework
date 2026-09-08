@@ -329,7 +329,7 @@ class OpenAICompatProvider:
             preset = self.preset
         body: dict[str, Any] = {
             "model": self.model,
-            "messages": [_encode_message(m) for m in messages],
+            "messages": [_encode_message(m, compat=compat) for m in messages],
             "stream": stream,
         }
         if stream and compat.supports_usage_in_streaming:
@@ -360,11 +360,16 @@ class OpenAICompatProvider:
             for key, value in preset.extra_body.items():
                 if key not in body:
                     body[key] = value
-        # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
-        # Harbor still logs the hook; the wire must send auto or the trial
-        # dies on round 0 (failed-prev 33335200327).
-        if body.get("tool_choice") == "required" and _z_ai_tool_choice_auto_only(
-            self.model, self.base_url
+        # ``tool_choice=required`` downgrade paths:
+        #  - compat flag: vendors whose thinking mode 400s the forced value
+        #    (DeepSeek: "Thinking mode does not support this tool_choice");
+        #  - Z.AI (direct or OpenRouter pin) 400s it outright — model-name
+        #    based, which host flags can't cover. Harbor still logs the hook;
+        #    the wire must send auto or the trial dies on round 0
+        #    (failed-prev 33335200327).
+        if body.get("tool_choice") == "required" and (
+            not compat.supports_forced_tool_choice
+            or _z_ai_tool_choice_auto_only(self.model, self.base_url)
         ):
             body["tool_choice"] = "auto"
         # W6-8: clamp the requested reasoning effort to a level the model
@@ -509,7 +514,10 @@ def _encode_content(message: LLMMessage) -> str | list[dict[str, Any]]:
     return out
 
 
-def _encode_message(message: LLMMessage) -> dict[str, Any]:
+def _encode_message(
+    message: LLMMessage, *, compat: OpenAICompatFlags | None = None
+) -> dict[str, Any]:
+    flags = compat or OpenAICompatFlags()
     out: dict[str, Any] = {"role": message.role, "content": _encode_content(message)}
     if message.name is not None:
         out["name"] = message.name
@@ -528,11 +536,13 @@ def _encode_message(message: LLMMessage) -> dict[str, Any]:
             for tc in message.tool_calls
         ]
     # OpenRouter: echo reasoning_details unmodified so GLM continues after
-    # tools. Prefer the structured block; plaintext is the fallback.
+    # tools. Prefer the structured block; plaintext is the fallback. The
+    # plaintext echo key is compat data: DeepSeek thinking mode 400s unless
+    # the round-trip uses its own ``reasoning_content`` field.
     if message.reasoning_details:
         out["reasoning_details"] = message.reasoning_details
     elif message.reasoning:
-        out["reasoning"] = message.reasoning
+        out[flags.reasoning_echo_field] = message.reasoning
     return out
 
 

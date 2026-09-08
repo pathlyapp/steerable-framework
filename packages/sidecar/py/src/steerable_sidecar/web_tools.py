@@ -39,6 +39,10 @@ the host's network position. Every hop (initial URL and each redirect
 target) is validated: http(s) only, no credentials-in-URL, and the host's
 DNS answers must ALL be globally reachable (``ipaddress.is_global``), with
 IPv4-mapped and NAT64 (64:ff9b::/96) forms unwrapped before the check.
+One exemption: the 198.18.0.0/15 fake-ip pool (Clash / sing-box fake-ip
+DNS) is allowed — reserved, non-routable, and intercepted by the proxy
+downstream, so refusing it only breaks fetching behind such proxies
+without protecting any real endpoint.
 Residual gap, documented honestly: the resolver check and httpx's own
 connect resolve twice, so a hostile authoritative DNS could rotate answers
 between them (classic TOCTOU). dsh pins the connection to the validated
@@ -99,6 +103,17 @@ _MAX_REDIRECTS_CEILING = 20
 #: globally reachable, so ``is_global`` alone would admit 64:ff9b::a9fe:a9fe
 #: — 169.254.169.254 in disguise).
 _NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
+
+#: Fake-IP pool (RFC 2544 benchmarking range) that Clash / sing-box /
+#: V2Ray-style fake-ip DNS hands out for proxied domains; the proxy's
+#: TUN/real-stack intercepts the connection downstream and maps it back to
+#: the real host. The range is reserved and non-routable, so no real
+#: metadata/internal endpoint lives here — allowing it does not widen the
+#: SSRF surface. Without the exemption every web_fetch behind a fake-ip
+#: proxy dies in the SSRF pre-check even though the network path itself
+#: works (live-verified 2026-09-08: wttr.in / weather.com.cn / example.com
+#: all resolved to 198.18.0.x under Clash fake-ip and were refused).
+_FAKE_IP_RANGE = ipaddress.ip_network("198.18.0.0/15")
 
 _USER_AGENT = "steerable-sidecar/0.1 (+https://github.com/deeppath/steerable-framework)"
 
@@ -619,6 +634,17 @@ async def _default_resolve_host(host: str, port: int) -> list[str]:
     return sorted({info[4][0] for info in infos})
 
 
+def _is_fake_ip(candidate: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True for fake-ip pool members, incl. their v4-mapped v6 wrappers."""
+    if candidate in _FAKE_IP_RANGE:
+        return True
+    if isinstance(candidate, ipaddress.IPv6Address):
+        mapped = candidate.ipv4_mapped
+        if mapped is not None and mapped in _FAKE_IP_RANGE:
+            return True
+    return False
+
+
 def _assert_public_address(address: str) -> None:
     """Reject any non-globally-reachable address, unwrapping v4-in-v6 forms."""
     try:
@@ -632,12 +658,13 @@ def _assert_public_address(address: str) -> None:
         if ip in _NAT64_WELL_KNOWN:
             candidates.append(ipaddress.IPv4Address(int(ip) & 0xFFFF_FFFF))
     for candidate in candidates:
-        if not candidate.is_global:
-            raise WebFetchPolicyError(
-                f"refusing to fetch a non-public address ({address}): "
-                "loopback, private, link-local (incl. 169.254.169.254-style "
-                "metadata endpoints), and reserved ranges are off-limits"
-            )
+        if candidate.is_global or _is_fake_ip(candidate):
+            continue
+        raise WebFetchPolicyError(
+            f"refusing to fetch a non-public address ({address}): "
+            "loopback, private, link-local (incl. 169.254.169.254-style "
+            "metadata endpoints), and reserved ranges are off-limits"
+        )
 
 
 def _parse_fetch_url(url: str) -> tuple[str, int]:
