@@ -9,14 +9,25 @@ transcript.
 Design:
 - Depth-1 by construction: the child dispatches to the *inner* executor,
   so a child cannot spawn further agents.
+- **Delegate-on-pool.** The child runs inside an ``AgentPool``
+  (``pool.py``) — the same engine the six-tool orchestration family
+  drives. The tool contract stays synchronous (the call returns the
+  child's final answer), but execution is a pooled child run: concurrent
+  profiles batch in parallel under the pool's ``max_parallel`` budget, and
+  lifecycle lands on the ``event_sink`` as ``child_spawned`` /
+  ``child_completed`` / ``child_failed`` events (carrying the resolved
+  ``profile`` name) so hosts can render delegation live. When the host
+  also enables the orchestration family it attaches the orchestration
+  executor's pool (``attach_pool``) — one budget, one lineage space, and
+  delegate children show up in ``agent_list``.
 - The child runs storage-free; in the parent trace the whole delegation is
   a single tool span — child internals stay out of the parent's event
   stream (a product that wants child traces wraps the child run in its own
   TraceRecorder via ``hooks``/composition, not this seam).
 - The child's answer is its accumulated assistant text at completion.
-- Opt-in: the host advertises ``subagent_tool_descriptor`` in the tools
-  list and wraps its executor; products that don't want delegation simply
-  do neither.
+- Opt-out: hosts advertise ``subagent_tool_descriptor`` in the tools list
+  and wrap their executor; the sidecar does both by default and
+  ``params.subagent: false`` turns delegation off.
 - Named profiles (CC ``subagent_type`` parity): a ``SubagentRegistry``
   maps profile names onto per-profile tool domains, round bounds, models,
   and concurrency; the tool schema advertises the names as a
@@ -34,13 +45,20 @@ Design:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .llm import LLMMessage, LLMProvider
+from .llm import LLMProvider
 from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
+from .pool import AgentPool, LoopFactory, OrchestrationBudgetExceeded, OrchestrationConfig
+
+#: ``profile`` label on lifecycle events for a delegation that named no
+#: ``subagent_type`` — mirrors the tool schema's "default general-purpose
+#: profile" wording.
+DEFAULT_PROFILE_LABEL = "general-purpose"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,8 +79,11 @@ class SubagentConfig:
     ``provider_factory`` or the request fails closed. ``concurrent`` lifts
     the never-batch rule so several delegations in one round run their
     child loops in parallel (CC's concurrent-subagents parity) — each child
-    is an independent loop over the shared inner executor, which is exactly
-    what the loop's parallel tool execution already does.
+    is a pooled child run, so a same-round batch executes concurrently up
+    to the pool's budget and the overflow delegation fails closed with
+    ``orchestration_budget_exceeded``. ``max_parallel`` sizes the
+    executor's own pool; it is inert once a shared pool is attached (the
+    shared pool's config governs).
     """
 
     tool_name: str = "delegate_subagent"
@@ -71,6 +92,7 @@ class SubagentConfig:
     tool_filter: frozenset[str] | None = None
     model: str | None = None
     concurrent: bool = False
+    max_parallel: int = 4
     description: str = (
         "Delegate a self-contained subtask to a sub-agent with its own "
         "reasoning loop. Good for parallelizable or context-heavy subtasks; "
@@ -191,13 +213,30 @@ class FilteredToolsExecutor:
         return bool(inner_safe and inner_safe(call))
 
 
+def _schema_name(schema: dict[str, Any]) -> str:
+    function = schema.get("function")
+    if isinstance(function, dict) and function.get("name"):
+        return str(function["name"])
+    return str(schema.get("name") or "")
+
+
 class SubagentExecutor:
     """ToolExecutor decorator: ``config.tool_name`` calls run a child loop.
+
+    The child runs as a pooled child (``AgentPool.run``): the tool contract
+    stays synchronous — the call returns the child's final answer — while
+    execution, budgeting, and lifecycle events are the pool's. ``pool``
+    injects a shared pool (the orchestration family's, when both surfaces
+    are on); absent one the executor runs its own, sized by
+    ``config.max_parallel``.
 
     ``provider_factory`` maps a model name onto a provider for children
     whose profile sets ``model`` (CC's per-subagent model parity); without
     one, a ``model``-bearing profile fails closed at dispatch. ``registry``
-    carries the named profiles the tool schema advertises.
+    carries the named profiles the tool schema advertises. ``tools`` is the
+    parent loop's advertised schemas — children advertise the subset their
+    profile delegates (minus the delegation tool itself); without it
+    children run reasoning-only.
     """
 
     def __init__(
@@ -209,6 +248,9 @@ class SubagentExecutor:
         hooks: LoopHooks | None = None,
         registry: SubagentRegistry | None = None,
         provider_factory: Any = None,
+        tools: list[dict[str, Any]] | None = None,
+        event_sink: Callable[[str, dict[str, Any]], None] | None = None,
+        pool: AgentPool | None = None,
     ) -> None:
         self._inner = inner
         self._provider = provider
@@ -216,6 +258,23 @@ class SubagentExecutor:
         self._hooks = hooks
         self._registry = registry
         self._provider_factory = provider_factory
+        self._parent_tools = list(tools or [])
+        self._pool = pool or AgentPool(
+            config=OrchestrationConfig(max_parallel=self._config.max_parallel),
+            depth=0,
+            lineage="0",
+            event_sink=event_sink,
+        )
+
+    def attach_pool(self, pool: AgentPool) -> None:
+        """Adopt a shared pool — wire-time only, before the first delegation.
+
+        The sidecar calls this with the orchestration executor's pool when
+        the six-tool family is also enabled, so both multi-agent surfaces
+        share one ``max_parallel`` budget and one lineage space (delegate
+        children then appear in ``agent_list`` too).
+        """
+        self._pool = pool
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         if call.name != self._config.tool_name:
@@ -243,41 +302,70 @@ class SubagentExecutor:
                     needsFollowup=True,
                 )
             config = profile
-        provider = self._provider
-        if config.model is not None:
-            if self._provider_factory is None:
-                return ToolResult(
-                    success=False,
-                    error=(
-                        f"sub-agent profile requests model {config.model!r} "
-                        "but this host has no provider factory"
-                    ),
-                )
-            provider = self._provider_factory(config.model)
-        child = CoreLoop(
-            provider,
-            self._child_executor(config),
-            LoopConfig(max_rounds=config.max_rounds),
-            hooks=self._hooks,
-        )
-        answer_parts: list[str] = []
-        status = "completed"
-        async for event in child.run([LLMMessage.text_of("user", task)]):
-            if event.kind == "content_delta":
-                answer_parts.append(str(event.data.get("delta") or ""))
-            elif event.kind == "completion":
-                status = str(event.data.get("status") or "completed")
-        answer = "".join(answer_parts).strip()
-        if status != "completed":
+        if config.model is not None and self._provider_factory is None:
             return ToolResult(
                 success=False,
-                error=f"sub-agent ended with status: {status}",
-                message=answer or None,
+                error=(
+                    f"sub-agent profile requests model {config.model!r} "
+                    "but this host has no provider factory"
+                ),
+            )
+        try:
+            outcome = await self._pool.run(
+                task,
+                config.tool_filter,
+                loop_factory=self._loop_factory_for(config),
+                event_extra={"profile": type_name or DEFAULT_PROFILE_LABEL},
+            )
+        except OrchestrationBudgetExceeded as exc:
+            return ToolResult(
+                success=False,
+                error=f"orchestration_budget_exceeded: {exc}",
+                needsFollowup=True,
+            )
+        if outcome.status != "completed":
+            return ToolResult(
+                success=False,
+                error=f"sub-agent ended with status: {outcome.status}",
+                message=outcome.answer or None,
             )
         return ToolResult(
             success=True,
-            message=answer or "(sub-agent returned no text)",
+            message=outcome.answer or "(sub-agent returned no text)",
         )
+
+    def _loop_factory_for(self, config: SubagentConfig) -> LoopFactory:
+        """Per-spawn child builder resolving the profile's provider, tool
+        domain, and round bound (profiles differ per call, so the pool's
+        constructor default cannot carry this)."""
+
+        def factory(
+            child_id: str, tool_filter: frozenset[str] | None
+        ) -> tuple[CoreLoop, list[dict[str, Any]] | None]:
+            provider = self._provider
+            if config.model is not None:
+                # execute() fails closed before the spawn when a
+                # model-bearing profile has no provider factory.
+                provider = self._provider_factory(config.model)
+            schemas: list[dict[str, Any]] | None = None
+            if config.allow_tools:
+                schemas = [
+                    schema
+                    for schema in self._parent_tools
+                    if _schema_name(schema) != self._config.tool_name
+                    and (tool_filter is None or _schema_name(schema) in tool_filter)
+                ] or None
+            return (
+                CoreLoop(
+                    provider,
+                    self._child_executor(config),
+                    LoopConfig(max_rounds=config.max_rounds),
+                    hooks=self._hooks,
+                ),
+                schemas,
+            )
+
+        return factory
 
     def _child_executor(self, config: SubagentConfig) -> ToolExecutor:
         if not config.allow_tools:
@@ -285,6 +373,12 @@ class SubagentExecutor:
         if config.tool_filter is not None:
             return FilteredToolsExecutor(self._inner, config.tool_filter)
         return self._inner
+
+    async def shutdown(self) -> None:
+        """Wind down children still running when the parent turn ends —
+        hosts call this on stream teardown (a no-op twice, so a shared
+        pool may also be shut down via the orchestration executor)."""
+        await self._pool.shutdown()
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         # Delegation spawns a full child loop — batched with siblings only

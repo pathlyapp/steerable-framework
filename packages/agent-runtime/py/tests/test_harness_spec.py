@@ -11,7 +11,7 @@ from steerable_agent_runtime.harness import (
     MinimalToolset,
     SingleAgent,
     Stateless,
-    SubAgentDelegation,
+    PoolOrchestration,
 )
 from steerable_agent_runtime.harness_spec import (
     HarnessSpecError,
@@ -217,7 +217,7 @@ def test_arm_c_subagent_spec_loads_and_differs_in_exactly_one_dimension() -> Non
             "informed_backtrack": {"max_context_tokens": 100_000},
         },
     )
-    assert isinstance(harness.orchestration, SubAgentDelegation)
+    assert isinstance(harness.orchestration, PoolOrchestration)
 
 
 def test_arm_d_minimal_spec_loads_and_differs_in_exactly_one_dimension() -> None:
