@@ -206,8 +206,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <polygon class="pt pt--ref" points="252,110.6 260,118.6 252,126.6 244,118.6"/>
 <text class="delta" x="264" y="103">+2.3 pts</text>
 <text class="lbl" x="264" y="113">Steerable 75.3%</text>
-<text class="sub" x="264" y="132">Terminus 73.0%</text>
-<text class="sub" x="264" y="141">published</text>
+<text class="sub" x="264" y="132">官方分数 73.0%</text>
 <text class="legend" x="44" y="306">Circles share one GLM-5.3-Flash gateway and sit on the $ axis. Diamonds are Qwen3.8-27B scores only — they are not a cost.</text>
 </svg>
 <p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. Qwen3.8-27B: Steerable 75.3% (this repo, catalog-89) vs Qwen's published Terminus 73.0% on the <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a>. The Qwen markers are a score overlay; they do not sit on the $ axis. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
