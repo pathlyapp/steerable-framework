@@ -7,14 +7,208 @@ export interface AskUserQuestionsPayload {
   answers?: {
     [k: string]: string | string[];
   } | null;
-  questions: {
-    id: string;
-    text: string;
-    type?: "select" | "text" | "password";
-    options?: string[];
-    placeholder?: string | null;
-    multiSelect?: boolean;
-    [k: string]: any;
-  }[];
+  /**
+   * @minItems 1
+   * @maxItems 4
+   */
+  questions:
+    | [
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        }
+      ]
+    | [
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        }
+      ]
+    | [
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        }
+      ]
+    | [
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        },
+        {
+          id: string;
+          text: string;
+          /**
+           * Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent.
+           */
+          header?: string;
+          type?: "select" | "text" | "password";
+          /**
+           * Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it.
+           *
+           * @minItems 2
+           * @maxItems 4
+           */
+          options?: [string, string] | [string, string, string] | [string, string, string, string];
+          placeholder?: string | null;
+          multiSelect?: boolean;
+          [k: string]: any;
+        }
+      ];
   [k: string]: any;
 }

@@ -39,16 +39,37 @@ ASK_USER_SCHEMA: dict[str, Any] = {
         },
         "questions": {
             "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
                     "text": {"type": "string"},
+                    "header": {
+                        "type": "string",
+                        "maxLength": 12,
+                        "description": (
+                            "Short chip label shown above the question "
+                            "(<=12 chars). Optional; the host derives one "
+                            "from `text` when absent."
+                        ),
+                    },
                     "type": {
                         "type": "string",
                         "enum": ["select", "text", "password"],
                     },
-                    "options": {"type": "array", "items": {"type": "string"}},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 4,
+                        "description": (
+                            "Choices for a select question (2-4). The host "
+                            "auto-appends an 'Other' free-text escape; do "
+                            "not list it yourself."
+                        ),
+                    },
                     "placeholder": {"type": "string"},
                     "multiSelect": {"type": "boolean"},
                 },
@@ -67,8 +88,40 @@ ASK_USER_SCHEMA: dict[str, Any] = {
 _QUESTION_ALIASES = {"id": "name", "text": "message", "options": "choices"}
 
 
+#: Claude Code ``AskUserQuestion`` parity bounds. The card renders a batched
+#: decision, not an interview — cap the question count so the model cannot
+#: bombard the user, and cap select options so it pre-categorizes instead of
+#: dumping a long list. The host auto-appends an "Other" free-text escape, so
+#: the model never lists it (the option space the model thought of is not the
+#: complete space).
+_MIN_QUESTIONS = 1
+_MAX_QUESTIONS = 4
+_MIN_OPTIONS = 2
+_MAX_OPTIONS = 4
+#: ``header`` is the short chip label shown above the question (CC parity).
+#: Optional on the wire; derived from ``text`` when absent.
+_MAX_HEADER_LEN = 12
+
+
+def _derive_header(text: str) -> str:
+    """Derive a <=12-char chip label from the question text when the model did
+    not supply ``header``. Strips trailing punctuation and truncates on a word
+    boundary so the chip stays readable."""
+    cleaned = text.strip().rstrip("?.!。")
+    if len(cleaned) <= _MAX_HEADER_LEN:
+        return cleaned
+    truncated = cleaned[:_MAX_HEADER_LEN]
+    # Prefer cutting on the last space so the chip does not end mid-word.
+    space = truncated.rfind(" ")
+    if space > 0:
+        truncated = truncated[:space]
+    return truncated
+
+
 def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Map known alias keys onto the canonical payload fields and require the
+    """Map known alias keys onto the canonical payload fields, enforce the
+    Claude Code ``AskUserQuestion`` bounds (1-4 questions, 2-4 options per
+    select, ``header`` <=12 chars, ``multiSelect`` explicit), and require the
     two fields the host card cannot render without (``id`` to key the answer,
     ``text`` to label the control). A violation raises ``ToolDispatchError`` —
     the router wraps it as the tool result, so the model sees exactly what to
@@ -76,6 +129,11 @@ def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]
     if not isinstance(questions, list):
         raise ToolDispatchError(
             f"ask_user: questions must be an array, got {type(questions).__name__}"
+        )
+    if not (_MIN_QUESTIONS <= len(questions) <= _MAX_QUESTIONS):
+        raise ToolDispatchError(
+            f"ask_user: questions must contain {_MIN_QUESTIONS}-{_MAX_QUESTIONS} "
+            f"items, got {len(questions)}. Batch a small decision, not an interview."
         )
     normalized: list[dict[str, Any]] = []
     for index, question in enumerate(questions):
@@ -98,6 +156,47 @@ def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]
                 f"ask_user: questions[{index}] is missing a non-empty string "
                 '"text" (the question label shown to the user).'
             )
+        # header: optional on the wire; validate length when present, derive
+        # from text when absent so the card always has a chip label.
+        header = q.get("header")
+        if header is None:
+            q["header"] = _derive_header(q["text"])
+        elif not isinstance(header, str) or not header:
+            raise ToolDispatchError(
+                f"ask_user: questions[{index}].header must be a non-empty string."
+            )
+        elif len(header) > _MAX_HEADER_LEN:
+            raise ToolDispatchError(
+                f"ask_user: questions[{index}].header is {len(header)} chars; "
+                f"the chip label must be <= {_MAX_HEADER_LEN}."
+            )
+        # multiSelect: CC requires the model to commit to single vs multi.
+        # Default to False when absent so existing single-select calls keep
+        # working, but stamp it so hosts always read an explicit boolean.
+        if "multiSelect" not in q or q["multiSelect"] is None:
+            q["multiSelect"] = False
+        elif not isinstance(q["multiSelect"], bool):
+            raise ToolDispatchError(
+                f"ask_user: questions[{index}].multiSelect must be a boolean, "
+                f"got {type(q['multiSelect']).__name__}."
+            )
+        # options: only a select question carries choices; enforce the 2-4
+        # bound so the model pre-categorizes instead of dumping a long list.
+        qtype = q.get("type", "select")
+        options = q.get("options")
+        if qtype == "select":
+            if options is not None:
+                if not isinstance(options, list):
+                    raise ToolDispatchError(
+                        f"ask_user: questions[{index}].options must be an array, "
+                        f"got {type(options).__name__}."
+                    )
+                if not (_MIN_OPTIONS <= len(options) <= _MAX_OPTIONS):
+                    raise ToolDispatchError(
+                        f"ask_user: questions[{index}] has {len(options)} options; "
+                        f"a select question needs {_MIN_OPTIONS}-{_MAX_OPTIONS}. "
+                        "The host auto-appends an 'Other' escape — do not list it."
+                    )
         normalized.append(q)
     return normalized
 

@@ -20,6 +20,8 @@
     },
     "questions": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
       "items": {
         "type": "object",
         "additionalProperties": true,
@@ -27,8 +29,19 @@
         "properties": {
           "id": { "type": "string" },
           "text": { "type": "string" },
+          "header": {
+            "type": "string",
+            "maxLength": 12,
+            "description": "Short chip label shown above the question (Claude Code AskUserQuestion parity). Optional; hosts derive one from `text` when absent."
+          },
           "type": { "type": "string", "enum": ["select", "text", "password"], "default": "select" },
-          "options": { "type": "array", "items": { "type": "string" } },
+          "options": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 2,
+            "maxItems": 4,
+            "description": "Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it."
+          },
           "placeholder": { "type": ["string", "null"] },
           "multiSelect": { "type": "boolean", "default": false }
         }
