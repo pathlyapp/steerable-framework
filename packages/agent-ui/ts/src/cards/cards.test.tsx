@@ -216,6 +216,25 @@ describe('AskUserQuestionsCard', () => {
     fireEvent.click(screen.getByText('提交'));
     expect(onSubmit).toHaveBeenCalledWith({ q1: '休息' });
   });
+
+  it('offers the custom pill by default (the schema promises an Other escape)', () => {
+    // The ask_user tool schema tells the model the host auto-appends an
+    // "Other" free-text escape, so the card must offer it without an
+    // explicit prop.
+    render(
+      <AskUserQuestionsCard
+        payload={{
+          intro: '请回答',
+          questions: [
+            { id: 'q1', text: '其他想法？', type: 'select', options: ['学习', '工作'] },
+          ],
+        }}
+        customLabel="自定义"
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('自定义')).toBeTruthy();
+  });
 });
 
 describe('QuizCard', () => {
