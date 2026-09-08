@@ -156,11 +156,13 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
-<div class="sf-bench-kicker">Cost × score · two models</div>
-<p class="sf-bench-blurb">Circles are GLM-5.3-Flash on one OpenRouter account — Steerable is the cheapest seat in the frontier band. Diamonds are Qwen3.8-27B: Steerable <strong>75.3%</strong> clears the published Terminus <strong>73.0%</strong>.</p>
-<svg class="sf-scatter" viewBox="0 0 400 312" role="img" aria-label="Terminal-Bench 2.1: GLM-5.3-Flash cost versus score for four harnesses, and Qwen3.8-27B Steerable 75.3 percent versus published Terminus 73.0 percent">
+<div class="sf-bench-kicker">Cost × score · GLM plus official overlays</div>
+<p class="sf-bench-blurb">Circles are GLM-5.3-Flash on one OpenRouter account — Steerable is the cheapest seat in the frontier band. Diamonds are published-score overlays: DeepSeek-V4-Flash Steerable <strong>84.3%</strong> vs official <strong>82.7%</strong>, Qwen3.8-27B <strong>75.3%</strong> vs Terminus <strong>73.0%</strong>.</p>
+<svg class="sf-scatter" viewBox="0 0 400 312" role="img" aria-label="Terminal-Bench 2.1: GLM-5.3-Flash cost versus score for four harnesses, DeepSeek-V4-Flash Steerable 84.3 percent versus official 82.7 percent, and Qwen3.8-27B Steerable 75.3 percent versus published Terminus 73.0 percent">
 <rect class="band" x="44" y="40" width="344" height="36"/>
-<text class="bandlbl" x="384" y="62" text-anchor="end">frontier band 79–84%</text>
+<text class="bandlbl" x="226" y="36" text-anchor="end">frontier band 79–84%</text>
+<rect class="qwenCol" x="232" y="18" width="148" height="64" rx="4"/>
+<text class="qwenColTitle" x="306" y="30" text-anchor="middle">DeepSeek-V4-Flash · score overlay</text>
 <rect class="qwenCol" x="232" y="82" width="148" height="66" rx="4"/>
 <text class="qwenColTitle" x="306" y="94" text-anchor="middle">Qwen3.8-27B · score overlay</text>
 <line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
@@ -199,15 +201,21 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <text class="lbl" x="338" y="198" text-anchor="end">Codex CLI</text>
 <text class="sub" x="338" y="208" text-anchor="end">GLM-5.3-Flash</text>
 <text class="sub" x="338" y="217" text-anchor="end">58% · $0.81</text>
+<line class="connector" x1="252" y1="52.1" x2="252" y2="61.9"/>
+<polygon class="pt pt--ours" points="252,44.1 260,52.1 252,60.1 244,52.1"/>
+<polygon class="pt pt--ref" points="252,53.9 260,61.9 252,69.9 244,61.9"/>
+<text class="delta" x="264" y="48">+1.6 pts</text>
+<text class="lbl" x="264" y="57">Steerable 84.3%</text>
+<text class="sub" x="264" y="72">official score 82.7%</text>
 <line class="connector" x1="252" y1="104.4" x2="252" y2="118.6"/>
 <polygon class="pt pt--ours" points="252,96.4 260,104.4 252,112.4 244,104.4"/>
 <polygon class="pt pt--ref" points="252,110.6 260,118.6 252,126.6 244,118.6"/>
 <text class="delta" x="264" y="103">+2.3 pts</text>
 <text class="lbl" x="264" y="113">Steerable 75.3%</text>
 <text class="sub" x="264" y="132">official score 73.0%</text>
-<text class="legend" x="44" y="306">Circles share one GLM-5.3-Flash gateway and sit on the $ axis. Diamonds are Qwen3.8-27B scores only — they are not a cost.</text>
+<text class="legend" x="44" y="306">Circles share one GLM-5.3-Flash gateway and sit on the $ axis. Diamonds are DeepSeek-V4-Flash and Qwen3.8-27B scores only — they are not a cost.</text>
 </svg>
-<p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. Qwen3.8-27B: Steerable 75.3% (this repo, catalog-89) vs Qwen's published Terminus 73.0% on the <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a>. The Qwen markers are a score overlay; they do not sit on the $ axis. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
+<p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. DeepSeek-V4-Flash-0731: Steerable 84.3% (this repo, catalog-89, vendor endpoint) vs DeepSeek's published 82.7% on <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731">the model card</a> (DeepSeek Harness). Qwen3.8-27B: Steerable 75.3% (this repo, catalog-89) vs Qwen's published Terminus 73.0% on the <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a>. Diamond markers are score overlays; they do not sit on the $ axis. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
 </div>
 
 </div>
