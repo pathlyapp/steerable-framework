@@ -543,15 +543,19 @@ class SteerableHarborAgent(BaseInstalledAgent):
         elif _is_deepseek(model):
             # Official DeepSeek-V4-Flash-0731 TB 2.1 (82.7) used max.
             env.setdefault("STEERABLE_REASONING_EFFORT", "max")
-            # 29 OpenRouter endpoints serve this id and the router sorts by
-            # price: DeepSeek's own is 22nd ($0.220/$0.660 per M vs $0.050 for
-            # OpenInference), so default routing never reaches it and two of
-            # the four cheapest are fp4. `max` is honoured per endpoint, not
-            # uniformly — the GLM pin's z-ai/fp8 emits 92% reasoning tokens
-            # where unpinned resellers span 3–86%. Pin the vendor for the same
-            # reason as z-ai above; the slug is `deepseek`, not `z-ai`.
-            env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "deepseek")
-            env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
+            # Unlike GLM there is no vendor pin to make here: `deepseek` is a
+            # real slug but this account's privacy setting excludes it
+            # ("Paid model training violation (account settings)"), so
+            # only=deepseek leaves 0 endpoints and every trial 404s
+            # (34226308104). The 82.7 reference therefore cannot be
+            # reproduced on the vendor's own weights from this account.
+            # 29 reseller endpoints serve the id and OpenRouter sorts by
+            # price, so the route varies per request. That matters because
+            # `max` is honoured per endpoint rather than uniformly — on the
+            # GLM traffic z-ai/fp8 emits 92.0% reasoning tokens where the
+            # other endpoints span 3.4–86.0%, and the spread does not track
+            # quantization (fp8 alone covers 30.4–92.0%). Which endpoint to
+            # pin is an open measurement, not a guess.
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",

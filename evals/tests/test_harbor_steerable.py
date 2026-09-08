@@ -283,10 +283,10 @@ def test_zai_defaults_do_not_follow_a_model_switch() -> None:
     assert not is_zai_glm("")
 
 
-def test_deepseek_pins_its_own_vendor_not_zai() -> None:
-    """Unpinned, OpenRouter's price sort routes past DeepSeek's own endpoint
-    (22nd of 29) onto fp4 resellers that honour `max` far more weakly, which
-    is the 73.0-vs-82.7 gap. `z-ai` serves only GLM and would 404 here."""
+def test_deepseek_takes_effort_but_no_provider_pin() -> None:
+    """Official Flash-0731 TB used max. No vendor pin is possible: `z-ai`
+    serves only GLM, and only=deepseek 404s every trial because this
+    account's privacy setting excludes that endpoint (34226308104)."""
     assert is_deepseek("deepseek/deepseek-v4-flash-0731")
     assert is_deepseek("deepseek-v4-flash")
     assert not is_deepseek("z-ai/glm-5.3-flash")
@@ -298,8 +298,7 @@ def test_deepseek_pins_its_own_vendor_not_zai() -> None:
     glm_block = run_body[run_body.index("if _is_zai_glm(model):") : deepseek_at]
     deepseek_block = run_body[deepseek_at : run_body.index("STEERABLE_HTTP_REFERER", deepseek_at)]
     assert 'STEERABLE_OPENROUTER_PROVIDER", "z-ai"' in glm_block
-    assert 'STEERABLE_OPENROUTER_PROVIDER", "deepseek"' in deepseek_block
-    assert 'STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0"' in deepseek_block
+    assert "STEERABLE_OPENROUTER_PROVIDER" not in deepseek_block
     assert 'STEERABLE_REASONING_EFFORT", "max"' in deepseek_block
 
 
