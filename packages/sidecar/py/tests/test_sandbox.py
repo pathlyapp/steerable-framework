@@ -193,6 +193,32 @@ def test_web_egress_is_a_noop_when_outbound_is_already_open() -> None:
     assert "network-outbound" not in no_network
 
 
+def test_resolver_adds_only_the_resolver_socket() -> None:
+    # Egress pinned to a local proxy: web_fetch's SSRF pre-check still
+    # resolves locally, so the profile needs the resolver socket — and must
+    # NOT gain the http(s) port rules, which would let the sandboxed process
+    # bypass the proxy entirely.
+    profile = build_seatbelt_profile(
+        allowed_hosts=["127.0.0.1:8899"], resolver=True
+    )
+    assert '(literal "/private/var/run/mDNSResponder")' in profile
+    assert '(remote tcp "*:443")' not in profile
+    assert '(remote tcp "*:80")' not in profile
+    # Still fail-closed for everything else.
+    assert "\n(allow network-outbound)\n" not in profile
+
+
+def test_resolver_is_a_noop_when_web_egress_or_open_outbound_covers_it() -> None:
+    assert build_seatbelt_profile(
+        allowed_hosts=["127.0.0.1:8899"], web_egress=True, resolver=True
+    ) == build_seatbelt_profile(allowed_hosts=["127.0.0.1:8899"], web_egress=True)
+    assert build_seatbelt_profile(
+        allowed_hosts=None, resolver=True
+    ) == build_seatbelt_profile(allowed_hosts=None)
+    no_network = build_seatbelt_profile(network=False, resolver=True)
+    assert "network-outbound" not in no_network
+
+
 def test_allow_list_rejects_invalid_entries() -> None:
     with pytest.raises(ValueError, match="invalid allow-list entry"):
         build_seatbelt_profile(allowed_hosts=['evil.com";(allow network-outbound)'])
@@ -230,6 +256,24 @@ def test_cli_allow_web_egress_flag(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     assert '(literal "/private/var/run/mDNSResponder")' in out
     assert '(remote tcp "*:443")' in out
+
+
+def test_cli_allow_resolver_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "sys.argv",
+            [
+                "sandbox",
+                "profile",
+                "--allow-host",
+                "127.0.0.1:8899",
+                "--allow-resolver",
+            ],
+        )
+        assert main() == 0
+    out = capsys.readouterr().out
+    assert '(literal "/private/var/run/mDNSResponder")' in out
+    assert '(remote tcp "*:443")' not in out
 
 
 @pytest.fixture
