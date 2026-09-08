@@ -543,19 +543,21 @@ class SteerableHarborAgent(BaseInstalledAgent):
         elif _is_deepseek(model):
             # Official DeepSeek-V4-Flash-0731 TB 2.1 (82.7) used max.
             env.setdefault("STEERABLE_REASONING_EFFORT", "max")
-            # Unlike GLM there is no vendor pin to make here: `deepseek` is a
-            # real slug but this account's privacy setting excludes it
-            # ("Paid model training violation (account settings)"), so
-            # only=deepseek leaves 0 endpoints and every trial 404s
-            # (34226308104). The 82.7 reference therefore cannot be
-            # reproduced on the vendor's own weights from this account.
-            # 29 reseller endpoints serve the id and OpenRouter sorts by
-            # price, so the route varies per request. That matters because
-            # `max` is honoured per endpoint rather than uniformly — on the
-            # GLM traffic z-ai/fp8 emits 92.0% reasoning tokens where the
-            # other endpoints span 3.4–86.0%, and the spread does not track
-            # quantization (fp8 alone covers 30.4–92.0%). Which endpoint to
-            # pin is an open measurement, not a guess.
+            # 29 endpoints serve this id and OpenRouter sorts by price, so
+            # without a pin the route varies per request and the vendor's own
+            # (22nd, $0.220/$0.660 per M against $0.050 for OpenInference) is
+            # never reached — the 73.0 catalog never once ran on DeepSeek's
+            # weights. That matters because `max` is honoured per endpoint
+            # rather than uniformly: on the GLM traffic the pinned z-ai/fp8
+            # emits 92.0% reasoning tokens where the rest span 3.4–86.0%, a
+            # spread that does not track quantization (fp8 alone covers
+            # 30.4–92.0%). Pin the vendor as z-ai is pinned above.
+            #
+            # This needs the account to permit providers that may train on
+            # paid inputs. While it did not, only=deepseek matched 0
+            # endpoints and every trial 404'd (34226308104).
+            env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "deepseek")
+            env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",
