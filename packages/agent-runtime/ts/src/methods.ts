@@ -24,6 +24,8 @@ export const SIDECAR_METHODS = [
   'agent.chat.cancel',
   'agent.chat.steer',
   'agent.chat.fork',
+  'agent.chat.compact',
+  'agent.session.tree',
   'tool.list',
   'tool.invoke',
   'workspace.apply_edits',
@@ -34,6 +36,12 @@ export const SIDECAR_METHODS = [
   'config.set',
   'compat.describe',
   'harness.describe',
+  'presets.describe',
+  'presets.resolve',
+  'plugin.list',
+  'plugin.enable',
+  'plugin.disable',
+  'plugin.reload',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];
