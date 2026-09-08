@@ -198,14 +198,14 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <text class="sub" x="338" y="208" text-anchor="end">GLM-5.3-Flash</text>
 <text class="sub" x="338" y="217" text-anchor="end">58% · $0.81</text>
 <line class="grid" x1="238" y1="22" x2="238" y2="132" stroke-dasharray="2 3"/>
-<text class="overlayTitle" x="246" y="30">DeepSeek-V4-Flash · score overlay</text>
+<text class="qwenColTitle" x="246" y="30">DeepSeek-V4-Flash · score overlay</text>
 <line class="connector" x1="256" y1="49.1" x2="256" y2="58.9"/>
 <polygon class="pt pt--ours" points="256,41.1 264,49.1 256,57.1 248,49.1"/>
 <polygon class="pt pt--ref" points="256,50.9 264,58.9 256,66.9 248,58.9"/>
 <text class="delta" x="270" y="46">+1.6 pts vs official</text>
 <text class="lbl" x="270" y="56.5">Steerable 84.3%</text>
 <text class="sub" x="270" y="66.5">official score 82.7%</text>
-<text class="overlayTitle" x="246" y="88">Qwen3.8-27B · score overlay</text>
+<text class="qwenColTitle" x="246" y="88">Qwen3.8-27B · score overlay</text>
 <line class="connector" x1="256" y1="104.4" x2="256" y2="118.6"/>
 <polygon class="pt pt--ours" points="256,96.4 264,104.4 256,112.4 248,104.4"/>
 <polygon class="pt pt--ref" points="256,110.6 264,118.6 256,126.6 248,118.6"/>
