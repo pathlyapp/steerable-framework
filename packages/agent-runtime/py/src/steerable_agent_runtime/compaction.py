@@ -25,6 +25,36 @@ System messages and the first user message (the goal) are always kept; the
 most recent ``keep_last_messages`` are never touched. Between compactions
 the transcript is append-only, so provider prompt caches keep hitting; a
 rewrite invalidates the cache once, then the prefix is stable again.
+
+Three trigger paths share the fold/summarize machinery:
+
+- **pressure** (``pre_step``, above) — the reactive default;
+- **overflow recovery** (``on_request_error``) — the heuristic threshold can
+  still miss the real window, so a context-overflow error forces one
+  compaction pass and retries, bounded per round;
+- **micro-compaction** (``pre_step``, opt-in ``micro_compact_interval_rounds``)
+  — every N rounds, fold old tool results regardless of pressure (CC
+  time-based microcompact parity). Off by default: each fold invalidates the
+  prompt-cache prefix, so the interval trades cache hits for a bounded
+  transcript;
+- **manual** (``compact_now``) — the host-command path (CC ``/compact``
+  parity): fold + summarize on demand, bypassing threshold, hysteresis, and
+  the circuit breaker.
+
+Two safety rails share the machinery:
+
+- Every rewrite carries its ``pre_tokens`` / ``post_tokens`` estimate onto
+  the recorded ``CompactionBoundary`` (CC ``compact_boundary`` parity), so
+  traces chart compaction effectiveness without re-estimating from bodies.
+- A **circuit breaker** (CC auto-compact breaker parity): a pressure
+  compaction whose post-estimate is still over threshold counts as
+  ineffective; three consecutive ineffective compactions open the circuit
+  and the pressure path stops firing — each further rewrite would only
+  invalidate the prompt-cache prefix without shrinking the transcript. The
+  overflow-recovery path keeps its own per-round bound and stays live, so
+  the turn still fails loud (bounded retries, then a named error) instead
+  of spinning. A round that lands under threshold — or any successful
+  compaction — resets the count.
 """
 
 from __future__ import annotations
@@ -75,17 +105,26 @@ class CompactionHooks(NoopHooks):
         model: str | None = None,
         recompact_margin_ratio: float = 0.1,
         fold_excerpt_chars: int = _FOLD_EXCERPT_CHARS,
+        micro_compact_interval_rounds: int = 0,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
         if not 0 <= recompact_margin_ratio:
             raise ValueError("recompact_margin_ratio must be >= 0")
+        if not 0 <= micro_compact_interval_rounds:
+            raise ValueError("micro_compact_interval_rounds must be >= 0")
         self._max_tokens = max_context_tokens
         self._threshold = threshold_ratio
         self._keep_last = keep_last_messages
         self._keep_last_tools = keep_last_tool_results
         self._fold_excerpt_chars = fold_excerpt_chars
         self._summarizer = summarizer
+        #: Proactive micro-compaction (CC time-based microcompact parity):
+        #: every N rounds, fold old tool results regardless of pressure, so a
+        #: long chatty run never drifts toward the window. 0 (default) is off
+        #: — each fold invalidates the provider prompt-cache prefix, so the
+        #: interval trades cache hits for a bounded transcript.
+        self._micro_compact_interval = micro_compact_interval_rounds
         #: Model name used for calibrated token estimates (see tokens.py).
         self._model = model
         #: Hysteresis: after a compaction, pressure must grow by
@@ -98,6 +137,8 @@ class CompactionHooks(NoopHooks):
         self._last_compaction_pressure: int | None = None
         # Observability for callers/tests: how many compactions happened.
         self.compactions = 0
+        # Observability: how many of them were periodic micro-compactions.
+        self.micro_compactions = 0
         # Overflow-recovery state: consecutive context-overflow retries within
         # one round. Capped so a pathological transcript cannot spin a
         # compact→overflow→compact loop forever.
@@ -107,6 +148,14 @@ class CompactionHooks(NoopHooks):
         self.max_overflow_retries = 2
         # Observability: how many overflow-driven compactions happened.
         self.overflow_recoveries = 0
+        #: Consecutive ineffective pressure compactions (post-estimate still
+        #: over threshold) before the circuit opens (CC auto-compact breaker
+        #: parity). The overflow path is bounded separately and unaffected.
+        self.max_consecutive_failures = 3
+        self._consecutive_failures = 0
+        # Observability: True once the breaker tripped; the pressure path
+        # stops firing for the rest of the session.
+        self.circuit_open = False
 
     def _estimate(self, transcript: Sequence[LLMMessage]) -> int:
         return estimate_tokens(transcript, model=self._model)
@@ -137,8 +186,40 @@ class CompactionHooks(NoopHooks):
     async def pre_step(
         self, transcript: list[LLMMessage], ctx: Any
     ) -> PreStepAction:
+        round_index = getattr(ctx, "round_index", 0)
+        if (
+            self._micro_compact_interval > 0
+            and round_index > 0
+            and round_index % self._micro_compact_interval == 0
+        ):
+            pruned = self._fold_old_tool_results(transcript)
+            if pruned is not transcript:
+                self.compactions += 1
+                self.micro_compactions += 1
+                self._reset_observed(ctx)
+                return PreStepAction(
+                    kind="proceed",
+                    rewrite=RewriteRequest(
+                        messages=pruned,
+                        reason=(
+                            "micro-compact: periodic tool-result prune "
+                            f"(every {self._micro_compact_interval} rounds)"
+                        ),
+                        action="micro_compact",
+                        pre_tokens=self._estimate(transcript),
+                        post_tokens=self._estimate(pruned),
+                    ),
+                )
         pressure = self._pressure(transcript, ctx)
         if pressure < self._threshold * self._max_tokens:
+            # A healthy round resets the breaker count — the pathology (or
+            # the transcript that caused it) is gone.
+            self._consecutive_failures = 0
+            return PreStepAction(kind="proceed")
+        if self.circuit_open:
+            # Breaker tripped: further pressure rewrites only invalidate the
+            # prompt-cache prefix without shrinking the transcript. The
+            # overflow path stays live and fails loud if the window is hit.
             return PreStepAction(kind="proceed")
         if (
             self._last_compaction_pressure is not None
@@ -146,9 +227,11 @@ class CompactionHooks(NoopHooks):
         ):
             return PreStepAction(kind="proceed")
 
+        threshold = self._threshold * self._max_tokens
         compacted = self._fold_old_tool_results(transcript)
-        if self._estimate(compacted) < self._threshold * self._max_tokens:
+        if self._estimate(compacted) < threshold:
             self.compactions += 1
+            self._consecutive_failures = 0
             self._last_compaction_pressure = pressure
             self._reset_observed(ctx)
             return PreStepAction(
@@ -157,11 +240,23 @@ class CompactionHooks(NoopHooks):
                     messages=compacted,
                     reason="context pressure: folded old tool results",
                     action="compact",
+                    pre_tokens=pressure,
+                    post_tokens=self._estimate(compacted),
                 ),
             )
 
         compacted = await self._summarize_middle(compacted)
+        post = self._estimate(compacted)
         self.compactions += 1
+        if post < threshold:
+            self._consecutive_failures = 0
+        else:
+            # Ineffective: even fold+summarize stayed over threshold (e.g. a
+            # single kept tool result bigger than the window). Three in a
+            # row open the circuit.
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.max_consecutive_failures:
+                self.circuit_open = True
         self._last_compaction_pressure = pressure
         self._reset_observed(ctx)
         return PreStepAction(
@@ -170,6 +265,36 @@ class CompactionHooks(NoopHooks):
                 messages=compacted,
                 reason="context pressure: summarized middle",
                 action="compact",
+                pre_tokens=pressure,
+                post_tokens=post,
+            ),
+        )
+
+    async def compact_now(self, transcript: list[LLMMessage], ctx: Any) -> PreStepAction:
+        """Manual compaction (CC ``/compact`` parity): fold old tool results,
+        then summarize the middle, regardless of pressure, hysteresis, or the
+        circuit breaker — the user asked for it. Returns a ``proceed`` action
+        carrying the rewrite; when neither stage changes anything the action
+        carries no rewrite (nothing was worth invalidating the cache for).
+        A manual pass resets the breaker count: the user has taken over.
+        """
+        pre = self._estimate(transcript)
+        compacted = self._fold_old_tool_results(transcript)
+        compacted = await self._summarize_middle(compacted)
+        self._consecutive_failures = 0
+        if compacted is transcript or compacted == transcript:
+            return PreStepAction(kind="proceed", reason="compact: nothing to fold")
+        self.compactions += 1
+        self._last_compaction_pressure = pre
+        self._reset_observed(ctx)
+        return PreStepAction(
+            kind="proceed",
+            rewrite=RewriteRequest(
+                messages=compacted,
+                reason="manual compact",
+                action="compact",
+                pre_tokens=pre,
+                post_tokens=self._estimate(compacted),
             ),
         )
 
@@ -214,13 +339,22 @@ class CompactionHooks(NoopHooks):
                 messages=compacted,
                 reason="context overflow: compacted transcript before retry",
                 action="overflow_recovery",
+                pre_tokens=self._estimate(transcript),
+                post_tokens=self._estimate(compacted),
             ),
         )
 
     # ------------------------------------------------------------------
 
     def _fold_old_tool_results(self, transcript: list[LLMMessage]) -> list[LLMMessage]:
-        tool_idx = [i for i, m in enumerate(transcript) if m.role == "tool"]
+        # Already-folded results are excluded: re-folding them would stack
+        # markers and invalidate the prompt-cache prefix for zero gain, and
+        # ``keep_last_tool_results`` should count *readable* results.
+        tool_idx = [
+            i
+            for i, m in enumerate(transcript)
+            if m.role == "tool" and not m.content_text.startswith(_FOLDED_TOOL_MARKER)
+        ]
         fold_before = len(tool_idx) - self._keep_last_tools
         if fold_before <= 0:
             return transcript

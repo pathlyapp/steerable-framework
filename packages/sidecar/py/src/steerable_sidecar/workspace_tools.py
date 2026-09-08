@@ -11,16 +11,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import re
 import signal
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Awaitable, Callable
 
 from steerable_agent_harness.safety import CommandSafetyConfig
 from steerable_agent_protocol.generated import ToolResult
 from steerable_agent_runtime import ToolRouter
+from steerable_agent_runtime.llm import LLMMessage
 
 from .file_edit import EditError, EditOp, apply_edits, content_version
 from .png_ascii import ascii_png_preview
@@ -262,6 +265,55 @@ _WRITE_STDIN_SCHEMA = {
 # password-recovery and qemu tasks use ``dd if=`` / mkfs as ordinary steps.
 _JAILED_DISABLED_SAFETY = ("sudo", "dd_if", "dd", "mkfs")
 
+#: Hard gate (CC read-before-write parity), ON by default: overwriting an
+#: existing file the session never read is rejected outright, not just
+#: conflict-checked. Set to 0/false/no/off to opt out. Creating new files
+#: stays allowed either way.
+_REQUIRE_READ_ENV = "STEERABLE_REQUIRE_READ_BEFORE_WRITE"
+
+#: Tools whose results carry ``data.path`` + ``data.version`` — the
+#: read-before-write evidence a resumed session can re-seed from.
+_FILE_STATE_TOOLS = frozenset({"read_file", "write_file", "edit_file"})
+
+
+def read_file_state_from_messages(messages: Iterable[LLMMessage]) -> dict[str, str]:
+    """Rebuild path → version evidence from recorded file-tool results.
+
+    The durable record's tool messages carry the full result JSON
+    (``data.path`` / ``data.version``; ``apply_patch`` carries a
+    ``data.versions`` mapping), so a resumed session re-seeds its
+    read-before-write state without the model re-reading everything — CC
+    ``seed_read_state`` parity. Entries that fail to parse (spilled or
+    folded bodies) are skipped: a missing entry only means one fewer CAS
+    check, never a wrong write. Later entries overwrite earlier ones, so the
+    state ends at each path's latest recorded version.
+    """
+    state: dict[str, str] = {}
+    for message in messages:
+        if message.role != "tool":
+            continue
+        try:
+            payload = json.loads(message.content_text)
+        except ValueError:
+            continue
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            continue
+        if message.name == "apply_patch":
+            versions = data.get("versions")
+            if isinstance(versions, dict):
+                for path, version in versions.items():
+                    if isinstance(path, str) and isinstance(version, str):
+                        state[path] = version
+            continue
+        if message.name not in _FILE_STATE_TOOLS:
+            continue
+        path = data.get("path")
+        version = data.get("version")
+        if isinstance(path, str) and isinstance(version, str):
+            state[path] = version
+    return state
+
 
 def workspace_tools_for_cwd(
     cwd: str | Path,
@@ -271,6 +323,7 @@ def workspace_tools_for_cwd(
     run_command: BashRunner | None = None,
     web_tools: bool = True,
     run_code: bool | None = None,
+    read_file_state: dict[str, str] | None = None,
 ) -> ToolRouter:
     """Return a router whose bash/read/write calls stay under ``cwd``.
 
@@ -293,6 +346,20 @@ def workspace_tools_for_cwd(
     ``run_code`` defaults to ``STEERABLE_RUN_CODE=1``. Harbor does not
     special-case it the way web tools are omitted; leave the env unset
     unless the trial wants programmatic tool calls.
+
+    ``read_file_state`` is the session's read-before-write evidence
+    (path → version of the last content read or written, CC ``readFileState``
+    parity). The caller owns the dict so the evidence survives per-prompt
+    router rebuilds (ACP) and can be re-seeded from the durable record on
+    resume (``read_file_state_from_messages``); ``None`` starts fresh.
+    Writes and edits auto-check it when the model passes no explicit
+    ``expectedVersion``, and refresh it after every successful write.
+    The hard gate is ON by default (CC parity): overwriting an existing
+    file the session never read is rejected outright, and so is a full
+    overwrite of a file the session only read partially (display clipped
+    at ``_MAX_OUTPUT``; a CAS-checked ``edit_file`` stays allowed).
+    ``STEERABLE_REQUIRE_READ_BEFORE_WRITE=0`` opts out; creating new files
+    is never gated.
     """
     root = Path(cwd).expanduser().resolve()
     safety = (
@@ -305,6 +372,18 @@ def workspace_tools_for_cwd(
     # same file cannot interleave (pi's file-mutation-queue). Keyed by resolved
     # path; distinct files proceed independently.
     file_locks: dict[str, asyncio.Lock] = {}
+    read_state = read_file_state if read_file_state is not None else {}
+    # Tracks files the session read only partially (display clipped at
+    # _MAX_OUTPUT): the model has not seen the whole content, so a blind
+    # full-file overwrite is rejected (CC isPartialView parity) while a
+    # CAS-checked edit stays allowed. Cleared by a full read or a write.
+    partial_reads: set[str] = set()
+    require_read_before_write = (os.environ.get(_REQUIRE_READ_ENV) or "").strip() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
     def _lock_for(target: Path) -> asyncio.Lock:
         key = str(target)
@@ -314,21 +393,49 @@ def workspace_tools_for_cwd(
             file_locks[key] = lock
         return lock
 
-    async def _check_version(target: Path, expected: str) -> str | None:
+    def _conflict_message(target: Path) -> str:
+        return (
+            f"冲突：{target} 在你读取后已被修改（版本令牌不匹配）。为避免覆盖"
+            "他人/其它操作的改动，本次写入已拒绝——请重新 read_file 拿到最新"
+            "内容与 version，再基于它重新编辑。"
+        )
+
+    async def _exists(target: Path) -> bool:
+        if isinstance(fs, LocalFs):
+            return target.exists()
+        try:
+            await fs.read_text(target)
+        except (OSError, ValueError, WorkspaceFsError):
+            return False
+        return True
+
+    async def _check_version(
+        target: Path, expected: str, *, automatic: bool = False
+    ) -> str | None:
         try:
             current = await fs.read_text(target)
         except (OSError, WorkspaceFsError):
+            # Auto-CAS guards files the session read; one that vanished since
+            # makes the write a plain create, not an overwrite.
+            if automatic:
+                return None
             return (
                 f"无法冲突检测：读取 {target} 失败（文件可能不存在）。"
                 "若确认要新建，请去掉 expectedVersion。"
             )
+        except ValueError:
+            # No longer the UTF-8 text the session read — treat as changed.
+            return _conflict_message(target)
         if content_version(current) != expected:
-            return (
-                f"冲突：{target} 在你读取后已被修改（版本令牌不匹配）。为避免覆盖"
-                "他人/其它操作的改动，本次写入已拒绝——请重新 read_file 拿到最新"
-                "内容与 version，再基于它重新编辑。"
-            )
+            return _conflict_message(target)
         return None
+
+    def _effective_expected(target: Path, expected_version: str | None) -> str | None:
+        """Explicit expectedVersion wins; otherwise fall back to the session's
+        read state (automatic CAS)."""
+        if expected_version is not None:
+            return expected_version
+        return read_state.get(str(target))
 
     def _run_bash(
         command: str, cwd: Path, live_pids: list[int] | None = None
@@ -427,6 +534,13 @@ def workspace_tools_for_cwd(
             except (OSError, ValueError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
         clipped = _clip(text)
+        version = content_version(text)
+        read_state[str(target)] = version
+        partial = len(clipped) != len(text)
+        if partial:
+            partial_reads.add(str(target))
+        else:
+            partial_reads.discard(str(target))
         return ToolResult(
             success=True,
             data={
@@ -434,7 +548,10 @@ def workspace_tools_for_cwd(
                 "content": clipped,
                 # Version of the FULL content (not the clipped preview), so a
                 # read-before-write token stays valid even on large files.
-                "version": content_version(text),
+                "version": version,
+                # The model only SAW the clipped preview; a full overwrite
+                # would destroy content it never read (CC isPartialView).
+                "partial": partial,
             },
         )
 
@@ -448,8 +565,37 @@ def workspace_tools_for_cwd(
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         async with _lock_for(target):
             try:
-                if expectedVersion is not None:
-                    conflict = await _check_version(target, expectedVersion)
+                expected = _effective_expected(target, expectedVersion)
+                if (
+                    expected is None
+                    and require_read_before_write
+                    and await _exists(target)
+                ):
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            f"拒绝写入：{target} 已存在但本会话尚未读过它"
+                            "（STEERABLE_REQUIRE_READ_BEFORE_WRITE）。请先 "
+                            "read_file 确认现有内容，再基于读到的 version 写入；"
+                            "新建文件不受此限。"
+                        ),
+                        needsFollowup=True,
+                    )
+                if str(target) in partial_reads:
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            f"拒绝整体覆写：{target} 过大，本会话只读到部分内容"
+                            "（显示截断于 "
+                            f"{_MAX_OUTPUT} 字符），覆写会销毁未见内容。请改用 "
+                            "edit_file 做定点修改；确需整体重写时先分段读完。"
+                        ),
+                        needsFollowup=True,
+                    )
+                if expected is not None:
+                    conflict = await _check_version(
+                        target, expected, automatic=expectedVersion is None
+                    )
                     if conflict:
                         return ToolResult(
                             success=False, error=conflict, needsFollowup=True
@@ -465,12 +611,19 @@ def workspace_tools_for_cwd(
                 await fs.write_text(target, content)
             except (OSError, ValueError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
+            version = content_version(content)
+            # Our own write is the freshest known state — without the update
+            # the next auto-CAS write would reject against the pre-write
+            # version (iterative editing is the norm). The model authored the
+            # full content, so the partial-view bar no longer applies.
+            read_state[str(target)] = version
+            partial_reads.discard(str(target))
             return ToolResult(
                 success=True,
                 data={
                     "path": str(target),
                     "bytes": len(content.encode("utf-8")),
-                    "version": content_version(content),
+                    "version": version,
                 },
             )
 
@@ -491,10 +644,25 @@ def workspace_tools_for_cwd(
                 current = await fs.read_text(target)
             except (OSError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
-            if expectedVersion is not None:
-                conflict = await _check_version(target, expectedVersion)
-                if conflict:
-                    return ToolResult(success=False, error=conflict, needsFollowup=True)
+            expected = _effective_expected(target, expectedVersion)
+            if expected is None and require_read_before_write:
+                # edit_file only reaches here on an existing file (the read
+                # above succeeded), so the gate is unconditional.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"拒绝编辑：{target} 已存在但本会话尚未读过它"
+                        "（STEERABLE_REQUIRE_READ_BEFORE_WRITE）。请先 "
+                        "read_file 确认现有内容，再基于读到的 version 编辑。"
+                    ),
+                    needsFollowup=True,
+                )
+            # Compare against the copy already read for this edit — no
+            # second read, and the check covers the auto-CAS fallback too.
+            if expected is not None and content_version(current) != expected:
+                return ToolResult(
+                    success=False, error=_conflict_message(target), needsFollowup=True
+                )
             try:
                 result = apply_edits(current, ops, file_path=target.name)
             except EditError as exc:
@@ -503,11 +671,13 @@ def workspace_tools_for_cwd(
                 await fs.write_text(target, result.content)
             except (OSError, WorkspaceFsError) as exc:
                 return ToolResult(success=False, error=str(exc), needsFollowup=True)
+            version = content_version(result.content)
+            read_state[str(target)] = version
             return ToolResult(
                 success=True,
                 data={
                     "path": str(target),
-                    "version": content_version(result.content),
+                    "version": version,
                     "diff": result.diff,
                     "applied": len(result.matches),
                     "matches": [
@@ -644,6 +814,10 @@ def workspace_tools_for_cwd(
                 resolve=lambda p: _resolve_under(root, p),
                 fs=fs,
             )
+            # Same write-updates-state rule as write_file/edit_file: later
+            # auto-CAS checks must compare against the post-patch versions.
+            for changed_path, changed_version in summary.versions:
+                read_state[changed_path] = changed_version
         except (ValueError, EditError) as exc:
             return ToolResult(success=False, error=str(exc), needsFollowup=True)
         finally:
@@ -651,7 +825,13 @@ def workspace_tools_for_cwd(
                 lock.release()
         return ToolResult(
             success=True,
-            data={"filesChanged": list(summary.files_changed), "diffs": list(summary.diffs)},
+            data={
+                "filesChanged": list(summary.files_changed),
+                "diffs": list(summary.diffs),
+                # Resolved path → version, so the durable record carries the
+                # evidence a resumed session re-seeds from.
+                "versions": dict(summary.versions),
+            },
         )
 
     router.register(

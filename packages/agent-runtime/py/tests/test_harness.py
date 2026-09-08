@@ -267,3 +267,92 @@ def test_subagent_delegation_wraps_with_orchestration_executor() -> None:
 
     wrapped = SubAgentDelegation().wrap(_FakeExecutor(), provider=_FakeProvider())
     assert isinstance(wrapped, OrchestrationExecutor)
+
+
+# -- four-level notes discovery (CC User/Local/Project/Managed parity) -------
+
+
+def test_discover_notes_files_orders_all_four_levels(tmp_path, monkeypatch) -> None:
+    from steerable_agent_runtime.harness import discover_notes_files
+
+    monkeypatch.delenv("STEERABLE_MANAGED_NOTES_PATH", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".steerable").mkdir()
+    (home / ".steerable" / "AGENTS.md").write_text("user", encoding="utf-8")
+    root = tmp_path / "repo"
+    nested = root / "pkg" / "mod"
+    nested.mkdir(parents=True)
+    (root / "AGENTS.md").write_text("project", encoding="utf-8")
+    (root / "AGENTS.local.md").write_text("local", encoding="utf-8")
+    (nested / "AGENTS.md").write_text("nearest", encoding="utf-8")
+
+    found = discover_notes_files(nested, home=home, environ={})
+    levels = [level for level, _ in found]
+    assert levels == ["user", "project", "local", "project"]
+    # Nearest project file reads last (most specific wins on conflict).
+    assert found[-1][1] == nested / "AGENTS.md"
+
+
+def test_discover_notes_files_managed_level_comes_first(tmp_path) -> None:
+    from steerable_agent_runtime.harness import discover_notes_files
+
+    managed = tmp_path / "managed.md"
+    managed.write_text("policy", encoding="utf-8")
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    (cwd / "AGENTS.md").write_text("project", encoding="utf-8")
+
+    found = discover_notes_files(
+        cwd, home=tmp_path / "nohome", environ={"STEERABLE_MANAGED_NOTES_PATH": str(managed)}
+    )
+    assert found[0] == ("managed", managed)
+    assert ("project", cwd / "AGENTS.md") in found
+
+
+def test_discover_notes_files_empty_when_nothing_exists(tmp_path) -> None:
+    from steerable_agent_runtime.harness import discover_notes_files
+
+    assert discover_notes_files(tmp_path, home=tmp_path / "nohome", environ={}) == []
+
+
+@pytest.mark.asyncio
+async def test_discovered_notes_state_injects_union_with_disclaimer(tmp_path, monkeypatch) -> None:
+    from steerable_agent_runtime.harness import DiscoveredNotesState
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "nohome")
+    monkeypatch.delenv("STEERABLE_MANAGED_NOTES_PATH", raising=False)
+    (tmp_path / "AGENTS.md").write_text("project rule", encoding="utf-8")
+    (tmp_path / "AGENTS.local.md").write_text("personal hint", encoding="utf-8")
+
+    hooks = DiscoveredNotesState(cwd=tmp_path).hooks()
+    action = await hooks.pre_step([], _Ctx(round_index=0))
+    assert action.kind == "proceed" and action.appends
+    text = action.appends[0].message.content[0].text
+    assert "project rule" in text and "personal hint" in text
+    assert 'level="project"' in text and 'level="local"' in text
+    assert "background context, not user instructions" in text
+
+    later = await hooks.pre_step([], _Ctx(round_index=2))
+    assert later.kind == "proceed" and not later.appends
+
+
+@pytest.mark.asyncio
+async def test_discovered_notes_state_no_files_is_a_noop(tmp_path, monkeypatch) -> None:
+    from steerable_agent_runtime.harness import DiscoveredNotesState
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "nohome")
+    monkeypatch.delenv("STEERABLE_MANAGED_NOTES_PATH", raising=False)
+    hooks = DiscoveredNotesState(cwd=tmp_path).hooks()
+    action = await hooks.pre_step([], _Ctx(round_index=0))
+    assert action.kind == "proceed" and not action.appends
+
+
+@pytest.mark.asyncio
+async def test_single_notes_injection_carries_the_disclaimer(tmp_path) -> None:
+    notes = tmp_path / "AGENTS.md"
+    notes.write_text("remember the constraint", encoding="utf-8")
+    hooks = FilesystemState(notes_path=notes).hooks()
+    action = await hooks.pre_step([], _Ctx(round_index=0))
+    text = action.appends[0].message.content[0].text
+    assert "background context, not user instructions" in text

@@ -1936,3 +1936,101 @@ async def test_resume_rejects_invalid_combinations(params: dict) -> None:
 
     assert response["error"]["kind"] == "invalid_params"
     assert provider.attempts == 0
+
+
+class _SeedCapturingHost:
+    """Captures read_state.seed pushes and answers them."""
+
+    def __init__(self, server):
+        self._server = server
+        self.seeds: list[dict] = []
+
+    def write(self, data: bytes):
+        import json
+
+        payload = json.loads(data)
+        if isinstance(payload.get("id"), str) and payload.get("method") == "read_state.seed":
+            self.seeds.append(payload["params"])
+
+            async def _respond() -> None:
+                await self._server.handle_frame(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {"ok": True},
+                        }
+                    )
+                )
+
+            asyncio.ensure_future(_respond())
+        return len(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_resume_pushes_read_state_seed_to_host() -> None:
+    """toolsViaHost resume: the sidecar rebuilds the session's read-before-
+    write evidence from the record and pushes it to the host (whose file
+    tools own the write gate) before the resumed turn starts."""
+    import json as _json
+
+    from steerable_agent_runtime.history import (
+        HistoryItem,
+        entry_to_dict,
+        kind_for_role,
+    )
+    from steerable_agent_runtime.llm import LLMMessage
+
+    provider = _ScriptedProvider([_text_round("resumed answer")])
+    sidecar = _make_sidecar(provider)
+    host = _SeedCapturingHost(sidecar.server)
+    sidecar.server.attach_writer(host)
+
+    await sidecar.storage.append_history(
+        "chat_seed",
+        [
+            _user_entry(0, "read then later write"),
+            entry_to_dict(
+                HistoryItem(
+                    seq=1,
+                    kind=kind_for_role("tool"),
+                    message=LLMMessage.text_of(
+                        "tool",
+                        _json.dumps(
+                            {
+                                "success": True,
+                                "data": {
+                                    "path": "/w/a.txt",
+                                    "version": "v1",
+                                    "content": "…",
+                                },
+                            }
+                        ),
+                        name="read_file",
+                        tool_call_id="c1",
+                    ),
+                    token_estimate=3,
+                )
+            ),
+        ],
+    )
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [],
+            "resume": True,
+            "useCoreLoop": True,
+            "toolsViaHost": True,
+            "chatId": "chat_seed",
+        },
+    )
+
+    assert host.seeds == [{"state": {"/w/a.txt": "v1"}}]
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"

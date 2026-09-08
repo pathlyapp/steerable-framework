@@ -271,3 +271,238 @@ async def test_host_executor_forwards_tool_context() -> None:
 
     assert result.success is True
     assert host.reverse_calls[0]["context"] == {"chatId": "chat-9", "mode": "plan"}
+
+
+class _AskUserHostWriter:
+    """Host stand-in for the ask_user reverse channel: answers
+    ``ask_user.request`` with a scripted answers mapping."""
+
+    def __init__(self, server, answers: dict):
+        self._server = server
+        self._answers = answers
+        self.asked: list[dict] = []
+
+    def write(self, data: bytes):
+        payload = json.loads(data)
+        if isinstance(payload.get("id"), str) and payload.get("method") == "ask_user.request":
+            self.asked.append(payload["params"])
+
+            async def _respond() -> None:
+                await self._server.handle_frame(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {"answers": self._answers},
+                        }
+                    )
+                )
+
+            asyncio.ensure_future(_respond())
+        return len(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_ask_user_round_trip_over_reverse_channel() -> None:
+    """askUser: true registers the tool; the model's call pauses on the host
+    card and the answers come back as the tool result."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="q1",
+                    name="ask_user",
+                    arguments={
+                        "intro": "Pick one",
+                        "questions": [
+                            {
+                                "id": "color",
+                                "text": "Which color?",
+                                "type": "select",
+                                "options": ["red", "blue"],
+                            }
+                        ],
+                    },
+                )
+            ),
+            _text_round("You chose blue."),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _AskUserHostWriter(sidecar.server, {"color": "blue"})
+    sidecar.server.attach_writer(host)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "ask me"}],
+                "useCoreLoop": True,
+                "askUser": True,
+            },
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+    task = sidecar._streams.get(stream_id)
+    if task is not None:
+        await task
+
+    # The host saw the question set.
+    assert host.asked[0]["intro"] == "Pick one"
+    assert host.asked[0]["questions"][0]["id"] == "color"
+    # The answers came back as the tool result payload.
+    events = sidecar._transport.events  # type: ignore[attr-defined]
+    results = [p for m, p in events if m == "stream.chunk" and "toolResult" in p]
+    assert len(results) == 1
+    assert results[0]["toolResult"]["success"] is True
+    assert "blue" in json.dumps(results[0]["toolResult"])
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+class _AskUserViaHostWriter:
+    """Host stand-in for the toolsViaHost path: answers ``ask_user.request``
+    and mimics the desktop's ``tool.invoke``, which has no ``ask_user``."""
+
+    def __init__(self, server, answers: dict):
+        self._server = server
+        self._answers = answers
+        self.asked: list[dict] = []
+        self.tool_invocations: list[dict] = []
+
+    def write(self, data: bytes):
+        payload = json.loads(data)
+        if not isinstance(payload.get("id"), str):
+            return len(data)
+        method = payload.get("method")
+        if method == "ask_user.request":
+            self.asked.append(payload["params"])
+            result: dict = {"answers": self._answers}
+        elif method == "tool.invoke":
+            self.tool_invocations.append(payload["params"])
+            result = {
+                "success": False,
+                "error": f"Unknown tool: {payload['params'].get('name')}",
+            }
+        else:
+            return len(data)
+
+        async def _respond() -> None:
+            await self._server.handle_frame(
+                json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result})
+            )
+
+        asyncio.ensure_future(_respond())
+        return len(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_ask_user_intercepted_under_tools_via_host() -> None:
+    """toolsViaHost + askUser: ask_user is answered locally over the reverse
+    channel, never forwarded to the host's ``tool.invoke`` (which would fail
+    with ``Unknown tool``). run_code stays unregistered here, so the
+    interception cannot rely on the run_code wrap."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="q1",
+                    name="ask_user",
+                    arguments={
+                        "intro": "Pick one",
+                        "questions": [
+                            {
+                                "id": "color",
+                                "text": "Which color?",
+                                "type": "select",
+                                "options": ["red", "blue"],
+                            }
+                        ],
+                    },
+                )
+            ),
+            _text_round("You chose blue."),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _AskUserViaHostWriter(sidecar.server, {"color": "blue"})
+    sidecar.server.attach_writer(host)
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            {
+                "provider": "openai_compat",
+                "model": "fake",
+                "messages": [{"role": "user", "content": "ask me"}],
+                "useCoreLoop": True,
+                "toolsViaHost": True,
+                "askUser": True,
+            },
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+    task = sidecar._streams.get(stream_id)
+    if task is not None:
+        await task
+
+    # The question went over the ask_user reverse channel...
+    assert host.asked[0]["intro"] == "Pick one"
+    # ...and nothing was forwarded to the host's tool.invoke.
+    assert host.tool_invocations == []
+    events = sidecar._transport.events  # type: ignore[attr-defined]
+    results = [p for m, p in events if m == "stream.chunk" and "toolResult" in p]
+    assert len(results) == 1
+    assert results[0]["toolResult"]["success"] is True
+    assert "blue" in json.dumps(results[0]["toolResult"])
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_registration_is_idempotent_across_turns() -> None:
+    """A second askUser turn on the same sidecar must not fail: registration
+    is process-global while the chat.stream handler runs per request, so the
+    duplicate register would raise ToolDispatchError and strand the host
+    (desktop e2e caught exactly this hang on a follow-up turn)."""
+    provider = _ScriptedProvider([_text_round("first."), _text_round("second.")])
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _AskUserHostWriter(sidecar.server, {})
+    sidecar.server.attach_writer(host)
+
+    for text in ("first turn", "second turn"):
+        response = await sidecar.server.handle_frame(
+            _frame(
+                "agent.chat.stream",
+                {
+                    "provider": "openai_compat",
+                    "model": "fake",
+                    "messages": [{"role": "user", "content": text}],
+                    "useCoreLoop": True,
+                    "askUser": True,
+                },
+            )
+        )
+        assert "error" not in response, response
+        task = sidecar._streams.get(response["result"]["streamId"])
+        if task is not None:
+            await task
+
+    events = sidecar._transport.events  # type: ignore[attr-defined]
+    errors = [p for m, p in events if m == "stream.error"]
+    assert errors == []
+    done = [p for m, p in events if m == "stream.done"]
+    assert [d["status"] for d in done] == ["completed", "completed"]

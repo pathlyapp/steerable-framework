@@ -62,6 +62,17 @@ def main() -> int:
         )
     if run_code_enabled():
         register_run_code(sidecar.tools)
+    # Third-party tools: discover packages that registered the
+    # ``steerable.tools`` entry-point group and load their tools onto the
+    # router. A broken entry point fails the boot loud (PluginLoadError
+    # names the offender) rather than silently dropping an installed tool.
+    from steerable_agent_runtime import PluginLoadError, load_tool_entry_points
+
+    try:
+        load_tool_entry_points(sidecar.tools)
+    except PluginLoadError as exc:
+        logging.getLogger("steerable_sidecar").error("tool plugin: %s", exc)
+        return 1
     try:
         asyncio.run(sidecar.serve())
     except KeyboardInterrupt:

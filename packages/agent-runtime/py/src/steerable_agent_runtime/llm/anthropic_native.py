@@ -161,10 +161,13 @@ class AnthropicProvider:
     ) -> dict[str, Any]:
         # Cache-shaping control keys are consumed here, never sent upstream.
         extra = dict(extra)
-        tail_anchor = bool(extra.pop("_cache_tail_anchor", False))
+        tail_anchor = extra.pop("_cache_tail_anchor", None)
+        # The wrapper passes the breakpoint marker (retention-class → TTL);
+        # a bare True from older callers means the 5m default.
+        marker = tail_anchor if isinstance(tail_anchor, dict) else {"type": "ephemeral"}
         system_text, formatted = _split_system_and_messages(messages)
         if tail_anchor:
-            _anchor_transcript_tail(formatted)
+            _anchor_transcript_tail(formatted, marker)
         body: dict[str, Any] = {
             "model": self.model,
             "messages": formatted,
@@ -174,7 +177,7 @@ class AnthropicProvider:
             # Anchor 1 (system prompt) needs the block form — a bare string
             # cannot carry a breakpoint.
             body["system"] = (
-                [{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}]
+                [{"type": "text", "text": system_text, "cache_control": marker}]
                 if tail_anchor
                 else system_text
             )
@@ -300,20 +303,24 @@ def _openai_tool_to_anthropic(tool: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _anchor_transcript_tail(formatted: list[dict[str, Any]]) -> None:
+def _anchor_transcript_tail(
+    formatted: list[dict[str, Any]], marker: dict[str, Any] | None = None
+) -> None:
     """Stamp a cache breakpoint on the tail of the transcript (pi's anchor 3).
 
     Mutates ``formatted`` in place: the last user message's trailing content
-    block gets ``cache_control: ephemeral`` — caching the conversation
-    prefix up to that point. String content is lifted to the block form
-    first (a bare string cannot carry a breakpoint).
+    block gets the breakpoint marker — caching the conversation prefix up to
+    that point. String content is lifted to the block form first (a bare
+    string cannot carry a breakpoint). ``marker`` carries the retention
+    class's TTL; the default is the 5-minute ephemeral breakpoint.
     """
     if not formatted:
         return
     last = formatted[-1]
     if last.get("role") != "user":
         return
-    marker = {"type": "ephemeral"}
+    if marker is None:
+        marker = {"type": "ephemeral"}
     content = last.get("content")
     if isinstance(content, str):
         last["content"] = [{"type": "text", "text": content, "cache_control": marker}]

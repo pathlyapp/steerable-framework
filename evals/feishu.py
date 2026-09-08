@@ -143,6 +143,9 @@ def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
 def agent_line(agent: str, status: str, summary: dict[str, Any] | None) -> str:
     if status == "skipped":
         return f"{agent}: 跳过"
+    if status == "credits":
+        n = len(summary["passed"]) + len(summary["failed"]) if summary else 0
+        return f"{agent}: 网关余额耗尽，本次不计分（仅 {n} 题跑完）"
     if status == "failed" and summary is None:
         return f"{agent}: 失败（无 result.json）"
     if summary is None:
@@ -161,6 +164,8 @@ def overall_ok(rows: list[tuple[str, str, dict[str, Any] | None]]) -> bool:
     for _agent, status, summary in rows:
         if status == "skipped":
             continue
+        if status == "credits":
+            return False
         if status == "failed" and summary is None:
             return False
         if summary is None:
@@ -322,7 +327,11 @@ def _status_by_agent(root: Path) -> dict[str, str]:
         by_agent.setdefault(agent, []).append(status)
     out: dict[str, str] = {}
     for agent, statuses in by_agent.items():
-        if "failed" in statuses:
+        # A balance that ran out mid-run outranks the shards that finished
+        # first: their Mean covers only the tasks that still had a gateway.
+        if "credits" in statuses:
+            out[agent] = "credits"
+        elif "failed" in statuses:
             out[agent] = "failed"
         elif "ran" in statuses:
             out[agent] = "ran"
@@ -370,10 +379,13 @@ def build_message(
 ) -> tuple[bool, str, str]:
     ok = overall_ok(rows)
     word = "成功" if ok else "失败"
+    # A partial Mean in the title is the number people quote. Withhold it for
+    # an agent whose gateway balance ran out: the tasks it never reached are
+    # missing, not failed.
     means = [
         f"{agent} {summary['mean']:.3f}"
-        for agent, _status, summary in rows
-        if summary and isinstance(summary.get("mean"), float)
+        for agent, status, summary in rows
+        if summary and status != "credits" and isinstance(summary.get("mean"), float)
     ]
     title = f"{word} · {label}"
     if means:

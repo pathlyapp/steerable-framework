@@ -3,11 +3,15 @@
 ACP (JSON-RPC over stdio, editor↔agent) is precisely the sidecar's
 transport and problem statement — this adapter is the peer that lets any
 ACP client (Zed, JetBrains, …) drive a Steerable loop instead of the
-bespoke 15-method surface. It implements the stable core of ``acp.Agent``:
+bespoke 23-method surface. It implements the stable core of ``acp.Agent``:
 ``initialize`` / ``new_session`` / ``prompt`` / ``cancel`` /
-``close_session``. Session loading, forking, and mode/config RPCs are
-deliberately unimplemented (the SDK's default ``None`` answers advertise
-that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
+``close_session``, plus the session-lifecycle and configuration RPCs
+``list_sessions`` / ``load_session`` / ``resume_session`` / ``fork_session``
+/ ``set_session_mode`` / ``set_config_option``.
+anchor: packages/sidecar/py/src/steerable_sidecar/acp_adapter.py :: def (authenticate|ext_method)
+Only ``authenticate`` and ``ext_method`` are unimplemented (the SDK's
+default ``None`` answers
+advertise that). Headless / Harbor evals use in-process ``bash`` / ``read_file`` /
 ``write_file`` scoped to the session cwd (see ``workspace_tools``). When
 the client advertises the fs/terminal capabilities, the same tools are
 served through editor bridges instead (3.4.3): file content flows through
@@ -100,6 +104,10 @@ class _Session:
     task: asyncio.Task[None] | None = None
     stop_reason: str = "end_turn"
     history: list[LLMMessage] = field(default_factory=list)
+    #: Read-before-write evidence (path → version), session-scoped: prompt()
+    # rebuilds the tool router every turn, so the state must outlive it.
+    # Hydration re-seeds it from the durable record (CC seed_read_state).
+    read_file_state: dict[str, str] = field(default_factory=dict)
     approvals: SessionApprovalCache = field(default_factory=SessionApprovalCache)
     #: MCP servers the client asked to mount (W3.4.2.1); stdio-only today.
     mcp_servers: list[Any] = field(default_factory=list)
@@ -444,6 +452,8 @@ class SteerableAcpAgent(acp.Agent):
         """
         from steerable_agent_runtime.resume import load_history_items
 
+        from .workspace_tools import read_file_state_from_messages
+
         items = await load_history_items(self._storage, session_id)
         if items is None:
             return False
@@ -452,7 +462,13 @@ class SteerableAcpAgent(acp.Agent):
             for item in items
             if item.message.role in ("user", "assistant")
         ]
-        self._sessions[session_id] = _Session(cwd=cwd, history=history)
+        self._sessions[session_id] = _Session(
+            cwd=cwd,
+            history=history,
+            read_file_state=read_file_state_from_messages(
+                item.message for item in items
+            ),
+        )
         return True
 
     async def load_session(
@@ -617,6 +633,7 @@ class SteerableAcpAgent(acp.Agent):
                 session.cwd,
                 **({"fs": fs} if fs is not None else {}),
                 **({"run_command": run_command} if run_command is not None else {}),
+                read_file_state=session.read_file_state,
             )
         mcp_clients = await self._mount_mcp(router, session)
         from .sidecar import _assemble_default_harness
@@ -782,7 +799,9 @@ class SteerableAcpAgent(acp.Agent):
 
 def main() -> None:
     """Serve the ACP agent on stdio (how editors spawn agents)."""
-    acp.run_agent(SteerableAcpAgent())
+    import asyncio
+
+    asyncio.run(acp.run_agent(SteerableAcpAgent()))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -20,7 +20,19 @@ Bounds are validated config fields resolved from the environment
 - redirect hop cap (``fetch_max_redirects``), same-origin only — a
   cross-origin redirect is reported, not followed, so the model re-issues
   the call against the new origin and the approval prompt names it;
-- search result cap (``search_max_results``, ceiling 20).
+- search result cap (``search_max_results``, ceiling 20);
+- domain policy (``allowed_domains`` / ``blocked_domains``) — Claude
+  Code's WebSearch ``allowed_domains``/``blocked_domains`` parity:
+  ``web_fetch`` refuses a disallowed target outright (redirects are
+  same-origin, so the initial check covers the chain) and ``web_search``
+  both passes the lists to providers that support them natively (Tavily's
+  ``include_domains``/``exclude_domains``) and filters returned hits
+  post-hoc, so the policy holds for every provider;
+- per-session call caps (``session_search_cap`` default 200, Claude
+  Code's per-session WebSearch limit parity; ``session_fetch_cap``
+  default off) — a counter per ``register_web_tools`` instance, which is
+  per sidecar process and therefore per session; exceeding the cap fails
+  the call with a followup-able error naming the limit.
 
 ``web_fetch`` takes a model-supplied URL — an SSRF primitive crossing into
 the host's network position. Every hop (initial URL and each redirect
@@ -130,6 +142,18 @@ def _bounded_int(
     return value
 
 
+def _domain_list(env: Mapping[str, str], name: str) -> tuple[str, ...]:
+    """Parse a comma-separated domain list env var into normalized entries."""
+    raw = (env.get(name) or "").strip()
+    if not raw:
+        return ()
+    return tuple(
+        entry.strip().lower().lstrip(".")
+        for entry in raw.split(",")
+        if entry.strip()
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class WebToolsConfig:
     """Validated bounds for the web tools (deployment-varying choices).
@@ -146,6 +170,15 @@ class WebToolsConfig:
     search_provider: str = "tavily"
     search_api_key: str | None = None
     search_base_url: str = "https://api.tavily.com"
+    #: Empty allow-list means every public domain is allowed. An entry
+    #: matches its exact host and every subdomain ("example.com" covers
+    #: "docs.example.com"). Blocked wins over allowed on a tie.
+    allowed_domains: tuple[str, ...] = ()
+    blocked_domains: tuple[str, ...] = ()
+    #: Per-session call caps; 0 disables. The search default mirrors Claude
+    #: Code's per-session WebSearch limit.
+    session_search_cap: int = 200
+    session_fetch_cap: int = 0
 
     @classmethod
     def resolve(cls, environ: Mapping[str, str] | None = None) -> "WebToolsConfig":
@@ -189,7 +222,50 @@ class WebToolsConfig:
                 (env.get("STEERABLE_WEB_SEARCH_BASE_URL") or "").strip()
                 or "https://api.tavily.com"
             ),
+            allowed_domains=_domain_list(env, "STEERABLE_WEB_ALLOWED_DOMAINS"),
+            blocked_domains=_domain_list(env, "STEERABLE_WEB_BLOCKED_DOMAINS"),
+            session_search_cap=_bounded_int(
+                env, "STEERABLE_WEB_SESSION_SEARCH_CAP", 200,
+                minimum=0, ceiling=1_000_000,
+            ),
+            session_fetch_cap=_bounded_int(
+                env, "STEERABLE_WEB_SESSION_FETCH_CAP", 0,
+                minimum=0, ceiling=1_000_000,
+            ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Domain policy
+# ---------------------------------------------------------------------------
+
+
+def _domain_matches(host: str, domain: str) -> bool:
+    """An entry matches its exact host and every subdomain."""
+    host = host.lower()
+    return host == domain or host.endswith("." + domain)
+
+
+def domain_policy_error(url: str, config: WebToolsConfig) -> str | None:
+    """``None`` when ``url``'s host passes the allow/block lists, else the
+    refusal text. Blocked wins over allowed on a tie; an empty allow-list
+    allows every host."""
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return None  # not a host-bearing URL; the SSRF check reports it
+    if any(_domain_matches(host, d) for d in config.blocked_domains):
+        return (
+            f"{host} is on this deployment's blocked-domains list "
+            "(STEERABLE_WEB_BLOCKED_DOMAINS)"
+        )
+    if config.allowed_domains and not any(
+        _domain_matches(host, d) for d in config.allowed_domains
+    ):
+        return (
+            f"{host} is outside this deployment's allowed-domains list "
+            f"(STEERABLE_WEB_ALLOWED_DOMAINS: {', '.join(config.allowed_domains)})"
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -233,11 +309,18 @@ class TavilySearchProvider:
         api_key: str,
         base_url: str = "https://api.tavily.com",
         timeout_ms: int = 30_000,
+        allowed_domains: tuple[str, ...] = (),
+        blocked_domains: tuple[str, ...] = (),
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key
         self._endpoint = base_url.rstrip("/") + "/search"
         self._timeout = httpx.Timeout(timeout_ms / 1000)
+        # Domain lists go on the request (Tavily include_/exclude_domains)
+        # so the backend ranks within the policy instead of the tool
+        # filtering a full page down to fewer hits post-hoc.
+        self._allowed_domains = allowed_domains
+        self._blocked_domains = blocked_domains
         # Test seam: a MockTransport-backed client keeps the wire-format
         # tests hermetic. Production builds a real client per call.
         self._client = client
@@ -251,11 +334,16 @@ class TavilySearchProvider:
     async def _request(
         self, client: httpx.AsyncClient, query: str, max_results: int
     ) -> list[WebSearchHit]:
+        body: dict[str, Any] = {"query": query, "max_results": max_results}
+        if self._allowed_domains:
+            body["include_domains"] = list(self._allowed_domains)
+        if self._blocked_domains:
+            body["exclude_domains"] = list(self._blocked_domains)
         try:
             response = await client.post(
                 self._endpoint,
                 headers={"Authorization": f"Bearer {self._api_key}"},
-                json={"query": query, "max_results": max_results},
+                json=body,
             )
         except httpx.TimeoutException as exc:
             raise WebSearchBackendError(
@@ -338,6 +426,8 @@ def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | N
                 api_key=config.search_api_key,
                 base_url=config.search_base_url,
                 timeout_ms=config.search_timeout_ms,
+                allowed_domains=config.allowed_domains,
+                blocked_domains=config.blocked_domains,
             )
         return HostDelegatedSearchProvider()
     if name != "tavily":
@@ -350,6 +440,8 @@ def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | N
         api_key=config.search_api_key,
         base_url=config.search_base_url,
         timeout_ms=config.search_timeout_ms,
+        allowed_domains=config.allowed_domains,
+        blocked_domains=config.blocked_domains,
     )
 
 
@@ -721,6 +813,25 @@ def register_web_tools(
     cfg = config or WebToolsConfig.resolve(env)
     make_client = client_factory or _default_client_factory
     resolve = resolve_host or _default_resolve_host
+    # Per-session call counters — this closure is per sidecar process, and
+    # a sidecar process serves one session.
+    session_counts = {"web_fetch": 0, "web_search": 0}
+
+    def _session_cap_error(tool: str, cap: int) -> ToolResult | None:
+        if cap <= 0:
+            return None
+        if session_counts[tool] < cap:
+            session_counts[tool] += 1
+            return None
+        return ToolResult(
+            success=False,
+            error=(
+                f"{tool} session limit reached ({cap} calls; "
+                f"STEERABLE_WEB_SESSION_{tool.removeprefix('web_').upper()}_CAP). "
+                "Work with what you have or ask the user to raise the cap."
+            ),
+            needsFollowup=True,
+        )
 
     async def web_fetch(url: str = "") -> ToolResult:
         url = (url or "").strip()
@@ -732,6 +843,14 @@ def register_web_tools(
                 error=_confined_error("web_fetch", url),
                 needsFollowup=True,
             )
+        policy_error = domain_policy_error(url, cfg)
+        if policy_error is not None:
+            return ToolResult(
+                success=False, error=policy_error, needsFollowup=True
+            )
+        capped = _session_cap_error("web_fetch", cfg.session_fetch_cap)
+        if capped is not None:
+            return capped
         return await _fetch(
             url, config=cfg, client_factory=make_client, resolve_host=resolve
         )
@@ -770,6 +889,9 @@ def register_web_tools(
                     error=_confined_error("web_search", cfg.search_base_url),
                     needsFollowup=True,
                 )
+            capped = _session_cap_error("web_search", cfg.session_search_cap)
+            if capped is not None:
+                return capped
             cap = max(
                 1,
                 min(
@@ -789,7 +911,14 @@ def register_web_tools(
                     error=f"web search failed: {exc}",
                     needsFollowup=True,
                 )
-            hits = hits[:cap]
+            # Post-hoc domain filter: the policy holds even for providers
+            # without native include/exclude support (and as defense in
+            # depth behind Tavily's native lists).
+            hits = [
+                hit
+                for hit in hits[:cap]
+                if domain_policy_error(hit.url, cfg) is None
+            ]
             return ToolResult(
                 success=True,
                 data={

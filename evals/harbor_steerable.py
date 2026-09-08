@@ -507,6 +507,10 @@ class SteerableHarborAgent(BaseInstalledAgent):
         env["STEERABLE_PROVIDER"] = kind
         env["STEERABLE_MODEL"] = model
         env["PYTHONUNBUFFERED"] = "1"
+        # Disclosure, not a knob: headless is confined by construction
+        # (consent_granted, no ApprovalExecutor, no host allow-rules), and
+        # the run summary asserts it. CC CLAUDE_CODE_EVAL_CONFINED parity.
+        env["STEERABLE_EVAL_CONFINED"] = "1"
         # Claude Code TB 84.3 used temperature=1.0, max_new_tokens=65536, 6h.
         env.setdefault("STEERABLE_TEMPERATURE", "1.0")
         env.setdefault("STEERABLE_MAX_TOKENS", "65536")

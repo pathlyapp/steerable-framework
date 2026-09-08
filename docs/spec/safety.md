@@ -166,6 +166,14 @@ Hosts integrating the sandbox must:
    Harbor / headless eval containers are themselves the boundary and
    must not inherit this refuse-to-start rule.
 
+   That eval posture is explicit: headless runs with
+   `consent_granted=True`, no `ApprovalExecutor`, and never reads the host's
+   approval rules (`approvals.json` / `config.json`) — the opposite of the
+   desktop's interactive gating. `STEERABLE_EVAL_CONFINED=1` (CC
+   `CLAUDE_CODE_EVAL_CONFINED` parity) declares the posture and discloses it
+   as `eval_confined: true` in `STEERABLE_RUN_SUMMARY`; the Harbor agent
+   (`evals/harbor_steerable.py`) sets it on every trial.
+
 The reference integration is the desktop supervisor
 (`deeppath-agent/src/sidecar/supervisor.ts`, `STEERABLE_SIDECAR_SANDBOX=1`).
 

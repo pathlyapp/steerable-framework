@@ -8,7 +8,7 @@ matching as ``edit_file`` (exact → whitespace-tolerant → unicode-normalized,
 line numbers — LLM-generated line numbers are wrong often enough that
 content-anchored matching is the reliable primitive.
 
-Atomicity is the other half: every file's edits are planned against the
+Atomicity is the other half: every file's edits are resolved against the
 original bytes first; any locate failure aborts the whole patch with
 nothing written. A failure during the write phase (disk, permissions)
 restores the files already written, so the workspace never holds a
@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .file_edit import EditOp, apply_edits
+from .file_edit import EditOp, apply_edits, content_version
 from .workspace_fs import LOCAL_FS, WorkspaceFs, WorkspaceFsError
 
 
@@ -36,6 +36,9 @@ class FilePatch:
 class PatchSummary:
     files_changed: tuple[str, ...]
     diffs: tuple[str, ...]
+    #: (resolved path, content version) per written file — the caller's
+    #: read-before-write state tracks post-patch versions without a re-read.
+    versions: tuple[tuple[str, str], ...] = ()
 
 
 async def apply_patch(
@@ -99,4 +102,8 @@ async def apply_patch(
     return PatchSummary(
         files_changed=tuple(patch.path for patch in patches),
         diffs=tuple(diff for _, _, _, diff in planned),
+        versions=tuple(
+            (str(target), content_version(new_content))
+            for target, _, new_content, _ in planned
+        ),
     )

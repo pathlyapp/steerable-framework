@@ -732,6 +732,7 @@ async def test_run_emits_run_summary_terminal_line(
     assert summary["tool_recoveries"] == 1
     assert summary["cache_tokens"] == 0
     assert "cost_usd" not in summary  # absent, never zero-filled
+    assert "eval_confined" not in summary  # same convention: absent unless declared
 
 
 def test_hard_run_timeout_defaults_under_harbor_wrap(
@@ -806,3 +807,162 @@ async def test_run_swallows_loop_errors(
     monkeypatch.setattr(headless_mod, "CoreLoop", _BoomLoop)
     await _run("crash", cwd=str(tmp_path), max_rounds=2)
     assert "[loop_error ConnectionError:" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Per-run MCP servers (--mcp)
+# ---------------------------------------------------------------------------
+
+_HEADLESS_FAKE_MCP = """
+import json
+import sys
+
+TOOLS = [
+    {
+        "name": "echo",
+        "description": "Echo text back",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    },
+]
+
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\\n")
+    sys.stdout.flush()
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if "method" not in msg:
+        continue
+    method = msg["method"]
+    if method == "initialize":
+        send({
+            "jsonrpc": "2.0",
+            "id": msg["id"],
+            "result": {
+                "protocolVersion": msg["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake-mcp", "version": "1.0"},
+            },
+        })
+    elif method == "notifications/initialized":
+        pass
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": msg["id"], "result": {"tools": TOOLS}})
+    elif method == "tools/call":
+        args = msg["params"].get("arguments") or {}
+        send({
+            "jsonrpc": "2.0",
+            "id": msg["id"],
+            "result": {
+                "content": [{"type": "text", "text": "echo:" + args.get("text", "")}],
+            },
+        })
+    elif "id" in msg:
+        send({
+            "jsonrpc": "2.0",
+            "id": msg["id"],
+            "error": {"code": -32601, "message": "unknown method"},
+        })
+"""
+
+
+@pytest.mark.asyncio
+async def test_run_mounts_and_dispatches_mcp_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """A --mcp server's catalog lands on the workspace router and the loop
+    dispatches the qualified tool for real against the subprocess."""
+    import sys as _sys
+
+    server = tmp_path / "fake_mcp_server.py"
+    server.write_text(_HEADLESS_FAKE_MCP)
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(
+                    tool_call_delta=ToolCall(
+                        id="e1", name="mcp__fake__echo", arguments={"text": "hi"}
+                    )
+                ),
+                LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ],
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ],
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    await _run(
+        "echo via mcp",
+        cwd=str(tmp_path),
+        max_rounds=4,
+        mcp_servers=[
+            {"name": "fake", "command": _sys.executable, "args": [str(server)]}
+        ],
+    )
+    out = capsys.readouterr().out
+    # The qualified tool dispatched (its start line names it) and the run
+    # completed with the scripted final answer.
+    assert "mcp__fake__echo" in out
+    assert "done" in out
+
+
+def test_main_rejects_invalid_mcp_json(capsys) -> None:
+    """--mcp that is not a JSON list is a CLI error, not a mid-run crash."""
+    with pytest.raises(SystemExit):
+        main(["--instruction", "hi", "--mcp", "{not json}"])
+    with pytest.raises(SystemExit):
+        main(["--instruction", "hi", "--mcp", '{"name":"x"}'])
+
+
+@pytest.mark.asyncio
+async def test_run_summary_discloses_eval_confined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """STEERABLE_EVAL_CONFINED=1 (CC EVAL_CONFINED parity): the run summary
+    discloses the confined posture; without the flag the key stays absent
+    (never false-filled)."""
+    import json
+
+    provider = _ScriptedProvider(
+        [
+            [
+                LLMStreamChunk(content_delta="done"),
+                LLMStreamChunk(
+                    finish_reason="stop",
+                    usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                ),
+            ]
+        ]
+    )
+    monkeypatch.setattr(headless_mod, "_env_provider_params", lambda: {"model": "fake"})
+    monkeypatch.setattr(
+        headless_mod, "default_llm_provider_factory", lambda _params: provider
+    )
+    monkeypatch.setenv("STEERABLE_EVAL_CONFINED", "1")
+    await _run("say done", cwd=str(tmp_path), max_rounds=4)
+    lines = capsys.readouterr().out.splitlines()
+    summary_lines = [ln for ln in lines if ln.startswith("STEERABLE_RUN_SUMMARY ")]
+    assert len(summary_lines) == 1
+    summary = json.loads(summary_lines[0][len("STEERABLE_RUN_SUMMARY "):])
+    assert summary["eval_confined"] is True

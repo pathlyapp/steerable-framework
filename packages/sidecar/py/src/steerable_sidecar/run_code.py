@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -158,16 +158,24 @@ _router_for_rpc: ContextVar[ToolRouter | None] = ContextVar(
 class RunCodeBoundExecutor:
     """Bind the live executor so nested ``run_code`` calls reuse it.
 
-    ``run_code`` itself is answered locally from the sidecar's router — under
-    ``toolsViaHost`` the inner executor forwards every call to the host, which
-    has no ``run_code`` (it is a sidecar tool), so without the interception the
-    desktop path fails with ``Unknown tool: run_code``. Nested calls inside the
-    program still go through ``self._inner`` (the host) via ``_dispatch``.
+    ``local_names`` (``run_code``, ``ask_user``) are answered locally from the
+    sidecar's router — under ``toolsViaHost`` the inner executor forwards every
+    call to the host, which has none of them (they are sidecar tools), so
+    without the interception the desktop path fails with ``Unknown tool``.
+    Nested calls inside the program still go through ``self._inner`` (the
+    host) via ``_dispatch``.
     """
 
-    def __init__(self, inner: ToolExecutor, router: ToolRouter | None = None) -> None:
+    def __init__(
+        self,
+        inner: ToolExecutor,
+        router: ToolRouter | None = None,
+        *,
+        local_names: Collection[str] = ("run_code",),
+    ) -> None:
         self._inner = inner
         self._router = router
+        self._local_names = frozenset(local_names)
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
@@ -176,7 +184,7 @@ class RunCodeBoundExecutor:
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         token = _dispatch.set(_Dispatch(self._inner, ctx))
         try:
-            if call.name == "run_code" and self._router is not None:
+            if call.name in self._local_names and self._router is not None:
                 return await self._router.dispatch(call)
             return await self._inner.execute(call, ctx)
         finally:

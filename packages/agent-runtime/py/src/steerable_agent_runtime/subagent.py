@@ -17,6 +17,13 @@ Design:
 - Opt-in: the host advertises ``subagent_tool_descriptor`` in the tools
   list and wraps its executor; products that don't want delegation simply
   do neither.
+- Named profiles (CC ``subagent_type`` parity): a ``SubagentRegistry``
+  maps profile names onto per-profile tool domains, round bounds, models,
+  and concurrency; the tool schema advertises the names as a
+  ``subagent_type`` enum and unknown names fail closed. A profile's
+  ``model`` is honored through the host's ``provider_factory`` — without
+  one the dispatch fails closed rather than silently running the parent's
+  model.
 - Privilege boundary: ``SubagentConfig.tool_filter`` narrows the child's
   tool domain (dsh ``toolFilter`` → restrict counterpart); filtered-out
   calls fail closed with ``tool_not_delegated``. Approval narrowing is not
@@ -48,12 +55,22 @@ class SubagentConfig:
     research sub-agent is ``tool_filter=frozenset({...read tools...})`` —
     it cannot reach the parent's write/shell tools *by construction*, which
     is what breaks the private-data + untrusted-content + egress trifecta.
+
+    ``model`` selects a different model for the child (CC's Agent-tool
+    ``model`` parity): the executor must be built with a
+    ``provider_factory`` or the request fails closed. ``concurrent`` lifts
+    the never-batch rule so several delegations in one round run their
+    child loops in parallel (CC's concurrent-subagents parity) — each child
+    is an independent loop over the shared inner executor, which is exactly
+    what the loop's parallel tool execution already does.
     """
 
     tool_name: str = "delegate_subagent"
     max_rounds: int = 8
     allow_tools: bool = True
     tool_filter: frozenset[str] | None = None
+    model: str | None = None
+    concurrent: bool = False
     description: str = (
         "Delegate a self-contained subtask to a sub-agent with its own "
         "reasoning loop. Good for parallelizable or context-heavy subtasks; "
@@ -61,9 +78,62 @@ class SubagentConfig:
     )
 
 
-def subagent_tool_descriptor(config: SubagentConfig | None = None) -> dict[str, Any]:
-    """OpenAI tool schema to append to the parent loop's tools list."""
+class SubagentRegistry:
+    """Named sub-agent profiles (CC ``subagent_type`` / ``.claude/agents``
+    parity): a name → ``SubagentConfig`` mapping the model picks from.
+
+    The delegation tool's schema advertises the registered names as the
+    ``subagent_type`` enum; a call naming one runs the child with that
+    profile's tool domain, model, and round bound. An unknown name fails
+    closed listing the registered ones — never a silent fall-back to the
+    default profile, which would hide a typo'd delegation.
+    """
+
+    def __init__(self) -> None:
+        self._profiles: dict[str, SubagentConfig] = {}
+
+    def register(self, name: str, config: SubagentConfig) -> None:
+        if not name or not name.strip():
+            raise ValueError("subagent profile name must be non-empty")
+        self._profiles[name] = config
+
+    def get(self, name: str) -> SubagentConfig | None:
+        return self._profiles.get(name)
+
+    def names(self) -> list[str]:
+        return sorted(self._profiles)
+
+
+def subagent_tool_descriptor(
+    config: SubagentConfig | None = None,
+    *,
+    registry: SubagentRegistry | None = None,
+) -> dict[str, Any]:
+    """OpenAI tool schema to append to the parent loop's tools list.
+
+    With a ``registry``, the schema gains a ``subagent_type`` enum of the
+    registered profile names (CC ``subagent_type`` parity); without one the
+    tool takes only ``task`` and runs the default profile.
+    """
     config = config or SubagentConfig()
+    properties: dict[str, Any] = {
+        "task": {
+            "type": "string",
+            "description": (
+                "Complete, self-contained instructions for the "
+                "sub-agent — it sees none of this conversation."
+            ),
+        },
+    }
+    if registry is not None and registry.names():
+        properties["subagent_type"] = {
+            "type": "string",
+            "enum": registry.names(),
+            "description": (
+                "Named sub-agent profile to run the task with; omit for "
+                "the default general-purpose profile."
+            ),
+        }
     return {
         "type": "function",
         "function": {
@@ -71,15 +141,7 @@ def subagent_tool_descriptor(config: SubagentConfig | None = None) -> dict[str, 
             "description": config.description,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "task": {
-                        "type": "string",
-                        "description": (
-                            "Complete, self-contained instructions for the "
-                            "sub-agent — it sees none of this conversation."
-                        ),
-                    },
-                },
+                "properties": properties,
                 "required": ["task"],
                 "additionalProperties": False,
             },
@@ -130,7 +192,13 @@ class FilteredToolsExecutor:
 
 
 class SubagentExecutor:
-    """ToolExecutor decorator: ``config.tool_name`` calls run a child loop."""
+    """ToolExecutor decorator: ``config.tool_name`` calls run a child loop.
+
+    ``provider_factory`` maps a model name onto a provider for children
+    whose profile sets ``model`` (CC's per-subagent model parity); without
+    one, a ``model``-bearing profile fails closed at dispatch. ``registry``
+    carries the named profiles the tool schema advertises.
+    """
 
     def __init__(
         self,
@@ -139,11 +207,15 @@ class SubagentExecutor:
         config: SubagentConfig | None = None,
         *,
         hooks: LoopHooks | None = None,
+        registry: SubagentRegistry | None = None,
+        provider_factory: Any = None,
     ) -> None:
         self._inner = inner
         self._provider = provider
         self._config = config or SubagentConfig()
         self._hooks = hooks
+        self._registry = registry
+        self._provider_factory = provider_factory
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         if call.name != self._config.tool_name:
@@ -151,10 +223,41 @@ class SubagentExecutor:
         task = str(call.arguments.get("task") or "").strip()
         if not task:
             return ToolResult(success=False, error="empty task")
+        config = self._config
+        type_name = str(call.arguments.get("subagent_type") or "").strip()
+        if type_name:
+            if self._registry is None:
+                return ToolResult(
+                    success=False,
+                    error="subagent_type given but no profiles are registered",
+                    needsFollowup=True,
+                )
+            profile = self._registry.get(type_name)
+            if profile is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"unknown subagent_type {type_name!r}; registered: "
+                        f"{', '.join(self._registry.names()) or '(none)'}"
+                    ),
+                    needsFollowup=True,
+                )
+            config = profile
+        provider = self._provider
+        if config.model is not None:
+            if self._provider_factory is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"sub-agent profile requests model {config.model!r} "
+                        "but this host has no provider factory"
+                    ),
+                )
+            provider = self._provider_factory(config.model)
         child = CoreLoop(
-            self._provider,
-            self._child_executor(),
-            LoopConfig(max_rounds=self._config.max_rounds),
+            provider,
+            self._child_executor(config),
+            LoopConfig(max_rounds=config.max_rounds),
             hooks=self._hooks,
         )
         answer_parts: list[str] = []
@@ -176,17 +279,22 @@ class SubagentExecutor:
             message=answer or "(sub-agent returned no text)",
         )
 
-    def _child_executor(self) -> ToolExecutor:
-        if not self._config.allow_tools:
+    def _child_executor(self, config: SubagentConfig) -> ToolExecutor:
+        if not config.allow_tools:
             return _NoTools()
-        if self._config.tool_filter is not None:
-            return FilteredToolsExecutor(self._inner, self._config.tool_filter)
+        if config.tool_filter is not None:
+            return FilteredToolsExecutor(self._inner, config.tool_filter)
         return self._inner
 
     def concurrency_safe(self, call: ToolCall) -> bool:
-        # Delegation spawns a full child loop — never batch it with siblings;
-        # other calls defer to the inner executor's own judgement.
+        # Delegation spawns a full child loop — batched with siblings only
+        # when the resolved profile opts into concurrency; other calls defer
+        # to the inner executor's own judgement.
         if call.name == self._config.tool_name:
-            return False
+            config = self._config
+            type_name = str(call.arguments.get("subagent_type") or "").strip()
+            if type_name and self._registry is not None:
+                config = self._registry.get(type_name) or config
+            return config.concurrent
         inner_safe = getattr(self._inner, "concurrency_safe", None)
         return bool(inner_safe and inner_safe(call))
