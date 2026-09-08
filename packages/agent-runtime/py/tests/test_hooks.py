@@ -311,6 +311,50 @@ async def test_chain_before_completion_later_retry_wins_same_kind() -> None:
 
 
 # ---------------------------------------------------------------------------
+# compact_now (optional capability, getattr-probed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chain_compact_now_without_compaction_hook_is_noop() -> None:
+    # NoopHooks defines no compact_now, so the probe skips it; a chain
+    # without a compaction hook answers a no-op proceed rather than failing.
+    hooks = ChainHooks(NoopHooks(), NoopHooks())
+    action = await hooks.compact_now(
+        [LLMMessage.text_of("user", "go")], ctx=None  # type: ignore[arg-type]
+    )
+    assert action == PreStepAction(
+        kind="proceed", reason="compact: no compaction hook in chain"
+    )
+
+
+@pytest.mark.asyncio
+async def test_chain_compact_now_delegates_to_first_implementer() -> None:
+    rewrite = RewriteRequest(
+        messages=[LLMMessage.text_of("user", "[compacted]")],
+        reason="manual compact",
+        action="compact",
+    )
+
+    class _ManualCompact(NoopHooks):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def compact_now(self, transcript, ctx):
+            self.calls += 1
+            return PreStepAction(kind="proceed", rewrite=rewrite)
+
+    first, second = _ManualCompact(), _ManualCompact()
+    hooks = ChainHooks(NoopHooks(), first, second)
+    action = await hooks.compact_now(
+        [LLMMessage.text_of("user", "go")], ctx=None  # type: ignore[arg-type]
+    )
+    assert action.rewrite is rewrite
+    assert first.calls == 1
+    assert second.calls == 0  # first implementer wins
+
+
+# ---------------------------------------------------------------------------
 # post_tool_result
 # ---------------------------------------------------------------------------
 

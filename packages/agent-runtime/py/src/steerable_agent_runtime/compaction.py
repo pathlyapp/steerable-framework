@@ -38,8 +38,10 @@ Three trigger paths share the fold/summarize machinery:
   prompt-cache prefix, so the interval trades cache hits for a bounded
   transcript;
 - **manual** (``compact_now``) — the host-command path (CC ``/compact``
-  parity): fold + summarize on demand, bypassing threshold, hysteresis, and
-  the circuit breaker.
+  parity): the host calls the sidecar's ``agent.chat.compact`` RPC, which
+  sets ``CoreLoop.request_compact()``; the loop runs ``compact_now`` at the
+  next pre_step boundary, folding + summarizing on demand, bypassing
+  threshold, hysteresis, and the circuit breaker.
 
 Two safety rails share the machinery:
 
