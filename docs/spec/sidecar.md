@@ -74,9 +74,11 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `agent.session.list`    | request   | `AgentSession[]`                       |
 | `agent.session.fork`    | request   | `BranchPoint` (fork a record, no turn run) |
 | `agent.session.branches`| request   | `{lineage, children}` (branch-family view) |
+| `agent.session.tree`    | request   | `{recordId, tree, nodeCount, truncated}` (full branch family from the root) |
 | `agent.chat.stream`     | request   | `{"streamId": "s_…"}`                  |
 | `agent.chat.cancel`     | request   | `null` (cooperative cancel)            |
 | `agent.chat.steer`      | request   | `{"accepted": bool}` (mid-turn steer)  |
+| `agent.chat.compact`    | request   | `{"ok": bool}` (manual compact at next pre_step; CC `/compact` parity) |
 | `agent.chat.fork`       | request   | fork the running turn's record         |
 | `tool.list`             | request   | `ToolDescriptor[]`                     |
 | `tool.invoke`           | request   | `ToolResult`                           |
@@ -95,10 +97,10 @@ Notifications emitted by the sidecar:
 | -------------------- | ---------------------------------------------- | ------------------------------------------------------- |
 | `lifecycle.ready`    | After boot, before accepting requests          | `{version, protocolVersion, pid, listenInfo}`           |
 | `lifecycle.shutdown` | Just before the process exits                  | `{reason}` (`"normal" \| "eof"`)                        |
-| `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?}`  |
+| `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?, rawChunk?}` |
 | `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?}`                            |
 | `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message}`                             |
-| `agent.child`        | Orchestration child lifecycle (spawned/completed/failed/cancelled) | `{streamId, kind, childId, depth?, status?}` |
+| `agent.child`        | Child-agent lifecycle (spawned/completed/failed/cancelled) — from the orchestration pool and from `delegate_subagent` delegations | `{streamId, kind, childId, depth?, status?, profile?}` |
 
 ## `agent.chat.stream` payload
 
@@ -126,6 +128,19 @@ display text until each request's outcome is known, discards tool-round
 narration and rejected retry drafts, and emits only the terminal tool-free
 response. Tool progress notifications, the durable record, and the trace are
 unchanged. `"final"` requires `useCoreLoop: true`.
+
+`streamRawChunks: true` (CoreLoop-only, default off) forwards every raw
+provider chunk the loop's `on_stream_chunk` hook observes — *before* UI-tag
+stripping and surrogate splitting turn it into display text — as
+`stream.chunk` notifications carrying `rawChunk`:
+`{contentDelta?, reasoningDelta?, toolCallDelta?: {id, name, arguments}, finishReason?}`,
+unset fields omitted. This is the input for hosts running incremental
+renderers (e.g. a streaming UI-tag parser); the digested `delta` /
+`reasoningDelta` fields on the same channel stay post-stripping display
+text. Emission is fire-and-forget: chunk order is preserved, ordering
+against the digested notifications is not. Note the OpenAI-compat provider
+buffers tool-call argument fragments into one complete `ToolCall`, so
+`toolCallDelta` arrives whole — only content/reasoning are incremental.
 
 `resume: true` (CoreLoop-only) continues the durable record's interrupted
 turn instead of opening a new one: the record's projected transcript —
@@ -164,8 +179,27 @@ terminal `stream.done` carries `status: "cancelled"` with
 `cancelled: true`. A 5s watchdog hard-cancels the task only if the
 wind-down wedges.
 
-Multi-agent orchestration is opt-in via `orchestration: {maxDepth?,
-maxParallel?, childMaxRounds?}` in `params`: the parent model drives
+Sub-agent delegation is ON BY DEFAULT: the sidecar advertises
+`delegate_subagent` and answers it with a bounded child CoreLoop running
+on the agent pool — the model's single multi-agent surface. Pass
+`subagent: false` to turn it off, or a dict to configure it:
+`{toolFilter?: string[], maxParallel?: int, profiles?: {name:
+{toolFilter?, model?, maxRounds?, concurrent?, description?}}}`.
+`toolFilter` narrows every child's tool domain (filtered-out calls fail
+closed with `tool_not_delegated`); `profiles` adds named profiles the
+schema advertises as a `subagent_type` enum (unknown names fail closed
+listing the registered ones; a profile's `model` resolves through the
+host's provider factory or fails closed). A `concurrent: true` profile
+lets same-round delegations execute in parallel under the pool's
+`maxParallel` budget — the overflow delegation fails closed with
+`orchestration_budget_exceeded`. Children advertise the host tool surface
+minus the delegation tool itself (depth-1 by construction), narrowed per
+profile. Delegate children emit `agent.child` lifecycle notifications
+like orchestration children; the `child_spawned` payload adds `profile`
+(the resolved profile name, `general-purpose` when untyped).
+
+Multi-agent orchestration (the explicit six-tool family) is opt-in via
+`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?}` in `params`: the parent model drives
 parallel child CoreLoops through six tools — `agent_spawn` (returns a
 lineage id like `0.2`, optional `toolFilter` narrows the child's tool
 domain), `agent_send` (steers a running child; resumes a finished or
@@ -181,7 +215,10 @@ has orchestration tools when `maxDepth` allows its own pool. Child
 lifecycle lands as `agent.child` notifications; every spawn/wait result
 carries the child id as structured JSON, so the delegation is
 reconstructable from the session record alone. Children still running
-when the parent ends are wound down cooperatively.
+when the parent ends are wound down cooperatively. When both surfaces
+are on, delegation and the six-tool family share ONE pool — one
+`maxParallel` budget and one lineage space, and delegate children appear
+in `agent_list`.
 
 Per-turn MCP servers mount via `mcp: [{name?, command, args?, env?}]` in
 `params` (CoreLoop, sidecar-local path only). Each entry spawns one stdio
@@ -194,6 +231,46 @@ server subprocess outlives its turn. The param is ignored under
 `toolsViaHost` (the host owns tool execution there) and when an embedder
 replaces the harness via a hooks factory. This mirrors the ACP adapter's
 `mcpServers` wiring; HTTP/SSE MCP transports remain an honest gap.
+
+## `agent.session.tree` payload
+
+```json
+{
+  "jsonrpc":"2.0", "id":9, "method":"agent.session.tree",
+  "params": { "recordId": "chat_1:r2" }
+}
+```
+
+Returns the full branch family containing `recordId` in one call — the
+view a host needs to render a full-tree branch switcher and to validate
+activating ANY family member (cousins included), where
+`agent.session.branches` only sees the lineage plus direct children:
+
+```json
+{
+  "recordId": "chat_1:r2",
+  "nodeCount": 4,
+  "truncated": false,
+  "tree": {
+    "recordId": "chat_1", "sourceRecordId": null, "sourceUntilSeq": null,
+    "label": "root", "depth": 0,
+    "children": [
+      {
+        "recordId": "chat_1:r2", "sourceRecordId": "chat_1", "sourceUntilSeq": 5,
+        "label": "question 1", "depth": 1, "children": []
+      }
+    ]
+  }
+}
+```
+
+`tree` is the family root (found by walking seed provenance up from
+`recordId`); each node carries its fork provenance, the derived label,
+and a `depth` that matches `lineage` numbering. Expansion is bounded —
+depth ≤ 32 (the lineage corruption bound) and ≤ 500 nodes; a family cut
+by either bound returns `truncated: true` with the partial tree. An
+unknown record fails with `invalid_request`, as does provenance
+corruption (a lineage cycle).
 
 ## Health snapshot
 
