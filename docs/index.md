@@ -36,9 +36,9 @@ Pick any subset, skip the rest — every layer ships on its own.
 
 <div class="sf-score-strip" markdown>
 <div class="sf-score sf-score--ours" markdown>
-<span class="sf-score-value">81.7%</span>
+<span class="sf-score-value">80.7%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">TB 2.1 · 3-run mean · this repo</span>
+<span class="sf-score-meta">TB 2.1 · 6-run mean · this repo</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">+8</span>
@@ -89,7 +89,7 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <h2 class="sf-section">Terminal-Bench 2.1</h2>
 
 <p class="sf-lede" markdown>
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **81.7%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, three independent full runs: mean **81.7%** (SD 4.3 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [Evals](evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80.7%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, six independent full runs: mean **80.7%** (SD 2.9 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -105,11 +105,11 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <span class="sf-bench-agent">Steerable <span class="sf-bench-badge">ours</span></span>
 <span class="sf-bench-model">GLM-5.3-Flash</span>
 </div>
-<span class="sf-bench-pct">81.7%</span>
-<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:81.7%"></span></span>
+<span class="sf-bench-pct">80.7%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80.7%"></span></span>
 <div class="sf-bench-meta">
-<span class="sf-bench-delta">ties Claude Code within noise · 15% less $ per solve</span>
-<span class="sf-bench-src">this repo, 3× catalog-89</span>
+<span class="sf-bench-delta">ties Claude Code within noise · 10% less $ per solve</span>
+<span class="sf-bench-src">this repo, 6× catalog-89</span>
 </div>
 </div>
 
@@ -190,9 +190,9 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt" cx="184.7" cy="56.2" r="9"/>
 <text class="lbl" x="184.7" y="27" text-anchor="middle">Claude Code</text>
 <text class="sub" x="184.7" y="36.5" text-anchor="middle">83% · $0.16</text>
-<circle class="pt pt--ours" cx="169.3" cy="65.4" r="10"/>
-<text class="lbl" x="152" y="61" text-anchor="end">Steerable</text>
-<text class="sub" x="152" y="71" text-anchor="end">81.7% · $0.14</text>
+<circle class="pt pt--ours" cx="175" cy="74.2" r="10"/>
+<text class="lbl" x="158" y="70" text-anchor="end">Steerable</text>
+<text class="sub" x="158" y="80" text-anchor="end">80.7% · $0.15</text>
 <circle class="pt" cx="348.9" cy="208.3" r="9"/>
 <text class="lbl" x="338" y="198" text-anchor="end">Codex CLI</text>
 <text class="sub" x="338" y="208" text-anchor="end">GLM-5.3-Flash</text>
@@ -226,7 +226,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 
 <div class="sf-bench-group">
 <div class="sf-bench-kicker">Frontier CLIs · public board</div>
-<p class="sf-bench-blurb">Different models and harnesses. Shows the band 81.7% sits in, not a controlled A/B.</p>
+<p class="sf-bench-blurb">Different models and harnesses. Shows the band 80.7% sits in, not a controlled A/B.</p>
 
 <div class="sf-bench-row">
 <div class="sf-bench-who">
