@@ -159,9 +159,18 @@ from .errors import (
     is_retryable,
 )
 from .openai_compat import OpenAICompatProvider
+from .presets import (
+    PROVIDER_PRESETS,
+    PresetEntry,
+    ProviderPreset,
+    describe_provider_presets,
+    preset_for,
+    register_provider_preset,
+)
 
 __all__ = [
     "PROVIDER_COMPAT_HOSTS",
+    "PROVIDER_PRESETS",
     "RETRYABLE_KINDS",
     "AnthropicProvider",
     "ContentPart",
@@ -174,7 +183,10 @@ __all__ = [
     "LLMStreamChunk",
     "LLMUsage",
     "OpenAICompatFlags",
+    "PresetEntry",
+    "ProviderPreset",
     "describe_compat_flags",
+    "describe_provider_presets",
     "OpenAICompatProvider",
     "TextPart",
     "classify_error",
@@ -182,5 +194,7 @@ __all__ = [
     "compat_for_base_url",
     "content_text",
     "is_retryable",
+    "preset_for",
+    "register_provider_preset",
     "text_parts",
 ]

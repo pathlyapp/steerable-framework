@@ -172,6 +172,18 @@ the sidecar auto-detects known vendors from the `baseUrl` host
 (`PROVIDER_COMPAT_HOSTS`); anything unmatched runs on reference OpenAI
 behavior.
 
+Optimal generation parameters are data too
+(`steerable_agent_runtime.llm.presets`): a `(host, modelPrefix)` table of
+vendor-documented sampling optima for the open-weight families (DeepSeek,
+Qwen3, GLM, Llama, gpt-oss, MiniMax) fills any request field the caller
+left unset — explicit per-request fields, host extra kwargs, and
+`default_temperature` always win, and compat flags still gate what may be
+sent at all (Moonshot's fixed-temperature models carry no entry for that
+reason). Entries key on the model leaf when the family travels across
+gateways and on the base-URL host when one vendor serves model classes
+with divergent optima (DeepSeek chat vs. reasoner).
+`STEERABLE_PROVIDER_PRESETS=0` disables the layer.
+
 `agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
 down at the next safe point (round boundary, stream chunk, or tool-call
 slot), records the partial turn so the chat can continue, and the

@@ -29,6 +29,7 @@ from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
+from .presets import preset_for
 from .system_proxy import client_env_kwargs
 
 logger = logging.getLogger(__name__)
@@ -310,6 +311,11 @@ class OpenAICompatProvider:
         extra: dict[str, Any],
     ) -> dict[str, Any]:
         compat = self.compat or OpenAICompatFlags()
+        # Vendor-documented optimal parameters (llm.presets): defaults filled
+        # only where the caller left the field unset — explicit per-request
+        # fields, host extra kwargs, and default_temperature always win, and
+        # compat flags still gate what may be sent at all.
+        preset = preset_for(self.base_url, self.model)
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [_encode_message(m) for m in messages],
@@ -322,15 +328,27 @@ class OpenAICompatProvider:
             # vLLM, DeepSeek; strict vendors flag out via compat.
             body["stream_options"] = {"include_usage": True}
         eff_temperature = temperature if temperature is not None else self.default_temperature
+        if eff_temperature is None and preset is not None:
+            eff_temperature = preset.temperature
         if eff_temperature is not None and compat.supports_temperature:
             body["temperature"] = eff_temperature
-        if max_tokens is not None:
-            body[compat.max_tokens_field] = max_tokens
+        eff_max_tokens = max_tokens
+        if eff_max_tokens is None and preset is not None:
+            eff_max_tokens = preset.max_tokens
+        if eff_max_tokens is not None:
+            body[compat.max_tokens_field] = eff_max_tokens
         if tools is not None:
             tools_list = list(tools)
             if tools_list:
                 body["tools"] = tools_list
         body.update(extra)
+        if preset is not None:
+            # Fill-only-when-absent: anything in ``extra`` already won above.
+            if preset.top_p is not None and "top_p" not in body:
+                body["top_p"] = preset.top_p
+            for key, value in preset.extra_body.items():
+                if key not in body:
+                    body[key] = value
         # Z.AI (direct or OpenRouter pin) 400s ``tool_choice=required``.
         # Harbor still logs the hook; the wire must send auto or the trial
         # dies on round 0 (failed-prev 33335200327).
@@ -338,12 +356,16 @@ class OpenAICompatProvider:
             self.model, self.base_url
         ):
             body["tool_choice"] = "auto"
-        # W6-8: clamp the env-requested reasoning effort to a level the model
+        # W6-8: clamp the requested reasoning effort to a level the model
         # actually supports (structured ModelInfo replaces the raw env
         # passthrough). A model with no reasoning knob gets no parameter at
-        # all — sending one would be an unsupported-field error on strict APIs.
+        # all — sending one would be an unsupported-field error on strict
+        # APIs. The env var is the explicit request; the preset's documented
+        # default applies only when the env is unset.
         effort = clamp_reasoning_effort(
-            self.model, os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            self.model,
+            os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            or (preset.reasoning_effort if preset is not None else ""),
         )
         if effort and compat.supports_reasoning_effort:
             # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
