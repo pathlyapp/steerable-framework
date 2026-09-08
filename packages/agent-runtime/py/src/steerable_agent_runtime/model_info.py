@@ -74,6 +74,16 @@ class ModelInfo:
 #: ``context_window_override`` for local-model deployments.
 MODEL_INFOS: tuple[ModelInfo, ...] = (
     ModelInfo("deepseek-reasoner", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
+    # Official V4 Flash (0731) documents low/high/max. The generic
+    # ``deepseek`` row has no knob, so Harbor's
+    # ``deepseek/deepseek-v4-flash-0731`` would otherwise drop the env.
+    ModelInfo(
+        "deepseek-v4-flash",
+        1_310_720,
+        frozenset({"text"}),
+        TOOL_FORMAT_OPENAI,
+        frozenset({"low", "high", "max"}),
+    ),
     ModelInfo("deepseek", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     # GLM-5.3 / Flash: 1M context (OpenRouter + Z.AI). Compacting at the
     # old 202k window folded tool results on long Terminal-Bench tasks.

@@ -103,6 +103,18 @@ def test_catalog_forwards_model_override() -> None:
     assert 'extra+=(--model "$EVAL_MODEL")' in WEEKLY
 
 
+def test_catalog_effort_defaults_per_model_family() -> None:
+    """A DeepSeek catalog without max would compare 82.7 against no thinking."""
+    assert (
+        '*qwen*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-medium}" ;;'
+        in WEEKLY
+    )
+    assert (
+        '*deepseek*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-max}" ;;'
+        in WEEKLY
+    )
+
+
 def test_weekly_uploads_the_pi_transcript() -> None:
     """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
     token counts alone, and the first pi-glm run had to infer a runaway first
