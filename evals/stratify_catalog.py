@@ -7,7 +7,7 @@ across N catalog runs of one commit and sorts it into three tiers:
 
 - ``stable-green``: passed every run — the regression baseline.
 - ``stable-red``: failed every run — candidate for the ``spiral-red`` /
-  ``loss-24`` splits and for loss-taxonomy analysis.
+  ``loss-34`` splits and for loss-taxonomy analysis.
 - ``flaky``: mixed — the A/B pairing pool (``flaky`` split).
 
 Failed trials are further classified by context pressure: the trial's

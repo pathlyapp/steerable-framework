@@ -260,28 +260,47 @@ splits:
   # Run with n-attempts 3: at one attempt a flapper's outcome is a coin toss
   # and the mean carries a ±0.19 band, wide enough to swallow any real effect.
   flaky:
-    # Rebuilt on the three `8e260de` catalog runs (34031313764 / 34031319806 /
-    # 34040053173): x/3 tiers. Dropped as 3/3: bn-fit-modify, build-pov-ray,
-    # chess-best-move, code-from-image, modernize-scientific-stack,
-    # path-tracing, sam-cell-seg, torch-tensor-parallelism, train-fasttext.
-    # Dropped as 0/3 (stable red): protein-assembly, video-processing.
-    # 1/3
-    - circuit-fibsqrt
+    # Rebuilt on the six `8e260de` catalog runs (34031313764 / 34031319806 /
+    # 34040053173 / 34122470060 / 34122485974 / 34139665379): x/6 tiers.
+    # The three-run list had 15 ids; six samples unmasked 12 more coin
+    # flips (bn-fit-modify, build-pov-ray, cobol-modernization,
+    # feal-linear-cryptanalysis, gpt2-codegolf, qemu-alpine-ssh,
+    # sam-cell-seg, schemelike-metacircular-eval, sparql-university,
+    # train-fasttext) and pulled two up from stable red (pytorch-model-cli
+    # 2/6, winning-avg-corewars 1/6). Rebuild again only after a new
+    # multi-run catalog, not from a single dispatch.
+    # 1/6
+    - make-mips-interpreter
+    - raman-fitting
+    - winning-avg-corewars
+    # 2/6
     - dna-assembly
     - dna-insert
-    - make-mips-interpreter
     - model-extraction-relu-logits
+    - pytorch-model-cli
+    # 3/6
     - path-tracing-reverse
-    - raman-fitting
-    # 2/3
-    - caffe-cifar-10
-    - db-wal-recovery
-    - extract-elf
-    - git-multibranch
+    # 4/6
+    - bn-fit-modify
+    - build-pov-ray
+    - circuit-fibsqrt
     - install-windows-3.11
     - largest-eigenval
     - mteb-retrieve
+    - schemelike-metacircular-eval
+    - train-fasttext
+    # 5/6
+    - caffe-cifar-10
+    - cobol-modernization
+    - db-wal-recovery
+    - extract-elf
+    - feal-linear-cryptanalysis
+    - git-multibranch
+    - gpt2-codegolf
+    - qemu-alpine-ssh
+    - sam-cell-seg
     - sanitize-git-repo
+    - sparql-university
   # Stable reds that lose their trial to unbounded reasoning: catalog runs
   # produced >=50 KB of reasoning per tool call, a regime that passes at
   # 0.071 against 0.889 below 3 KB. They are absent from `flaky` because that
@@ -297,43 +316,54 @@ splits:
   # dna-assembly and circuit-fibsqrt flip (2/4 and 1/4), so they belong to
   # `flaky`. Leaving them would have handed the next run two guaranteed
   # "passes" against a baseline that was never zero. Re-audit this list
-  # whenever the stable-red set is recomputed. Re-audited on the three
-  # `8e260de` runs: all three ids are still 0-for-N (0/3 each; the
+  # whenever the stable-red set is recomputed. Re-audited on the six
+  # `8e260de` runs: winning-avg-corewars passed once (1/6) and moved to
+  # `flaky`; the remaining two are still 0-for-6 (the
   # reasoning_effort=high probe, GHA 34040196148, went 0/9).
   spiral-red:
     - extract-moves-from-video
     - regex-chess
-    - winning-avg-corewars
-  # 15 flaky + 9 stable-red at `8e260de` (three runs: 34031313764 /
-  # 34031319806 / 34040053173). Claude Code GLM reruns use this split
-  # instead of catalog-89. Not a GHA shard matrix — local / one job.
-  loss-24:
+  # 27 flaky + 7 stable-red at `8e260de` (six runs: 34031313764 /
+  # 34031319806 / 34040053173 / 34122470060 / 34122485974 / 34139665379).
+  # Claude Code GLM reruns use this split instead of catalog-89. Not a GHA
+  # shard matrix — local / one job.
+  loss-34:
     # flaky
-    - circuit-fibsqrt
+    - make-mips-interpreter
+    - raman-fitting
+    - winning-avg-corewars
     - dna-assembly
     - dna-insert
-    - make-mips-interpreter
     - model-extraction-relu-logits
+    - pytorch-model-cli
     - path-tracing-reverse
-    - raman-fitting
-    - caffe-cifar-10
-    - db-wal-recovery
-    - extract-elf
-    - git-multibranch
+    - bn-fit-modify
+    - build-pov-ray
+    - circuit-fibsqrt
     - install-windows-3.11
     - largest-eigenval
     - mteb-retrieve
+    - schemelike-metacircular-eval
+    - train-fasttext
+    - caffe-cifar-10
+    - cobol-modernization
+    - db-wal-recovery
+    - extract-elf
+    - feal-linear-cryptanalysis
+    - git-multibranch
+    - gpt2-codegolf
+    - qemu-alpine-ssh
+    - sam-cell-seg
     - sanitize-git-repo
-    # stable red 0/3
+    - sparql-university
+    # stable red 0/6
     - extract-moves-from-video
     - filter-js-from-html
     - gcode-to-text
     - make-doom-for-mips
     - protein-assembly
-    - pytorch-model-cli
     - regex-chess
     - video-processing
-    - winning-avg-corewars
   cheap-12:
     - fix-git
     - openssl-selfsigned-cert

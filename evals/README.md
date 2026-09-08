@@ -41,11 +41,11 @@ python -m evals.run --agent steerable --split oracle-canary
 python -m evals.run --agent steerable --split cheap-12
 python -m evals.run --agent pi --split cheap-12
 python -m evals.run --agent claude-code --split cheap-12
-python -m evals.run --agent claude-code-glm --split loss-24 --dry-run
+python -m evals.run --agent claude-code-glm --split loss-34 --dry-run
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
-`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 15 coin-toss tasks for paired A/B. `--split loss-24` is those 15 plus the 9 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
+`--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 27 coin-toss tasks for paired A/B (six-run rebuild). `--split loss-34` is those 27 plus the 7 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
 
 ## Claude Code on GLM (same-model comparison)
 
@@ -68,7 +68,7 @@ fail before any request leaves the container:
 export ANTHROPIC_BASE_URL="$STEERABLE_BASE_URL"   # e.g. https://openrouter.ai/api/v1
 export ANTHROPIC_API_KEY="$STEERABLE_API_KEY"
 
-python -m evals.run --agent claude-code-glm --split loss-24 \
+python -m evals.run --agent claude-code-glm --split loss-34 \
   --n-attempts 1 --n-concurrent 2 \
   --agent-timeout-multiplier 12
 
@@ -82,7 +82,7 @@ steerable-egress-proxy --bind 127.0.0.1:8899 \
   --record-requests /tmp/cc-requests.jsonl
 
 STEERABLE_REQUEST_RECORD_PATH=/tmp/steerable-requests.jsonl \
-  python -m evals.run --agent steerable --split loss-24 --tasks fix-git
+  python -m evals.run --agent steerable --split loss-34 --tasks fix-git
 ```
 
 After the job: `python -m evals.task_diff --they <claude-job> --we <steerable-job>`.
