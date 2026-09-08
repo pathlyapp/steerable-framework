@@ -84,7 +84,7 @@ has a relevance floor: a document containing no query term scores zero and
 is dropped, so an off-vocabulary query returns an empty result rather than
 irrelevant tools.
 
-## Third-party tools (entry points)
+## Third-party tools (plugin runtime)
 
 An installed Python package adds tools without any host code change by
 declaring the `steerable.tools` entry-point group in its own packaging
@@ -106,12 +106,28 @@ def register(router):
         return f"hello {name}"
 ```
 
-The sidecar calls `load_tool_entry_points(router)` at boot; each entry point
-resolves to a callable that receives the router and registers its `@tool`
-functions. This is a discovery seam, not a plugin system — no lifecycle, no
-config schema, no isolation. A broken entry point (import failure or a
-non-callable target) fails the boot loud with a `PluginLoadError` naming the
-offender rather than silently dropping an installed tool.
+The sidecar boots a `PluginRegistry` over the tool router and loads every
+configured `PluginSource`: `EntryPointSource` (installed packages, as
+above) plus `DirectorySource` on the directory named by
+`STEERABLE_PLUGIN_DIR` (local development — each non-`_`-prefixed `.py`
+file is one plugin with a top-level `register(router)`). The registry
+tracks which tool names each plugin registered (via a recording proxy over
+the router), so plugins have a lifecycle after boot:
+`enable`/`disable`/`unload`/`reload`. Disable removes the plugin's tools
+from the router; enable re-runs the register callable; reload re-imports
+the plugin's module (`importlib.reload`) and swaps its registrations —
+with the usual reload boundaries (references already imported from the
+module elsewhere keep the old objects). Remote sources (a market) plug
+into the `PluginSource` protocol; only discovery is reserved, no download
+mechanism.
+
+Failures fail loud and name the offender: a missing source directory, an
+import failure, a missing/non-callable `register`, and tool-name conflicts
+(first registrant wins; the later plugin's load raises `PluginLoadError`)
+all abort the offending plugin — and, at boot, the sidecar — rather than
+silently dropping an installed tool. A registration that fails mid-way
+rolls back the tools already registered by that plugin. Lifecycle calls on
+unknown or wrong-state plugins raise `PluginStateError`.
 
 ## `ask_user` (structured user questions)
 
@@ -340,15 +356,25 @@ plus the short window is the mitigation.
 
 ### Egress-proxy interaction
 
-When the desktop runs the per-host egress proxy (`STEERABLE_EGRESS_PROXY=1`,
-see `safety.md`), the sidecar's outbound is confined to a proxy that only
-tunnels the configured LLM provider endpoint. The desktop marks that
-posture with `STEERABLE_EGRESS_CONFINED=1` in the sidecar env — set only on
-the proxy-started path, never on the startup-failure fallback, so the
-sidecar cannot believe it is confined when it is not. Both tools then fail
-loud with an actionable error naming the remedies (restart without the
-proxy, or extend the proxy's allow-list) instead of hanging behind a proxy
-that 403/405s them.
+When the desktop runs the per-host egress proxy (`STEERABLE_EGRESS_PROXY`,
+default-on in the desktop since 2026-09-08; see `safety.md`), the sidecar's
+outbound is confined to the proxy. The proxy's CONNECT allow-list covers the
+configured LLM provider endpoint, the deployment's web domain list, and a
+configured in-sidecar search backend's fixed API endpoint — one source
+(`STEERABLE_WEB_ALLOWED_DOMAINS`) feeds both this module's application-layer
+policy and the proxy's network-layer list. The desktop marks that posture
+with `STEERABLE_EGRESS_CONFINED=1` in the sidecar env — set only on the
+proxy-started path, never on the startup-failure fallback, so the sidecar
+cannot believe it is confined when it is not — and points `HTTPS_PROXY` at
+the proxy. Both tools then run *through* the proxy (httpx `trust_env`): the
+domain policy and the SSRF pre-check are unchanged, and a target outside the
+proxy's allow-list fails with an error naming the list. Two honest edges:
+the proxy matches exact hosts, so a subdomain of an allowed domain passes
+the app layer but is denied by the proxy unless listed separately; and an
+empty `STEERABLE_WEB_ALLOWED_DOMAINS` (app-layer "any public domain") cannot
+be expressed in a closed proxy list, so arbitrary fetches then fail at the
+proxy. The marker without any proxy env is a misconfiguration and fails loud
+with an actionable error instead of hanging behind an absent proxy.
 
 ## Completion semantics
 
