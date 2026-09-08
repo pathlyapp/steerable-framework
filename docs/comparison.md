@@ -139,6 +139,18 @@ each tier is independently adoptable.
   with `BRAVE_SEARCH_API_KEY`), plus the host-delegated path. What we still
   lack is a self-hosted usage-accounting service, and Harbor evals run
   `--no-web-tools` regardless.
+- **Provider compatibility is data, now including per-model optimal
+  parameters.** Vendor wire divergences are flag entries
+  (`PROVIDER_COMPAT_HOSTS`), and a preset table (`llm.presets`) fills
+  vendor-documented sampling optima for the open-weight families —
+  DeepSeek (0.0 for coding, nothing for the fixed-1.0 reasoner), Qwen3
+  (0.6 / 0.95 / `top_k` 20), GLM (1.0 / 0.95), Llama (0.6 / 0.9), gpt-oss
+  (1.0 / 1.0 / effort `medium`), MiniMax (1.0 / 0.95 / `top_k` 40) — keyed
+  by base-URL host and model leaf, applied only where the caller left the
+  field unset, with compat flags still gating what may be sent. What we
+  still lack is a third *protocol* family beyond OpenAI-compatible and
+  Anthropic-native (Gemini-native), and a remote model catalog with
+  ETag-cached updates like Codex's.
 - **Sandbox coverage.** Layer-1 OS confinement covers macOS (Seatbelt) and
   Linux (bwrap, falling back to Landlock). Windows has no rewriter and relies <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
   on the layer-2 classifier plus consent. Egress control is productized: the
