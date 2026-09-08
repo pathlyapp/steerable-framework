@@ -89,3 +89,61 @@ def test_image_part_without_source_rejected() -> None:
 def test_non_list_parts_rejected() -> None:
     with pytest.raises(JsonRpcError):
         _coerce_messages([{"role": "user", "content": "", "parts": "nope"}])
+
+
+def test_assistant_tool_calls_and_reasoning_round_trip() -> None:
+    """Host-echoed assistant turns must carry toolCalls + reasoningContent —
+    without toolCalls the next `role: tool` message is an orphan (OpenAI
+    strict-protocol 400); DeepSeek thinking mode also 400s when the reasoning
+    round-trip is missing."""
+    [msg] = _coerce_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "查一下",
+                "toolCalls": [
+                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "北京"}}
+                ],
+                "reasoningContent": "user wants weather",
+            }
+        ]
+    )
+    assert msg.tool_calls is not None
+    assert msg.tool_calls[0].id == "call_1"
+    assert msg.tool_calls[0].name == "get_weather"
+    assert msg.tool_calls[0].arguments == {"city": "北京"}
+    assert msg.reasoning == "user wants weather"
+
+
+def test_assistant_reasoning_alias_and_details() -> None:
+    [msg] = _coerce_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning": "plain",
+                "reasoningDetails": [{"type": "reasoning.text", "text": "plain"}],
+            }
+        ]
+    )
+    assert msg.reasoning == "plain"
+    assert msg.reasoning_details == [{"type": "reasoning.text", "text": "plain"}]
+
+
+def test_tool_calls_non_dict_arguments_fall_back_to_empty() -> None:
+    [msg] = _coerce_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "toolCalls": [{"id": "c", "name": "t", "arguments": "broken"}],
+            }
+        ]
+    )
+    assert msg.tool_calls is not None
+    assert msg.tool_calls[0].arguments == {}
+
+
+def test_tool_calls_non_list_rejected() -> None:
+    with pytest.raises(JsonRpcError):
+        _coerce_messages([{"role": "assistant", "content": "", "toolCalls": "nope"}])
