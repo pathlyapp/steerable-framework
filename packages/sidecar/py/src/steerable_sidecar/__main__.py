@@ -96,6 +96,8 @@ def main() -> int:
     except PluginLoadError as exc:
         logging.getLogger("steerable_sidecar").error("tool plugin: %s", exc)
         return 1
+    # Expose the lifecycle over plugin.list/enable/disable/reload RPCs.
+    sidecar.plugin_registry = plugins
     try:
         asyncio.run(sidecar.serve())
     except KeyboardInterrupt:
