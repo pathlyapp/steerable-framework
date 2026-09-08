@@ -31,6 +31,7 @@ from e2e_harness import (
     TESTS_DIR,
     SidecarClient,
     child_env,
+    model_tool_names,
     sse_text,
     sse_tool_call,
 )
@@ -803,3 +804,46 @@ async def test_plugin_runtime_lifecycle_in_a_real_process(tmp_path: Path) -> Non
         "v2": "v2",
         "unloaded": True,
     }
+
+
+async def test_skill_tool_loads_body_over_real_sidecar(
+    host_client_factory: Any, mock_openai: Any, tmp_path: Path
+) -> None:
+    """The ``skill`` tool on the default (layered) mode: the catalog reaches
+    the model, a call crosses stdio, and the full SKILL.md body comes back
+    as the tool result."""
+    root = tmp_path / "skills"
+    skill_dir = root / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: demo\n"
+        "description: Demo skill for the e2e pass.\n"
+        "---\n"
+        "\n"
+        "# Demo\n"
+        "DEMO_SKILL_BODY_MARKER\n",
+        encoding="utf-8",
+    )
+
+    def responder(body: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        if index == 0:
+            return sse_tool_call("skill", {"name": "demo"}, call_id="c_skill")
+        return sse_text("SKILL_E2E_OK")
+
+    mock = mock_openai(responder)
+    client = await host_client_factory()
+    result = await client.request(
+        "agent.chat.stream", _stream_params(mock, skills={"roots": [str(root)]})
+    )
+    await _await_done(client, result["streamId"])
+
+    # The catalog advertised the tool and the model's call dispatched.
+    assert "skill" in model_tool_names(mock.requests[0].get("tools"))
+    assert len(mock.requests) == 2
+    tool_msgs = [
+        m for m in mock.requests[1]["messages"] if m.get("role") == "tool"
+    ]
+    assert any(
+        "DEMO_SKILL_BODY_MARKER" in str(m.get("content")) for m in tool_msgs
+    )
