@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 from steerable_agent_runtime import (
     DirectorySource,
     EntryPointSource,
@@ -266,6 +266,34 @@ def test_loads_from_entry_points_and_directory(
 # ---------------------------------------------------------------------------
 # Hot reload
 # ---------------------------------------------------------------------------
+
+
+def test_directory_reload_same_size_edit_same_mtime(tmp_path: Path) -> None:
+    """A same-size edit within one mtime tick must still reload fresh code.
+
+    The source loader's __pycache__ validation keys on (mtime, size); a
+    naive re-``exec_module`` would serve the stale bytecode. Reload bypasses
+    the bytecode cache by compiling the source directly.
+    """
+    plugin_file = tmp_path / "greeter.py"
+    plugin_file.write_text(_V1)
+    router = ToolRouter()
+    registry = PluginRegistry(router)
+    registry.load_source(DirectorySource(tmp_path))
+    assert router.get("greet").handler() == "v1"
+
+    # Same length as _V1 ("v1" -> "v2"), pinned to the load-time mtime:
+    # the exact condition under which the pyc cache would be reused.
+    same_size = _V1.replace("v1", "v2")
+    assert len(same_size) == len(_V1)
+    stat = plugin_file.stat()
+    plugin_file.write_text(same_size)
+    os.utime(plugin_file, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+    registry.reload("greeter")
+    assert router.get("greet").handler() == "v2"
+
+
 
 
 def test_directory_reload_picks_up_new_code(tmp_path: Path) -> None:

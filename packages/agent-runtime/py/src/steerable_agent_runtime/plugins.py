@@ -383,13 +383,24 @@ def _reexecute_module(module: Any) -> None:
     cannot find modules imported from an explicit file path under a
     synthesized name. Falls back to ``importlib.reload`` when the module
     carries no usable spec.
+
+    The source loader's ``exec_module`` validates ``__pycache__`` by
+    (mtime, size): a same-size edit landing within the same mtime tick
+    would silently re-run the STALE bytecode — hot reload must reflect the
+    file on disk, so the source is read and compiled directly, bypassing
+    the bytecode cache.
     """
     spec = getattr(module, "__spec__", None)
     loader = getattr(spec, "loader", None)
-    if loader is None:
+    path = getattr(spec, "origin", None)
+    get_data = getattr(loader, "get_data", None)
+    if loader is None or not callable(get_data) or not path:
         importlib.reload(module)
         return
-    loader.exec_module(module)
+    source = get_data(path)
+    code = compile(source, str(path), "exec", dont_inherit=True)
+    # Hot reload runs plugin source by design — the file IS the plugin.
+    exec(code, module.__dict__)  # noqa: S102
 
 
 class DirectorySource:
