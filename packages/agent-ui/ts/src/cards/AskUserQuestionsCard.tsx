@@ -88,7 +88,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
         seed[q.id] = fromBackend;
         continue;
       }
-      const options = q.options ?? [];
+      const options: readonly string[] = q.options ?? [];
       if (Array.isArray(fromBackend)) {
         const allInOptions = fromBackend.every((a) => options.includes(a));
         if (allInOptions) {
