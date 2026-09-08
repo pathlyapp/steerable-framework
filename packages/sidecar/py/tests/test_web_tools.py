@@ -181,6 +181,14 @@ def test_public_addresses_pass() -> None:
     _assert_public_address("2606:2800:220:1:248:1893:25c8:1946")
 
 
+def test_fake_ip_addresses_pass() -> None:
+    # Clash / sing-box fake-ip pool (RFC 2544 benchmarking range): reserved
+    # but exempt — see _FAKE_IP_RANGE. Includes the v4-mapped v6 wrapper.
+    _assert_public_address("198.18.0.1")
+    _assert_public_address("198.19.255.254")
+    _assert_public_address("::ffff:198.18.0.23")
+
+
 @pytest.mark.parametrize(
     "url, fragment",
     [
@@ -218,6 +226,26 @@ async def test_hostname_resolving_to_private_ip_rejected() -> None:
     assert result.success is False
     assert "non-public" in result.error
     assert requests == []
+
+
+async def test_hostname_resolving_to_fake_ip_is_fetched() -> None:
+    """Fake-ip DNS answers (Clash-style) pass the SSRF pre-check and the
+    request proceeds — the proxy intercepts the connection downstream."""
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        requests=requests,
+        handler=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={"content-type": "text/html; charset=utf-8"},
+                content=b"<p>ok</p>",
+            )
+        ),
+        dns={"proxied.example": ["198.18.0.23"]},
+    )
+    result = await _call(router, "web_fetch", {"url": "https://proxied.example/"})
+    assert result.success is True
+    assert len(requests) == 1
 
 
 async def test_unresolvable_host_is_a_loud_error() -> None:
