@@ -44,7 +44,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from steerable_agent_runtime.llm import ProviderPreset
 
 from steerable_agent_harness import BudgetLimit
 from steerable_agent_protocol.generated import (
@@ -257,6 +260,8 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("presets.describe", self._handle_presets_describe)
+        register("presets.resolve", self._handle_presets_resolve)
         register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
@@ -692,6 +697,35 @@ class Sidecar:
         from steerable_agent_runtime.llm import describe_compat_flags
 
         return {"flags": describe_compat_flags()}
+
+    async def _handle_presets_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the provider-preset table to host settings UIs.
+
+        Same service pattern as ``compat.describe``: the framework owns the
+        preset data (`describe_provider_presets`), hosts render their preset
+        picker from this payload so a new table entry needs no host change.
+        """
+        from steerable_agent_runtime.llm import describe_provider_presets
+
+        return {"presets": describe_provider_presets()}
+
+    async def _handle_presets_resolve(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Resolve the preset a given (baseUrl, model) pair would auto-match.
+
+        Powers the settings UI's "what applies" preview without the host
+        reimplementing the matching rules. ``preset`` is the camelCase wire
+        form, or ``None`` when no entry matches (or the layer is disabled
+        via ``STEERABLE_PROVIDER_PRESETS=0``).
+        """
+        from steerable_agent_runtime.llm import preset_for
+
+        params = params or {}
+        preset = preset_for(params.get("baseUrl"), params.get("model"))
+        return {"preset": preset.to_dict() if preset is not None else None}
 
     async def _handle_harness_describe(
         self, _params: dict[str, Any] | None
@@ -2730,6 +2764,32 @@ _DEFAULT_HARNESS_SPEC_PATH = (
 )
 
 
+def _resolve_preset_param(
+    params: dict[str, Any],
+) -> ProviderPreset | Literal["auto", "off"]:
+    """Map the host's ``presets`` chat param onto the provider's ``preset`` field.
+
+    Absent or ``{"enabled": true}`` → ``"auto"`` (registry match on
+    base-URL+model); ``{"enabled": false}`` → ``"off"``; ``{"override": {...}}``
+    pins an explicit preset (parsed fail-loud by ``ProviderPreset.from_dict``).
+    A malformed payload raises ``ValueError`` rather than silently falling
+    back to auto — the host made a choice, it must apply or fail.
+    """
+    from steerable_agent_runtime.llm import ProviderPreset
+
+    raw = params.get("presets")
+    if raw is None:
+        return "auto"
+    if not isinstance(raw, dict):
+        raise TypeError("presets param must be an object")
+    override = raw.get("override")
+    if override is not None:
+        if not isinstance(override, dict):
+            raise TypeError("presets.override must be an object")
+        return ProviderPreset.from_dict(override)
+    return "auto" if raw.get("enabled", True) else "off"
+
+
 def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     """Construct an LLMProvider from a chat-stream request payload.
 
@@ -2783,6 +2843,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     compat=compat,
+                    preset=_resolve_preset_param(params),
                 )
             )
         )

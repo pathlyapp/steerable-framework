@@ -64,6 +64,44 @@ class ProviderPreset:
     reasoning_effort: str | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ProviderPreset:
+        """Parse a camelCase wire payload (host settings / chat params).
+
+        Unknown keys raise ``ValueError`` — same discipline as
+        ``OpenAICompatFlags.from_dict``: a misspelled key must surface at
+        the boundary instead of silently not applying.
+        """
+        known = {"temperature", "topP", "maxTokens", "reasoningEffort", "extraBody"}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError(f"unknown provider-preset keys: {sorted(unknown)}")
+        extra_body = data.get("extraBody") or {}
+        if not isinstance(extra_body, dict):
+            raise TypeError("provider-preset extraBody must be an object")
+        return cls(
+            temperature=data.get("temperature"),
+            top_p=data.get("topP"),
+            max_tokens=data.get("maxTokens"),
+            reasoning_effort=data.get("reasoningEffort"),
+            extra_body=dict(extra_body),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """CamelCase wire form; ``None`` fields are omitted."""
+        out: dict[str, Any] = {}
+        if self.temperature is not None:
+            out["temperature"] = self.temperature
+        if self.top_p is not None:
+            out["topP"] = self.top_p
+        if self.max_tokens is not None:
+            out["maxTokens"] = self.max_tokens
+        if self.reasoning_effort is not None:
+            out["reasoningEffort"] = self.reasoning_effort
+        if self.extra_body:
+            out["extraBody"] = dict(self.extra_body)
+        return out
+
 
 @dataclass(frozen=True, slots=True)
 class PresetEntry:

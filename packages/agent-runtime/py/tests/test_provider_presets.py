@@ -33,6 +33,7 @@ def _build(
     default_temperature: float | None = None,
     compat: OpenAICompatFlags | None = None,
     extra: dict | None = None,
+    preset: ProviderPreset | str = "auto",
 ) -> dict:
     provider = OpenAICompatProvider(
         name="t",
@@ -40,6 +41,7 @@ def _build(
         base_url=base_url,
         default_temperature=default_temperature,
         compat=compat,
+        preset=preset,  # type: ignore[arg-type]
     )
     return provider._build_body(
         messages=[LLMMessage.text_of("user", "hi")],
@@ -191,4 +193,62 @@ def test_build_body_preset_max_tokens_via_compat_field(monkeypatch) -> None:
 def test_build_body_kill_switch_disables_application(monkeypatch) -> None:
     monkeypatch.setenv("STEERABLE_PROVIDER_PRESETS", "off")
     body = _build("deepseek-chat", "https://api.deepseek.com/v1")
+    assert "temperature" not in body
+
+
+# ---------------------------------------------------------------------------
+# Wire parsing (from_dict / to_dict)
+# ---------------------------------------------------------------------------
+
+
+def test_from_dict_round_trip() -> None:
+    preset = ProviderPreset(
+        temperature=0.6, top_p=0.95, max_tokens=8192, reasoning_effort="medium",
+        extra_body={"top_k": 20},
+    )
+    assert ProviderPreset.from_dict(preset.to_dict()) == preset
+
+
+def test_from_dict_unknown_keys_fail_loud() -> None:
+    with pytest.raises(ValueError, match="unknown provider-preset keys"):
+        ProviderPreset.from_dict({"temprature": 0.6})
+
+
+def test_from_dict_extra_body_must_be_object() -> None:
+    with pytest.raises(TypeError, match="extraBody must be an object"):
+        ProviderPreset.from_dict({"extraBody": [1, 2]})
+
+
+def test_to_dict_omits_unset_fields() -> None:
+    assert ProviderPreset().to_dict() == {}
+    assert ProviderPreset(temperature=0.0).to_dict() == {"temperature": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# Provider-level preset selection (auto / off / pinned)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_preset_off_disables_application() -> None:
+    body = _build("deepseek-chat", "https://api.deepseek.com/v1", preset="off")
+    assert "temperature" not in body
+
+
+def test_provider_preset_pinned_overrides_registry() -> None:
+    """A pinned preset applies even where the registry would match nothing —
+    and shadows the registry entry that would otherwise win."""
+    pinned = ProviderPreset(temperature=0.42, extra_body={"top_k": 7})
+    body = _build("some-unknown-model", "http://x/v1", preset=pinned)
+    assert body["temperature"] == 0.42
+    assert body["top_k"] == 7
+    shadowed = _build("deepseek-chat", "https://api.deepseek.com/v1", preset=pinned)
+    assert shadowed["temperature"] == 0.42  # not the registry's 0.0
+
+
+def test_provider_preset_pinned_still_respects_compat_gate() -> None:
+    pinned = ProviderPreset(temperature=0.42)
+    body = _build(
+        "m", "http://x/v1", preset=pinned,
+        compat=OpenAICompatFlags(supports_temperature=False),
+    )
     assert "temperature" not in body

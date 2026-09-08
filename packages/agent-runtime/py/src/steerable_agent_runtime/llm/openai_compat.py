@@ -20,7 +20,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from steerable_agent_protocol.generated import ToolCall
 
@@ -29,7 +29,7 @@ from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
-from .presets import preset_for
+from .presets import ProviderPreset, preset_for
 from .system_proxy import client_env_kwargs
 
 logger = logging.getLogger(__name__)
@@ -121,6 +121,11 @@ class OpenAICompatProvider:
     api_key: str | None = None
     default_temperature: float | None = None
     compat: OpenAICompatFlags | None = None
+    #: Vendor-preset selection: ``"auto"`` matches ``llm.presets.preset_for``
+    #: on (base_url, model); ``"off"`` disables the layer for this provider;
+    #: a ``ProviderPreset`` instance pins that preset regardless of the
+    #: registry (host settings UIs send an explicit choice this way).
+    preset: ProviderPreset | Literal["auto", "off"] = "auto"
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -314,8 +319,14 @@ class OpenAICompatProvider:
         # Vendor-documented optimal parameters (llm.presets): defaults filled
         # only where the caller left the field unset — explicit per-request
         # fields, host extra kwargs, and default_temperature always win, and
-        # compat flags still gate what may be sent at all.
-        preset = preset_for(self.base_url, self.model)
+        # compat flags still gate what may be sent at all. The provider's
+        # `preset` field selects the source: auto-match, off, or pinned.
+        if self.preset == "off":
+            preset = None
+        elif self.preset == "auto":
+            preset = preset_for(self.base_url, self.model)
+        else:
+            preset = self.preset
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [_encode_message(m) for m in messages],

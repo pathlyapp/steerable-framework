@@ -184,6 +184,17 @@ gateways and on the base-URL host when one vendor serves model classes
 with divergent optima (DeepSeek chat vs. reasoner).
 `STEERABLE_PROVIDER_PRESETS=0` disables the layer.
 
+Hosts steer the layer per stream with the `presets` chat param: omitted or
+`{"enabled": true}` auto-matches the registry, `{"enabled": false}` turns
+it off, and `{"override": {...}}` pins an explicit preset (camelCase keys
+parsed fail-loud by `ProviderPreset.from_dict`). Two RPCs serve host
+settings UIs, symmetric with `compat.describe`: `presets.describe` returns
+the registry table for a preset picker, and `presets.resolve` answers the
+preset a given `(baseUrl, model)` pair would auto-match (`null` when none)
+so the UI can preview what applies without reimplementing the matching
+rules. `OpenAICompatProvider(preset=...)` accepts the same three states
+(`"auto"` / `"off"` / a `ProviderPreset`) for in-process embedders.
+
 `agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
 down at the next safe point (round boundary, stream chunk, or tool-call
 slot), records the partial turn so the chat can continue, and the
