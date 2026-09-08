@@ -1850,6 +1850,14 @@ class Sidecar:
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # todo_write: session task list (CC TodoWrite parity). Registered
+        # unconditionally at boot, so it is advertised every turn; dispatch
+        # is intercepted locally like run_code (the host does not know it).
+        if self.tools.get("todo_write") is not None:
+            from steerable_agent_runtime import todo_write_tool_descriptor
+
+            local_names.append("todo_write")
+            tools = [*(tools or []), todo_write_tool_descriptor()]
         # run_js/wait_js: conversational JS PTC (the codex CodeModeHost
         # counterpart). Same router-answered local dispatch as run_code; the
         # session binds to this run's chatId inside the tool.
