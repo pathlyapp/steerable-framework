@@ -101,6 +101,58 @@ export interface HarnessDescription {
   default: Record<string, HarnessImplDescriptor[] | HarnessImplDescriptor>;
 }
 
+/**
+ * One built-in provider preset as served by `presets.describe`: the match
+ * rule (`host` + `modelPrefix`) plus the parameter patch it applies. Host
+ * settings UIs render their preset picker from this list.
+ */
+export interface ProviderPresetDescriptor {
+  host: string;
+  modelPrefix: string;
+  temperature: number | null;
+  topP: number | null;
+  maxTokens: number | null;
+  reasoningEffort: string | null;
+  extraBody: Record<string, unknown> | null;
+}
+
+/** The resolved parameter patch from `presets.resolve` (`None` fields omitted). */
+export interface ProviderPreset {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  reasoningEffort?: string;
+  extraBody?: Record<string, unknown>;
+}
+
+/** One plugin record as served by the `plugin.*` lifecycle RPCs. */
+export interface PluginRecord {
+  name: string;
+  origin: string;
+  tools: string[];
+  enabled: boolean;
+  reloadable: boolean;
+}
+
+/** Recursive node of the `agent.session.tree` branch-family view. */
+export interface SessionTreeNode {
+  recordId: string;
+  sourceRecordId: string | null;
+  sourceUntilSeq: number | null;
+  label: string | null;
+  depth: number;
+  children: SessionTreeNode[];
+}
+
+/** The `agent.session.tree` payload; `truncated` marks a family cut by the
+ * depth/node bounds documented on the Python handler. */
+export interface SessionTreeResult {
+  recordId: string;
+  tree: SessionTreeNode;
+  nodeCount: number;
+  truncated: boolean;
+}
+
 export type ChatStreamStatus =
   | 'completed'
   | 'cancelled'
@@ -513,6 +565,59 @@ export class AgentRuntime {
    */
   describeHarness(): Promise<HarnessDescription> {
     return this.process.request('harness.describe');
+  }
+
+  // ---- plugins / presets / session tree --------------------------------
+
+  /** Every plugin the sidecar registry knows, with lifecycle state. */
+  listPlugins(): Promise<{ plugins: PluginRecord[] }> {
+    return this.process.request('plugin.list');
+  }
+
+  /** Enable a registered plugin; rejects invalid_params on unknown names. */
+  enablePlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.enable', { name });
+  }
+
+  /** Disable a plugin without unloading its code. */
+  disablePlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.disable', { name });
+  }
+
+  /** Hot-reload a reloadable plugin from its source. */
+  reloadPlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.reload', { name });
+  }
+
+  /** The framework-owned provider-preset table for host settings UIs. */
+  describePresets(): Promise<{ presets: ProviderPresetDescriptor[] }> {
+    return this.process.request('presets.describe');
+  }
+
+  /** Which preset a (baseUrl, model) pair would auto-match; null when none. */
+  resolvePreset(input: {
+    baseUrl?: string;
+    model?: string;
+  }): Promise<{ preset: ProviderPreset | null }> {
+    return this.process.request('presets.resolve', input);
+  }
+
+  /** The full branch family containing a record (pi-style tree view). */
+  sessionTree(recordId: string): Promise<SessionTreeResult> {
+    return this.process.request('agent.session.tree', { recordId });
+  }
+
+  /**
+   * Ask a running turn to compact its transcript at the next pre_step
+   * boundary (CC `/compact` parity). Soft-fails false when the stream
+   * already completed, mirroring steerChat.
+   */
+  async compactChat(streamId: string): Promise<boolean> {
+    const res = await this.process.request<{ ok?: boolean }>(
+      'agent.chat.compact',
+      { streamId },
+    );
+    return res?.ok === true;
   }
 
   // ---- internals ---------------------------------------------------------

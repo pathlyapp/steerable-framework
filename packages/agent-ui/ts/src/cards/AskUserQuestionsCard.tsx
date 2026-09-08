@@ -63,7 +63,9 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
   onSubmit,
   onAutoContinue,
   className,
-  allowCustomText = false,
+  // The ask_user schema tells the model the host auto-appends an "Other"
+  // free-text escape — so the card defaults to offering it.
+  allowCustomText = true,
   requireAllAnswered = false,
   submitLabel = '提交',
   multiSelectLabel = '（可多选）',

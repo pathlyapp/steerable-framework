@@ -73,6 +73,8 @@ from steerable_agent_runtime import (
     McpStdioClient,
     OrchestrationConfig,
     OrchestrationExecutor,
+    PluginLoadError,
+    PluginStateError,
     PolicyDeniedError,
     RouterToolExecutor,
     SandboxedToolExecutor,
@@ -221,6 +223,10 @@ class Sidecar:
         self._wall_started_ms = int(time.time() * 1000)
         self._shutdown_requested = asyncio.Event()
         self._serving = False
+        #: Injected by the entrypoint after plugin loading so the plugin.*
+        #: RPCs can drive the lifecycle. None means the plugin subsystem is
+        #: not wired (unit tests constructing a bare Sidecar).
+        self.plugin_registry: Any = None
 
         self._register_default_methods()
         for tool in self.config.initial_tools:
@@ -260,6 +266,10 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("plugin.list", self._handle_plugin_list)
+        register("plugin.enable", self._handle_plugin_enable)
+        register("plugin.disable", self._handle_plugin_disable)
+        register("plugin.reload", self._handle_plugin_reload)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
         register("harness.describe", self._handle_harness_describe)
@@ -697,6 +707,69 @@ class Sidecar:
         from steerable_agent_runtime.llm import describe_compat_flags
 
         return {"flags": describe_compat_flags()}
+
+    def _require_plugin_registry(self) -> Any:
+        """The plugin registry, or an RPC error when the subsystem is unwired."""
+        if self.plugin_registry is None:
+            raise JsonRpcError(
+                "plugin subsystem is not wired on this sidecar",
+                code=-32602,
+                kind="invalid_params",
+            )
+        return self.plugin_registry
+
+    @staticmethod
+    def _plugin_record_dict(record: Any) -> dict[str, Any]:
+        return {
+            "name": record.name,
+            "origin": record.origin,
+            "tools": list(record.tools),
+            "enabled": record.enabled,
+            "reloadable": record.reloadable,
+        }
+
+    async def _handle_plugin_list(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        return {
+            "plugins": [
+                self._plugin_record_dict(record) for record in registry.plugins()
+            ]
+        }
+
+    async def _handle_plugin_enable(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.enable(name)
+        except PluginStateError as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_disable(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.disable(name)
+        except PluginStateError as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_reload(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.reload(name)
+        except (PluginStateError, PluginLoadError) as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
 
     async def _handle_presets_describe(
         self, _params: dict[str, Any] | None
@@ -1850,6 +1923,14 @@ class Sidecar:
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # todo_write: session task list (CC TodoWrite parity). Registered
+        # unconditionally at boot, so it is advertised every turn; dispatch
+        # is intercepted locally like run_code (the host does not know it).
+        if self.tools.get("todo_write") is not None:
+            from steerable_agent_runtime import todo_write_tool_descriptor
+
+            local_names.append("todo_write")
+            tools = [*(tools or []), todo_write_tool_descriptor()]
         # run_js/wait_js: conversational JS PTC (the codex CodeModeHost
         # counterpart). Same router-answered local dispatch as run_code; the
         # session binds to this run's chatId inside the tool.
