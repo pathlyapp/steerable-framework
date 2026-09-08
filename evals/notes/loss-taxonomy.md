@@ -1,10 +1,21 @@
-# Loss taxonomy — 15 flaky + 9 stable red at `8e260de`
+# Loss taxonomy — 27 flaky + 7 stable red at `8e260de`
 
-Rebuilt on the three `8e260de` catalog runs (70/71/77). The `27d521a`
-set was 20 flaky + 9 stable red; `raman-fitting` and `sanitize-git-repo`
-left stable red, `protein-assembly` and `video-processing` fell in, and
-nine flaky graduated to 3/3. Mechanism labels below keep the old set's
-entries where the mechanism still applies.
+Rebuilt on the six `8e260de` catalog runs (70/71/77/71/71/71; tag
+`tb-8e260de`). Doubling the sample moved ten three-run "stable green"
+tasks into flaky (coin tosses the small sample hid) and pulled
+`pytorch-model-cli` (2/6) and `winning-avg-corewars` (1/6) up from
+stable red. The mechanism tables below keep the three-run set's rows —
+mechanisms do not move with resampling — with the two graduated rows
+marked. Current tier membership lives in `evals/suite.yaml`
+(`flaky` x/6 comments, `loss-34`); this file owns mechanisms.
+
+**Context length defeats zero failures.** Across all 103 failed trials
+in the six runs, not one peaked within 90% of the model's
+1,048,576-token window — none reached 50% (max 473,325 = 45.1%, median
+149,117 = 14.2%; per-trial `peak_context_tokens` from the
+`STEERABLE_RUN_SUMMARY` log line, classified by
+`evals/stratify_catalog.py`). Every loss below is capability-side:
+mechanism, clock, or coin — never window exhaustion.
 
 Sources: `EVALS_TODO.md` (2.5.9–2.5.17), `evals/suite.yaml` four-run
 pass counts, `docs/evals.md`, catalogs 33497477757 (73/89), 33530806570
@@ -15,7 +26,14 @@ are not in this repo. Recipe: `evals/README.md`.
 The four buckets are failure *mechanisms*. A task can sit in more than
 one. Arm decisions follow the mechanism, not the 0/4 label.
 
-## Stable red (0/4 at `27d521a`; current 0/3 set in `suite.yaml`)
+## Stable red (0/4 at `27d521a`; current 0/6 set in `suite.yaml`)
+
+Six-run membership: `extract-moves-from-video`, `filter-js-from-html`,
+`gcode-to-text`, `make-doom-for-mips`, `protein-assembly`, `regex-chess`,
+`video-processing`. `pytorch-model-cli` and `winning-avg-corewars` kept
+their rows below for mechanism reference but are flaky now (2/6 and 1/6);
+`raman-fitting` (1/6) and `sanitize-git-repo` (5/6) likewise sit in
+`flaky`.
 
 | Task | Mechanism | Evidence | Arm? |
 | ---- | --------- | -------- | ---- |
@@ -34,7 +52,7 @@ wrong inference (`pytorch-model-cli`), wrong unit (`raman-fitting`).
 `sanitize-git-repo` is the 0/4 with a harness-side fix (keep the pinned SHA).
 Do not count the other three toward ≥72/round.
 
-## Flaky (20 at `27d521a`; current 15-id set in `suite.yaml`)
+## Flaky (20 at `27d521a`; current 27-id set in `suite.yaml`)
 
 These are the only ids a harness change can win or lose. Four-run counts
 below are the `27d521a` samples; the `8e260de` x/3 tiers live in

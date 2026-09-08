@@ -75,6 +75,7 @@ def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
     the same-model pi comparison has to be dispatchable there."""
     assert "- pi-glm" in WEEKLY
+    assert "- terminus-2" in WEEKLY
     assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
 
 
@@ -85,11 +86,21 @@ def test_catalog_feishu_label_names_the_agent() -> None:
 
 def test_catalog_concurrency_separates_the_agents() -> None:
     """The group holds one running plus one pending run. Sharing it across
-    agents makes a second dispatch cancel the first's pending run."""
+    agents makes a second dispatch cancel the first's pending run. The model
+    is in the group so a qwen catalog does not queue behind a GLM catalog."""
     assert (
         "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
-        "${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+        "${{ github.event.inputs.agent || 'steerable' }}-"
+        "${{ github.event.inputs.model || 'default' }}" in WEEKLY
     )
+
+
+def test_catalog_forwards_model_override() -> None:
+    """A catalog Mean without `--model` is the suite.yaml default, so a
+    qwen/glm comparison has to be an explicit dispatch input, not a silent
+    suite.yaml edit that also moves the product default."""
+    assert "EVAL_MODEL: ${{ github.event.inputs.model }}" in WEEKLY
+    assert 'extra+=(--model "$EVAL_MODEL")' in WEEKLY
 
 
 def test_weekly_uploads_the_pi_transcript() -> None:
@@ -97,6 +108,33 @@ def test_weekly_uploads_the_pi_transcript() -> None:
     token counts alone, and the first pi-glm run had to infer a runaway first
     turn from `n_output_tokens` sitting exactly on the cap."""
     assert "**/agent/pi.txt" in WEEKLY
+
+
+def test_catalog_start_card_names_the_agent() -> None:
+    """A terminus or pi-glm catalog announced as 产品 steerable is read as
+    the product score before any Mean exists."""
+    assert 'os.environ.get("EVAL_AGENT")' in WEEKLY
+    assert "产品 steerable × {model}" not in WEEKLY
+
+
+def test_weekly_uploads_the_terminus_trajectory() -> None:
+    """Terminus-2 writes agent/trajectory.json, not headless.log. Without
+    that glob a failed trial arrives as a reward and no transcript."""
+    assert "agent/trajectory.json" in WEEKLY
+
+
+def test_weekly_gives_the_gateway_openai_only_to_terminus() -> None:
+    """Terminus LiteLLM reads OPENAI_*. An unconditional catalog OPENAI_BASE_URL
+    would be fine today (one agent per dispatch) but the cheap-12 pattern is
+    the one that must not leak: only this leg gets the gateway as OPENAI_*."""
+    assert (
+        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+    )
+    assert (
+        "OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' "
+        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+    )
 
 
 def test_weekly_gives_the_gateway_only_to_the_pi_glm_leg() -> None:

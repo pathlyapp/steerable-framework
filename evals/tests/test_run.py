@@ -12,6 +12,7 @@ from evals.run import (
     _print_summary,
     _retry_agent_timeout,
     any_verifier_reward,
+    credit_exhausted_tasks,
     env_start_error_tasks,
     harbor_progress_line,
     main,
@@ -319,6 +320,70 @@ def test_env_start_error_tasks_detects_dataset_remote_protocol(tmp_path: Path) -
     (job / "result.json").write_text(json.dumps({"stats": {"n_errored_trials": 1}}))
     assert env_start_error_tasks(tmp_path) == ("largest-eigenval",)
     assert any_verifier_reward(tmp_path) is False
+
+
+def test_empty_shard_is_skipped_only_for_an_explicit_task_list(capsys) -> None:
+    """Finishing a cancelled catalog dispatches fewer ids than the matrix has
+    shards. A split still has to fill every shard or its tail goes unnoticed."""
+    code = main(
+        [
+            "--agent",
+            "steerable",
+            "--tasks",
+            "fix-git",
+            "--shard",
+            "48",
+            "--shards",
+            "49",
+            "--dry-run",
+        ]
+    )
+    assert code == EXIT_SKIPPED
+    assert "no tasks in this slice of --tasks" in capsys.readouterr().out
+
+    code = main(
+        ["--agent", "steerable", "--split", "cheap-12", "--shard", "40", "--shards", "49", "--dry-run"]
+    )
+    assert code == EXIT_USAGE
+    assert "selected no tasks" in capsys.readouterr().err
+
+
+def test_credit_exhausted_tasks_reads_every_trial_surface(tmp_path: Path) -> None:
+    """Each harness reports the gateway's 402 in a different trial file."""
+    job = tmp_path / "2026-09-07__08-05-26"
+    sidecar = job / "chess-best-move__oRJVq3R" / "agent"
+    sidecar.mkdir(parents=True)
+    (sidecar / "headless.log").write_text(
+        "[error {'message': 'openai_compat: HTTP 402 (invalid_request): "
+        '{"error":{"message":"This request requires more credits, or fewer '
+        "max_tokens\"}}', 'round': 27, 'phase': 'llm_stream'}]\n"
+    )
+    terminus = job / "mailman__TkyvS9N" / "agent"
+    terminus.mkdir(parents=True)
+    (terminus / "trajectory.json").write_text(
+        json.dumps({"steps": [{"error": "litellm.APIError: Insufficient credits."}]})
+    )
+    early = job / "regex-chess__abc"
+    early.mkdir()
+    (early / "exception.txt").write_text('APIError: {"code":402}\n')
+    solved = job / "fix-git__def" / "agent"
+    solved.mkdir(parents=True)
+    (solved / "headless.log").write_text("[tool bash {'command': 'git status'}]\n")
+
+    assert credit_exhausted_tasks(tmp_path) == (
+        "chess-best-move",
+        "mailman",
+        "regex-chess",
+    )
+
+
+def test_credit_exhausted_tasks_ignores_non_trial_dirs(tmp_path: Path) -> None:
+    """Only ``<job stamp>/<task>__<id>`` is a trial; a stray tree is not."""
+    stray = tmp_path / "notes" / "chess-best-move__abc"
+    stray.mkdir(parents=True)
+    (stray / "exception.txt").write_text("Insufficient credits\n")
+    assert credit_exhausted_tasks(tmp_path) == ()
+    assert credit_exhausted_tasks(tmp_path / "missing") == ()
 
 
 def test_any_verifier_reward_counts_zero_as_scored(tmp_path: Path) -> None:

@@ -151,6 +151,8 @@ The score of record is **Steerable + GLM-5.3-Flash = 80.7%** on the 89-task cata
 
 In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 80.7% at **$0.146**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the six-run spread in mind: our sample standard deviation is 2.9 points, wide enough to contain the 2.4-point gap.
 
+In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 81.7% at **$0.138**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the three-run spread in mind: our sample standard deviation is 4.3 points, wide enough to contain the 1.4-point gap.
+
 ## Choosing
 
 **Reach for Steerable when** you need a typed cross-language contract

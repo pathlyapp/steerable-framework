@@ -88,7 +88,15 @@ def test_steerable_is_the_harness_aware_agent() -> None:
     suite = load_suite()
     assert suite.agents["steerable"].accepts_harness is True
     # Baselines run as shipped: varying their harness is not our variable.
-    for name in ("oracle", "claude-code", "codex", "pi", "pi-glm", "claude-code-glm"):
+    for name in (
+        "oracle",
+        "claude-code",
+        "codex",
+        "pi",
+        "pi-glm",
+        "claude-code-glm",
+        "terminus-2",
+    ):
         assert suite.agents[name].accepts_harness is False
 
 
@@ -135,22 +143,20 @@ def test_iteration_splits_are_catalog_subsets_that_do_not_overlap() -> None:
     assert not flaky & spiral
 
 
-def test_loss_24_is_flaky_plus_stable_reds() -> None:
+def test_loss_34_is_flaky_plus_stable_reds() -> None:
     suite = load_suite()
     flaky = set(suite.splits["flaky"])
-    loss = set(suite.splits["loss-24"])
+    loss = set(suite.splits["loss-34"])
     stable_red = {
         "extract-moves-from-video",
         "filter-js-from-html",
         "gcode-to-text",
         "make-doom-for-mips",
         "protein-assembly",
-        "pytorch-model-cli",
         "regex-chess",
         "video-processing",
-        "winning-avg-corewars",
     }
-    assert len(loss) == 24
+    assert len(loss) == 34
     assert loss == flaky | stable_red
     assert flaky <= loss
     assert set(suite.splits["spiral-red"]) <= loss
@@ -215,6 +221,26 @@ def test_pi_glm_declares_the_wire_protocol_of_the_gateway() -> None:
     OPENROUTER_BASE_URL, so a missing kwarg fails every trial at setup."""
     suite = load_suite()
     assert dict(suite.agents["pi-glm"].kwargs)["model_api"] == "openai-completions"
+
+
+def test_terminus_2_is_stock_harbor_agent() -> None:
+    """Qwen's published 73.0% is vendor Terminus. Stock Harbor `terminus-2`
+    is that harness; a wrapper would make the Mean uncomparable."""
+    suite = load_suite()
+    spec = suite.agents["terminus-2"]
+    assert spec.skipped is False
+    assert spec.harbor == "terminus-2"
+    assert spec.model == "openai/z-ai/glm-5.3-flash"
+    assert spec.env_any == ("OPENAI_API_KEY",)
+    assert spec.kwargs == ()
+    argv = harbor_argv(
+        suite,
+        agent="terminus-2",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    assert argv[argv.index("--agent") + 1] == "terminus-2"
+    assert "--agent-kwarg" not in argv
 
 
 def test_pi_baseline_carries_no_gateway_kwargs() -> None:
@@ -360,7 +386,32 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     assert "github.event.inputs.split == 'cheap-12'" in weekly
     assert "github.event.inputs.split != 'catalog'" not in weekly
     catalog_job = weekly.split("name: Harbor catalog shard", 1)[1]
-    assert "OPENAI_API_KEY" not in catalog_job.split("upload-artifact", 1)[0]
+    catalog_env = catalog_job.split("upload-artifact", 1)[0]
+    # Vendor OPENAI_API_KEY would send Codex (if it ever shared this job) to
+    # api.openai.com with the gateway key. Terminus-2 is host LiteLLM and
+    # needs OPENAI_* mapped from STEERABLE_*, gated on this agent.
+    assert "secrets.OPENAI_API_KEY" not in catalog_env
+    assert (
+        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in catalog_env
+    )
+    # All 49 shards draw on one gateway balance, and `fail-fast: false` means
+    # nothing else stops them: without the cancel, the shards that outlive the
+    # balance score 0 for lack of an LLM and the catalog reports that as a Mean.
+    assert "EXIT_CREDITS" not in weekly
+    assert '[ "$code" -eq 4 ]' in catalog_job
+    assert "gh run cancel" in catalog_job
+    assert "echo credits >" in catalog_job
+    assert "GH_TOKEN: ${{ github.token }}" in catalog_env
+    # Cancelling needs a scope the read-only workflow default does not carry,
+    # and a job-level block replaces that default rather than adding to it.
+    catalog_head = weekly.split("\n  catalog:\n", 1)[1].split("\n    steps:", 1)[0]
+    assert "actions: write" in catalog_head
+    assert "contents: read" in catalog_head
+    # Finishing a cancelled catalog reruns the ids it never scored, so the
+    # dispatch needs a way to name them; the matrix stays at 49 either way.
+    assert "EVAL_TASKS: ${{ github.event.inputs.tasks }}" in catalog_env
+    assert "extra+=(--tasks $EVAL_TASKS)" in catalog_job
     failed_job = weekly.split("name: Harbor failed-prev shard", 1)[1]
     assert '--split failed-prev --shard "${{ matrix.shard }}" --shards 24' in weekly
     assert '--split catalog --shard "${{ matrix.shard }}" --shards 49' in weekly

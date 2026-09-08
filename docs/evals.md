@@ -13,6 +13,9 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 | 1 | [34031313764](https://github.com/pathlyapp/steerable-framework/actions/runs/34031313764) | 0.7865 (70/89) |
 | 2 | [34031319806](https://github.com/pathlyapp/steerable-framework/actions/runs/34031319806) | 0.7978 (71/89) |
 | 3 | [34040053173](https://github.com/pathlyapp/steerable-framework/actions/runs/34040053173) | 0.8652 (77/89) |
+| 4 | [34122470060](https://github.com/pathlyapp/steerable-framework/actions/runs/34122470060) | 0.7978 (71/89) |
+| 5 | [34122485974](https://github.com/pathlyapp/steerable-framework/actions/runs/34122485974) | 0.7978 (71/89) |
+| 6 | [34139665379](https://github.com/pathlyapp/steerable-framework/actions/runs/34139665379) | 0.7978 (71/89) |
 
 **Cost is a co-equal metric, not a footnote.** The score of record is two numbers, not one: pass rate **80.7%** and cost per solved task **~$0.146** (mean 271.7M input tokens/run, ~$10.50/run across the same six `8e260de` runs; per-trial `result.json` telemetry, not the ±15% OpenRouter analytics panel). Every future catalog run updates both numbers together — a pass-rate move that hides a token move is half the information. For calibration on the same model and protocol: Pi solves at **$0.061**/task (138.9M tokens, 73.4%), Claude Code at **$0.162**/task (299.2M tokens, 83.1%); we spend 2.3× Pi's tokens to buy 7.3 points.
 | 4 | [34122470060](https://github.com/pathlyapp/steerable-framework/actions/runs/34122470060) | 0.7978 (71/89) |
