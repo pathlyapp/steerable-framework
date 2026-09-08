@@ -147,9 +147,9 @@ each tier is independently adoptable.
 
 ## Terminal-Bench 2.1
 
-The score of record is **Steerable + GLM-5.3-Flash = 81.7%** on the 89-task catalog (three-run mean; see [Evals](evals.md)). That is a Flash-cost model in the same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%) on the [public 2.1 board](https://snorkel.ai/leaderboard/terminal-bench-2-1/). Z.AI's own Claude Code run of GLM-5.3-Flash is 84.3% under a 6-hour timeout — we are behind that vendor protocol, and still in the usable band.
+The score of record is **Steerable + GLM-5.3-Flash = 80.7%** on the 89-task catalog (six-run mean at tag `tb-8e260de`; see [Evals](evals.md)). That is a Flash-cost model in the same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%) on the [public 2.1 board](https://snorkel.ai/leaderboard/terminal-bench-2-1/). Z.AI's own Claude Code run of GLM-5.3-Flash is 84.3% under a 6-hour timeout — we are behind that vendor protocol, and still in the usable band.
 
-In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 81.7% at **$0.138**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the three-run spread in mind: our sample standard deviation is 4.3 points, wide enough to contain the 1.4-point gap.
+In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 80.7% at **$0.146**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the six-run spread in mind: our sample standard deviation is 2.9 points, wide enough to contain the 2.4-point gap.
 
 ## Choosing
 
