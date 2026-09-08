@@ -542,8 +542,16 @@ class SteerableHarborAgent(BaseInstalledAgent):
             env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
         elif _is_deepseek(model):
             # Official DeepSeek-V4-Flash-0731 TB 2.1 (82.7) used max.
-            # Do not pin z-ai: that provider serves only GLM.
             env.setdefault("STEERABLE_REASONING_EFFORT", "max")
+            # 29 OpenRouter endpoints serve this id and the router sorts by
+            # price: DeepSeek's own is 22nd ($0.220/$0.660 per M vs $0.050 for
+            # OpenInference), so default routing never reaches it and two of
+            # the four cheapest are fp4. `max` is honoured per endpoint, not
+            # uniformly — the GLM pin's z-ai/fp8 emits 92% reasoning tokens
+            # where unpinned resellers span 3–86%. Pin the vendor for the same
+            # reason as z-ai above; the slug is `deepseek`, not `z-ai`.
+            env.setdefault("STEERABLE_OPENROUTER_PROVIDER", "deepseek")
+            env.setdefault("STEERABLE_OPENROUTER_ALLOW_FALLBACKS", "0")
         env.setdefault(
             "STEERABLE_HTTP_REFERER",
             "https://github.com/pathlyapp/steerable-framework",
