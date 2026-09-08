@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -18,10 +19,11 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_BOT_PAT }}
 
       - name: Extract version and push tag
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="${{ github.event.pull_request.head.ref }}"
@@ -37,3 +39,6 @@ jobs:
           fi
           git tag "$TAG"
           git push origin "$TAG"
+          # A tag pushed by GITHUB_TOKEN does not trigger the tag-driven
+          # Release workflow (recursive-workflow protection), so dispatch it.
+          gh workflow run release.yml -f version="$VERSION"
