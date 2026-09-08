@@ -2,7 +2,9 @@
 
 ``SandboxedToolExecutor`` confines a shell call by *rewriting the command*
 into a sandboxed invocation — which requires a platform rewriter (Seatbelt
-on macOS, bwrap/landlock on Linux). Windows has no rewriter: real
+on macOS, bwrap/landlock on Linux).
+anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter)
+Windows has no rewriter: real
 confinement there is a restricted-token + JobObject spawn, and only the
 host can do that (``CreateProcessWithTokenW`` needs the privileged parent,
 not the sandboxed child). This executor is the no-rewriter route: the raw

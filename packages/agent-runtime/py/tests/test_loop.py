@@ -15,6 +15,7 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     ToolRouter,
 )
+from steerable_agent_runtime.hooks import CompletionAction, NoopHooks
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
 
 
@@ -460,3 +461,33 @@ async def test_stage_complete_emitted_after_tool_rounds() -> None:
     kinds = [e.kind for e in events]
     assert kinds.index("tool_call_result") < kinds.index("stage_complete")
     assert kinds.index("stage_complete") < kinds.index("completion")
+
+
+class _AlwaysRetryHooks(NoopHooks):
+    """before_completion vetoes every draft — the redo budget must bound it."""
+
+    async def before_completion(self, draft, ctx):
+        return CompletionAction(kind="retry", message="not good enough")
+
+
+@pytest.mark.asyncio
+async def test_before_completion_redo_budget_exhausted_disclosed() -> None:
+    """A hook vetoing every draft runs the redo budget out; the loop
+    discloses the exhaustion on the trace instead of silently accepting."""
+    provider = make_provider([{"content": "final answer"}])
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(max_rounds=100),
+        hooks=_AlwaysRetryHooks(),
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+
+    hook_events = [e for e in events if e.kind == "hook_action"]
+    retries = [e for e in hook_events if e.data["action"] == "retry"]
+    exhausted = [e for e in hook_events if e.data["action"] == "budget_exhausted"]
+    assert len(retries) == 32
+    assert len(exhausted) == 1
+    assert exhausted[0].data["hook"] == "before_completion"
+    assert "32" in exhausted[0].data["reason"]
+    assert final_completion(events)["status"] == "completed"

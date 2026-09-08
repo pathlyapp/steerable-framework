@@ -29,6 +29,24 @@ from .approval_policy import (
     PolicyApprover,
     rule_from_amendment,
 )
+from .ask_user import (
+    ASK_USER_SCHEMA,
+    ASK_USER_TOOL_NAME,
+    AskUserHandler,
+    make_ask_user_tool,
+)
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    ConfigError,
+    ResolvedConfig,
+    load_user_config,
+    resolve_config,
+)
+from .plugins import (
+    STEERABLE_TOOLS_ENTRY_POINT_GROUP,
+    PluginLoadError,
+    load_tool_entry_points,
+)
 from .branch import (
     BranchPoint,
     ForkResult,
@@ -39,6 +57,7 @@ from .branch import (
 )
 from .cache_control import (
     CacheControlProvider,
+    CacheDriftMonitor,
     CacheRetention,
     place_cache_breakpoints,
     system_blocks_with_cache,
@@ -195,6 +214,7 @@ from .subagent import (
     FilteredToolsExecutor,
     SubagentConfig,
     SubagentExecutor,
+    SubagentRegistry,
     subagent_tool_descriptor,
 )
 from .tokens import (
@@ -230,8 +250,13 @@ __all__ = [
     "REASONING_EFFORT_ORDER",
     "RECORD_FORMAT_VERSION",
     "TOOL_SEARCH_NAME",
+    "ASK_USER_SCHEMA",
+    "ASK_USER_TOOL_NAME",
+    "STEERABLE_TOOLS_ENTRY_POINT_GROUP",
     "AgentPool",
     "AntiHallucinationConfig",
+    "AskUserHandler",
+    "PluginLoadError",
     "AntiHallucinationHooks",
     "ApprovalAborted",
     "ApprovalDecision",
@@ -242,9 +267,13 @@ __all__ = [
     "ApprovalStore",
     "Approver",
     "AutoApprover",
+    "ConfigError",
+    "DEFAULT_CONFIG_PATH",
+    "ResolvedConfig",
     "BranchPoint",
     "BudgetExhaustedError",
     "CacheControlProvider",
+    "CacheDriftMonitor",
     "CacheRetention",
     "CalibratingProvider",
     "ChainHooks",
@@ -328,6 +357,7 @@ __all__ = [
     "StorageError",
     "SubagentConfig",
     "SubagentExecutor",
+    "SubagentRegistry",
     "TextPart",
     "ToolDispatchError",
     "ToolExecutor",
@@ -367,8 +397,12 @@ __all__ = [
     "last_world_state_snapshot",
     "lineage",
     "load_history_transcript",
+    "load_tool_entry_points",
+    "load_user_config",
+    "resolve_config",
     "load_recorded_requests",
     "load_transcript",
+    "make_ask_user_tool",
     "matches_conditions",
     "mcp_invoker",
     "merge_patch",

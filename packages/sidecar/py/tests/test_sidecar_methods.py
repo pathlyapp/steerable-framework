@@ -112,6 +112,27 @@ async def test_config_get_set_round_trip(sidecar: Sidecar) -> None:
     assert after["result"]["logLevel"] == "DEBUG"
 
 
+async def test_config_get_merged_previews_layered_config(
+    sidecar: Sidecar, tmp_path, monkeypatch
+) -> None:
+    """``config.get {merged:true}`` reports each key's value and source."""
+    import json as _json
+
+    from steerable_agent_runtime import config as config_mod
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({"log_level": "DEBUG"}), encoding="utf-8")
+    monkeypatch.setattr(config_mod, "DEFAULT_CONFIG_PATH", cfg)
+    monkeypatch.setenv("STEERABLE_GRACE_PERIOD_SECONDS", "9")
+
+    response = await _call(sidecar, "config.get", {"merged": True})
+    merged = response["result"]["merged"]
+    assert merged["log_level"] == {"value": "DEBUG", "source": "file"}
+    # Schema enforcement: env strings coerce to the declared default's type.
+    assert merged["grace_period_seconds"] == {"value": 9.0, "source": "env"}
+    assert merged["storage_path"]["source"] == "default"
+
+
 async def test_compat_describe_serves_the_framework_flag_vocabulary(
     sidecar: Sidecar,
 ) -> None:

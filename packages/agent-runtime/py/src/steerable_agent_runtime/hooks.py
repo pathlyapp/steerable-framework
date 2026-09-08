@@ -78,11 +78,18 @@ class RewriteRequest:
     itself only grows. ``action`` is the ``hook_action`` label
     (``"compact"``, ``"overflow_recovery"``, …) so traces attribute the
     boundary without guessing.
+
+    ``pre_tokens`` / ``post_tokens`` are the rewriter's token estimates
+    around the rewrite; the loop forwards them onto the recorded boundary
+    (CC ``compact_boundary`` parity) so traces chart compaction
+    effectiveness. ``None`` when the rewriter does not estimate.
     """
 
     messages: list[LLMMessage]
     reason: str
     action: str = "compact"
+    pre_tokens: int | None = None
+    post_tokens: int | None = None
 
 
 @dataclass(slots=True)

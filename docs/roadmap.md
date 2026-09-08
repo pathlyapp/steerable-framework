@@ -167,12 +167,16 @@ Staged fix:
    explicit host config. The sidecar's only legitimate egress is the LLM
    provider. Roughly 30 lines in the profile generator, and it breaks the
    exfiltration leg for the process holding the API key.
-2. **Subagent tool scoping (M).** `SubagentExecutor` dispatches the child
-   to the parent's own executor (`subagent.py:107` — all of the parent's
-   tools, or none). A read-only researcher subagent breaks the trifecta
-   by construction, but that requires the child to take its own executor
-   and tool advertisement. Today the seam has the delegation ergonomics
-   without the isolation guarantee, and the child gets no separate trace.
+2. **Subagent tool scoping (M) — landed.** `SubagentConfig.tool_filter`
+   narrows the child's tool domain with fail-closed `tool_not_delegated`
+   denials (`subagent.py` `FilteredToolsExecutor`), so a read-only
+   researcher subagent breaks the trifecta by construction. Named profiles
+   (`SubagentRegistry`) add CC `subagent_type` parity: per-profile tool
+   domains, round bounds, models (via the host's `provider_factory`), and
+   opt-in concurrency; the tool schema advertises the profile names as a
+   `subagent_type` enum and unknown names fail closed. Remaining gap: the
+   child gets no separate trace, and there is no host-level background
+   task system (CC `run_in_background`).
 3. **`SandboxedToolExecutor` port (L).** So tool execution can route
    through a real boundary: per-exec Seatbelt on the desktop, an
    E2B/Modal-style sandbox on the server. Model it on the OpenAI SDK's

@@ -161,6 +161,45 @@ class HostApprover:
             logger.warning("failed to persist approval amendment: %s", exc)
 
 
+class HostAskUserHandler:
+    """Answer ``ask_user`` over the reverse channel: the host UI renders the
+    question card and replies to ``ask_user.request`` with ``{"answers":
+    {id: value}}``.
+
+    Fails open to an empty mapping: an unreachable host or a malformed reply
+    records "no answer" so the loop moves on instead of hanging a turn on a
+    card nobody can see.
+    """
+
+    def __init__(
+        self,
+        server: JsonRpcServer,
+        *,
+        method: str = "ask_user.request",
+        timeout: float | None = None,
+    ) -> None:
+        self._server = server
+        self._method = method
+        self._timeout = timeout
+
+    async def __call__(
+        self, intro: str, questions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        try:
+            payload: Any = await self._server.call(
+                self._method,
+                {"intro": intro, "questions": questions},
+                timeout=self._timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 — no answer beats a hung turn
+            logger.warning("host ask_user request failed: %s", exc)
+            return {}
+        if isinstance(payload, dict) and isinstance(payload.get("answers"), dict):
+            return dict(payload["answers"])
+        logger.warning("host returned an invalid ask_user reply: %r", payload)
+        return {}
+
+
 _KNOWN_RESULT_KEYS = frozenset(ToolResult.model_fields)
 
 

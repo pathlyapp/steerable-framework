@@ -664,3 +664,173 @@ def test_workspace_router_omits_web_tools_when_declined(tmp_path) -> None:
         for t in workspace_tools_for_cwd(tmp_path, jailed=True).describe_model()
     }
     assert "web_fetch" in with_web
+
+
+# ─── domain policy + session caps ───────────────────────────────────────────
+
+
+def test_config_reads_domain_lists_and_session_caps() -> None:
+    cfg = WebToolsConfig.resolve(
+        {
+            "STEERABLE_WEB_ALLOWED_DOMAINS": "example.com, .docs.python.org ",
+            "STEERABLE_WEB_BLOCKED_DOMAINS": "evil.example.com",
+            "STEERABLE_WEB_SESSION_SEARCH_CAP": "5",
+            "STEERABLE_WEB_SESSION_FETCH_CAP": "3",
+        }
+    )
+    assert cfg.allowed_domains == ("example.com", "docs.python.org")
+    assert cfg.blocked_domains == ("evil.example.com",)
+    assert cfg.session_search_cap == 5
+    assert cfg.session_fetch_cap == 3
+
+
+async def test_fetch_refuses_a_blocked_domain_before_any_network() -> None:
+    requests: list[httpx.Request] = []
+    router = _make_router(
+        requests=requests,
+        dns={"evil.example.com": ["93.184.216.34"]},
+        config=WebToolsConfig(blocked_domains=("evil.example.com",)),
+    )
+    result = await _call(router, "web_fetch", {"url": "https://evil.example.com/x"})
+    assert result.success is False
+    assert "blocked-domains" in result.error
+    assert requests == []  # refused before DNS/HTTP
+
+
+async def test_fetch_refuses_a_host_outside_the_allow_list() -> None:
+    router = _make_router(
+        dns=_PUBLIC_DNS,
+        config=WebToolsConfig(allowed_domains=("docs.python.org",)),
+    )
+    result = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert result.success is False
+    assert "allowed-domains" in result.error
+
+
+async def test_fetch_allow_list_covers_subdomains_and_blocked_wins() -> None:
+    dns = {
+        "docs.example.com": ["93.184.216.34"],
+        "evil.example.com": ["93.184.216.34"],
+    }
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
+    )
+    router = _make_router(
+        handler=transport,
+        dns=dns,
+        config=WebToolsConfig(
+            allowed_domains=("example.com",),
+            blocked_domains=("evil.example.com",),
+        ),
+    )
+    ok = await _call(router, "web_fetch", {"url": "https://docs.example.com/"})
+    assert ok.success is True
+    denied = await _call(router, "web_fetch", {"url": "https://evil.example.com/"})
+    assert denied.success is False
+    assert "blocked-domains" in denied.error
+
+
+async def test_search_filters_hits_post_hoc_by_domain_policy() -> None:
+    provider = _FakeSearchProvider(
+        hits=[
+            WebSearchHit(title="good", url="https://docs.example.com/a", snippet="s"),
+            WebSearchHit(title="bad", url="https://other.org/b", snippet="s"),
+        ]
+    )
+    router = _make_router(
+        dns=_PUBLIC_DNS,
+        config=WebToolsConfig(allowed_domains=("example.com",)),
+        search_provider=provider,
+    )
+    result = await _call(router, "web_search", {"query": "q"})
+    assert result.success is True
+    urls = [r["url"] for r in result.data["results"]]
+    assert urls == ["https://docs.example.com/a"]
+    assert result.data["result_count"] == 1
+
+
+async def test_search_session_cap_blocks_after_limit() -> None:
+    provider = _FakeSearchProvider()
+    router = _make_router(
+        dns=_PUBLIC_DNS,
+        config=WebToolsConfig(session_search_cap=2),
+        search_provider=provider,
+    )
+    for _ in range(2):
+        ok = await _call(router, "web_search", {"query": "q"})
+        assert ok.success is True
+    third = await _call(router, "web_search", {"query": "q"})
+    assert third.success is False
+    assert "session limit reached" in third.error
+    assert "2 calls" in third.error
+    assert len(provider.calls) == 2  # the capped call never hit the backend
+
+
+async def test_fetch_session_cap_zero_means_unlimited() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
+    )
+    router = _make_router(
+        handler=transport,
+        dns=_PUBLIC_DNS,
+        config=WebToolsConfig(session_fetch_cap=0),
+    )
+    for _ in range(3):
+        result = await _call(router, "web_fetch", {"url": "https://example.com/"})
+        assert result.success is True
+
+
+async def test_fetch_session_cap_blocks_after_limit() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, text="ok", headers={"content-type": "text/plain"})
+    )
+    router = _make_router(
+        handler=transport,
+        dns=_PUBLIC_DNS,
+        config=WebToolsConfig(session_fetch_cap=1),
+    )
+    first = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert first.success is True
+    second = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert second.success is False
+    assert "session limit reached" in second.error
+
+
+async def test_tavily_passes_domain_lists_natively() -> None:
+    requests: list[httpx.Request] = []
+
+    def recording(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    provider = TavilySearchProvider(
+        api_key="k",
+        allowed_domains=("example.com",),
+        blocked_domains=("evil.example.com",),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(recording)),
+    )
+    await provider.search("q", max_results=5)
+    import json as _json
+
+    body = _json.loads(requests[0].content)
+    assert body["include_domains"] == ["example.com"]
+    assert body["exclude_domains"] == ["evil.example.com"]
+
+
+async def test_tavily_omits_domain_keys_when_unconfigured() -> None:
+    requests: list[httpx.Request] = []
+
+    def recording(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    provider = TavilySearchProvider(
+        api_key="k",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(recording)),
+    )
+    await provider.search("q", max_results=5)
+    import json as _json
+
+    body = _json.loads(requests[0].content)
+    assert "include_domains" not in body
+    assert "exclude_domains" not in body

@@ -501,3 +501,223 @@ async def test_write_file_refuses_shrinking_large_file(tmp_path: Path) -> None:
         router, "write_file", {"path": "sample.csv", "content": big + "extra\n"}
     )
     assert grown.success is True
+
+
+# ── read-before-write state (CC readFileState / seed_read_state parity) ──
+
+
+@pytest.mark.asyncio
+async def test_read_file_state_tracks_reads_and_writes(tmp_path: Path) -> None:
+    state: dict[str, str] = {}
+    router = workspace_tools_for_cwd(tmp_path, read_file_state=state)
+    written = await _call(router, "write_file", {"path": "a.txt", "content": "v1"})
+    assert written.success is True
+    # Our own write records the fresh version.
+    assert state[str(tmp_path / "a.txt")] == written.data["version"]
+    read = await _call(router, "read_file", {"path": "a.txt"})
+    assert read.success is True
+    assert state[str(tmp_path / "a.txt")] == read.data["version"]
+
+
+@pytest.mark.asyncio
+async def test_auto_cas_rejects_write_after_external_modification(
+    tmp_path: Path,
+) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    await _call(router, "write_file", {"path": "a.txt", "content": "v1"})
+    await _call(router, "read_file", {"path": "a.txt"})
+    # Modified outside the session — the tracked version is now stale.
+    (tmp_path / "a.txt").write_text("changed outside", encoding="utf-8")
+    rejected = await _call(router, "write_file", {"path": "a.txt", "content": "v2"})
+    assert rejected.success is False
+    assert "冲突" in rejected.error
+    # Re-reading refreshes the state; the retry passes.
+    await _call(router, "read_file", {"path": "a.txt"})
+    ok = await _call(router, "write_file", {"path": "a.txt", "content": "v2"})
+    assert ok.success is True
+
+
+@pytest.mark.asyncio
+async def test_auto_cas_allows_sequential_writes_after_own_write(
+    tmp_path: Path,
+) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    await _call(router, "write_file", {"path": "a.txt", "content": "v1"})
+    second = await _call(router, "write_file", {"path": "a.txt", "content": "v2"})
+    assert second.success is True
+
+
+@pytest.mark.asyncio
+async def test_auto_cas_edit_file_rejects_stale_edit(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    await _call(router, "write_file", {"path": "a.txt", "content": "hello world"})
+    (tmp_path / "a.txt").write_text("hello there world", encoding="utf-8")
+    rejected = await _call(
+        router,
+        "edit_file",
+        {"path": "a.txt", "edits": [{"oldText": "world", "newText": "moon"}]},
+    )
+    assert rejected.success is False
+    assert "冲突" in rejected.error
+
+
+@pytest.mark.asyncio
+async def test_new_file_creation_never_gated(tmp_path: Path) -> None:
+    router = workspace_tools_for_cwd(tmp_path)
+    created = await _call(router, "write_file", {"path": "new.txt", "content": "x"})
+    assert created.success is True
+
+
+@pytest.mark.asyncio
+async def test_require_read_before_write_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Default-ON (CC parity): no env needed. An existing unread file rejects
+    # overwrite; new files create freely; a read clears the gate.
+    monkeypatch.delenv("STEERABLE_REQUIRE_READ_BEFORE_WRITE", raising=False)
+    (tmp_path / "existing.txt").write_text("old", encoding="utf-8")
+    router = workspace_tools_for_cwd(tmp_path)
+    blocked = await _call(
+        router, "write_file", {"path": "existing.txt", "content": "new"}
+    )
+    assert blocked.success is False
+    assert "尚未读过" in blocked.error
+    # New files still create freely.
+    created = await _call(router, "write_file", {"path": "fresh.txt", "content": "x"})
+    assert created.success is True
+    # After a read the write passes.
+    await _call(router, "read_file", {"path": "existing.txt"})
+    ok = await _call(router, "write_file", {"path": "existing.txt", "content": "new"})
+    assert ok.success is True
+    # edit_file is gated the same way on an unread existing file.
+    (tmp_path / "other.txt").write_text("old", encoding="utf-8")
+    blocked_edit = await _call(
+        router,
+        "edit_file",
+        {"path": "other.txt", "edits": [{"oldText": "old", "newText": "new"}]},
+    )
+    assert blocked_edit.success is False
+    assert "尚未读过" in blocked_edit.error
+
+
+@pytest.mark.asyncio
+async def test_require_read_before_write_opt_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("STEERABLE_REQUIRE_READ_BEFORE_WRITE", "0")
+    (tmp_path / "existing.txt").write_text("old", encoding="utf-8")
+    router = workspace_tools_for_cwd(tmp_path)
+    ok = await _call(router, "write_file", {"path": "existing.txt", "content": "new"})
+    assert ok.success is True
+
+
+@pytest.mark.asyncio
+async def test_partial_view_rejects_full_overwrite_but_allows_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file larger than the display clip is read partially: the model never
+    # saw the tail, so a blind full overwrite is rejected (CC isPartialView
+    # parity) while a CAS-checked targeted edit stays allowed.
+    monkeypatch.delenv("STEERABLE_REQUIRE_READ_BEFORE_WRITE", raising=False)
+    from steerable_sidecar.workspace_tools import _MAX_OUTPUT
+
+    big = "line\n" * (_MAX_OUTPUT // 5 + 1000)
+    (tmp_path / "big.txt").write_text(big, encoding="utf-8")
+    router = workspace_tools_for_cwd(tmp_path)
+
+    read = await _call(router, "read_file", {"path": "big.txt"})
+    assert read.success is True
+    assert read.data["partial"] is True
+    assert len(read.data["content"]) < len(big)
+
+    blocked = await _call(router, "write_file", {"path": "big.txt", "content": "new"})
+    assert blocked.success is False
+    assert "只读到部分内容" in blocked.error
+
+    edited = await _call(
+        router,
+        "edit_file",
+        {"path": "big.txt", "edits": [{"oldText": "line\n", "newText": "LINE\n"}]},
+    )
+    assert edited.success is True
+
+    # A small file reads in full (partial: false) and overwrites freely.
+    (tmp_path / "small.txt").write_text("small", encoding="utf-8")
+    read_small = await _call(router, "read_file", {"path": "small.txt"})
+    assert read_small.data["partial"] is False
+    ok = await _call(router, "write_file", {"path": "small.txt", "content": "new"})
+    assert ok.success is True
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_updates_read_state(tmp_path: Path) -> None:
+    state: dict[str, str] = {}
+    router = workspace_tools_for_cwd(tmp_path, read_file_state=state)
+    await _call(router, "write_file", {"path": "a.txt", "content": "hello world"})
+    patched = await _call(
+        router,
+        "apply_patch",
+        {
+            "patches": [
+                {"path": "a.txt", "edits": [{"oldText": "world", "newText": "moon"}]}
+            ]
+        },
+    )
+    assert patched.success is True
+    assert patched.data["versions"] == {
+        str(tmp_path / "a.txt"): state[str(tmp_path / "a.txt")]
+    }
+    # A later write auto-CASes against the post-patch version, not the stale
+    # pre-patch one.
+    ok = await _call(router, "write_file", {"path": "a.txt", "content": "final"})
+    assert ok.success is True
+
+
+def test_read_file_state_from_messages() -> None:
+    import json as _json
+
+    from steerable_agent_runtime.llm import LLMMessage
+
+    from steerable_sidecar.workspace_tools import read_file_state_from_messages
+
+    messages = [
+        LLMMessage.text_of("user", "go"),
+        LLMMessage.text_of(
+            "tool",
+            _json.dumps(
+                {
+                    "success": True,
+                    "data": {"path": "/w/a.txt", "version": "v1", "content": "…"},
+                }
+            ),
+            name="read_file",
+        ),
+        # A later write supersedes the read's version.
+        LLMMessage.text_of(
+            "tool",
+            _json.dumps(
+                {"success": True, "data": {"path": "/w/a.txt", "version": "v2"}}
+            ),
+            name="write_file",
+        ),
+        LLMMessage.text_of(
+            "tool",
+            _json.dumps(
+                {
+                    "success": True,
+                    "data": {
+                        "filesChanged": ["b.txt"],
+                        "versions": {"/w/b.txt": "v3"},
+                    },
+                }
+            ),
+            name="apply_patch",
+        ),
+        # Spilled/folded bodies and non-file tools are skipped.
+        LLMMessage.text_of("tool", "spilled pointer, not json", name="read_file"),
+        LLMMessage.text_of(
+            "tool", _json.dumps({"success": True, "data": {"value": 1}}), name="bash"
+        ),
+    ]
+    state = read_file_state_from_messages(messages)
+    assert state == {"/w/a.txt": "v2", "/w/b.txt": "v3"}

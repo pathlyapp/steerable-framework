@@ -64,6 +64,7 @@ from steerable_agent_runtime import (
     JsonApprovalStore,
     LoopConfig,
     LoopHooks,
+    McpStdioClient,
     OrchestrationConfig,
     OrchestrationExecutor,
     PolicyDeniedError,
@@ -96,6 +97,8 @@ from steerable_agent_runtime import (
     skill_to_dict,
     skill_tool_descriptor,
     subagent_tool_descriptor,
+    mcp_invoker,
+    register_mcp_catalog,
 )
 from steerable_agent_runtime.llm import (
     ContentPart,
@@ -114,7 +117,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 )
 
 from .file_edit import EditError, EditOp, apply_edits
-from .host_tools import HostApprover, HostToolExecutor
+from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
 from .loop_limits import resolve_loop_limits
 from .sandbox import select_exec_backend
 
@@ -402,6 +405,45 @@ class Sidecar:
             )
         return session.model_dump(exclude_none=True)
 
+    async def _seed_host_read_state(self, record_id: str) -> None:
+        """Push the record's read-before-write evidence to the host.
+
+        Best-effort: a failed scan or push leaves the host's readFileState
+        empty, which only means fewer automatic CAS checks (or, with the
+        hard gate armed, a required re-read) — never a wrong write.
+        """
+        from steerable_agent_runtime.history import (
+            HistoryItem,
+            HistorySeed,
+            entry_from_dict,
+        )
+
+        from .workspace_tools import read_file_state_from_messages
+
+        try:
+            raw_entries = await self.storage.list_history(record_id)
+        except Exception as exc:  # noqa: BLE001 — seeding is best-effort
+            logger.warning("read_state seed scan failed for %s: %s", record_id, exc)
+            return
+        messages: list[LLMMessage] = []
+        for raw in raw_entries:
+            try:
+                entry = entry_from_dict(raw)
+            except Exception as exc:  # noqa: BLE001 — skip entries this build cannot read
+                logger.debug("skipping unreadable history entry: %s", exc)
+                continue
+            if isinstance(entry, HistoryItem):
+                messages.append(entry.message)
+            elif isinstance(entry, HistorySeed):
+                messages.extend(entry.messages)
+        state = read_file_state_from_messages(messages)
+        if not state:
+            return
+        try:
+            await self.server.call("read_state.seed", {"state": state}, timeout=10)
+        except Exception as exc:  # noqa: BLE001 — best-effort; see docstring
+            logger.warning("read_state.seed push failed for %s: %s", record_id, exc)
+
     async def _handle_session_list(
         self, params: dict[str, Any] | None
     ) -> list[dict[str, Any]]:
@@ -598,14 +640,30 @@ class Sidecar:
         return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
 
     async def _handle_config_get(
-        self, _params: dict[str, Any] | None
+        self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
-        return {
+        base = {
             "logLevel": self.config.log_level,
             "gracePeriodSeconds": self.config.grace_period_seconds,
             "version": SIDECAR_VERSION,
             "protocolVersion": PROTOCOL_VERSION,
         }
+        # ``{"merged": true}`` previews the layered user config (default →
+        # ~/.steerable/config.json → STEERABLE_* env), reporting each key's
+        # value and where it came from — the ``--dump-config`` counterpart.
+        # A malformed user file fails loud instead of serving stale defaults.
+        if isinstance(params, dict) and params.get("merged"):
+            from steerable_agent_runtime import resolve_config
+
+            resolved = resolve_config(
+                {
+                    "log_level": self.config.log_level,
+                    "grace_period_seconds": self.config.grace_period_seconds,
+                    "storage_path": self.config.storage_path,
+                }
+            )
+            base["merged"] = resolved.describe()
+        return base
 
     async def _handle_config_set(self, params: dict[str, Any] | None) -> None:
         params = _require_params(params)
@@ -730,6 +788,13 @@ class Sidecar:
             # records free of dangling tool_calls, but the record is a
             # durable artifact other writers/versions may have produced.
             messages = close_dangling_tool_calls(resumed)
+            # seed_read_state (CC parity): under toolsViaHost the desktop's
+            # file tools own the write gate, but their readFileState is
+            # process-resident and empty after an app restart. Re-seed it
+            # from the record so the resumed session keeps its
+            # read-before-write evidence.
+            if params.get("toolsViaHost"):
+                await self._seed_host_read_state(str(record_id))
             # The host re-sends its freshly assembled systemPrompt on every
             # turn; the record's leading system message (written by the
             # interrupted turn) must yield to it or the mutual-exclusion
@@ -784,9 +849,22 @@ class Sidecar:
                 code=-32602,
                 kind="invalid_params",
             )
+        # Validate the mcp param up front (foreground, so a malformed entry
+        # fails the request with a clean invalid_params rather than surfacing
+        # as an unretrieved exception inside the background stream task).
+        # Spawning/registration happens in _run_chat_stream_coreloop.
+        mcp_param = params.get("mcp")
+        if isinstance(mcp_param, list):
+            for index, server in enumerate(mcp_param):
+                if not isinstance(server, dict) or not server.get("command"):
+                    raise JsonRpcError(
+                        f"mcp[{index}] requires a non-empty 'command'",
+                        code=-32602,
+                        kind="invalid_params",
+                    )
         if use_coreloop:
             task = asyncio.create_task(
-                self._run_chat_stream_coreloop(
+                self._run_chat_stream_coreloop_guarded(
                     provider, messages, params, stream_id, transport
                 )
             )
@@ -927,7 +1005,9 @@ class Sidecar:
 
         transport = self._transport
         task = asyncio.create_task(
-            self._run_chat_stream_coreloop(provider, seed, params, stream_id, transport)
+            self._run_chat_stream_coreloop_guarded(
+                provider, seed, params, stream_id, transport
+            )
         )
         self._streams[stream_id] = task
         return {"streamId": stream_id, "seedMessages": len(seed)}
@@ -1167,6 +1247,42 @@ class Sidecar:
         finally:
             self._streams.pop(stream_id, None)
 
+    async def _run_chat_stream_coreloop_guarded(
+        self,
+        provider: LLMProvider,
+        messages: list[LLMMessage],
+        params: dict[str, Any],
+        stream_id: str,
+        transport: StdioJsonRpcTransport,
+    ) -> None:
+        """Catch setup-phase failures the inner catch-all cannot reach.
+
+        ``_run_chat_stream_coreloop`` only starts converting exceptions into
+        ``stream.error`` once its ``try`` begins — a failure in the setup
+        region before it (tool registration, MCP client spawn, executor
+        wiring) would otherwise escape as an unretrieved task exception and
+        strand the host waiting for a terminal event that never comes.
+        """
+        try:
+            await self._run_chat_stream_coreloop(
+                provider, messages, params, stream_id, transport
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # last line before a stranded host
+            logger.exception("coreloop chat stream %s failed during setup", stream_id)
+            try:
+                await transport.emit_notification(
+                    "stream.error",
+                    {
+                        "streamId": stream_id,
+                        "kind": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
+                )
+            except Exception:  # noqa: BLE001 — transport already broken
+                logger.warning("stream.error emit failed for %s", stream_id)
+
     async def _run_chat_stream_coreloop(
         self,
         provider: LLMProvider,
@@ -1187,7 +1303,53 @@ class Sidecar:
         draft, and a tool call discards that request's narration. Only the
         terminal tool-free response reaches the host; the durable record and
         trace still retain every intermediate assistant turn.
+
+        ``mcp`` mounts per-turn MCP servers on the sidecar-local path:
+        ``[{"name", "command", "args"?, "env"?}]`` spawns one
+        ``McpStdioClient`` per entry, registers its catalog under the
+        ``mcp__<name>__<tool>`` prefix on this turn's router, and closes the
+        clients when the stream ends (completion, error, or cancel). It is
+        the sidecar-local counterpart of the ACP adapter's ``mcpServers``
+        wiring (``acp_adapter``); over ``toolsViaHost`` the host owns tool
+        execution, so MCP mounting is a desktop concern instead.
         """
+
+        # mcp: per-turn MCP servers on the sidecar-local path. Each entry
+        # spawns one McpStdioClient; its catalog is registered on this turn's
+        # router under the ``mcp__<name>__<tool>`` prefix. Clients are closed
+        # in this method's ``finally`` so a completion, error, or cancel never
+        # leaks a subprocess. Skipped under toolsViaHost (the host owns
+        # execution there) and when an embedder replaces the whole harness
+        # (the hooks factory owns the tool surface).
+        mcp_clients: list[McpStdioClient] = []
+        mcp_param = params.get("mcp")
+        if (
+            isinstance(mcp_param, list)
+            and mcp_param
+            and not params.get("toolsViaHost")
+            and self._loop_hooks_factory is None
+        ):
+            # Entries were shape-validated in _handle_chat_stream.
+            for index, server in enumerate(mcp_param):
+                name = str(server.get("name") or f"mcp{index}")
+                client = McpStdioClient(
+                    str(server["command"]),
+                    [str(a) for a in server.get("args") or []],
+                    env={
+                        str(k): str(v)
+                        for k, v in (server.get("env") or {}).items()
+                    }
+                    or None,
+                )
+                await client.start()
+                mcp_clients.append(client)
+                catalog = await client.list_tools()
+                register_mcp_catalog(
+                    self.tools,
+                    server=name,
+                    tools=catalog,
+                    invoker=mcp_invoker(client),
+                )
 
         if self._loop_hooks_factory is not None:
             # An embedder-supplied hooks factory replaces the whole default
@@ -1467,17 +1629,63 @@ class Sidecar:
                 *(tools or []),
                 *orchestration_tool_descriptors(orch_config),
             ]
+        # Router-answered tools (run_code, ask_user): registered on the
+        # sidecar's router but unknown to the host — under toolsViaHost the
+        # inner executor forwards every call to the host, so they must be
+        # intercepted here and dispatched locally regardless of which subset
+        # is enabled.
+        local_names: list[str] = []
         if self.tools.get("run_code") is not None:
-            from .run_code import RunCodeBoundExecutor, run_code_tool_descriptor
+            from .run_code import run_code_tool_descriptor
 
-            # Pass the router so run_code is answered locally — under
-            # toolsViaHost the inner executor forwards to the host, which has
-            # no run_code (it is a sidecar tool).
-            executor = RunCodeBoundExecutor(executor, router=self.tools)
+            local_names.append("run_code")
             # Advertise the tool to the model: registration on the router only
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # askUser: opt-in structured user questions (W8). The host renders the
+        # question card and answers over the reverse channel
+        # (``ask_user.request``); the tool blocks until the reply. Registered
+        # on the router so dispatch works on both the host path (toolsViaHost)
+        # and the sidecar-local path — the handler is host-routed either way.
+        if params.get("askUser"):
+            from steerable_agent_runtime import make_ask_user_tool
+
+            ask_fn = make_ask_user_tool(HostAskUserHandler(self.server))
+            meta = ask_fn.__steerable_tool_meta__
+            # Registration is process-global while this block runs per
+            # request: the router rejects duplicates, so only the first
+            # askUser turn registers (the handler binds self.server, which
+            # is request-independent — re-registering would be identical).
+            if self.tools.get(meta["name"]) is None:
+                self.tools.register(
+                    ask_fn,
+                    name=meta["name"],
+                    mode=meta["mode"],
+                    description=meta["description"],
+                    schema=meta["schema"],
+                    require_consent=meta["require_consent"],
+                    concurrency_safe=meta["concurrency_safe"],
+                    exposure=meta["exposure"],
+                )
+            local_names.append(meta["name"])
+            tools = [
+                *(tools or []),
+                {
+                    "type": "function",
+                    "function": {
+                        "name": meta["name"],
+                        "description": meta["description"],
+                        "parameters": meta["schema"],
+                    },
+                },
+            ]
+        if local_names:
+            from .run_code import RunCodeBoundExecutor
+
+            executor = RunCodeBoundExecutor(
+                executor, router=self.tools, local_names=local_names
+            )
         loop = CoreLoop(
             provider,
             executor,
@@ -1557,6 +1765,10 @@ class Sidecar:
             )
         finally:
             self._coreloops.pop(stream_id, None)
+            for client in mcp_clients:
+                # Close every per-turn MCP client (completion, error, or
+                # cancel) so no server subprocess outlives its stream.
+                await client.aclose()
             if orchestration is not None:
                 # Wind down any children still running when the parent ends
                 # (completion, error, or cancel) — cooperative first.
@@ -2397,6 +2609,9 @@ def _wrap_with_cache_control(provider: LLMProvider) -> LLMProvider:
     implicit prefix caches (OpenAI-compatible, Ollama) the wrapper is a
     pass-through. ``STEERABLE_CACHE_CONTROL=0`` disables it (a debugging
     escape hatch, e.g. diffing wire bytes against a recorded fixture).
+    ``STEERABLE_PROMPT_CACHE_TTL=1h`` opts the breakpoints into Anthropic's
+    1-hour TTL (CC ``CLAUDE_CODE_PROMPT_CACHE_TTL`` parity); anything else
+    keeps the 5-minute default.
     """
 
     flag = os.environ.get("STEERABLE_CACHE_CONTROL", "1").strip().lower()
@@ -2404,4 +2619,6 @@ def _wrap_with_cache_control(provider: LLMProvider) -> LLMProvider:
         return provider
     from steerable_agent_runtime import CacheControlProvider
 
-    return CacheControlProvider(provider)
+    ttl = os.environ.get("STEERABLE_PROMPT_CACHE_TTL", "").strip().lower()
+    retention = "long" if ttl in {"1h", "3600", "3600s", "long"} else "short"
+    return CacheControlProvider(provider, retention=retention)

@@ -1100,6 +1100,8 @@ class CoreLoop:
                     pre.rewrite.messages,
                     reason=pre.rewrite.reason,
                     action=pre.rewrite.action,
+                    pre_tokens=pre.rewrite.pre_tokens,
+                    post_tokens=pre.rewrite.post_tokens,
                 )
                 yield LoopEvent(
                     "hook_action",
@@ -1108,6 +1110,8 @@ class CoreLoop:
                         "action": pre.rewrite.action,
                         "reason": pre.rewrite.reason,
                         "round": round_index,
+                        "pre_tokens": pre.rewrite.pre_tokens,
+                        "post_tokens": pre.rewrite.post_tokens,
                     },
                 )
             if pre.appends:
@@ -1379,6 +1383,8 @@ class CoreLoop:
                                 action.rewrite.messages,
                                 reason=action.rewrite.reason,
                                 action=action.rewrite.action,
+                                pre_tokens=action.rewrite.pre_tokens,
+                                post_tokens=action.rewrite.post_tokens,
                             )
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)
@@ -1538,17 +1544,32 @@ class CoreLoop:
                 # a text-only stop while extra act rounds remain (regex-chess
                 # summarized instead of writing /app/re.json). An empty
                 # wrap-up still gets one bounded second chance.
-                if (
-                    completion_redos < _MAX_COMPLETION_REDOS
-                    and (
-                        not wrap_up
-                        or not content.strip()
-                        or (
-                            self._config.wrap_up_keeps_tools
-                            and not withholding_tools()
-                        )
+                hook_eligible = (
+                    not wrap_up
+                    or not content.strip()
+                    or (
+                        self._config.wrap_up_keeps_tools
+                        and not withholding_tools()
                     )
-                ):
+                )
+                if hook_eligible and completion_redos >= _MAX_COMPLETION_REDOS:
+                    # The veto budget is spent: the draft is accepted without
+                    # one more before_completion consult. Disclose that to the
+                    # hook author — silent acceptance is undebuggable (CC
+                    # parity: preventContinuation discloses the block cap).
+                    yield LoopEvent(
+                        "hook_action",
+                        {
+                            "hook": "before_completion",
+                            "action": "budget_exhausted",
+                            "reason": (
+                                f"completion redo budget ({_MAX_COMPLETION_REDOS}) "
+                                "exhausted; accepting draft"
+                            ),
+                            "round": round_index,
+                        },
+                    )
+                if completion_redos < _MAX_COMPLETION_REDOS and hook_eligible:
                     action = await self._hooks.before_completion(
                         CompletionDraft(
                             status=decision.status,
