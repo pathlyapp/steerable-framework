@@ -88,6 +88,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `trace.export`          | request   | `{status, traceId, privacyMode}` (OTLP/HTTP push) |
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
+| `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` |
 
 `config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → selected profile → `STEERABLE_*` env → per-request RPC override → managed file — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud. The defaults dict doubles as the schema: a value whose type doesn't match the declared default fails the load naming the key, the layer, and the expected type (env strings coerce). The user file may carry named `profiles` blocks, selected by `STEERABLE_PROFILE`; an unknown profile name fails loud listing the available ones. `STEERABLE_MANAGED_CONFIG_PATH` points at an enterprise-managed file applied after every other layer, so its pins (e.g. a restrictive sandbox posture) cannot be loosened from below — CC managed-settings parity.
 
@@ -194,6 +195,38 @@ preset a given `(baseUrl, model)` pair would auto-match (`null` when none)
 so the UI can preview what applies without reimplementing the matching
 rules. `OpenAICompatProvider(preset=...)` accepts the same three states
 (`"auto"` / `"off"` / a `ProviderPreset`) for in-process embedders.
+
+`models.list` serves the gateway's live model catalog to host model
+pickers. The sidecar fetches `GET {baseUrl}/models` (params or
+`STEERABLE_BASE_URL`/`STEERABLE_API_KEY` env) and tolerates both listing
+shapes in the wild (OpenAI-style `data` array, models.dev-style `models`
+map) and their field variants for window / max-output / pricing. Each id
+is joined with the bundled models.dev catalog by exact cross-provider
+final-segment match (endpoint modifiers like OpenRouter's `:free` /
+`:batch` suffixes are stripped first — they change pricing, never
+capabilities), and capability fields come from `resolve_model_info`
+itself — the same resolution the request path's
+`clamp_reasoning_effort` uses, hand-owned legacy union included — so the
+picker and the wire never disagree
+about a model's reasoning knob. A successful fetch is installed into
+the runtime's resolution path, so window budgeting sees gateway-advertised
+windows. The catalog is discovery, not a routing whitelist: a host may
+send an unlisted id, and a listed id with no catalog match is returned
+with `capabilities: "unknown"` rather than dropped. `catalogStatus` is
+`live` (just fetched), `stale` (refresh failed, previous listing served
+from the 60s TTL cache), or `offline` (no listing at all; a 200 with an
+`error` string, not an RPC error — an unreachable gateway must not break
+the settings screen).
+
+Reasoning effort is strict on the request path. `agent.chat.stream`
+accepts `reasoningEffort` (per-request, wins over
+`STEERABLE_REASONING_EFFORT` and the preset default); any explicit request
+is validated against the resolved catalog entry at provider construction,
+and an unsupportable level — unknown model, no reasoning knob, unsupported
+or misspelled level — fails as an `invalid_params` RPC error instead of
+being silently dropped from the wire body (EVALS 2.5.22). A vendor whose
+compat flags reject the field outright (Moonshot thinking) still drops it
+silently — the gate runs before validation.
 
 `agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
 down at the next safe point (round boundary, stream chunk, or tool-call

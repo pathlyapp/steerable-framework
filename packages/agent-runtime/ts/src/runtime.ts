@@ -101,6 +101,91 @@ export interface HarnessDescription {
   default: Record<string, HarnessImplDescriptor[] | HarnessImplDescriptor>;
 }
 
+/** One model id the configured gateway accepts (`models.list`), joined
+ * with the bundled models.dev capability catalog by the same resolution
+ * the request path's reasoning-effort clamp uses. `joinedFrom` keeps the
+ * leaf-join provenance; `capabilities: 'unknown'` means no catalog tier
+ * matched, so reasoning levels are unavailable rather than empty. */
+export interface GatewayModelEntry {
+  id: string;
+  name: string | null;
+  window: number | null;
+  modalities: string[];
+  reasoningLevels: string[];
+  pricing: {
+    promptPerMtok: number | null;
+    completionPerMtok: number | null;
+  } | null;
+  joinedFrom: string | null;
+  capabilities: 'known' | 'unknown';
+}
+
+/** The `models.list` payload. `catalogStatus` is `live` when the listing
+ * was just fetched from the gateway, `stale` when served from cache after
+ * a refresh failure, and `offline` when the gateway is unreachable with no
+ * cache (then `models` is empty and `error` carries the cause). Discovery
+ * only — the catalog is not a routing whitelist. */
+export interface GatewayModelCatalog {
+  models: GatewayModelEntry[];
+  catalogStatus: 'live' | 'stale' | 'offline';
+  error?: string;
+  fetchedAt?: number;
+  /** Absent on the offline path (no gateway/env context to report). */
+  current?: { model: string | null; reasoningEffort: string | null };
+}
+
+/**
+ * One built-in provider preset as served by `presets.describe`: the match
+ * rule (`host` + `modelPrefix`) plus the parameter patch it applies. Host
+ * settings UIs render their preset picker from this list.
+ */
+export interface ProviderPresetDescriptor {
+  host: string;
+  modelPrefix: string;
+  temperature: number | null;
+  topP: number | null;
+  maxTokens: number | null;
+  reasoningEffort: string | null;
+  extraBody: Record<string, unknown> | null;
+}
+
+/** The resolved parameter patch from `presets.resolve` (`None` fields omitted). */
+export interface ProviderPreset {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  reasoningEffort?: string;
+  extraBody?: Record<string, unknown>;
+}
+
+/** One plugin record as served by the `plugin.*` lifecycle RPCs. */
+export interface PluginRecord {
+  name: string;
+  origin: string;
+  tools: string[];
+  enabled: boolean;
+  reloadable: boolean;
+}
+
+/** Recursive node of the `agent.session.tree` branch-family view. */
+export interface SessionTreeNode {
+  recordId: string;
+  sourceRecordId: string | null;
+  sourceUntilSeq: number | null;
+  label: string | null;
+  depth: number;
+  children: SessionTreeNode[];
+}
+
+/** The `agent.session.tree` payload; `truncated` marks a family cut by the
+ * depth/node bounds documented on the Python handler. */
+export interface SessionTreeResult {
+  recordId: string;
+  tree: SessionTreeNode;
+  nodeCount: number;
+  truncated: boolean;
+}
+
 export type ChatStreamStatus =
   | 'completed'
   | 'cancelled'
@@ -513,6 +598,74 @@ export class AgentRuntime {
    */
   describeHarness(): Promise<HarnessDescription> {
     return this.process.request('harness.describe');
+  }
+
+  /**
+   * The gateway's live model catalog (`models.list`): the ids the
+   * configured `STEERABLE_BASE_URL` actually accepts, joined with
+   * models.dev capabilities — reasoning levels included — by the same
+   * resolution the request path's clamp uses, so a picker and the wire
+   * never disagree about a model's knob. Host model pickers render from
+   * this payload and badge the `stale`/`offline` states.
+   */
+  listModels(params?: {
+    baseUrl?: string;
+    apiKey?: string;
+  }): Promise<GatewayModelCatalog> {
+    return this.process.request('models.list', params);
+  }
+
+  // ---- plugins / presets / session tree --------------------------------
+
+  /** Every plugin the sidecar registry knows, with lifecycle state. */
+  listPlugins(): Promise<{ plugins: PluginRecord[] }> {
+    return this.process.request('plugin.list');
+  }
+
+  /** Enable a registered plugin; rejects invalid_params on unknown names. */
+  enablePlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.enable', { name });
+  }
+
+  /** Disable a plugin without unloading its code. */
+  disablePlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.disable', { name });
+  }
+
+  /** Hot-reload a reloadable plugin from its source. */
+  reloadPlugin(name: string): Promise<{ plugin: PluginRecord }> {
+    return this.process.request('plugin.reload', { name });
+  }
+
+  /** The framework-owned provider-preset table for host settings UIs. */
+  describePresets(): Promise<{ presets: ProviderPresetDescriptor[] }> {
+    return this.process.request('presets.describe');
+  }
+
+  /** Which preset a (baseUrl, model) pair would auto-match; null when none. */
+  resolvePreset(input: {
+    baseUrl?: string;
+    model?: string;
+  }): Promise<{ preset: ProviderPreset | null }> {
+    return this.process.request('presets.resolve', input);
+  }
+
+  /** The full branch family containing a record (pi-style tree view). */
+  sessionTree(recordId: string): Promise<SessionTreeResult> {
+    return this.process.request('agent.session.tree', { recordId });
+  }
+
+  /**
+   * Ask a running turn to compact its transcript at the next pre_step
+   * boundary (CC `/compact` parity). Soft-fails false when the stream
+   * already completed, mirroring steerChat.
+   */
+  async compactChat(streamId: string): Promise<boolean> {
+    const res = await this.process.request<{ ok?: boolean }>(
+      'agent.chat.compact',
+      { streamId },
+    );
+    return res?.ok === true;
   }
 
   // ---- internals ---------------------------------------------------------

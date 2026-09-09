@@ -209,6 +209,11 @@ class PressureCompaction:
     # trades cache hits for a bounded transcript. R16 found compaction does not
     # move the eval score, so this stays opt-in capability, not a default.
     micro_compact_interval_rounds: int = 0
+    # Rapid-refill breaker (CC parity): a successful compaction whose freed
+    # space refills within this many rounds of the previous one counts as a
+    # refill; max_rapid_refills consecutive refills open the circuit.
+    rapid_refill_window_rounds: int = 3
+    max_rapid_refills: int = 3
     name: str = "pressure_compaction"
     assumes: str = (
         "long trajectories exceed the window; older detail is expendable "
@@ -231,6 +236,8 @@ class PressureCompaction:
                 summarizer=provider,
                 model=self.model,
                 micro_compact_interval_rounds=self.micro_compact_interval_rounds,
+                rapid_refill_window_rounds=self.rapid_refill_window_rounds,
+                max_rapid_refills=self.max_rapid_refills,
                 **extra,
             ),
             forward=("compact_now",),

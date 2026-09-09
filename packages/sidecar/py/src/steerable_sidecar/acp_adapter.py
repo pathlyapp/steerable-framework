@@ -227,6 +227,8 @@ def _env_provider_params() -> dict[str, Any]:
         os.environ.get("STEERABLE_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
     )
     if not api_key:
         from steerable_agent_runtime.model_resolve import provider_endpoint

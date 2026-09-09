@@ -485,6 +485,11 @@ async def _run(
     if not params.get("model"):
         raise ValueError("set STEERABLE_MODEL (or pass Harbor --model)")
     tools = workspace_tools_for_cwd(cwd, jailed=True, web_tools=web_tools)
+    # todo_write: session task list (CC TodoWrite parity). Unconditional —
+    # exposure="direct" puts it in describe_model() with no env gate.
+    from .todo_tools import register_todo_write
+
+    register_todo_write(tools)
     provider = default_llm_provider_factory(params)
     # mcp: per-run MCP servers, mounted after the workspace tools so their
     # catalogs register on the same router under the mcp__<name>__<tool>

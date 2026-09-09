@@ -22,7 +22,6 @@
       "id": "q-time",
       "text": "工作日每天可投入的时间（小时）：",
       "type": "text",
-      "options": [],
       "placeholder": "例如 1.5",
       "multiSelect": false
     }

@@ -16,6 +16,14 @@ export type {
 export { AgentSelector } from './AgentSelector.js';
 export type { AgentSelectorProps } from './AgentSelector.js';
 
+export { ModelSelector } from './ModelSelector.js';
+export type {
+  ModelCatalogEntry,
+  ModelCatalogResponse,
+  ModelCatalogTransport,
+  ModelSelectorProps,
+} from './ModelSelector.js';
+
 export { OrchestrationPlanCard } from './OrchestrationPlanCard.js';
 export type {
   OrchestrationPlanCardProps,

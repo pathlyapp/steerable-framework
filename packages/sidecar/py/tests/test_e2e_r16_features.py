@@ -31,6 +31,7 @@ from e2e_harness import (
     TESTS_DIR,
     SidecarClient,
     child_env,
+    model_tool_names,
     sse_text,
     sse_tool_call,
 )
@@ -166,8 +167,8 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
                 call_id="call_bad",
             )
         if index == 1:
-            # Valid minimal select: no header, no multiSelect — the reverse
-            # payload must carry the derived header and the stamped boolean.
+            # Violation: multiSelect omitted — CC parity requires the model
+            # to commit to single vs multi explicitly.
             return sse_tool_call(
                 "ask_user",
                 {
@@ -178,6 +179,25 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
                             "text": "Which flavor do you want?",
                             "type": "select",
                             "options": ["vanilla", "chocolate"],
+                        }
+                    ],
+                },
+                call_id="call_no_multiselect",
+            )
+        if index == 2:
+            # Valid minimal select: no header — the reverse payload must
+            # carry the derived header and the committed multiSelect.
+            return sse_tool_call(
+                "ask_user",
+                {
+                    "intro": "pick one",
+                    "questions": [
+                        {
+                            "id": "flavor",
+                            "text": "Which flavor do you want?",
+                            "type": "select",
+                            "options": ["vanilla", "chocolate"],
+                            "multiSelect": False,
                         }
                     ],
                 },
@@ -194,15 +214,19 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
     )
     await _await_done(client, result["streamId"])
 
-    # The violation came back as a tool result naming the bound…
-    assert len(mock.requests) == 3
-    tool_msgs = [
+    # Both violations came back as tool results naming the fix…
+    assert len(mock.requests) == 4
+    tool_msgs_1 = [
         m for m in mock.requests[1]["messages"] if m.get("role") == "tool"
     ]
-    assert any("1-4" in str(m.get("content")) for m in tool_msgs)
+    assert any("1-4" in str(m.get("content")) for m in tool_msgs_1)
+    tool_msgs_2 = [
+        m for m in mock.requests[2]["messages"] if m.get("role") == "tool"
+    ]
+    assert any("multiSelect is required" in str(m.get("content")) for m in tool_msgs_2)
 
     # …and the retry reached the host normalized: derived header (<=12
-    # chars), multiSelect stamped, options intact.
+    # chars), the committed multiSelect, options intact.
     assert len(client.ask_user_payloads) == 1
     question = client.ask_user_payloads[0]["questions"][0]
     assert question["header"] and len(question["header"]) <= 12
@@ -803,3 +827,46 @@ async def test_plugin_runtime_lifecycle_in_a_real_process(tmp_path: Path) -> Non
         "v2": "v2",
         "unloaded": True,
     }
+
+
+async def test_skill_tool_loads_body_over_real_sidecar(
+    host_client_factory: Any, mock_openai: Any, tmp_path: Path
+) -> None:
+    """The ``skill`` tool on the default (layered) mode: the catalog reaches
+    the model, a call crosses stdio, and the full SKILL.md body comes back
+    as the tool result."""
+    root = tmp_path / "skills"
+    skill_dir = root / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: demo\n"
+        "description: Demo skill for the e2e pass.\n"
+        "---\n"
+        "\n"
+        "# Demo\n"
+        "DEMO_SKILL_BODY_MARKER\n",
+        encoding="utf-8",
+    )
+
+    def responder(body: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        if index == 0:
+            return sse_tool_call("skill", {"name": "demo"}, call_id="c_skill")
+        return sse_text("SKILL_E2E_OK")
+
+    mock = mock_openai(responder)
+    client = await host_client_factory()
+    result = await client.request(
+        "agent.chat.stream", _stream_params(mock, skills={"roots": [str(root)]})
+    )
+    await _await_done(client, result["streamId"])
+
+    # The catalog advertised the tool and the model's call dispatched.
+    assert "skill" in model_tool_names(mock.requests[0].get("tools"))
+    assert len(mock.requests) == 2
+    tool_msgs = [
+        m for m in mock.requests[1]["messages"] if m.get("role") == "tool"
+    ]
+    assert any(
+        "DEMO_SKILL_BODY_MARKER" in str(m.get("content")) for m in tool_msgs
+    )

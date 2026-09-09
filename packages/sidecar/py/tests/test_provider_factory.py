@@ -71,6 +71,32 @@ def test_unknown_provider_rejected() -> None:
         default_llm_provider_factory({"provider": "nope", "model": "m"})
 
 
+def test_openai_responses_constructs() -> None:
+    provider = default_llm_provider_factory(
+        {"provider": "openai-responses", "model": "gpt-5", "apiKey": "k"}
+    )
+    assert provider.model == "gpt-5"
+    assert provider.base_url == "https://api.openai.com/v1"  # type: ignore[attr-defined]
+
+
+def test_xai_alias_constructs_with_xai_base_url() -> None:
+    provider = default_llm_provider_factory({"provider": "xai", "model": "grok-4"})
+    assert provider.base_url == "https://api.x.ai/v1"  # type: ignore[attr-defined]
+
+
+def test_google_constructs() -> None:
+    provider = default_llm_provider_factory(
+        {"provider": "google", "model": "gemini-3-pro", "apiKey": "k"}
+    )
+    assert provider.model == "gemini-3-pro"
+    assert provider.base_url == "https://generativelanguage.googleapis.com"  # type: ignore[attr-defined]
+
+
+def test_gemini_alias_constructs() -> None:
+    provider = default_llm_provider_factory({"provider": "gemini", "model": "m"})
+    assert provider.name == "gemini"  # type: ignore[attr-defined]
+
+
 def test_compat_auto_detected_from_base_url_host() -> None:
     """The deepseek registry entry is selected by base-URL host — the
     provider kinds are generic, so the host is the vendor signal."""

@@ -156,21 +156,20 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
-<div class="sf-bench-kicker">Cost × score · two models</div>
-<p class="sf-bench-blurb">Circles are GLM-5.3-Flash on one OpenRouter account — Steerable is the cheapest seat in the frontier band. Diamonds are Qwen3.8-27B: Steerable <strong>75.3%</strong> clears the published Terminus <strong>73.0%</strong>.</p>
-<svg class="sf-scatter" viewBox="0 0 400 312" role="img" aria-label="Terminal-Bench 2.1: GLM-5.3-Flash cost versus score for four harnesses, and Qwen3.8-27B Steerable 75.3 percent versus published Terminus 73.0 percent">
-<rect class="band" x="44" y="40" width="344" height="36"/>
-<text class="bandlbl" x="384" y="62" text-anchor="end">frontier band 79–84%</text>
-<rect class="qwenCol" x="232" y="82" width="148" height="66" rx="4"/>
-<text class="qwenColTitle" x="306" y="94" text-anchor="middle">Qwen3.8-27B · score overlay</text>
+<div class="sf-bench-kicker">Cost × score · every marker measured on both axes</div>
+<p class="sf-bench-blurb">One harness across three models, against each model's own best published number. On DeepSeek-V4-Flash, Steerable is the highest point on the chart and beats DSH on both axes — <strong>84.3%</strong> at $0.17 against <strong>82.7%</strong> at $0.185. On Qwen3.8-27B it is beaten on both: <strong>75.3%</strong> at $0.85 against Artificial Analysis' independent Terminus 2 run at <strong>79.8%</strong> and $0.25.</p>
+<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1 score against cost per solved task. On GLM-5.3-Flash: Steerable 81.7 percent at 14 cents, Claude Code 83 percent at 16 cents, Pi 73 percent at 6 cents, Codex 58 percent at 81 cents. Steerable on DeepSeek-V4-Flash is the highest point at 84.3 percent and 17 cents, above DeepSeek Harness at 82.7 percent and 18.5 cents. Steerable on Qwen3.8-27B is 75.3 percent at 85 cents, below and to the right of an independent Terminus 2 run at xhigh reasoning effort scoring 79.8 percent at 25 cents.">
 <line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
 <line class="grid" x1="136.7" y1="14" x2="136.7" y2="260"/>
 <line class="grid" x1="229.4" y1="14" x2="229.4" y2="260"/>
 <line class="grid" x1="299.6" y1="14" x2="299.6" y2="260"/>
 <line class="grid" x1="369.7" y1="14" x2="369.7" y2="260"/>
+<line class="grid" x1="44" y1="37.1" x2="388" y2="37.1"/>
 <line class="grid" x1="44" y1="75.5" x2="388" y2="75.5"/>
-<line class="grid" x1="44" y1="137" x2="388" y2="137"/>
-<line class="grid" x1="44" y1="198.5" x2="388" y2="198.5"/>
+<line class="grid" x1="44" y1="113.9" x2="388" y2="113.9"/>
+<line class="grid" x1="44" y1="152.4" x2="388" y2="152.4"/>
+<line class="grid" x1="44" y1="190.8" x2="388" y2="190.8"/>
+<line class="grid" x1="44" y1="229.2" x2="388" y2="229.2"/>
 <line class="axis" x1="44" y1="14" x2="44" y2="260"/>
 <line class="axis" x1="44" y1="260" x2="388" y2="260"/>
 <text class="tick" x="66.6" y="272" text-anchor="middle">$0.05</text>
@@ -178,36 +177,43 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <text class="tick" x="229.4" y="272" text-anchor="middle">$0.25</text>
 <text class="tick" x="299.6" y="272" text-anchor="middle">$0.50</text>
 <text class="tick" x="369.7" y="272" text-anchor="middle">$1.00</text>
-<text class="tick" x="39" y="17" text-anchor="end">90</text>
+<text class="tick" x="39" y="40.1" text-anchor="end">85</text>
 <text class="tick" x="39" y="78.5" text-anchor="end">80</text>
-<text class="tick" x="39" y="140" text-anchor="end">70</text>
-<text class="tick" x="39" y="201.5" text-anchor="end">60</text>
-<text class="tick" x="39" y="263" text-anchor="end">50</text>
-<text class="axisTitle" x="216" y="290" text-anchor="middle">$ per solved task (log) · GLM-5.3-Flash</text>
+<text class="tick" x="39" y="116.9" text-anchor="end">75</text>
+<text class="tick" x="39" y="155.4" text-anchor="end">70</text>
+<text class="tick" x="39" y="193.8" text-anchor="end">65</text>
+<text class="tick" x="39" y="232.2" text-anchor="end">60</text>
+<text class="axisTitle" x="216" y="290" text-anchor="middle">$ per solved task (log)</text>
 <text class="axisTitle" x="12" y="137" text-anchor="middle" transform="rotate(-90 12 137)">TB 2.1 score</text>
-<circle class="pt" cx="86.7" cy="118.6" r="9"/>
-<text class="lbl" x="86.7" y="138" text-anchor="middle">Pi</text>
-<text class="sub" x="86.7" y="148" text-anchor="middle">GLM-5.3-Flash</text>
-<text class="sub" x="86.7" y="157" text-anchor="middle">73% · $0.06</text>
-<circle class="pt pt--ours" cx="169.3" cy="65.4" r="10"/>
-<text class="lbl" x="156" y="60" text-anchor="end">Steerable</text>
-<text class="sub" x="156" y="70" text-anchor="end">81.7% · $0.14</text>
-<circle class="pt" cx="184.7" cy="56.2" r="9"/>
-<text class="lbl" x="198" y="32">Claude Code</text>
-<text class="sub" x="198" y="42">83% · $0.16</text>
-<circle class="pt" cx="348.9" cy="208.3" r="9"/>
-<text class="lbl" x="338" y="198" text-anchor="end">Codex CLI</text>
-<text class="sub" x="338" y="208" text-anchor="end">GLM-5.3-Flash</text>
-<text class="sub" x="338" y="217" text-anchor="end">58% · $0.81</text>
-<line class="connector" x1="252" y1="104.4" x2="252" y2="118.6"/>
-<polygon class="pt pt--ours" points="252,96.4 260,104.4 252,112.4 244,104.4"/>
-<polygon class="pt pt--ref" points="252,110.6 260,118.6 252,126.6 244,118.6"/>
-<text class="delta" x="264" y="103">+2.3 pts</text>
-<text class="lbl" x="264" y="113">Steerable 75.3%</text>
-<text class="sub" x="264" y="132">official score 73.0%</text>
-<text class="legend" x="44" y="306">Circles share one GLM-5.3-Flash gateway and sit on the $ axis. Diamonds are Qwen3.8-27B scores only — they are not a cost.</text>
+<circle class="pt" cx="86.7" cy="129.3" r="5.5"/>
+<text class="lbl" x="98" y="127">Pi</text>
+<text class="sub" x="98" y="136.5">GLM-5.3-Flash · 73% · $0.06</text>
+<line x1="152" y1="52.4" x2="178.5" y2="52.4" style="stroke:var(--md-default-fg-color--light);stroke-width:0.6"/>
+<circle class="pt" cx="184.7" cy="52.4" r="5.5"/>
+<text class="lbl" x="150" y="48" text-anchor="end">Claude Code</text>
+<text class="sub" x="150" y="57.5" text-anchor="end">GLM-5.3-Flash · 83% · $0.16</text>
+<circle class="pt" cx="348.9" cy="244.6" r="5.5"/>
+<text class="lbl" x="340" y="236" text-anchor="end">Codex CLI</text>
+<text class="sub" x="340" y="245.5" text-anchor="end">GLM-5.3-Flash · 58% · $0.81</text>
+<circle class="pt pt--ref" cx="198.9" cy="54.7" r="5.5"/>
+<text class="lbl" x="208" y="54">DSH</text>
+<text class="sub" x="208" y="63.5">DeepSeek-V4-Flash · 82.7% · $0.185</text>
+<circle class="pt pt--ref" cx="229.4" cy="77.2" r="5.5"/>
+<text class="lbl" x="240" y="79">Terminus 2</text>
+<text class="sub" x="240" y="88.5">Qwen3.8-27B (xhigh) · 79.8% · $0.25</text>
+<circle class="pt pt--ours" cx="169.3" cy="62.4" r="7"/>
+<text class="lbl lbl--ours" x="158" y="73" text-anchor="end">Steerable</text>
+<text class="sub" x="158" y="82.5" text-anchor="end">GLM-5.3-Flash · 81.7% · $0.14</text>
+<circle class="pt pt--ours" cx="190.4" cy="42.4" r="7"/>
+<text class="lbl lbl--ours" x="190.4" y="23" text-anchor="middle">Steerable</text>
+<text class="sub" x="190.4" y="33.5" text-anchor="middle">DeepSeek-V4-Flash · 84.3% · $0.17</text>
+<circle class="pt pt--ours" cx="353.2" cy="111.6" r="7"/>
+<text class="lbl lbl--ours" x="344" y="110" text-anchor="end">Steerable</text>
+<text class="sub" x="344" y="119.5" text-anchor="end">Qwen3.8-27B · 75.3% · $0.85</text>
+<text class="legend" x="44" y="301">Purple is Steerable. Grey is another harness; hollow is the other party's own run.</text>
+<text class="legend" x="44" y="311.5">The four GLM-5.3-Flash rows share one gateway. Every marker sits at its measured cost and score.</text>
 </svg>
-<p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. Qwen3.8-27B: Steerable 75.3% (this repo, catalog-89) vs Qwen's published Terminus 73.0% on the <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a>. The Qwen markers are a score overlay; they do not sit on the $ axis. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
+<p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. DeepSeek-V4-Flash-0731: Steerable 84.3% at $0.17 per solve (this repo, catalog-89, vendor endpoint, observed spend) against DeepSeek's published 82.7% on <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731">the model card</a>. DeepSeek publishes no cost for that run, so $0.185 comes from <a href="https://antigma.ai/eval">Antigma's Ante</a>, an independent open harness that reproduced the same 82.7% — $68.41 over 445 trials, 368 passed. Qwen3.8-27B: Steerable 75.3% at an estimated $0.85 (this repo, catalog-89; partial cost data on unpinned endpoints). Qwen's <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a> publishes Terminus 73.0% with no cost, so the reference here is <a href="https://artificialanalysis.ai/evaluations/terminalbench-v2-1">Artificial Analysis'</a> independent Terminus 2 run — 79.8% in an e2b sandbox, pass@1 over 3 repeats at xhigh effort, its list-price cost restated on a single-pass basis to match ours. That row is not effort-matched: Steerable pins <code>reasoning_effort=max</code> and the Z.AI endpoint for GLM only, and our Qwen run sent no reasoning field at all, so it ran at whatever the endpoint defaults to server-side — a tier we did not record. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
 </div>
 
 </div>

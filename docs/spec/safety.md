@@ -149,6 +149,18 @@ Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
   startup-failure fallback so the sidecar never believes it is confined when it
   is not.
 
+  A denied `CONNECT` is answered `403` with the target named in the reason
+  phrase (the only metadata channel a CONNECT client can see). With the
+  control endpoint configured (`--control-port` + `--control-token-env`),
+  the sidecar's web tools turn that denial into a host approval prompt
+  (`category=network_egress`); an allow decision is relayed to
+  `POST 127.0.0.1:<control-port>/allow` as a session-scoped list addition
+  and the fetch retries once. The bearer token is the authorization
+  boundary: it is passed by env (never argv) to the proxy and the sidecar,
+  and sandboxed children run with a scrubbed environment that excludes it —
+  a confined process cannot widen its own egress. Session grants die with
+  the proxy process; durable grants belong to the configured domain list.
+
 The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 
 Hosts integrating the sandbox must:

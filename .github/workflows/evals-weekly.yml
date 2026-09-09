@@ -27,6 +27,18 @@ on:
         description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
         default: ""
+      reasoning_effort:
+        description: "STEERABLE_REASONING_EFFORT for the run (catalog split). Empty keeps the per-model default (qwen: medium). The level must exist in the model's catalog entry — an unsupported level now fails loud instead of being silently dropped."
+        type: choice
+        options:
+          - ""
+          - minimal
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
+        default: ""
       tasks:
         description: "Catalog ids to run instead of the whole split, space separated. Use to finish a catalog the credit guard cancelled; shards with nothing to do report skipped."
         type: string
@@ -192,6 +204,7 @@ jobs:
           AGENT: ${{ github.event.inputs.agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_TASKS: ${{ github.event.inputs.tasks }}
+          EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           # Same gateway as the product leg, so pi differs from steerable only
@@ -210,6 +223,15 @@ jobs:
           extra=()
           if [ -n "$EVAL_MODEL" ]; then
             extra+=(--model "$EVAL_MODEL")
+          fi
+          # Explicit dispatch input wins; the qwen fallback exists because
+          # the catalog used to top out at medium for it. With the gateway
+          # catalog the level is validated strict against the model's entry
+          # — an unsupported level fails the trial at stream start instead
+          # of being silently dropped (EVALS 2.5.22).
+          if [ -n "$EVAL_EFFORT" ]; then
+            export STEERABLE_REASONING_EFFORT="$EVAL_EFFORT"
+          else
             case "$EVAL_MODEL" in
               *qwen*) export STEERABLE_REASONING_EFFORT="${STEERABLE_REASONING_EFFORT:-medium}" ;;
             esac
@@ -425,6 +447,7 @@ jobs:
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
+          EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
         run: |
           python3 - << 'PY'
@@ -437,11 +460,13 @@ jobs:
           if split == "catalog":
               agent = (os.environ.get("EVAL_AGENT") or "steerable").strip()
               model = (os.environ.get("EVAL_MODEL") or "").strip()
+              effort = (os.environ.get("EVAL_EFFORT") or "").strip()
               title = f"开始 · GHA catalog 89 × {agent}"
               body = f"{agent} × 全量 89 题，49 分片并行。"
               if model:
-                  title = f"开始 · GHA catalog 89 × {agent} × {model}"
-                  body = f"{agent} × {model} × 全量 89 题，49 分片并行。"
+                  suffix = f" × {model}" + (f" @{effort}" if effort else "")
+                  title = f"开始 · GHA catalog 89 × {agent}{suffix}"
+                  body = f"{agent}{suffix} × 全量 89 题，49 分片并行。"
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"
@@ -489,15 +514,20 @@ jobs:
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
+          EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
         run: |
           label="GHA cheap-12"
           if [ "$EVAL_SPLIT" = "catalog" ]; then
             # Naming the agent keeps a pi-glm catalog Mean from being read as
             # the product score. Naming the model keeps a qwen Mean from being
-            # read as the GLM product score.
+            # read as the GLM product score. Naming the effort keeps an xhigh
+            # Mean from being read as a medium one.
             label="GHA catalog 89 × $EVAL_AGENT"
             if [ -n "$EVAL_MODEL" ]; then
               label="$label × $EVAL_MODEL"
+              if [ -n "$EVAL_EFFORT" ]; then
+                label="$label @$EVAL_EFFORT"
+              fi
             fi
           elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
             label="GHA failed-prev"

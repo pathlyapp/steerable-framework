@@ -13,6 +13,7 @@ from .sidecar import Sidecar, SidecarConfig
 from .web_tools import register_web_tools
 from .run_code import register_run_code, run_code_enabled
 from .ptc_js import ptc_js_enabled, register_ptc_js
+from .todo_tools import register_todo_write
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,7 +58,14 @@ def main() -> int:
     # not brick chat for an optional feature, so the misconfiguration logs
     # loud and the sidecar serves without the web pair.
     try:
-        register_web_tools(sidecar.tools)
+        from .egress_ask import asker_from_environ
+
+        # Egress widening over the host approval channel: only when the
+        # launcher injected the proxy's control endpoint (both env vars) —
+        # otherwise denials stay denials.
+        register_web_tools(
+            sidecar.tools, egress_asker=asker_from_environ(sidecar.server, None)
+        )
     except ValueError as exc:
         logging.getLogger("steerable_sidecar").error(
             "web tools disabled: %s", exc
@@ -66,13 +74,16 @@ def main() -> int:
         register_run_code(sidecar.tools)
     if ptc_js_enabled():
         register_ptc_js(sidecar.tools)
+    # todo_write: session task list (CC TodoWrite parity). Unconditional —
+    # no workspace side effects, no host wiring, no env gate.
+    register_todo_write(sidecar.tools)
     # Third-party tools: load plugins from every configured source —
     # installed packages declaring the ``steerable.tools`` entry-point
     # group, plus the local development directory named by
     # STEERABLE_PLUGIN_DIR. A broken plugin fails the boot loud
     # (PluginLoadError names the offender) rather than silently dropping an
-    # installed tool. The registry stays alive for the process lifetime so
-    # a future management RPC surface can drive enable/disable/reload.
+    # installed tool. The registry stays alive for the process lifetime and
+    # backs the plugin.* management RPCs.
     from steerable_agent_runtime import (
         DirectorySource,
         EntryPointSource,
@@ -92,6 +103,8 @@ def main() -> int:
     except PluginLoadError as exc:
         logging.getLogger("steerable_sidecar").error("tool plugin: %s", exc)
         return 1
+    # Expose the lifecycle over plugin.list/enable/disable/reload RPCs.
+    sidecar.plugin_registry = plugins
     try:
         asyncio.run(sidecar.serve())
     except KeyboardInterrupt:

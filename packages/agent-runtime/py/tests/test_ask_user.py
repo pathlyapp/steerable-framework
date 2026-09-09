@@ -117,6 +117,7 @@ async def test_ask_user_blocks_and_injects_answers() -> None:
                                     "text": "Which color?",
                                     "type": "select",
                                     "options": ["red", "blue"],
+                                    "multiSelect": False,
                                 }
                             ],
                         },
@@ -179,6 +180,7 @@ async def test_ask_user_normalizes_inquirer_style_aliases() -> None:
                                     "message": "目标环境",
                                     "type": "select",
                                     "choices": ["staging", "prod"],
+                                    "multiSelect": False,
                                 }
                             ],
                         },
@@ -314,6 +316,7 @@ def test_ask_user_rejects_a_select_with_too_many_options() -> None:
                     "text": "Which env?",
                     "type": "select",
                     "options": ["a", "b", "c", "d", "e"],
+                    "multiSelect": False,
                 }
             ],
         }
@@ -326,7 +329,13 @@ def test_ask_user_rejects_a_select_with_one_option() -> None:
         {
             "intro": "?",
             "questions": [
-                {"id": "env", "text": "Which env?", "type": "select", "options": ["a"]}
+                {
+                    "id": "env",
+                    "text": "Which env?",
+                    "type": "select",
+                    "options": ["a"],
+                    "multiSelect": False,
+                }
             ],
         }
     )
@@ -347,10 +356,9 @@ def test_ask_user_rejects_an_overlong_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_user_derives_header_and_stamps_multiselect() -> None:
-    """When the model omits ``header``/``multiSelect``, the tool derives the
-    chip from ``text`` and stamps ``multiSelect=False`` so hosts always read an
-    explicit boolean."""
+async def test_ask_user_derives_header() -> None:
+    """When the model omits ``header``, the tool derives the chip from
+    ``text`` so the card always has a chip label."""
     router = ToolRouter()
     asked: list[dict[str, Any]] = []
 
@@ -374,6 +382,7 @@ async def test_ask_user_derives_header_and_stamps_multiselect() -> None:
                                     "text": "Which deployment environment should I target?",
                                     "type": "select",
                                     "options": ["staging", "prod"],
+                                    "multiSelect": False,
                                 }
                             ],
                         },
@@ -394,5 +403,19 @@ async def test_ask_user_derives_header_and_stamps_multiselect() -> None:
     # header derived from text, <=12 chars.
     assert isinstance(question["header"], str)
     assert 0 < len(question["header"]) <= 12
-    # multiSelect stamped explicitly.
+    # multiSelect passes through as the model committed it.
     assert question["multiSelect"] is False
+
+
+def test_ask_user_requires_multiselect() -> None:
+    """CC parity: the model must commit to single vs multi explicitly — an
+    omitted ``multiSelect`` is a model error, not a default to assume."""
+    content = _run_rejection(
+        {
+            "intro": "?",
+            "questions": [
+                {"id": "env", "text": "Which env?", "type": "select", "options": ["a", "b"]}
+            ],
+        }
+    )
+    assert "multiSelect is required" in content

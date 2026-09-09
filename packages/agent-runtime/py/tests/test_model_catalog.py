@@ -133,7 +133,7 @@ def test_build_entries_projects_and_skips() -> None:
         200_000,
         ("image", "text"),
         TOOL_FORMAT_OPENAI,
-        ("low", "high"),  # xhigh is outside our canonical ordering — dropped
+        ("low", "high", "xhigh"),  # upstream effort values flow through verbatim
     )
     # The anthropic AI-SDK package implies the anthropic wire format.
     assert models["anthropic/claude-test"][2] == TOOL_FORMAT_ANTHROPIC
@@ -179,5 +179,5 @@ def test_overlay_fails_loud_on_unknown_reasoning_level() -> None:
     with pytest.raises(ValueError, match="unknown reasoning levels"):
         gen.apply_overlay(
             models,
-            {"models": {"acme/acme-large": {"reasoning_levels": ["xhigh"]}}},
+            {"models": {"acme/acme-large": {"reasoning_levels": ["ultra"]}}},
         )

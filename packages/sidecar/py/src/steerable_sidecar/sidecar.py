@@ -73,6 +73,8 @@ from steerable_agent_runtime import (
     McpStdioClient,
     OrchestrationConfig,
     OrchestrationExecutor,
+    PluginLoadError,
+    PluginStateError,
     PolicyDeniedError,
     RouterToolExecutor,
     SandboxedToolExecutor,
@@ -87,6 +89,7 @@ from steerable_agent_runtime import (
     SubagentRegistry,
     ToolDispatchError,
     ToolRouter,
+    TodoCompletionGate,
     TraceRecorder,
     WorldStateHooks,
     branch_label,
@@ -221,6 +224,10 @@ class Sidecar:
         self._wall_started_ms = int(time.time() * 1000)
         self._shutdown_requested = asyncio.Event()
         self._serving = False
+        #: Injected by the entrypoint after plugin loading so the plugin.*
+        #: RPCs can drive the lifecycle. None means the plugin subsystem is
+        #: not wired (unit tests constructing a bare Sidecar).
+        self.plugin_registry: Any = None
 
         self._register_default_methods()
         for tool in self.config.initial_tools:
@@ -260,8 +267,13 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("plugin.list", self._handle_plugin_list)
+        register("plugin.enable", self._handle_plugin_enable)
+        register("plugin.disable", self._handle_plugin_disable)
+        register("plugin.reload", self._handle_plugin_reload)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
+        register("models.list", self._handle_models_list)
         register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
@@ -698,6 +710,69 @@ class Sidecar:
 
         return {"flags": describe_compat_flags()}
 
+    def _require_plugin_registry(self) -> Any:
+        """The plugin registry, or an RPC error when the subsystem is unwired."""
+        if self.plugin_registry is None:
+            raise JsonRpcError(
+                "plugin subsystem is not wired on this sidecar",
+                code=-32602,
+                kind="invalid_params",
+            )
+        return self.plugin_registry
+
+    @staticmethod
+    def _plugin_record_dict(record: Any) -> dict[str, Any]:
+        return {
+            "name": record.name,
+            "origin": record.origin,
+            "tools": list(record.tools),
+            "enabled": record.enabled,
+            "reloadable": record.reloadable,
+        }
+
+    async def _handle_plugin_list(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        return {
+            "plugins": [
+                self._plugin_record_dict(record) for record in registry.plugins()
+            ]
+        }
+
+    async def _handle_plugin_enable(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.enable(name)
+        except PluginStateError as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_disable(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.disable(name)
+        except PluginStateError as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_reload(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        registry = self._require_plugin_registry()
+        name = str(_require_params(params).get("name") or "")
+        try:
+            registry.reload(name)
+        except (PluginStateError, PluginLoadError) as exc:
+            raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
+        return {"plugin": self._plugin_record_dict(registry.get(name))}
+
     async def _handle_presets_describe(
         self, _params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -727,6 +802,88 @@ class Sidecar:
         preset = preset_for(params.get("baseUrl"), params.get("model"))
         return {"preset": preset.to_dict() if preset is not None else None}
 
+    async def _handle_models_list(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the gateway's live model catalog to host model pickers.
+
+        The gateway's own ``GET /models`` names the ids the endpoint
+        actually accepts — discovery, not a routing whitelist (a host may
+        still send an unlisted id). Each id is joined with catalog
+        capabilities via the same leaf join the request path uses, so the
+        picker and ``clamp_reasoning_effort`` never disagree about a model's
+        knob. A successful fetch is installed into the runtime's resolution
+        path (``register_gateway_models``) so window budgeting sees the
+        gateway-advertised windows.
+
+        ``catalogStatus``: ``live`` (just fetched), ``stale`` (refresh
+        failed, previous listing served), ``offline`` (no listing at all —
+        the picker falls back to free-form entry). Offline is a 200, not an
+        RPC error: an unreachable gateway must not break the host's
+        settings screen.
+        """
+        from steerable_agent_runtime import (
+            REASONING_EFFORT_ORDER,
+            register_gateway_models,
+        )
+        from steerable_agent_runtime.gateway_catalog import (
+            GatewayCatalogError,
+            fetch_gateway_models,
+            merge_with_catalog,
+        )
+
+        params = params or {}
+        base_url = params.get("baseUrl") or os.environ.get("STEERABLE_BASE_URL", "")
+        api_key = params.get("apiKey") or os.environ.get("STEERABLE_API_KEY", "")
+        if not base_url:
+            raise JsonRpcError(
+                "models.list requires baseUrl (or STEERABLE_BASE_URL)",
+                code=-32602,
+                kind="invalid_params",
+            )
+        try:
+            listing = await fetch_gateway_models(str(base_url), str(api_key) or None)
+        except GatewayCatalogError as exc:
+            return {"models": [], "catalogStatus": "offline", "error": str(exc)}
+        rows = merge_with_catalog(listing.entries)
+        register_gateway_models(row.info for row in rows)
+        return {
+            "models": [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "window": row.info.context_window,
+                    "modalities": sorted(row.info.modalities),
+                    "reasoningLevels": [
+                        level
+                        for level in REASONING_EFFORT_ORDER
+                        if level in row.info.reasoning_levels
+                    ],
+                    "pricing": (
+                        {
+                            "promptPerMtok": row.prompt_price_per_mtok,
+                            "completionPerMtok": row.completion_price_per_mtok,
+                        }
+                        if row.prompt_price_per_mtok is not None
+                        or row.completion_price_per_mtok is not None
+                        else None
+                    ),
+                    "joinedFrom": row.joined_from,
+                    "capabilities": (
+                        "known" if row.joined_from is not None else "unknown"
+                    ),
+                }
+                for row in rows
+            ],
+            "catalogStatus": "stale" if listing.stale else "live",
+            "fetchedAt": listing.fetched_at,
+            "current": {
+                "model": os.environ.get("STEERABLE_MODEL") or None,
+                "reasoningEffort": os.environ.get("STEERABLE_REASONING_EFFORT")
+                or None,
+            },
+        }
+
     async def _handle_harness_describe(
         self, _params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -755,13 +912,18 @@ class Sidecar:
         Params shape (all optional unless noted)::
 
             {
-              "provider": "openai_compat" | "anthropic" | <custom>,  # required
+              "provider": "openai_compat" | "anthropic"             # required
+                        | "openai-responses" | "google" | <custom>,
               "model": "gpt-4o-mini",                                # required
               "messages": [{"role": "...", "content": "..."}],       # required
               "baseUrl": "https://api.example.com/v1",
               "apiKey":  "sk-...",
               "temperature": 0.2,
               "maxTokens": 1024,
+              "reasoningEffort": "high",  # per-request picker value; wins over
+                                        # STEERABLE_REASONING_EFFORT and the
+                                        # preset default. Strict: an effort the
+                                        # model cannot honor is an RPC error.
               "tools":   [...],         # OpenAI tool descriptors
               "streamId": "str_xyz",    # auto-generated if omitted
               "providerOptions": {...}, # passthrough
@@ -1482,6 +1644,14 @@ class Sidecar:
             )
             hooks = default_harness.hooks
             tool_selection = default_harness.tool_selection
+        # todo completion gate: a turn that ends `completed` while the
+        # chat's todo list still has unfinished items is retried with a
+        # reminder instead of stalling for user input (long-task stall fix).
+        # The gate keys the store by the run's LoopContext.chat_id — the same
+        # id todo_write dispatches with — so it reads the list the model wrote.
+        from .todo_tools import todo_store
+
+        hooks = ChainHooks(hooks, TodoCompletionGate(todo_store()))
         # The bundled spec's tools dimension governs the host-supplied tool
         # surface; the sidecar's own additions below (subagent / skills /
         # orchestration) are orthogonal dimensions advertised past
@@ -1850,6 +2020,14 @@ class Sidecar:
             # enables dispatch; the descriptor must also reach the tools array
             # (mirrors subagent/skills above) or the model never sees run_code.
             tools = [*(tools or []), run_code_tool_descriptor()]
+        # todo_write: session task list (CC TodoWrite parity). Registered
+        # unconditionally at boot, so it is advertised every turn; dispatch
+        # is intercepted locally like run_code (the host does not know it).
+        if self.tools.get("todo_write") is not None:
+            from steerable_agent_runtime import todo_write_tool_descriptor
+
+            local_names.append("todo_write")
+            tools = [*(tools or []), todo_write_tool_descriptor()]
         # run_js/wait_js: conversational JS PTC (the codex CodeModeHost
         # counterpart). Same router-answered local dispatch as run_code; the
         # session binds to this run's chatId inside the tool.
@@ -2857,6 +3035,25 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     base_url = params.get("baseUrl") or params.get("base_url")
     api_key = params.get("apiKey") or params.get("api_key") or ""
 
+    # The host model picker's per-request reasoning effort. Parsed once for
+    # every provider family and validated at construction so an
+    # unsupportable level is an RPC error here, not a mid-stream failure
+    # (EVALS 2.5.22 fail-loud). The wire path re-validates with the
+    # branch-resolved base_url.
+    reasoning_effort = params.get("reasoningEffort") or params.get(
+        "reasoning_effort"
+    )
+    if reasoning_effort:
+        from steerable_agent_runtime import clamp_reasoning_effort
+
+        clamp_reasoning_effort(
+            str(model),
+            str(reasoning_effort),
+            provider=provider_kind or None,
+            base_url=base_url,
+            strict=True,
+        )
+
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import (
             OpenAICompatFlags,
@@ -2896,6 +3093,9 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     model=str(model),
                     compat=compat,
                     preset=_resolve_preset_param(params),
+                    reasoning_effort=(
+                        str(reasoning_effort) if reasoning_effort else None
+                    ),
                 )
             )
         )
@@ -2910,6 +3110,42 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                         api_key=api_key,
                         model=str(model),
                     )
+                )
+            )
+        )
+    if provider_kind in {"openai-responses", "openai_responses", "responses", "xai"}:
+        from steerable_agent_runtime.llm import OpenAIResponsesProvider
+
+        resolved_base_url = (
+            base_url
+            or ("https://api.x.ai/v1" if provider_kind == "xai" else None)
+            or "https://api.openai.com/v1"
+        )
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                OpenAIResponsesProvider(
+                    name=provider_kind or "openai-responses",
+                    base_url=resolved_base_url,
+                    api_key=api_key,
+                    model=str(model),
+                    preset=_resolve_preset_param(params),
+                    reasoning_effort=(
+                        str(reasoning_effort) if reasoning_effort else None
+                    ),
+                )
+            )
+        )
+    if provider_kind in {"google", "gemini", "google-genai", "google_genai"}:
+        from steerable_agent_runtime.llm import GoogleGenAIProvider
+
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                GoogleGenAIProvider(
+                    name=provider_kind or "google",
+                    base_url=base_url or "https://generativelanguage.googleapis.com",
+                    api_key=api_key,
+                    model=str(model),
+                    preset=_resolve_preset_param(params),
                 )
             )
         )
