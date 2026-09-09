@@ -1,4 +1,9 @@
-from .budget import BudgetLimit, BudgetState, consume_budget
+from .budget import (
+    DEFAULT_CACHED_TOKEN_WEIGHT,
+    BudgetLimit,
+    BudgetState,
+    consume_budget,
+)
 from .completion import is_terminal_result
 from .policy import PolicyDecision, ToolMode, decide_tool_mode
 from .retry import RetryPolicy, next_retry_delay_ms
@@ -17,6 +22,7 @@ __version__ = "0.2.0"
 
 __all__ = [
     "BUILTIN_PATTERNS",
+    "DEFAULT_CACHED_TOKEN_WEIGHT",
     "SAFETY_CATEGORIES",
     "BudgetLimit",
     "BudgetState",
