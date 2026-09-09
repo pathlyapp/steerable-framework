@@ -8,9 +8,13 @@ measured ratio plus a variance headroom.
 """
 
 #: Measured wall-time ratio between the x64 CI runner and the arm64
-#: reference machine. Initial value follows dsh's; recalibrate from the
-#: first CI runs' reported medians (see README).
-CI_TIME_SCALE = 2.0
+#: reference machine. First CI run (PR #46) measured medians at 0.38–0.81x
+#: the reference budgets — GitHub's current runners are faster than the
+#: reference Mac on these paths. We keep 1.0 rather than tightening to the
+#: observed ratio: runner allocation varies, and the headroom below is what
+#: absorbs a slow-runner day. Recalibrate from reported medians if the lane
+#: goes flaky or drifts (see README).
+CI_TIME_SCALE = 1.0
 
 #: Allowed variance above the calibrated expectation. Wide enough to absorb
 #: runner jitter, tight enough to catch a real regression.
