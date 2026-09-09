@@ -55,7 +55,14 @@ def measure(fn: Callable[[], None], *, samples: int = DEFAULT_SAMPLES) -> Sample
 
 
 def assert_within_budget(report: SampleReport, budget_ms: float, label: str) -> None:
-    """Assert the median is within budget; on failure print the distribution."""
+    """Assert the median is within budget; on failure print the distribution.
+
+    Always prints the measurement (the CI lane runs with ``-s``): the gate's
+    value over time comes from these recorded medians — they are the
+    evidence for recalibrating CI_TIME_SCALE and the early signal of a slow
+    drift that has not yet crossed the budget.
+    """
+    print(f"[bench] {label}: {report.render()} budget={budget_ms:.0f}ms")
     assert report.median <= budget_ms, (
         f"{label}: median {report.median:.1f}ms exceeds budget {budget_ms:.0f}ms — "
         f"{report.render()}. If this is a real regression, the budget is a "
