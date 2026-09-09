@@ -102,14 +102,21 @@ each tier is independently adoptable.
   registration wins, the offender is named). What we still lack versus
   Claude Code is the marketplace, blocklist, and impersonation check — the
   runtime is there, the distribution trust layer is not.
-- **Context compaction now ships four paths** — pressure-triggered,
-  overflow-reactive, periodic micro-compaction (tool-result pruning), and
-  manual (`compact_now`, the host-command path) — with a circuit breaker
-  that stops the pressure path after three consecutive ineffective
-  compactions and `pre_tokens` / `post_tokens` estimates recorded on every
-  `CompactionBoundary` (the `compact_boundary` observability pattern).
-  What we still lack is Claude Code's partial-compaction variant that
-  preserves named conversation sections.
+- **Context compaction now ships four paths and both breakers** —
+  pressure-triggered, overflow-reactive, periodic micro-compaction
+  (tool-result pruning), and manual (`compact_now`, the host-command
+  path). Two circuit breakers match Claude Code's pair: the failure
+  breaker stops the pressure path after three consecutive ineffective
+  compactions, and the rapid-refill breaker stops it after three
+  consecutive compactions whose freed space refills within three rounds —
+  the tripping round appends an actionable thrashing reminder (model- and
+  UI-visible) telling the model to converge instead of re-reading folded
+  output. `pre_tokens` / `post_tokens` estimates are recorded on every
+  `CompactionBoundary` (the `compact_boundary` observability pattern), and
+  a hysteresis margin (which CC does not have) keeps a borderline
+  transcript from re-compacting every round. What we still lack is
+  Claude Code's partial-compaction variant that preserves named
+  conversation sections.
 - **Structured questions reach the model end-to-end, at Claude Code's
   constraints.** The `ask_user` tool registers sidecar-side per request,
   the desktop answers over the reverse channel with a rendered question

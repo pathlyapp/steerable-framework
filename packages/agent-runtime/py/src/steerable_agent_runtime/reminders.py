@@ -91,6 +91,34 @@ class RunawayExplorationReminder(ContextFragment):
         return ("[system notice]", "Do not keep inspecting source.")
 
 
+class CompactionThrashingReminder(ContextFragment):
+    """Pressure compaction circuit-opened on rapid refill: the transcript
+    keeps refilling within a few rounds of each compaction, so further
+    rewrites only kill the prompt cache without lasting relief."""
+
+    content_kind = "reminder.compaction_thrashing"
+    max_tokens = 200
+
+    def __init__(self, refills: int, window: int) -> None:
+        self._refills = refills
+        self._window = window
+
+    def body(self) -> str:
+        return (
+            f"[system notice] Context thrashing: the transcript refilled "
+            f"within {self._window} rounds of a compaction {self._refills} "
+            "times in a row, so pressure compaction is now OFF (each rewrite "
+            "kills the prompt-cache prefix without lasting relief). Converge: "
+            "do not re-read folded tool outputs, page or filter large reads "
+            "instead of dumping them, and finish the task with the context "
+            "you already have."
+        )
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice] Context thrashing:", "")
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -158,6 +186,11 @@ REMINDER_CATALOG: tuple[ReminderEntry, ...] = (
         id="exploration.runaway",
         failure_mode="探索失控：连续非写入调用，含写过之后继续只读",
         fragment=RunawayExplorationReminder,
+    ),
+    ReminderEntry(
+        id="compaction.thrashing",
+        failure_mode="压缩后 3 轮内又填满、连续 3 次（rapid refill）——继续压只毁缓存",
+        fragment=CompactionThrashingReminder,
     ),
 )
 

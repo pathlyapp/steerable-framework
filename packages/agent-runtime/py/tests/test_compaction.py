@@ -565,6 +565,135 @@ async def test_circuit_breaker_opens_after_three_ineffective_compactions() -> No
     assert hooks.compactions == 3
 
 
+def _refill_transcript(base: list[LLMMessage], round_index: int, n_new: int = 2) -> list[LLMMessage]:
+    """Append fresh tool results so the transcript climbs back over
+    threshold — the rapid-refill pattern: each compaction's freed space is
+    eaten by new verbose output within a round."""
+    msgs = list(base)
+    for i in range(n_new):
+        msgs.append(
+            LLMMessage.text_of(
+                "tool", "x" * 240, name="emit", tool_call_id=f"r{round_index}n{i}"
+            )
+        )
+    return msgs
+
+
+@pytest.mark.asyncio
+async def test_rapid_refill_breaker_opens_and_warns() -> None:
+    # CC parity: three compactions in a row whose freed space refills within
+    # 3 rounds open the circuit; the tripping round carries the thrashing
+    # reminder, and the pressure path then stops firing.
+    hooks = CompactionHooks(
+        max_context_tokens=200,
+        threshold_ratio=0.8,
+        keep_last_messages=6,
+        keep_last_tool_results=1,
+        # Small excerpts so a fold actually lands under the tiny test
+        # threshold (the default 160-char excerpt is ~60 tokens each).
+        fold_excerpt_chars=40,
+        recompact_margin_ratio=0.0,  # isolate the refill breaker from hysteresis
+    )
+
+    class _Ctx:
+        round_index = 0
+
+    saw_reminder = False
+    for round_index in range(1, 6):
+        _Ctx.round_index = round_index
+        # A fresh over-threshold transcript each round: the last compaction's
+        # freed space was eaten by new verbose output (the refill pattern).
+        transcript = _refill_transcript([LLMMessage.text_of("user", "go")], round_index, n_new=3)
+        action = await hooks.pre_step(transcript, _Ctx())
+        if round_index <= 4:
+            # Every pass compacts successfully (fold lands under threshold)…
+            assert action.rewrite is not None
+            assert action.rewrite.post_tokens is not None
+            assert action.rewrite.post_tokens < 0.8 * 200
+            if round_index == 4:
+                # …and the third consecutive refill trips the breaker with
+                # the actionable reminder appended.
+                assert action.appends is not None
+                fragment = action.appends[0].fragment
+                assert fragment is not None
+                assert fragment.content_kind == "reminder.compaction_thrashing"
+                assert "thrashing" in action.appends[0].message.content_text
+                saw_reminder = True
+        else:
+            # Breaker open: pressure path stops firing despite the refill.
+            assert action.rewrite is None
+    assert saw_reminder
+    assert hooks.circuit_open is True
+    assert hooks.circuit_reason == "rapid_refill"
+    assert hooks.compactions == 4
+
+
+@pytest.mark.asyncio
+async def test_rapid_refill_count_resets_on_a_healthy_round() -> None:
+    hooks = CompactionHooks(
+        max_context_tokens=200,
+        threshold_ratio=0.8,
+        keep_last_messages=6,
+        keep_last_tool_results=1,
+        fold_excerpt_chars=40,
+        recompact_margin_ratio=0.0,
+    )
+
+    class _Ctx:
+        round_index = 0
+
+    # Two consecutive refills…
+    for round_index in (1, 2):
+        _Ctx.round_index = round_index
+        transcript = _refill_transcript([LLMMessage.text_of("user", "go")], round_index, n_new=3)
+        action = await hooks.pre_step(transcript, _Ctx())
+        assert action.rewrite is not None
+    assert hooks._rapid_refills == 1  # first compaction is the baseline, not a refill
+
+    # …then a healthy round breaks the streak…
+    _Ctx.round_index = 3
+    small = [LLMMessage.text_of("user", "go")]
+    action = await hooks.pre_step(small, _Ctx())
+    assert action.rewrite is None
+    assert hooks._rapid_refills == 0
+
+    # …so two further refills do not trip the breaker.
+    for round_index in (4, 5):
+        _Ctx.round_index = round_index
+        transcript = _refill_transcript([LLMMessage.text_of("user", "go")], round_index, n_new=3)
+        action = await hooks.pre_step(transcript, _Ctx())
+        assert action.rewrite is not None
+    assert hooks.circuit_open is False
+
+
+@pytest.mark.asyncio
+async def test_compact_now_resets_the_refill_streak() -> None:
+    hooks = CompactionHooks(
+        max_context_tokens=200,
+        threshold_ratio=0.8,
+        keep_last_messages=6,
+        keep_last_tool_results=1,
+        fold_excerpt_chars=40,
+        recompact_margin_ratio=0.0,
+    )
+
+    class _Ctx:
+        round_index = 0
+
+    transcript: list[LLMMessage] = []
+    for round_index in (1, 2, 3):
+        _Ctx.round_index = round_index
+        transcript = _refill_transcript([LLMMessage.text_of("user", "go")], round_index, n_new=3)
+        action = await hooks.pre_step(transcript, _Ctx())
+        assert action.rewrite is not None
+    assert hooks._rapid_refills == 2
+
+    # The user takes over: manual compact clears the streak and the history.
+    await hooks.compact_now(list(transcript), _Ctx())
+    assert hooks._rapid_refills == 0
+    assert hooks._last_compact_round is None
+
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_resets_on_a_healthy_round() -> None:
     hooks = CompactionHooks(
