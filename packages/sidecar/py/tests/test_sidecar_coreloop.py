@@ -2427,3 +2427,70 @@ async def test_stream_raw_chunks_off_by_default() -> None:
     chunks = [p for m, p in events if m == "stream.chunk"]
     assert chunks
     assert all("rawChunk" not in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_todo_gate_retries_completion_until_list_is_finished() -> None:
+    """A text-only stop with unfinished todos is vetoed into a retry.
+
+    Regression for long-task stalls (the PPT case): the model narrates
+    progress ("先做到这里") instead of continuing, the draft reads
+    `completed`, and without the gate the turn would end waiting for user
+    input while the chat's todo list still has pending items.
+    """
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="t1",
+                    name="todo_write",
+                    arguments={
+                        "todos": [
+                            {"id": "a", "content": "task a", "status": "completed"},
+                            {"id": "b", "content": "task b", "status": "pending"},
+                        ]
+                    },
+                )
+            ),
+            _text_round("先做到这里"),  # gate vetoes: task b still pending
+            _tool_round(
+                ToolCall(
+                    id="t2",
+                    name="todo_write",
+                    arguments={
+                        "todos": [
+                            {"id": "a", "content": "task a", "status": "completed"},
+                            {"id": "b", "content": "task b", "status": "completed"},
+                        ]
+                    },
+                )
+            ),
+            _text_round("全部完成"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+    register_todo_write(sidecar.tools)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "do two things"}],
+            "useCoreLoop": True,
+            "chatId": "gate-chat",
+        },
+    )
+
+    # Four LLM rounds: list, vetoed stop, list update, real stop. The veto
+    # reminder reached the model-visible transcript naming the pending item.
+    assert provider.attempts == 4
+    assert any(
+        "unfinished" in str(message) and "task b" in str(message)
+        for messages in provider.seen_messages
+        for message in messages
+    )
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"

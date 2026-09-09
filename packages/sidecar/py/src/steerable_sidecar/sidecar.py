@@ -89,6 +89,7 @@ from steerable_agent_runtime import (
     SubagentRegistry,
     ToolDispatchError,
     ToolRouter,
+    TodoCompletionGate,
     TraceRecorder,
     WorldStateHooks,
     branch_label,
@@ -1643,6 +1644,14 @@ class Sidecar:
             )
             hooks = default_harness.hooks
             tool_selection = default_harness.tool_selection
+        # todo completion gate: a turn that ends `completed` while the
+        # chat's todo list still has unfinished items is retried with a
+        # reminder instead of stalling for user input (long-task stall fix).
+        # The gate keys the store by the run's LoopContext.chat_id — the same
+        # id todo_write dispatches with — so it reads the list the model wrote.
+        from .todo_tools import todo_store
+
+        hooks = ChainHooks(hooks, TodoCompletionGate(todo_store()))
         # The bundled spec's tools dimension governs the host-supplied tool
         # surface; the sidecar's own additions below (subagent / skills /
         # orchestration) are orthogonal dimensions advertised past
