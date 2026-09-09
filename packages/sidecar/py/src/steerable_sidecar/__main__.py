@@ -58,7 +58,14 @@ def main() -> int:
     # not brick chat for an optional feature, so the misconfiguration logs
     # loud and the sidecar serves without the web pair.
     try:
-        register_web_tools(sidecar.tools)
+        from .egress_ask import asker_from_environ
+
+        # Egress widening over the host approval channel: only when the
+        # launcher injected the proxy's control endpoint (both env vars) —
+        # otherwise denials stay denials.
+        register_web_tools(
+            sidecar.tools, egress_asker=asker_from_environ(sidecar.server, None)
+        )
     except ValueError as exc:
         logging.getLogger("steerable_sidecar").error(
             "web tools disabled: %s", exc
