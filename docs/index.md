@@ -158,7 +158,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <div class="sf-bench-group sf-bench-group--focus">
 <div class="sf-bench-kicker">Cost × score · every marker measured on both axes</div>
 <p class="sf-bench-blurb">One harness across three models, against each model's own best published number. On DeepSeek-V4-Flash, Steerable is the highest point on the chart and beats DSH on both axes — <strong>84.3%</strong> at $0.17 against <strong>82.7%</strong> at $0.185. On Qwen3.8-27B it is beaten on both: <strong>75.3%</strong> at $0.85 against Artificial Analysis' independent Terminus 2 run at <strong>79.8%</strong> and $0.25.</p>
-<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1 score against cost per solved task. On GLM-5.3-Flash: Steerable 81.7 percent at 14 cents, Claude Code 83 percent at 16 cents, Pi 73 percent at 6 cents, Codex 58 percent at 81 cents. Steerable on DeepSeek-V4-Flash is the highest point at 84.3 percent and 17 cents, above DeepSeek Harness at 82.7 percent and 18.5 cents. Steerable on Qwen3.8-27B is 75.3 percent at 85 cents, below and to the right of an independent Terminus 2 run at xhigh reasoning effort scoring 79.8 percent at 25 cents.">
+<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1 score against cost per solved task. On GLM-5.3-Flash: Steerable 80.7 percent at 15 cents, Claude Code 83 percent at 16 cents, Pi 73 percent at 6 cents, Codex 58 percent at 81 cents. Steerable on DeepSeek-V4-Flash is the highest point at 84.3 percent and 17 cents, above DeepSeek Harness at 82.7 percent and 18.5 cents. Steerable on Qwen3.8-27B is 75.3 percent at 85 cents, below and to the right of an independent Terminus 2 run at xhigh reasoning effort scoring 79.8 percent at 25 cents.">
 <line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
 <line class="grid" x1="136.7" y1="14" x2="136.7" y2="260"/>
 <line class="grid" x1="229.4" y1="14" x2="229.4" y2="260"/>
@@ -201,9 +201,9 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt pt--ref" cx="229.4" cy="77.2" r="5.5"/>
 <text class="lbl" x="240" y="79">Terminus 2</text>
 <text class="sub" x="240" y="88.5">Qwen3.8-27B (xhigh) · 79.8% · $0.25</text>
-<circle class="pt pt--ours" cx="169.3" cy="62.4" r="7"/>
-<text class="lbl lbl--ours" x="158" y="73" text-anchor="end">Steerable</text>
-<text class="sub" x="158" y="82.5" text-anchor="end">GLM-5.3-Flash · 81.7% · $0.14</text>
+<circle class="pt pt--ours" cx="175" cy="70.1" r="7"/>
+<text class="lbl lbl--ours" x="164" y="80.7" text-anchor="end">Steerable</text>
+<text class="sub" x="164" y="90.2" text-anchor="end">GLM-5.3-Flash · 80.7% · $0.15</text>
 <circle class="pt pt--ours" cx="190.4" cy="42.4" r="7"/>
 <text class="lbl lbl--ours" x="190.4" y="23" text-anchor="middle">Steerable</text>
 <text class="sub" x="190.4" y="33.5" text-anchor="middle">DeepSeek-V4-Flash · 84.3% · $0.17</text>
