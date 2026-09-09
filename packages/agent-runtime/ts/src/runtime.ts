@@ -591,6 +591,21 @@ export class AgentRuntime {
   }
 
   /**
+   * Per-exec enforcement this host can actually reach (`sandbox.describe`),
+   * given the egress arguments a turn will send. Hosts that set
+   * `execSandbox.requireFull` from a platform guess refuse every shell call
+   * on backends that cannot pin per-host (bwrap, Landlock, Windows). Probe
+   * once and require full only when the reply is `full`.
+   */
+  describeSandbox(params?: {
+    network?: boolean;
+    allowedHosts?: string[];
+    shell?: string;
+  }): Promise<{ backend: string; enforcement: 'full' | 'partial' | 'none' }> {
+    return this.process.request('sandbox.describe', params);
+  }
+
+  /**
    * The framework-owned harness vocabulary (`harness.describe`, W1.2.2):
    * every dimension's available implementations with their assumption
    * contracts, plus the active default selection. Host harness pickers

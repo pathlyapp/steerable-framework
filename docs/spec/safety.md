@@ -449,16 +449,22 @@ All three layers are **on by default** in the DeepPath desktop build:
   rather than that it is running unconfined.
 - **Layer 3 (per-exec sandbox)** is sent on every chat turn as
   `execSandbox: {enabled, writableRoots: [project root], network: true,
-  allowedHosts: [provider endpoint], requireFull: false,
-  requireBackend: true}`. The backend is
+  allowedHosts: [egress proxy endpoint, else provider endpoint],
+  requireFull, requireBackend: true}`. The backend is
   picked per platform: Seatbelt on macOS, bwrap → Landlock on Linux (both
   probe-gated), Windows `hostSpawn` via `win-spawn-helper`. `requireBackend`
   refuses `enforcement: "none"` so a command never runs unsandboxed when
-  confinement was requested. `requireFull` stays false: the desktop's
-  `network: true` makes every current backend honest-`partial` (open egress
-  on bwrap/Landlock, port-only on Seatbelt, network unenforced on Windows),
-  and `requireFull` would refuse shell even on macOS. `STEERABLE_EXEC_SANDBOX=0`
-  restores unconfined execution.
+  confinement was requested. `requireFull` follows what the host can
+  actually reach, asked once at boot through `sandbox.describe` with the
+  turn's egress arguments: with the egress proxy live the allow-list is a
+  single localhost endpoint, which Seatbelt pins per host and reports
+  `full`, so macOS requires it; bwrap and Landlock have no per-host pinning
+  <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
+  and Windows has no rewriter backend, so those report `partial`/`none`
+  and the desktop leaves `requireFull` off rather than refusing every shell
+  call. Deriving it from a platform check instead denied all shell on Linux
+  for as long as the proxy was up. `STEERABLE_EXEC_SANDBOX=0` restores
+  unconfined execution.
 - **Approval algebra** runs in host mode on every turn: the sidecar's
   `ApprovalExecutor` asks the Electron approval modal over the reverse
   channel (`approval.request`), the user picks among the seven variants
