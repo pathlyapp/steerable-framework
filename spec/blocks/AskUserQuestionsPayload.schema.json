@@ -25,7 +25,7 @@
       "items": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["id", "text"],
+        "required": ["id", "text", "multiSelect"],
         "properties": {
           "id": { "type": "string" },
           "text": { "type": "string" },
@@ -43,7 +43,10 @@
             "description": "Choices for a select question (2-4, CC parity). The host auto-appends an 'Other' free-text escape; the model does not list it."
           },
           "placeholder": { "type": ["string", "null"] },
-          "multiSelect": { "type": "boolean", "default": false }
+          "multiSelect": {
+            "type": "boolean",
+            "description": "Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly."
+          }
         }
       }
     }
