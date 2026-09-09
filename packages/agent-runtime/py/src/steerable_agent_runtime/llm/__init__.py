@@ -158,7 +158,9 @@ from .errors import (
     classify_http_status,
     is_retryable,
 )
+from .google_genai import GoogleGenAIProvider
 from .openai_compat import OpenAICompatProvider
+from .openai_responses import OpenAIResponsesProvider
 from .presets import (
     PROVIDER_PRESETS,
     PresetEntry,
@@ -174,6 +176,7 @@ __all__ = [
     "RETRYABLE_KINDS",
     "AnthropicProvider",
     "ContentPart",
+    "GoogleGenAIProvider",
     "ImagePart",
     "LLMError",
     "LLMErrorKind",
@@ -188,6 +191,7 @@ __all__ = [
     "describe_compat_flags",
     "describe_provider_presets",
     "OpenAICompatProvider",
+    "OpenAIResponsesProvider",
     "TextPart",
     "classify_error",
     "classify_http_status",

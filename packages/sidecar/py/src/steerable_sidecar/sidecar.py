@@ -828,7 +828,8 @@ class Sidecar:
         Params shape (all optional unless noted)::
 
             {
-              "provider": "openai_compat" | "anthropic" | <custom>,  # required
+              "provider": "openai_compat" | "anthropic"             # required
+                        | "openai-responses" | "google" | <custom>,
               "model": "gpt-4o-mini",                                # required
               "messages": [{"role": "...", "content": "..."}],       # required
               "baseUrl": "https://api.example.com/v1",
@@ -2991,6 +2992,39 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                         api_key=api_key,
                         model=str(model),
                     )
+                )
+            )
+        )
+    if provider_kind in {"openai-responses", "openai_responses", "responses", "xai"}:
+        from steerable_agent_runtime.llm import OpenAIResponsesProvider
+
+        resolved_base_url = (
+            base_url
+            or ("https://api.x.ai/v1" if provider_kind == "xai" else None)
+            or "https://api.openai.com/v1"
+        )
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                OpenAIResponsesProvider(
+                    name=provider_kind or "openai-responses",
+                    base_url=resolved_base_url,
+                    api_key=api_key,
+                    model=str(model),
+                    preset=_resolve_preset_param(params),
+                )
+            )
+        )
+    if provider_kind in {"google", "gemini", "google-genai", "google_genai"}:
+        from steerable_agent_runtime.llm import GoogleGenAIProvider
+
+        return _wrap_with_recording(
+            _wrap_with_calibration(
+                GoogleGenAIProvider(
+                    name=provider_kind or "google",
+                    base_url=base_url or "https://generativelanguage.googleapis.com",
+                    api_key=api_key,
+                    model=str(model),
+                    preset=_resolve_preset_param(params),
                 )
             )
         )
