@@ -167,8 +167,8 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
                 call_id="call_bad",
             )
         if index == 1:
-            # Valid minimal select: no header, no multiSelect — the reverse
-            # payload must carry the derived header and the stamped boolean.
+            # Violation: multiSelect omitted — CC parity requires the model
+            # to commit to single vs multi explicitly.
             return sse_tool_call(
                 "ask_user",
                 {
@@ -179,6 +179,25 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
                             "text": "Which flavor do you want?",
                             "type": "select",
                             "options": ["vanilla", "chocolate"],
+                        }
+                    ],
+                },
+                call_id="call_no_multiselect",
+            )
+        if index == 2:
+            # Valid minimal select: no header — the reverse payload must
+            # carry the derived header and the committed multiSelect.
+            return sse_tool_call(
+                "ask_user",
+                {
+                    "intro": "pick one",
+                    "questions": [
+                        {
+                            "id": "flavor",
+                            "text": "Which flavor do you want?",
+                            "type": "select",
+                            "options": ["vanilla", "chocolate"],
+                            "multiSelect": False,
                         }
                     ],
                 },
@@ -195,15 +214,19 @@ async def test_ask_user_schema_enforced_and_normalized_over_reverse_channel(
     )
     await _await_done(client, result["streamId"])
 
-    # The violation came back as a tool result naming the bound…
-    assert len(mock.requests) == 3
-    tool_msgs = [
+    # Both violations came back as tool results naming the fix…
+    assert len(mock.requests) == 4
+    tool_msgs_1 = [
         m for m in mock.requests[1]["messages"] if m.get("role") == "tool"
     ]
-    assert any("1-4" in str(m.get("content")) for m in tool_msgs)
+    assert any("1-4" in str(m.get("content")) for m in tool_msgs_1)
+    tool_msgs_2 = [
+        m for m in mock.requests[2]["messages"] if m.get("role") == "tool"
+    ]
+    assert any("multiSelect is required" in str(m.get("content")) for m in tool_msgs_2)
 
     # …and the retry reached the host normalized: derived header (<=12
-    # chars), multiSelect stamped, options intact.
+    # chars), the committed multiSelect, options intact.
     assert len(client.ask_user_payloads) == 1
     question = client.ask_user_payloads[0]["questions"][0]
     assert question["header"] and len(question["header"]) <= 12

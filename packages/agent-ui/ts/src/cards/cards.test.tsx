@@ -149,7 +149,7 @@ describe('AskUserQuestionsCard', () => {
         payload={{
           intro: '请回答',
           questions: [
-            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'] },
+            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'], multiSelect: false },
           ],
         }}
         onSubmit={onSubmit}
@@ -166,7 +166,7 @@ describe('AskUserQuestionsCard', () => {
         payload={{
           intro: '请回答',
           questions: [
-            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'] },
+            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'], multiSelect: false },
           ],
           answers: { q1: '学习' },
         }}
@@ -183,7 +183,7 @@ describe('AskUserQuestionsCard', () => {
         payload={{
           intro: '请回答',
           questions: [
-            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'] },
+            { id: 'q1', text: '你的目标？', type: 'select', options: ['学习', '工作'], multiSelect: false },
           ],
         }}
         onSubmit={vi.fn()}
@@ -202,7 +202,7 @@ describe('AskUserQuestionsCard', () => {
         payload={{
           intro: '请回答',
           questions: [
-            { id: 'q1', text: '其他想法？', type: 'select', options: ['学习', '工作'] },
+            { id: 'q1', text: '其他想法？', type: 'select', options: ['学习', '工作'], multiSelect: false },
           ],
         }}
         allowCustomText
@@ -226,7 +226,7 @@ describe('AskUserQuestionsCard', () => {
         payload={{
           intro: '请回答',
           questions: [
-            { id: 'q1', text: '其他想法？', type: 'select', options: ['学习', '工作'] },
+            { id: 'q1', text: '其他想法？', type: 'select', options: ['学习', '工作'], multiSelect: false },
           ],
         }}
         customLabel="自定义"
