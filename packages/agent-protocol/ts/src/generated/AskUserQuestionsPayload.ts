@@ -29,7 +29,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         }
       ]
@@ -50,7 +53,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -69,7 +75,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         }
       ]
@@ -90,7 +99,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -109,7 +121,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -128,7 +143,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         }
       ]
@@ -149,7 +167,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -168,7 +189,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -187,7 +211,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         },
         {
@@ -206,7 +233,10 @@ export interface AskUserQuestionsPayload {
            */
           options?: [string, string] | [string, string, string] | [string, string, string, string];
           placeholder?: string | null;
-          multiSelect?: boolean;
+          /**
+           * Whether the user may pick several options. Required (CC parity): the model commits to single vs multi explicitly.
+           */
+          multiSelect: boolean;
           [k: string]: any;
         }
       ];

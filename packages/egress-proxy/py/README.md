@@ -54,3 +54,32 @@ request bodies → `501`. One inject rule per proxy. `--inject-header`
 switches the header (e.g. `x-api-key`); `--inject-scheme http` exists for
 loopback test upstreams only. TLS is never intercepted — the CONNECT path
 stays opaque byte plumbing.
+
+## Control endpoint (session-scoped widening)
+
+```sh
+STEERABLE_EGRESS_CONTROL_TOKEN='random-token' \
+steerable-egress-proxy --bind 127.0.0.1:8899 \
+    --allow api.deepseek.com \
+    --control-port 0 \
+    --control-token-env STEERABLE_EGRESS_CONTROL_TOKEN
+```
+
+With a control token configured, the proxy also serves one loopback-only
+endpoint, `POST /allow {"host": "example.com[:port]"}` with
+`Authorization: Bearer <token>`, which adds a **session-scoped** entry to
+the allow-list (it dies with the process; the baseline list stays
+immutable). The ephemeral port is reported on stdout as
+`EGRESS_CONTROL_PORT=<port>`.
+
+This exists for the ask-the-user flow: a denied `CONNECT` gets a `403`
+whose reason phrase names the target (`... egress denied for host:port` —
+the only metadata channel a CONNECT client can see), the sidecar's web
+tools parse that and ask the host UI for a widening decision, and an allow
+is relayed here before the fetch retries once.
+
+The bearer token is the whole authorization story. Pass it by env, never
+argv (visible in `ps`); the sidecar's sandboxed children run with a
+scrubbed environment that excludes it, so a confined process cannot widen
+its own egress. Without `--control-token-env` there is no control plane
+at all.

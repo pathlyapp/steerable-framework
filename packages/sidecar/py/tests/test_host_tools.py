@@ -323,6 +323,7 @@ async def test_ask_user_round_trip_over_reverse_channel() -> None:
                                 "text": "Which color?",
                                 "type": "select",
                                 "options": ["red", "blue"],
+                                "multiSelect": False,
                             }
                         ],
                     },
@@ -426,6 +427,7 @@ async def test_ask_user_intercepted_under_tools_via_host() -> None:
                                 "text": "Which color?",
                                 "type": "select",
                                 "options": ["red", "blue"],
+                                "multiSelect": False,
                             }
                         ],
                     },

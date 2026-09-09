@@ -824,6 +824,7 @@ async def _fetch(
     client_factory: ClientFactory,
     resolve_host: ResolveHost,
     egress_confined: bool = False,
+    egress_asker: Any | None = None,
 ) -> ToolResult:
     timeout = httpx.Timeout(config.fetch_timeout_ms / 1000)
     current = url
@@ -867,6 +868,37 @@ async def _fetch(
                     error=(
                         f"web_fetch timed out after {config.fetch_timeout_ms}ms "
                         f"fetching {current}"
+                    ),
+                    needsFollowup=True,
+                )
+            except httpx.ProxyError as exc:
+                # The egress proxy's 403 names the denied host in its reason
+                # phrase. With an asker wired (desktop host-approval mode),
+                # offer the user a widening grant instead of a dead end; an
+                # allow lands in the proxy's session set and the fetch
+                # retries once with the asker off, so a second denial is
+                # final. ProxyError is an HTTPError subclass — this branch
+                # must stay above the generic one.
+                if egress_asker is not None:
+                    from .egress_ask import parse_egress_denied
+
+                    denied = parse_egress_denied(exc)
+                    if denied is not None and await egress_asker.ask_and_allow(
+                        denied[0], denied[1], current
+                    ):
+                        return await _fetch(
+                            url,
+                            config=config,
+                            client_factory=client_factory,
+                            resolve_host=resolve_host,
+                            egress_confined=egress_confined,
+                            egress_asker=None,
+                        )
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"web_fetch request failed for {current}: {exc}"
+                        + (_CONFINED_PROXY_HINT if egress_confined else "")
                     ),
                     needsFollowup=True,
                 )
@@ -978,6 +1010,7 @@ def register_web_tools(
     client_factory: ClientFactory | None = None,
     resolve_host: ResolveHost | None = None,
     environ: Mapping[str, str] | None = None,
+    egress_asker: Any | None = None,
 ) -> list[str]:
     """Register ``web_fetch`` (always) and ``web_search`` (when a search
     backend is configured) on ``router``. Returns the registered names.
@@ -1046,6 +1079,7 @@ def register_web_tools(
             client_factory=make_client,
             resolve_host=resolve,
             egress_confined=confined,
+            egress_asker=egress_asker,
         )
 
     router.register(

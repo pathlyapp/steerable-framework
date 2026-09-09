@@ -102,14 +102,21 @@ each tier is independently adoptable.
   registration wins, the offender is named). What we still lack versus
   Claude Code is the marketplace, blocklist, and impersonation check — the
   runtime is there, the distribution trust layer is not.
-- **Context compaction now ships four paths** — pressure-triggered,
-  overflow-reactive, periodic micro-compaction (tool-result pruning), and
-  manual (`compact_now`, the host-command path) — with a circuit breaker
-  that stops the pressure path after three consecutive ineffective
-  compactions and `pre_tokens` / `post_tokens` estimates recorded on every
-  `CompactionBoundary` (the `compact_boundary` observability pattern).
-  What we still lack is Claude Code's partial-compaction variant that
-  preserves named conversation sections.
+- **Context compaction now ships four paths and both breakers** —
+  pressure-triggered, overflow-reactive, periodic micro-compaction
+  (tool-result pruning), and manual (`compact_now`, the host-command
+  path). Two circuit breakers match Claude Code's pair: the failure
+  breaker stops the pressure path after three consecutive ineffective
+  compactions, and the rapid-refill breaker stops it after three
+  consecutive compactions whose freed space refills within three rounds —
+  the tripping round appends an actionable thrashing reminder (model- and
+  UI-visible) telling the model to converge instead of re-reading folded
+  output. `pre_tokens` / `post_tokens` estimates are recorded on every
+  `CompactionBoundary` (the `compact_boundary` observability pattern), and
+  a hysteresis margin (which CC does not have) keeps a borderline
+  transcript from re-compacting every round. What we still lack is
+  Claude Code's partial-compaction variant that preserves named
+  conversation sections.
 - **Structured questions reach the model end-to-end, at Claude Code's
   constraints.** The `ask_user` tool registers sidecar-side per request,
   the desktop answers over the reverse channel with a rendered question
@@ -140,7 +147,16 @@ each tier is independently adoptable.
   lack is a self-hosted usage-accounting service, and Harbor evals run
   `--no-web-tools` regardless.
 - **Provider compatibility is data, now including per-model optimal
-  parameters.** Vendor wire divergences are flag entries
+  parameters.** Four wire protocols ship: OpenAI-compatible
+  chat/completions (`OpenAICompatProvider` — covers OpenAI, Ollama, vLLM,
+  DeepSeek, Groq, Mistral, Moonshot, Together and the rest of the
+  chat/completions ecosystem), OpenAI Responses (`OpenAIResponsesProvider`
+  — the item-based wire where the o-series / gpt-5 reasoning models expose
+  their full capability set, with `store: false` + encrypted-reasoning
+  round-trips; also serves xAI), Anthropic-native (`AnthropicProvider`),
+  and Gemini-native (`GoogleGenAIProvider` — `generateContent` /
+  `streamGenerateContent`, where thinking config and cached content are
+  first-class). Vendor wire divergences are flag entries
   (`PROVIDER_COMPAT_HOSTS`), and a preset table (`llm.presets`) fills
   vendor-documented sampling optima for the open-weight families —
   DeepSeek (0.0 for coding, nothing for the fixed-1.0 reasoner), Qwen3
@@ -148,9 +164,9 @@ each tier is independently adoptable.
   (1.0 / 1.0 / effort `medium`), MiniMax (1.0 / 0.95 / `top_k` 40) — keyed
   by base-URL host and model leaf, applied only where the caller left the
   field unset, with compat flags still gating what may be sent. What we
-  still lack is a third *protocol* family beyond OpenAI-compatible and
-  Anthropic-native (Gemini-native), and a remote model catalog with
-  ETag-cached updates like Codex's.
+  still lack is Bedrock Converse (the enterprise AWS path; boto3-weighted,
+  and Bedrock's OpenAI-compatible proxy covers the interim) and a remote
+  model catalog with ETag-cached updates like Codex's.
 - **Sandbox coverage.** Layer-1 OS confinement covers macOS (Seatbelt) and
   Linux (bwrap, falling back to Landlock). Windows has no rewriter and relies <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
   on the layer-2 classifier plus consent. Egress control is productized: the
@@ -162,6 +178,16 @@ each tier is independently adoptable.
   enforced by the proxy plus the app-layer domain list, not the namespace —
   the UI says so honestly. When the proxy is live, shell egress pins to its
   localhost endpoint, Seatbelt reports `full`, and `requireFull` defaults on.
+  A denied CONNECT is no longer a dead end: the proxy's 403 names the
+  target, and the web tools offer a host approval round-trip — an allow
+  lands as a session-scoped allow-list addition via the proxy's loopback
+  control endpoint (bearer-token'd; the token never reaches sandboxed
+  children, so a confined process cannot widen its own egress) and the
+  fetch retries once. The approval UI defaults to deny for these prompts
+  and hides the durable variants (the list is process-lifetime; durable
+  grants belong to the configured domain list). The ambient-proxy fallback
+  is disclosed in the security settings panel with its reason, not just in
+  the main-process log.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream (post-hoc OTLP export only).
 - **Multi-agent: one delegate tool on a shared pool.** The model-facing
@@ -188,8 +214,6 @@ each tier is independently adoptable.
 The score of record is **Steerable + GLM-5.3-Flash = 80.7%** on the 89-task catalog (six-run mean at tag `tb-8e260de`; see [Evals](evals.md)). That is a Flash-cost model in the same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%) on the [public 2.1 board](https://snorkel.ai/leaderboard/terminal-bench-2-1/). Z.AI's own Claude Code run of GLM-5.3-Flash is 84.3% under a 6-hour timeout — we are behind that vendor protocol, and still in the usable band.
 
 In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 80.7% at **$0.146**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the six-run spread in mind: our sample standard deviation is 2.9 points, wide enough to contain the 2.4-point gap.
-
-In our own controlled matrix — same model, same gateway account, same Harbor protocol — Claude Code scores 83.1% at **$0.162 per solved task** against our 81.7% at **$0.138**, and Pi scores 73.4% at $0.061. Pass rate and cost per solved task are tracked as co-equal metrics precisely because they can move in opposite directions. Read both numbers with the three-run spread in mind: our sample standard deviation is 4.3 points, wide enough to contain the 1.4-point gap.
 
 ## Choosing
 

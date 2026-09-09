@@ -86,6 +86,24 @@ def main(argv: list[str] | None = None) -> int:
             "The injected credential is not recorded."
         ),
     )
+    parser.add_argument(
+        "--control-port",
+        type=int,
+        default=0,
+        metavar="PORT",
+        help=(
+            "loopback control endpoint port (0 = ephemeral, printed at "
+            "startup). Requires --control-token-env."
+        ),
+    )
+    parser.add_argument(
+        "--control-token-env",
+        metavar="VAR",
+        help=(
+            "env var holding the control endpoint's bearer token. The value "
+            "never appears in argv (visible in ps) — only the var name does."
+        ),
+    )
     args = parser.parse_args(argv)
 
     bind_host, sep, bind_port_s = args.bind.rpartition(":")
@@ -121,6 +139,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.record_requests and inject is None:
         print("error: --record-requests requires --inject-host", file=sys.stderr)
         return 2
+    control_token: str | None = None
+    if args.control_token_env:
+        control_token = os.environ.get(args.control_token_env, "")
+        if not control_token:
+            print(
+                f"error: control token env var {args.control_token_env!r} is empty or unset",
+                file=sys.stderr,
+            )
+            return 2
     try:
         bind_port = int(bind_port_s)
         allow = AllowList(args.allow)
@@ -131,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
             connect_timeout_s=args.connect_timeout,
             inject=inject,
             record_requests=args.record_requests,
+            control_token=control_token,
+            control_port=args.control_port,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

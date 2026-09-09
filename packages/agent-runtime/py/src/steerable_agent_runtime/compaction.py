@@ -57,6 +57,14 @@ Two safety rails share the machinery:
   the turn still fails loud (bounded retries, then a named error) instead
   of spinning. A round that lands under threshold — or any successful
   compaction — resets the count.
+- A **rapid-refill breaker** (CC parity): a compaction that lands under
+  threshold but refills within ``rapid_refill_window_rounds`` rounds of the
+  previous one counts as a refill; ``max_rapid_refills`` consecutive
+  refills open the same circuit — the transcript is churning faster than
+  compaction can help, so further rewrites only kill the prompt cache.
+  The tripping round appends a ``CompactionThrashingReminder`` (model- and
+  UI-visible) with an actionable converge notice. ``circuit_reason``
+  records which breaker tripped.
 """
 
 from __future__ import annotations
@@ -64,9 +72,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .hooks import NoopHooks, PreStepAction, RetryAction, RewriteRequest
+from .hooks import NoopHooks, PreStepAction, RetryAction, RewriteRequest, TranscriptAppend
 from .llm import LLMMessage, LLMProvider
 from .llm.errors import classify_error
+from .reminders import CompactionThrashingReminder
 from .tokens import estimate_tokens
 
 _SUMMARY_MARKER = "[context compacted: earlier conversation summarized]"
@@ -108,6 +117,8 @@ class CompactionHooks(NoopHooks):
         recompact_margin_ratio: float = 0.1,
         fold_excerpt_chars: int = _FOLD_EXCERPT_CHARS,
         micro_compact_interval_rounds: int = 0,
+        rapid_refill_window_rounds: int = 3,
+        max_rapid_refills: int = 3,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
@@ -115,6 +126,10 @@ class CompactionHooks(NoopHooks):
             raise ValueError("recompact_margin_ratio must be >= 0")
         if not 0 <= micro_compact_interval_rounds:
             raise ValueError("micro_compact_interval_rounds must be >= 0")
+        if not 1 <= rapid_refill_window_rounds:
+            raise ValueError("rapid_refill_window_rounds must be >= 1")
+        if not 1 <= max_rapid_refills:
+            raise ValueError("max_rapid_refills must be >= 1")
         self._max_tokens = max_context_tokens
         self._threshold = threshold_ratio
         self._keep_last = keep_last_messages
@@ -155,9 +170,22 @@ class CompactionHooks(NoopHooks):
         #: parity). The overflow path is bounded separately and unaffected.
         self.max_consecutive_failures = 3
         self._consecutive_failures = 0
+        #: Rapid-refill breaker (CC parity): a compaction that *worked* but
+        #: whose freed space refills within ``rapid_refill_window_rounds``
+        #: rounds counts as a refill; ``max_rapid_refills`` consecutive
+        #: refills open the circuit — the transcript is churning faster than
+        #: compaction can help, and each rewrite only kills the prompt-cache
+        #: prefix. Distinct from the failure breaker above, which catches
+        #: compactions that never get under threshold at all.
+        self.rapid_refill_window_rounds = rapid_refill_window_rounds
+        self.max_rapid_refills = max_rapid_refills
+        self._rapid_refills = 0
+        self._last_compact_round: int | None = None
         # Observability: True once the breaker tripped; the pressure path
         # stops firing for the rest of the session.
         self.circuit_open = False
+        #: Which breaker tripped: "consecutive_failures" | "rapid_refill".
+        self.circuit_reason: str | None = None
 
     def _estimate(self, transcript: Sequence[LLMMessage]) -> int:
         return estimate_tokens(transcript, model=self._model)
@@ -214,9 +242,10 @@ class CompactionHooks(NoopHooks):
                 )
         pressure = self._pressure(transcript, ctx)
         if pressure < self._threshold * self._max_tokens:
-            # A healthy round resets the breaker count — the pathology (or
-            # the transcript that caused it) is gone.
+            # A healthy round resets both breaker counts — the pathology
+            # (or the transcript that caused it) is gone.
             self._consecutive_failures = 0
+            self._rapid_refills = 0
             return PreStepAction(kind="proceed")
         if self.circuit_open:
             # Breaker tripped: further pressure rewrites only invalidate the
@@ -234,6 +263,7 @@ class CompactionHooks(NoopHooks):
         if self._estimate(compacted) < threshold:
             self.compactions += 1
             self._consecutive_failures = 0
+            notice = self._note_successful_compaction(round_index)
             self._last_compaction_pressure = pressure
             self._reset_observed(ctx)
             return PreStepAction(
@@ -245,13 +275,17 @@ class CompactionHooks(NoopHooks):
                     pre_tokens=pressure,
                     post_tokens=self._estimate(compacted),
                 ),
+                appends=[notice] if notice is not None else None,
+                append_action="reminder" if notice is not None else None,
             )
 
         compacted = await self._summarize_middle(compacted)
         post = self._estimate(compacted)
         self.compactions += 1
+        notice: TranscriptAppend | None = None
         if post < threshold:
             self._consecutive_failures = 0
+            notice = self._note_successful_compaction(round_index)
         else:
             # Ineffective: even fold+summarize stayed over threshold (e.g. a
             # single kept tool result bigger than the window). Three in a
@@ -259,6 +293,7 @@ class CompactionHooks(NoopHooks):
             self._consecutive_failures += 1
             if self._consecutive_failures >= self.max_consecutive_failures:
                 self.circuit_open = True
+                self.circuit_reason = "consecutive_failures"
         self._last_compaction_pressure = pressure
         self._reset_observed(ctx)
         return PreStepAction(
@@ -270,7 +305,37 @@ class CompactionHooks(NoopHooks):
                 pre_tokens=pressure,
                 post_tokens=post,
             ),
+            appends=[notice] if notice is not None else None,
+            append_action="reminder" if notice is not None else None,
         )
+
+    def _note_successful_compaction(self, round_index: int) -> TranscriptAppend | None:
+        """Rapid-refill bookkeeping for a compaction that landed under
+        threshold. A refill is a successful compaction within
+        ``rapid_refill_window_rounds`` of the previous one; on the
+        ``max_rapid_refills``-th consecutive refill the circuit opens and
+        the round carries the thrashing reminder so both the model and the
+        host UI see the actionable notice."""
+        if (
+            self._last_compact_round is not None
+            and round_index - self._last_compact_round <= self.rapid_refill_window_rounds
+        ):
+            self._rapid_refills += 1
+        else:
+            self._rapid_refills = 0
+        self._last_compact_round = round_index
+        if self._rapid_refills >= self.max_rapid_refills and not self.circuit_open:
+            self.circuit_open = True
+            self.circuit_reason = "rapid_refill"
+            reminder = CompactionThrashingReminder(
+                self._rapid_refills, self.rapid_refill_window_rounds
+            )
+            return TranscriptAppend(
+                message=LLMMessage.text_of(reminder.role, reminder.render()),
+                kind=reminder.content_kind,
+                fragment=reminder,
+            )
+        return None
 
     async def compact_now(self, transcript: list[LLMMessage], ctx: Any) -> PreStepAction:
         """Manual compaction (CC ``/compact`` parity): fold old tool results,
@@ -278,12 +343,14 @@ class CompactionHooks(NoopHooks):
         circuit breaker — the user asked for it. Returns a ``proceed`` action
         carrying the rewrite; when neither stage changes anything the action
         carries no rewrite (nothing was worth invalidating the cache for).
-        A manual pass resets the breaker count: the user has taken over.
+        A manual pass resets both breaker counts: the user has taken over.
         """
         pre = self._estimate(transcript)
         compacted = self._fold_old_tool_results(transcript)
         compacted = await self._summarize_middle(compacted)
         self._consecutive_failures = 0
+        self._rapid_refills = 0
+        self._last_compact_round = None
         if compacted is transcript or compacted == transcript:
             return PreStepAction(kind="proceed", reason="compact: nothing to fold")
         self.compactions += 1

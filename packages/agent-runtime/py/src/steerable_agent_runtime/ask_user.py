@@ -71,9 +71,16 @@ ASK_USER_SCHEMA: dict[str, Any] = {
                         ),
                     },
                     "placeholder": {"type": "string"},
-                    "multiSelect": {"type": "boolean"},
+                    "multiSelect": {
+                        "type": "boolean",
+                        "description": (
+                            "Whether the user may pick several options. "
+                            "Required (CC parity): commit to single vs multi "
+                            "explicitly — pass false for a single-select."
+                        ),
+                    },
                 },
-                "required": ["id", "text"],
+                "required": ["id", "text", "multiSelect"],
             },
         },
     },
@@ -170,12 +177,15 @@ def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]
                 f"ask_user: questions[{index}].header is {len(header)} chars; "
                 f"the chip label must be <= {_MAX_HEADER_LEN}."
             )
-        # multiSelect: CC requires the model to commit to single vs multi.
-        # Default to False when absent so existing single-select calls keep
-        # working, but stamp it so hosts always read an explicit boolean.
+        # multiSelect: CC requires the model to commit to single vs multi —
+        # the field is required, so an omission is a model error to fix, not
+        # a default to assume.
         if "multiSelect" not in q or q["multiSelect"] is None:
-            q["multiSelect"] = False
-        elif not isinstance(q["multiSelect"], bool):
+            raise ToolDispatchError(
+                f"ask_user: questions[{index}].multiSelect is required "
+                "(CC parity) — pass false for a single-select question."
+            )
+        if not isinstance(q["multiSelect"], bool):
             raise ToolDispatchError(
                 f"ask_user: questions[{index}].multiSelect must be a boolean, "
                 f"got {type(q['multiSelect']).__name__}."
