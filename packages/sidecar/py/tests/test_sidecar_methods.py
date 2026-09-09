@@ -213,10 +213,139 @@ def test_resolve_preset_param_mapping() -> None:
         _resolve_preset_param({"presets": {"override": {"bogus": 1}}})
 
 
+async def test_models_list_requires_a_base_url(sidecar: Sidecar, monkeypatch) -> None:
+    monkeypatch.delenv("STEERABLE_BASE_URL", raising=False)
+    response = await _call(sidecar, "models.list")
+    assert response["error"]["kind"] == "invalid_params"
+    assert "baseUrl" in response["error"]["message"]
+
+
+async def test_models_list_offline_is_a_200_not_an_rpc_error(
+    sidecar: Sidecar, monkeypatch
+) -> None:
+    # An unreachable gateway must not break the host's settings screen.
+    from steerable_agent_runtime.gateway_catalog import (
+        GatewayCatalogError,
+        clear_gateway_cache,
+    )
+
+    clear_gateway_cache()
+
+    async def _fail(base_url, api_key=None, **kwargs):
+        raise GatewayCatalogError(base_url, "connection refused")
+
+    monkeypatch.setattr(
+        "steerable_agent_runtime.gateway_catalog.fetch_gateway_models", _fail
+    )
+    response = await _call(sidecar, "models.list", {"baseUrl": "http://x/v1"})
+    result = response["result"]
+    assert result["catalogStatus"] == "offline"
+    assert result["models"] == []
+    assert "connection refused" in result["error"]
+
+
+async def test_models_list_serializes_joined_rows_and_registers_them(
+    sidecar: Sidecar, monkeypatch
+) -> None:
+    from steerable_agent_runtime import resolve_model_info
+    from steerable_agent_runtime.gateway_catalog import (
+        GatewayListing,
+        clear_gateway_cache,
+        parse_models_listing,
+    )
+    from steerable_agent_runtime.model_info import (
+        _gateway_infos,
+        clear_gateway_models,
+    )
+
+    clear_gateway_cache()
+    snapshot = dict(_gateway_infos)
+    clear_gateway_models()
+    try:
+
+        async def _live(base_url, api_key=None, **kwargs):
+            import time
+
+            return GatewayListing(
+                entries=tuple(
+                    parse_models_listing(
+                        {
+                            "data": [
+                                {
+                                    "id": "openai/qwen/qwen3.8-27b",
+                                    "name": "Qwen 3.8 27B",
+                                    "context_length": 500_000,
+                                    "pricing": {
+                                        "prompt": "0.0000002",
+                                        "completion": "0.0000008",
+                                    },
+                                },
+                                {"id": "acme/internal-9"},
+                            ]
+                        }
+                    )
+                ),
+                fetched_at=time.time(),
+                stale=False,
+            )
+
+        monkeypatch.setattr(
+            "steerable_agent_runtime.gateway_catalog.fetch_gateway_models", _live
+        )
+        response = await _call(sidecar, "models.list", {"baseUrl": "http://gw/v1"})
+        result = response["result"]
+        assert result["catalogStatus"] == "live"
+        qwen, acme = result["models"]
+        # Catalog join: levels from the leaf match, window from the gateway.
+        assert qwen["joinedFrom"].lower().endswith("qwen3.8-27b")
+        assert qwen["reasoningLevels"] == ["low", "medium", "xhigh"]
+        assert qwen["window"] == 500_000
+        assert qwen["pricing"] == {
+            "promptPerMtok": pytest.approx(0.2),
+            "completionPerMtok": pytest.approx(0.8),
+        }
+        assert qwen["capabilities"] == "known"
+        # Unknown id: listed (discovery, not whitelist), marked unknown.
+        assert acme["joinedFrom"] is None
+        assert acme["capabilities"] == "unknown"
+        # The fetch installed the listing into the runtime resolution path.
+        assert (
+            resolve_model_info("openai/qwen/qwen3.8-27b").context_window == 500_000
+        )
+    finally:
+        clear_gateway_models()
+        _gateway_infos.update(snapshot)
+
+
+def test_factory_validates_reasoning_effort_strict() -> None:
+    from steerable_sidecar.sidecar import default_llm_provider_factory
+
+    # A level the model supports passes construction…
+    provider = default_llm_provider_factory(
+        {
+            "provider": "openai",
+            "model": "deepseek-reasoner",
+            "baseUrl": "http://x/v1",
+            "reasoningEffort": "low",
+        }
+    )
+    assert provider is not None
+    # …a level it cannot honor fails at construction (RPC invalid_params),
+    # not mid-stream.
+    with pytest.raises(ValueError, match="no reasoning-effort knob"):
+        default_llm_provider_factory(
+            {
+                "provider": "openai",
+                "model": "deepseek-chat",
+                "baseUrl": "http://x/v1",
+                "reasoningEffort": "low",
+            }
+        )
+
+
 async def test_harness_describe_serves_registry_and_default(
     sidecar: Sidecar,
-) -> None:
-    # W1.2.2: hosts render harness pickers from this payload; every impl it
+) -> None:    # W1.2.2: hosts render harness pickers from this payload; every impl it
     # advertises must be loadable through the registry (a describe/registry
     # skew fails loud here).
     from steerable_agent_runtime.harness import STRATEGY_REGISTRY

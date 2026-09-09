@@ -46,7 +46,10 @@ UPSTREAM_URL = "https://models.dev/api.json"
 
 #: Keep in sync with ``model_info.REASONING_EFFORT_ORDER`` — the catalog
 #: stores levels in this canonical order so the resolver can clamp by index.
-REASONING_EFFORT_ORDER = ("minimal", "low", "medium", "high")
+#: Upstream ``reasoning_options`` effort values flow through verbatim (xhigh
+#: included); levels upstream never emits (e.g. ``max``) enter through the
+#: overlay's manual corrections (pi's 手工修正层 counterpart).
+REASONING_EFFORT_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 TOOL_FORMAT_OPENAI = "openai"
 TOOL_FORMAT_ANTHROPIC = "anthropic"
