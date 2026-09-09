@@ -588,6 +588,9 @@ export interface ChatPanelConnectedProps {
   emptyTitle?: string;
   emptyDescription?: string;
   inputPlaceholder?: string;
+  /** Extra controls rendered in the input toolbar (e.g. `ModelSelector`). */
+  inputToolbarLeft?: React.ReactNode;
+  inputToolbarRight?: React.ReactNode;
   renderMessage?: (props: MessageRendererProps) => React.ReactNode;
   renderToolCall?: (call: ToolCall, result?: ToolResult) => React.ReactNode;
   /** Apply the panel's own background/foreground tokens (default). */
@@ -602,6 +605,8 @@ function ChatPanelConnected(props: ChatPanelConnectedProps) {
     emptyTitle,
     emptyDescription,
     inputPlaceholder,
+    inputToolbarLeft,
+    inputToolbarRight,
     renderMessage,
     renderToolCall,
     styled = true,
@@ -639,6 +644,8 @@ function ChatPanelConnected(props: ChatPanelConnectedProps) {
         onCancel={composer.cancel}
         isStreaming={session.isStreaming}
         placeholder={inputPlaceholder}
+        toolbarLeft={inputToolbarLeft}
+        toolbarRight={inputToolbarRight}
       />
     </ChatPanelRoot>
   );

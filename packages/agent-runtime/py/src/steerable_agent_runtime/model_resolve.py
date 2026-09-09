@@ -23,7 +23,7 @@ from typing import Literal
 
 from .model_catalog import MODEL_ENTRIES, PROVIDER_ENTRIES
 
-ResolveSource = Literal["exact", "scoped", "prefix"]
+ResolveSource = Literal["exact", "scoped", "prefix", "leaf"]
 
 #: Minimum model-id length a prefix match may claim. Below this, prefixes
 #: are too greedy ("gpt-5" claiming "gpt-5.5-20251001"'s entry).
@@ -100,6 +100,50 @@ def resolve_in_catalog(provider: str | None, model: str) -> CatalogHit | None:
     if best is not None:
         return _entry(best, "prefix")
     return None
+
+
+def resolve_leaf_cross_provider(model: str) -> CatalogHit | None:
+    """Cross-provider final-segment join — the gateway-id tier.
+
+    A gateway-namespaced id (``openai/qwen/qwen3.8-27b`` on a private
+    gateway) carries a *wire* namespace that says nothing about the serving
+    catalog namespace (``openrouter/qwen/qwen3.8-27b``), so every
+    same-provider tier misses. The leaf (``qwen3.8-27b``) is matched across
+    all providers by exact, case-insensitive equality — never by prefix, so
+    ``qwen3.8-27b`` cannot claim ``qwen3.8-27b-instruct``'s entry.
+
+    Several providers may serve the same leaf with different facts (the
+    tier-3 caveat: 302ai's deepseek-reasoner lists no reasoning knob,
+    first-party does). The join picks deterministically: entries with known
+    reasoning levels first (the capability a listing can never advertise),
+    then the smallest context window (conservative — never budget against a
+    window only some deployments provide), then lexicographic key. The hit
+    carries ``source="leaf"`` so the join stays observable.
+
+    Endpoint modifiers are stripped before matching: gateways suffix a
+    variant class onto the canonical id (OpenRouter's ``:free`` / ``:batch``
+    / ``:extended``), and the modifier changes pricing or throughput, never
+    the model's capability descriptor.
+    """
+    if not model:
+        return None
+    leaf = model.rsplit("/", 1)[-1].lower()
+    leaf = leaf.split(":", 1)[0]
+    if not leaf:
+        return None
+    hits = [
+        key
+        for key in MODEL_ENTRIES
+        if key.rsplit("/", 1)[-1].lower() == leaf
+    ]
+    if not hits:
+        return None
+
+    def _rank(key: str) -> tuple[bool, int, str]:
+        context, _modalities, _tool_format, reasoning = MODEL_ENTRIES[key]
+        return (not reasoning, context, key)
+
+    return _entry(sorted(hits, key=_rank)[0], "leaf")
 
 
 @dataclass(frozen=True, slots=True)

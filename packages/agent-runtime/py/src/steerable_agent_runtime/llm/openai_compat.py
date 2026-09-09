@@ -24,7 +24,10 @@ from typing import Any, Literal
 
 from steerable_agent_protocol.generated import ToolCall
 
-from ..model_info import clamp_reasoning_effort
+from ..model_info import (
+    ReasoningEffortUnsupported,
+    clamp_reasoning_effort,
+)
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
@@ -126,6 +129,12 @@ class OpenAICompatProvider:
     #: a ``ProviderPreset`` instance pins that preset regardless of the
     #: registry (host settings UIs send an explicit choice this way).
     preset: ProviderPreset | Literal["auto", "off"] = "auto"
+    #: Per-request reasoning effort from the host's model picker; wins over
+    #: ``STEERABLE_REASONING_EFFORT`` and the preset default. Explicitly
+    #: requested effort is validated strict (``clamp_reasoning_effort``) —
+    #: a level the model cannot honor fails the request instead of being
+    #: silently dropped (EVALS 2.5.22).
+    reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -376,14 +385,35 @@ class OpenAICompatProvider:
         # actually supports (structured ModelInfo replaces the raw env
         # passthrough). A model with no reasoning knob gets no parameter at
         # all — sending one would be an unsupported-field error on strict
-        # APIs. The env var is the explicit request; the preset's documented
-        # default applies only when the env is unset.
-        effort = clamp_reasoning_effort(
-            self.model,
-            os.environ.get("STEERABLE_REASONING_EFFORT", "")
-            or (preset.reasoning_effort if preset is not None else ""),
+        # APIs. Precedence: the host's per-request pick, then the env var,
+        # then the preset's documented default. The compat gate runs FIRST:
+        # a vendor that rejects the field outright (Moonshot thinking 400s
+        # on reasoning_effort) must drop it silently, not fail. Otherwise an
+        # explicit request is strict: an effort the resolved catalog entry
+        # cannot honor raises instead of being silently dropped
+        # (EVALS 2.5.22).
+        requested_effort = (
+            self.reasoning_effort
+            or os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            or (preset.reasoning_effort if preset is not None else "")
         )
-        if effort and compat.supports_reasoning_effort:
+        effort: str | None = None
+        if requested_effort and compat.supports_reasoning_effort:
+            try:
+                effort = clamp_reasoning_effort(
+                    self.model,
+                    requested_effort,
+                    provider=self.name,
+                    base_url=self.base_url,
+                    strict=True,
+                )
+            except ReasoningEffortUnsupported as exc:
+                raise LLMError(
+                    f"{self.name}: {exc}",
+                    kind="invalid_request",
+                    provider=self.name,
+                ) from exc
+        if effort:
             # GLM-5.3 default is ``max``; ``high`` is a downgrade. TB uses max.
             if "reasoning_effort" not in body:
                 body["reasoning_effort"] = effort

@@ -26,6 +26,20 @@ The dev server listens on port `5180`. Static build outputs go to `dist/` and
 are deployable as a flat folder (the framework's `docs.yml` GitHub Pages job
 serves them at `/demo/`).
 
+## Model selector
+
+The input toolbar carries the framework's `ModelSelector`: a model picker
+plus a per-model reasoning-effort picker, backed by the gateway catalog
+contract (the sidecar's `models.list` RPC). In mock mode it serves a canned
+listing; in sidecar mode it calls `GET {origin}/models` on the same origin
+as `VITE_SIDECAR_URL`, expecting the host to proxy the `models.list` result
+as `ModelCatalogResponse` JSON. If that endpoint is absent or unreachable
+the selector shows a "catalog offline" badge and the composer keeps working
+— the catalog is discovery, not a routing whitelist. The current selection
+rides along on every send as `metadata.model` / `metadata.reasoningEffort`;
+a host transport forwards them to `agent.chat.stream`, which validates an
+unsupported effort strictly instead of silently dropping it.
+
 ## Card scenarios
 
 Click any item in the left sidebar to see the matching rich card render, or

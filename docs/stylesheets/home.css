@@ -188,20 +188,6 @@
   font-weight: 600;
 }
 
-.sf-scatter .band {
-  fill: rgba(38, 166, 154, 0.08);
-  stroke: rgba(38, 166, 154, 0.4);
-  stroke-width: 0.7;
-  stroke-dasharray: 3 3;
-}
-
-.sf-scatter .bandlbl {
-  fill: rgba(38, 166, 154, 0.9);
-  font-size: 7.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
 .sf-scatter .pt {
   fill: rgba(127, 127, 140, 0.3);
   stroke: var(--md-default-fg-color--light);
@@ -225,45 +211,23 @@
   font-weight: 700;
 }
 
+.sf-scatter .lbl--ours {
+  fill: #5c6bc0;
+}
+
+[data-md-color-scheme="slate"] .sf-scatter .lbl--ours {
+  fill: #818cf8;
+}
+
 .sf-scatter .sub {
   fill: var(--md-default-fg-color--light);
   font-size: 8px;
-}
-
-.sf-scatter .qwenColTitle {
-  fill: #5c6bc0;
-  font-size: 7.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-[data-md-color-scheme="slate"] .sf-scatter .qwenColTitle {
-  fill: #818cf8;
 }
 
 .sf-scatter .pt--ref {
   fill: var(--md-default-bg-color);
   stroke: var(--md-default-fg-color);
   stroke-width: 1.3;
-}
-
-.sf-scatter .connector {
-  stroke: #5c6bc0;
-  stroke-width: 1.4;
-}
-
-[data-md-color-scheme="slate"] .sf-scatter .connector {
-  stroke: #818cf8;
-}
-
-.sf-scatter .delta {
-  fill: #5c6bc0;
-  font-size: 8px;
-  font-weight: 700;
-}
-
-[data-md-color-scheme="slate"] .sf-scatter .delta {
-  fill: #818cf8;
 }
 
 .sf-scatter .legend {

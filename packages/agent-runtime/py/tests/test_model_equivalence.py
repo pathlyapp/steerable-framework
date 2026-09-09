@@ -83,7 +83,9 @@ EQUIVALENCE_TABLE: tuple[tuple[str, str, str, str], ...] = (
         "kimi-k2",
         "moonshotai",
         "kimi-k2-0905-preview",
-        "",  # 262,144 == 262,144
+        "upstream drift: models.dev dropped moonshotai/kimi-k2-0905-preview "
+        "(the namespace now starts at k2.6); the legacy row stays for the "
+        "first-party API id, which still serves 262,144",
     ),
     (
         "minimax",
