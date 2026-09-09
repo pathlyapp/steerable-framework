@@ -104,6 +104,10 @@ def test_system_prompt_keeps_tools_and_grading_facts() -> None:
     assert "read_file returns an ASCII preview" in prompt
     assert "git gc --prune" in prompt
     assert "cannot be found anywhere in the repo" in prompt
+    # openssl-selfsigned-cert: verified under python3, graded under python.
+    assert "a pip install lands in one interpreter only" in prompt
+    # sqlite-db-truncate: float64 bits shipped as a 19-digit int.
+    assert "a float decoded as an int" in prompt
 
 
 def test_missing_instruction_errors() -> None:
