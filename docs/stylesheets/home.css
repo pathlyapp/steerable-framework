@@ -188,20 +188,6 @@
   font-weight: 600;
 }
 
-.sf-scatter .band {
-  fill: rgba(38, 166, 154, 0.08);
-  stroke: rgba(38, 166, 154, 0.4);
-  stroke-width: 0.7;
-  stroke-dasharray: 3 3;
-}
-
-.sf-scatter .bandlbl {
-  fill: rgba(38, 166, 154, 0.9);
-  font-size: 7.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
 .sf-scatter .pt {
   fill: rgba(127, 127, 140, 0.3);
   stroke: var(--md-default-fg-color--light);
