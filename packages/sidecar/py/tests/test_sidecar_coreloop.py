@@ -2494,3 +2494,54 @@ async def test_todo_gate_retries_completion_until_list_is_finished() -> None:
     )
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised() -> None:
+    """profiles.<name>.systemPrompt seeds the child loop's first message
+    (CC .claude/agents body parity), and every profile's description rides
+    the tool description so the model picks by purpose."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "扫一下", "subagent_type": "explore"},
+                )
+            ),
+            _text_round("child done"),
+            _text_round("parent done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "subagent": {
+                "profiles": {
+                    "explore": {
+                        "description": "只读代码侦察。",
+                        "systemPrompt": "你是只读探索代理。",
+                    },
+                }
+            },
+        },
+    )
+
+    # Round 1 is the parent's request; round 2 is the child's first — the
+    # profile system prompt leads its seed.
+    child_seed = provider.seen_messages[1]
+    assert child_seed[0].role == "system"
+    assert "只读探索代理" in str(child_seed[0].content)
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    descriptor = next(
+        t for t in first_tools if t["function"]["name"] == "delegate_subagent"
+    )
+    assert "explore: 只读代码侦察。" in descriptor["function"]["description"]

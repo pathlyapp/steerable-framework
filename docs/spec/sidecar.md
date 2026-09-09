@@ -240,12 +240,17 @@ Sub-agent delegation is ON BY DEFAULT: the sidecar advertises
 on the agent pool — the model's single multi-agent surface. Pass
 `subagent: false` to turn it off, or a dict to configure it:
 `{toolFilter?: string[], maxParallel?: int, profiles?: {name:
-{toolFilter?, model?, maxRounds?, concurrent?, description?}}}`.
+{toolFilter?, model?, maxRounds?, concurrent?, description?,
+systemPrompt?}}}`.
 `toolFilter` narrows every child's tool domain (filtered-out calls fail
 closed with `tool_not_delegated`); `profiles` adds named profiles the
-schema advertises as a `subagent_type` enum (unknown names fail closed
+schema advertises as a `subagent_type` enum — with each profile's
+`description` listed in the tool description so the model picks a
+profile by what it is for (CC Agent-tool parity), and a profile's
+`systemPrompt` seeded as the child loop's first message (CC
+`.claude/agents` body parity). Unknown names fail closed
 listing the registered ones; a profile's `model` resolves through the
-host's provider factory or fails closed). A `concurrent: true` profile
+host's provider factory or fails closed. A `concurrent: true` profile
 lets same-round delegations execute in parallel under the pool's
 `maxParallel` budget — the overflow delegation fails closed with
 `orchestration_budget_exceeded`. Children advertise the host tool surface
