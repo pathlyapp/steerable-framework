@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from steerable_agent_protocol.generated import ToolCall
 
-from ..model_info import clamp_reasoning_effort
+from ..model_info import ReasoningEffortUnsupported, clamp_reasoning_effort
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .errors import LLMError, classify_http_status, parse_retry_after_ms
 from .parts import ImagePart, TextPart
@@ -75,6 +75,12 @@ class OpenAIResponsesProvider:
     api_key: str | None = None
     default_temperature: float | None = None
     preset: ProviderPreset | Literal["auto", "off"] = "auto"
+    #: Per-request reasoning effort from the host's model picker; wins over
+    #: ``STEERABLE_REASONING_EFFORT`` and the preset default. Explicitly
+    #: requested effort is validated strict (``clamp_reasoning_effort``) —
+    #: a level the model cannot honor fails the request instead of being
+    #: silently dropped (EVALS 2.5.22).
+    reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
         if not self.base_url:
@@ -284,13 +290,33 @@ class OpenAIResponsesProvider:
             for key, value in preset.extra_body.items():
                 if key not in body:
                     body[key] = value
-        # Reasoning lives under ``reasoning.effort`` on this wire; the clamp
-        # keeps env/preset requests within what the model supports.
-        effort = clamp_reasoning_effort(
-            self.model,
-            os.environ.get("STEERABLE_REASONING_EFFORT", "")
-            or (preset.reasoning_effort if preset is not None else ""),
+        # Reasoning lives under ``reasoning.effort`` on this wire.
+        # Precedence: the host's per-request pick, then the env var, then
+        # the preset's documented default. An explicit request is validated
+        # strict against the resolved catalog entry — a level the model
+        # cannot honor raises instead of being silently dropped
+        # (EVALS 2.5.22), same as the chat-completions path.
+        requested_effort = (
+            self.reasoning_effort
+            or os.environ.get("STEERABLE_REASONING_EFFORT", "")
+            or (preset.reasoning_effort if preset is not None else "")
         )
+        effort: str | None = None
+        if requested_effort:
+            try:
+                effort = clamp_reasoning_effort(
+                    self.model,
+                    requested_effort,
+                    provider=self.name,
+                    base_url=self.base_url,
+                    strict=True,
+                )
+            except ReasoningEffortUnsupported as exc:
+                raise LLMError(
+                    f"{self.name}: {exc}",
+                    kind="invalid_request",
+                    provider=self.name,
+                ) from exc
         if effort and "reasoning" not in body:
             body["reasoning"] = {"effort": effort}
         if "include" not in body:

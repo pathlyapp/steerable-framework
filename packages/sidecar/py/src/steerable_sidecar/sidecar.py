@@ -3026,6 +3026,25 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     base_url = params.get("baseUrl") or params.get("base_url")
     api_key = params.get("apiKey") or params.get("api_key") or ""
 
+    # The host model picker's per-request reasoning effort. Parsed once for
+    # every provider family and validated at construction so an
+    # unsupportable level is an RPC error here, not a mid-stream failure
+    # (EVALS 2.5.22 fail-loud). The wire path re-validates with the
+    # branch-resolved base_url.
+    reasoning_effort = params.get("reasoningEffort") or params.get(
+        "reasoning_effort"
+    )
+    if reasoning_effort:
+        from steerable_agent_runtime import clamp_reasoning_effort
+
+        clamp_reasoning_effort(
+            str(model),
+            str(reasoning_effort),
+            provider=provider_kind or None,
+            base_url=base_url,
+            strict=True,
+        )
+
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import (
             OpenAICompatFlags,
@@ -3056,22 +3075,6 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             if isinstance(compat_param, dict)
             else compat_for_base_url(resolved_base_url)
         )
-        # The host model picker's per-request reasoning effort. Validate at
-        # construction so an unsupportable level is an RPC error here, not a
-        # mid-stream failure (EVALS 2.5.22 fail-loud).
-        reasoning_effort = params.get("reasoningEffort") or params.get(
-            "reasoning_effort"
-        )
-        if reasoning_effort:
-            from steerable_agent_runtime import clamp_reasoning_effort
-
-            clamp_reasoning_effort(
-                str(model),
-                str(reasoning_effort),
-                provider=provider_kind,
-                base_url=resolved_base_url,
-                strict=True,
-            )
         return _wrap_with_recording(
             _wrap_with_calibration(
                 OpenAICompatProvider(
@@ -3117,6 +3120,9 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     preset=_resolve_preset_param(params),
+                    reasoning_effort=(
+                        str(reasoning_effort) if reasoning_effort else None
+                    ),
                 )
             )
         )
