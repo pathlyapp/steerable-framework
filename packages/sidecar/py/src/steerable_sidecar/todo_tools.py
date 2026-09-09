@@ -18,6 +18,16 @@ from steerable_agent_runtime import (
 _STORE = TodoStore()
 
 
+def todo_store() -> TodoStore:
+    """Return the process-local store, for wiring the completion gate.
+
+    The gate hooks ``before_completion`` per chat stream and reads the same
+    store the tool writes, so a turn that ends with unfinished items is
+    retried instead of stalling.
+    """
+    return _STORE
+
+
 def register_todo_write(router: ToolRouter) -> None:
     """Register ``todo_write`` on the sidecar's router (dispatch capability).
 

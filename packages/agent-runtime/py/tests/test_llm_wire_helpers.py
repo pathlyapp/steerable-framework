@@ -245,8 +245,13 @@ def test_openai_stream_requests_usage_chunk() -> None:
 
 def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
     """W6-8: the env-requested effort is clamped to the model's structured
-    reasoning levels — applied when the model has a reasoning knob, omitted
-    for models that don't (never an unsupported parameter)."""
+    reasoning levels — applied when the model has a reasoning knob. An
+    explicit request the catalog cannot honor (no knob, unknown model)
+    raises instead of being silently dropped (EVALS 2.5.22); with no
+    request, nothing is sent."""
+    import pytest
+
+    from steerable_agent_runtime.llm import LLMError
     from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
 
     monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "low")
@@ -264,11 +269,19 @@ def test_openai_build_body_reasoning_effort_from_env(monkeypatch) -> None:
 
     # A reasoning-capable model gets the (supported) env effort.
     assert build("deepseek-reasoner")["reasoning_effort"] == "low"
-    # A model with no reasoning knob gets no reasoning parameter at all.
-    assert "reasoning_effort" not in build("deepseek-chat")
-    assert "reasoning_effort" not in build("m")  # unknown model → no knob
+    # A model with no reasoning knob fails loud — the request would
+    # otherwise run on the server's default level while the logs claim
+    # otherwise.
+    with pytest.raises(LLMError, match="no reasoning-effort knob"):
+        build("deepseek-chat")
+    # An unknown model cannot even verify support → fails loud.
+    with pytest.raises(LLMError, match="no catalog tier"):
+        build("m")
     # An explicit per-request effort always wins over the env default.
     assert build("deepseek-reasoner", {"reasoning_effort": "max"})["reasoning_effort"] == "max"
+    # No request → no parameter, no error.
+    monkeypatch.delenv("STEERABLE_REASONING_EFFORT")
+    assert "reasoning_effort" not in build("deepseek-chat")
 
 
 def test_openai_build_body_glm_z_ai_thinking_and_max(monkeypatch) -> None:

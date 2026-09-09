@@ -170,6 +170,34 @@ class TestBuildBody:
         # gpt-5 supports reasoning; the clamped env/preset effort lands here.
         assert "max_tokens" not in body
 
+    def test_per_request_reasoning_effort_lands_on_the_wire(self) -> None:
+        body = _provider(reasoning_effort="high")._build_body(
+            messages=[LLMMessage.text_of("user", "hi")],
+            tools=None,
+            temperature=None,
+            max_tokens=None,
+            stream=False,
+            extra={},
+        )
+        assert body["reasoning"] == {"effort": "high"}
+
+    def test_unsupported_reasoning_effort_fails_loud(self) -> None:
+        # gpt-5 tops out at "high": an explicit "max" request must error
+        # (invalid_request), never be silently dropped (EVALS 2.5.22).
+        from steerable_agent_runtime.llm import LLMError
+
+        with pytest.raises(LLMError) as excinfo:
+            _provider(reasoning_effort="max")._build_body(
+                messages=[LLMMessage.text_of("user", "hi")],
+                tools=None,
+                temperature=None,
+                max_tokens=None,
+                stream=False,
+                extra={},
+            )
+        assert excinfo.value.kind == "invalid_request"
+        assert "max" in str(excinfo.value)
+
     def test_extra_kwargs_win_over_presets(self) -> None:
         body = _provider()._build_body(
             messages=[LLMMessage.text_of("user", "hi")],

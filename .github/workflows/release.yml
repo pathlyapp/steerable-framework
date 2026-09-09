@@ -18,6 +18,7 @@ name: Release
 #   4. Chains publish-npm.yml + publish-pypi.yml. Those workflows are
 #      idempotent — they skip any package whose version is already on
 #      the registry — so re-tagging after a partial failure is safe.
+#   5. Posts a Feishu card (success or failure) via FEISHU_BOT_WEBHOOK.
 #
 # Why tag-driven instead of release-please?
 #   * release-please opens per-component release PRs, which can
@@ -117,3 +118,76 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
+  # Always runs so a half-published or lockstep-rejected tag still pages
+  # the team. A missing webhook (or a Feishu outage) is a warning, not a
+  # failed release — the registries are already the source of truth.
+  notify:
+    needs: [validate, publish-npm, publish-pypi]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Feishu
+        env:
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          VALIDATE: ${{ needs.validate.result }}
+          NPM: ${{ needs.publish-npm.result }}
+          PYPI: ${{ needs.publish-pypi.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.validate.outputs.version }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 <<'PY'
+          import json, os, urllib.error, urllib.request
+
+          webhook = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not webhook:
+              print("FEISHU_BOT_WEBHOOK unset; skip")
+              raise SystemExit(0)
+
+          version = (os.environ.get("VERSION") or "").strip() or "(unknown)"
+          validate = os.environ.get("VALIDATE") or "unknown"
+          npm = os.environ.get("NPM") or "unknown"
+          pypi = os.environ.get("PYPI") or "unknown"
+          ok = validate == "success" and npm == "success" and pypi == "success"
+          tag = f"v{version}"
+          title = f"{'成功' if ok else '失败'} · Steerable {tag}"
+          lines = [
+              f"仓库：{os.environ.get('REPO', '')}",
+              f"版本：{tag}",
+              f"发布者：{os.environ.get('ACTOR', '')}",
+              f"validate：{validate}",
+              f"npm：{npm}",
+              f"PyPI：{pypi}",
+              f"[GHA run]({os.environ.get('RUN_URL', '')})",
+          ]
+          if version != "(unknown)":
+              lines.append(f"[GitHub Release]({os.environ.get('RELEASE_URL', '')})")
+          payload = {
+              "msg_type": "interactive",
+              "card": {
+                  "header": {
+                      "title": {"tag": "plain_text", "content": title},
+                      "template": "green" if ok else "red",
+                  },
+                  "elements": [
+                      {
+                          "tag": "div",
+                          "text": {"tag": "lark_md", "content": "\n".join(lines)},
+                      }
+                  ],
+              },
+          }
+          req = urllib.request.Request(
+              webhook,
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              urllib.request.urlopen(req, timeout=20).read()
+          except (urllib.error.URLError, TimeoutError) as exc:
+              print(f"::warning::Feishu post failed: {exc}")
+          PY

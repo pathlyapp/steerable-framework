@@ -19,11 +19,16 @@ import * as React from 'react';
 import {
   ChatSessionProvider,
   ChatPanel,
+  ModelSelector,
   useChatSession,
   type ChatStreamTransport,
 } from '@steerable/agent-ui';
 import { createMockTransport } from './transports/mock.js';
 import { createSidecarTransport } from './transports/sidecar.js';
+import {
+  createMockCatalogTransport,
+  createSidecarCatalogTransport,
+} from './transports/models.js';
 import { CardMessageRenderer } from './components/CardMessageRenderer.js';
 
 const TRANSPORT_MODE = ((import.meta.env.VITE_TRANSPORT as string | undefined) ?? 'mock').toLowerCase();
@@ -50,7 +55,32 @@ function App() {
     () => (TRANSPORT_MODE === 'sidecar' ? createSidecarTransport() : createMockTransport()),
     [],
   );
-  const session = useChatSession({ transport });
+  const catalogTransport = React.useMemo(
+    () =>
+      TRANSPORT_MODE === 'sidecar'
+        ? createSidecarCatalogTransport()
+        : createMockCatalogTransport(),
+    [],
+  );
+  // Model + reasoning-effort selection, mirrored into every send's metadata
+  // so a real host transport can forward them to the sidecar's
+  // `agent.chat.stream` (which validates the effort strictly). The mock
+  // transport ignores metadata; the picker is still fully exercisable.
+  const [model, setModel] = React.useState('deepseek-v4-flash');
+  const [reasoningEffort, setReasoningEffort] = React.useState<string | null>(null);
+  const selectionRef = React.useRef({ model, reasoningEffort });
+  selectionRef.current = { model, reasoningEffort };
+
+  const session = useChatSession({
+    transport,
+    buildMetadata: () => {
+      const { model: m, reasoningEffort: effort } = selectionRef.current;
+      return {
+        ...(m ? { model: m } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
+      };
+    },
+  });
   const [darkMode, setDarkMode] = React.useState(false);
 
   React.useEffect(() => {
@@ -119,6 +149,20 @@ function App() {
             emptyPrompts={['测验', '编排计划', '研究计划', '候选方案', '覆盖度报告']}
             renderMessage={CardMessageRenderer}
             inputPlaceholder="问点什么…  (Cmd/Ctrl+Enter 发送)"
+            inputToolbarRight={
+              <ModelSelector
+                transport={catalogTransport}
+                model={model}
+                reasoningEffort={reasoningEffort}
+                onSelectModel={(id) => {
+                  setModel(id);
+                  // Effort levels are per-model; a stale pick would be
+                  // rejected by the sidecar's strict validation anyway.
+                  setReasoningEffort(null);
+                }}
+                onSelectEffort={setReasoningEffort}
+              />
+            }
           />
         </main>
       </div>

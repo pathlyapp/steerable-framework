@@ -103,6 +103,17 @@ def test_catalog_forwards_model_override() -> None:
     assert 'extra+=(--model "$EVAL_MODEL")' in WEEKLY
 
 
+def test_catalog_forwards_reasoning_effort() -> None:
+    """Reasoning effort used to be hardwired to medium for qwen because the
+    catalog knew no higher level. With the gateway catalog the level is
+    validated strict against the model's entry, so the dispatch input must
+    reach the env verbatim — and the result card must name it, or an xhigh
+    Mean gets read as a medium one."""
+    assert "EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}" in WEEKLY
+    assert 'export STEERABLE_REASONING_EFFORT="$EVAL_EFFORT"' in WEEKLY
+    assert 'label="$label @$EVAL_EFFORT"' in WEEKLY
+
+
 def test_weekly_uploads_the_pi_transcript() -> None:
     """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
     token counts alone, and the first pi-glm run had to infer a runaway first

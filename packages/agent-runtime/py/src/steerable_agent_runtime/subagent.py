@@ -93,6 +93,10 @@ class SubagentConfig:
     model: str | None = None
     concurrent: bool = False
     max_parallel: int = 4
+    #: Profile system prompt (CC ``.claude/agents`` body parity): seeded as
+    #: the child loop's first message, ahead of the task. ``None`` runs the
+    #: child with no system prompt at all — the legacy behavior.
+    system_prompt: str | None = None
     description: str = (
         "Delegate a self-contained subtask to a sub-agent with its own "
         "reasoning loop. Good for parallelizable or context-heavy subtasks; "
@@ -147,6 +151,7 @@ def subagent_tool_descriptor(
             ),
         },
     }
+    description = config.description
     if registry is not None and registry.names():
         properties["subagent_type"] = {
             "type": "string",
@@ -156,11 +161,21 @@ def subagent_tool_descriptor(
                 "the default general-purpose profile."
             ),
         }
+        # CC Agent-tool parity: the model picks a profile by what it is
+        # for, not by name alone — advertise each profile's description
+        # alongside its name in the tool description.
+        roster = "\n".join(
+            f"- {name}: {(registry.get(name) or config).description}"
+            for name in registry.names()
+        )
+        description = (
+            f"{description}\n\nAvailable subagent_type profiles:\n{roster}"
+        )
     return {
         "type": "function",
         "function": {
             "name": config.tool_name,
-            "description": config.description,
+            "description": description,
             "parameters": {
                 "type": "object",
                 "properties": properties,
@@ -316,6 +331,7 @@ class SubagentExecutor:
                 config.tool_filter,
                 loop_factory=self._loop_factory_for(config),
                 event_extra={"profile": type_name or DEFAULT_PROFILE_LABEL},
+                system_prompt=config.system_prompt,
             )
         except OrchestrationBudgetExceeded as exc:
             return ToolResult(

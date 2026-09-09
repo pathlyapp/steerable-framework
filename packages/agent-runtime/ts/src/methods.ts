@@ -36,6 +36,7 @@ export const SIDECAR_METHODS = [
   'config.set',
   'compat.describe',
   'harness.describe',
+  'models.list',
   'presets.describe',
   'presets.resolve',
   'plugin.list',

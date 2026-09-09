@@ -89,6 +89,7 @@ from steerable_agent_runtime import (
     SubagentRegistry,
     ToolDispatchError,
     ToolRouter,
+    TodoCompletionGate,
     TraceRecorder,
     WorldStateHooks,
     branch_label,
@@ -272,6 +273,7 @@ class Sidecar:
         register("plugin.reload", self._handle_plugin_reload)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
+        register("models.list", self._handle_models_list)
         register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
         register("agent.chat.cancel", self._handle_chat_cancel)
@@ -800,6 +802,88 @@ class Sidecar:
         preset = preset_for(params.get("baseUrl"), params.get("model"))
         return {"preset": preset.to_dict() if preset is not None else None}
 
+    async def _handle_models_list(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the gateway's live model catalog to host model pickers.
+
+        The gateway's own ``GET /models`` names the ids the endpoint
+        actually accepts — discovery, not a routing whitelist (a host may
+        still send an unlisted id). Each id is joined with catalog
+        capabilities via the same leaf join the request path uses, so the
+        picker and ``clamp_reasoning_effort`` never disagree about a model's
+        knob. A successful fetch is installed into the runtime's resolution
+        path (``register_gateway_models``) so window budgeting sees the
+        gateway-advertised windows.
+
+        ``catalogStatus``: ``live`` (just fetched), ``stale`` (refresh
+        failed, previous listing served), ``offline`` (no listing at all —
+        the picker falls back to free-form entry). Offline is a 200, not an
+        RPC error: an unreachable gateway must not break the host's
+        settings screen.
+        """
+        from steerable_agent_runtime import (
+            REASONING_EFFORT_ORDER,
+            register_gateway_models,
+        )
+        from steerable_agent_runtime.gateway_catalog import (
+            GatewayCatalogError,
+            fetch_gateway_models,
+            merge_with_catalog,
+        )
+
+        params = params or {}
+        base_url = params.get("baseUrl") or os.environ.get("STEERABLE_BASE_URL", "")
+        api_key = params.get("apiKey") or os.environ.get("STEERABLE_API_KEY", "")
+        if not base_url:
+            raise JsonRpcError(
+                "models.list requires baseUrl (or STEERABLE_BASE_URL)",
+                code=-32602,
+                kind="invalid_params",
+            )
+        try:
+            listing = await fetch_gateway_models(str(base_url), str(api_key) or None)
+        except GatewayCatalogError as exc:
+            return {"models": [], "catalogStatus": "offline", "error": str(exc)}
+        rows = merge_with_catalog(listing.entries)
+        register_gateway_models(row.info for row in rows)
+        return {
+            "models": [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "window": row.info.context_window,
+                    "modalities": sorted(row.info.modalities),
+                    "reasoningLevels": [
+                        level
+                        for level in REASONING_EFFORT_ORDER
+                        if level in row.info.reasoning_levels
+                    ],
+                    "pricing": (
+                        {
+                            "promptPerMtok": row.prompt_price_per_mtok,
+                            "completionPerMtok": row.completion_price_per_mtok,
+                        }
+                        if row.prompt_price_per_mtok is not None
+                        or row.completion_price_per_mtok is not None
+                        else None
+                    ),
+                    "joinedFrom": row.joined_from,
+                    "capabilities": (
+                        "known" if row.joined_from is not None else "unknown"
+                    ),
+                }
+                for row in rows
+            ],
+            "catalogStatus": "stale" if listing.stale else "live",
+            "fetchedAt": listing.fetched_at,
+            "current": {
+                "model": os.environ.get("STEERABLE_MODEL") or None,
+                "reasoningEffort": os.environ.get("STEERABLE_REASONING_EFFORT")
+                or None,
+            },
+        }
+
     async def _handle_harness_describe(
         self, _params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -836,6 +920,10 @@ class Sidecar:
               "apiKey":  "sk-...",
               "temperature": 0.2,
               "maxTokens": 1024,
+              "reasoningEffort": "high",  # per-request picker value; wins over
+                                        # STEERABLE_REASONING_EFFORT and the
+                                        # preset default. Strict: an effort the
+                                        # model cannot honor is an RPC error.
               "tools":   [...],         # OpenAI tool descriptors
               "streamId": "str_xyz",    # auto-generated if omitted
               "providerOptions": {...}, # passthrough
@@ -1556,6 +1644,14 @@ class Sidecar:
             )
             hooks = default_harness.hooks
             tool_selection = default_harness.tool_selection
+        # todo completion gate: a turn that ends `completed` while the
+        # chat's todo list still has unfinished items is retried with a
+        # reminder instead of stalling for user input (long-task stall fix).
+        # The gate keys the store by the run's LoopContext.chat_id — the same
+        # id todo_write dispatches with — so it reads the list the model wrote.
+        from .todo_tools import todo_store
+
+        hooks = ChainHooks(hooks, TodoCompletionGate(todo_store()))
         # The bundled spec's tools dimension governs the host-supplied tool
         # surface; the sidecar's own additions below (subagent / skills /
         # orchestration) are orthogonal dimensions advertised past
@@ -1765,6 +1861,11 @@ class Sidecar:
                                 str(p["model"]) if p.get("model") is not None else None
                             ),
                             concurrent=bool(p.get("concurrent", False)),
+                            system_prompt=(
+                                str(p["systemPrompt"])
+                                if p.get("systemPrompt") is not None
+                                else None
+                            ),
                             description=(
                                 str(p["description"])
                                 if p.get("description") is not None
@@ -2939,6 +3040,25 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
     base_url = params.get("baseUrl") or params.get("base_url")
     api_key = params.get("apiKey") or params.get("api_key") or ""
 
+    # The host model picker's per-request reasoning effort. Parsed once for
+    # every provider family and validated at construction so an
+    # unsupportable level is an RPC error here, not a mid-stream failure
+    # (EVALS 2.5.22 fail-loud). The wire path re-validates with the
+    # branch-resolved base_url.
+    reasoning_effort = params.get("reasoningEffort") or params.get(
+        "reasoning_effort"
+    )
+    if reasoning_effort:
+        from steerable_agent_runtime import clamp_reasoning_effort
+
+        clamp_reasoning_effort(
+            str(model),
+            str(reasoning_effort),
+            provider=provider_kind or None,
+            base_url=base_url,
+            strict=True,
+        )
+
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import (
             OpenAICompatFlags,
@@ -2978,6 +3098,9 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     model=str(model),
                     compat=compat,
                     preset=_resolve_preset_param(params),
+                    reasoning_effort=(
+                        str(reasoning_effort) if reasoning_effort else None
+                    ),
                 )
             )
         )
@@ -3011,6 +3134,9 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     preset=_resolve_preset_param(params),
+                    reasoning_effort=(
+                        str(reasoning_effort) if reasoning_effort else None
+                    ),
                 )
             )
         )

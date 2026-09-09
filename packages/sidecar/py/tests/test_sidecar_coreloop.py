@@ -2427,3 +2427,121 @@ async def test_stream_raw_chunks_off_by_default() -> None:
     chunks = [p for m, p in events if m == "stream.chunk"]
     assert chunks
     assert all("rawChunk" not in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_todo_gate_retries_completion_until_list_is_finished() -> None:
+    """A text-only stop with unfinished todos is vetoed into a retry.
+
+    Regression for long-task stalls (the PPT case): the model narrates
+    progress ("先做到这里") instead of continuing, the draft reads
+    `completed`, and without the gate the turn would end waiting for user
+    input while the chat's todo list still has pending items.
+    """
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="t1",
+                    name="todo_write",
+                    arguments={
+                        "todos": [
+                            {"id": "a", "content": "task a", "status": "completed"},
+                            {"id": "b", "content": "task b", "status": "pending"},
+                        ]
+                    },
+                )
+            ),
+            _text_round("先做到这里"),  # gate vetoes: task b still pending
+            _tool_round(
+                ToolCall(
+                    id="t2",
+                    name="todo_write",
+                    arguments={
+                        "todos": [
+                            {"id": "a", "content": "task a", "status": "completed"},
+                            {"id": "b", "content": "task b", "status": "completed"},
+                        ]
+                    },
+                )
+            ),
+            _text_round("全部完成"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+    register_todo_write(sidecar.tools)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "do two things"}],
+            "useCoreLoop": True,
+            "chatId": "gate-chat",
+        },
+    )
+
+    # Four LLM rounds: list, vetoed stop, list update, real stop. The veto
+    # reminder reached the model-visible transcript naming the pending item.
+    assert provider.attempts == 4
+    assert any(
+        "unfinished" in str(message) and "task b" in str(message)
+        for messages in provider.seen_messages
+        for message in messages
+    )
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised() -> None:
+    """profiles.<name>.systemPrompt seeds the child loop's first message
+    (CC .claude/agents body parity), and every profile's description rides
+    the tool description so the model picks by purpose."""
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "扫一下", "subagent_type": "explore"},
+                )
+            ),
+            _text_round("child done"),
+            _text_round("parent done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "subagent": {
+                "profiles": {
+                    "explore": {
+                        "description": "只读代码侦察。",
+                        "systemPrompt": "你是只读探索代理。",
+                    },
+                }
+            },
+        },
+    )
+
+    # Round 1 is the parent's request; round 2 is the child's first — the
+    # profile system prompt leads its seed.
+    child_seed = provider.seen_messages[1]
+    assert child_seed[0].role == "system"
+    assert "只读探索代理" in str(child_seed[0].content)
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    descriptor = next(
+        t for t in first_tools if t["function"]["name"] == "delegate_subagent"
+    )
+    assert "explore: 只读代码侦察。" in descriptor["function"]["description"]

@@ -160,12 +160,17 @@ class AgentPool:
         *,
         loop_factory: LoopFactory | None = None,
         event_extra: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
     ) -> _ChildHandle:
         """Start a child loop immediately; returns its handle.
 
         ``loop_factory`` overrides the constructor's default for this spawn;
         ``event_extra`` merges into the ``child_spawned`` payload (the
         delegation seam adds the resolved ``profile`` name there).
+        ``system_prompt`` seeds the child's transcript ahead of the task —
+        the delegation seam passes the resolved profile's system prompt
+        (CC ``.claude/agents`` body parity); without one the child starts
+        from the bare task, as before.
         """
         factory = loop_factory or self._loop_factory
         if factory is None:
@@ -187,9 +192,10 @@ class AgentPool:
         handle.task_desc = task
         handle.schemas = schemas
         self._children[child_id] = handle
-        handle.task = asyncio.ensure_future(
-            self._run_child(handle, [LLMMessage.text_of("user", task)])
-        )
+        seed = [LLMMessage.text_of("user", task)]
+        if system_prompt:
+            seed.insert(0, LLMMessage.text_of("system", system_prompt))
+        handle.task = asyncio.ensure_future(self._run_child(handle, seed))
         self._emit(
             "child_spawned",
             {
@@ -208,12 +214,17 @@ class AgentPool:
         *,
         loop_factory: LoopFactory | None = None,
         event_extra: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
     ) -> ChildOutcome:
         """Synchronous delegation: spawn a child and await its terminal
         outcome. The caller's cancellation propagates into the child run
         (a parent turn cancel winds the child down with it)."""
         handle = self.spawn(
-            task, tool_filter, loop_factory=loop_factory, event_extra=event_extra
+            task,
+            tool_filter,
+            loop_factory=loop_factory,
+            event_extra=event_extra,
+            system_prompt=system_prompt,
         )
         assert handle.task is not None
         await handle.task
