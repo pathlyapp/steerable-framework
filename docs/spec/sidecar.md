@@ -163,6 +163,18 @@ applies to every executor, in-process or remote (reverse channel, future
 MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
 budget — set a tighter value for fast tools.
 
+`budgetTokens` is the run's cumulative token cap; exceeding it terminates
+the turn `budget_exhausted`. Unset, it defaults to
+`max_rounds × window × cached_token_weight`, floored at `2 × window`.
+The scaling matters because the cap is cumulative while a context window
+is a per-request size: an agentic turn re-sends its prompt every round, so
+even a fully cache-hit window bills `cached_token_weight × window` per
+round, and a flat multiple of the window silently caps the round count
+well below `maxRounds`. Scaling with the round budget keeps `maxRounds`
+the primary runaway guard and leaves the token axis a backstop for rounds
+that cost more than a cached full window; the floor keeps short-round
+configs (subagent profiles) at the production-calibrated `2 × window`.
+
 OpenAI-compatible vendor divergences are data, not provider branches
 (`steerable_agent_runtime.llm.compat`). An optional `compat` object in
 `params` overrides request/response handling for the OpenAI-compatible
@@ -195,6 +207,18 @@ preset a given `(baseUrl, model)` pair would auto-match (`null` when none)
 so the UI can preview what applies without reimplementing the matching
 rules. `OpenAICompatProvider(preset=...)` accepts the same three states
 (`"auto"` / `"off"` / a `ProviderPreset`) for in-process embedders.
+
+`sandbox.describe` answers what per-exec enforcement this host can reach,
+so a host chooses an `execSandbox` posture it can satisfy instead of
+guessing from its own platform check. Params are the egress half of
+`execSandbox` (`network`, `allowedHosts`, `shell`); the reply is the
+`{backend, enforcement}` pair a turn sent with those arguments would carry
+on every `data["_sandbox"]` marker. `writableRoots` is not consulted —
+every backend derives `enforcement` from egress alone, so the answer is
+exact and probing cannot fail on a root that does not exist yet. The
+motivating case is `requireFull`: only Seatbelt reaches `full` with egress
+open (it pins per host), so a host that sets `requireFull` from a platform
+guess has every shell call refused on Linux and Windows.
 
 `models.list` serves the gateway's live model catalog to host model
 pickers. The sidecar fetches `GET {baseUrl}/models` (params or
