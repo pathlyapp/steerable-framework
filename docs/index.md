@@ -36,14 +36,14 @@ Pick any subset, skip the rest — every layer ships on its own.
 
 <div class="sf-score-strip" markdown>
 <div class="sf-score sf-score--ours" markdown>
-<span class="sf-score-value">81.7%</span>
+<span class="sf-score-value">80.7%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">TB 2.1 · 3-run mean · this repo</span>
+<span class="sf-score-meta">TB 2.1 · 6-run mean · this repo</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">+8</span>
+<span class="sf-score-value">+7.3</span>
 <span class="sf-score-label">vs Pi on the same Flash model</span>
-<span class="sf-score-meta">Pi + GLM-5.3-Flash · 73%</span>
+<span class="sf-score-meta">Pi + GLM-5.3-Flash · 73.4%</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">79–84%</span>
@@ -89,7 +89,7 @@ A portable, signed CPython binary speaking JSON-RPC over stdio. Ship local LLMs 
 <h2 class="sf-section">Terminal-Bench 2.1</h2>
 
 <p class="sf-lede" markdown>
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **81.7%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, three independent full runs: mean **81.7%** (SD 4.3 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [Evals](evals.md).
+A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Same model, same gateway, four harnesses: Claude Code 83%, Steerable **80.7%**, Pi 73%, Codex 58% — the harness alone moves the score 25 points. Harbor hidden tests, 89-task catalog, six independent full runs: mean **80.7%** (SD 2.9 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [Evals](evals.md).
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -105,11 +105,11 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <span class="sf-bench-agent">Steerable <span class="sf-bench-badge">ours</span></span>
 <span class="sf-bench-model">GLM-5.3-Flash</span>
 </div>
-<span class="sf-bench-pct">81.7%</span>
-<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:81.7%"></span></span>
+<span class="sf-bench-pct">80.7%</span>
+<span class="sf-bench-track" aria-hidden="true"><span class="sf-bench-fill" style="width:80.7%"></span></span>
 <div class="sf-bench-meta">
-<span class="sf-bench-delta">ties Claude Code within noise · 15% less $ per solve</span>
-<span class="sf-bench-src">this repo, 3× catalog-89</span>
+<span class="sf-bench-delta">2.4 pts behind Claude Code's single run · 10% less $ per solve</span>
+<span class="sf-bench-src">this repo, 6× catalog-89</span>
 </div>
 </div>
 
@@ -152,13 +152,13 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 </div>
 </div>
 
-<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.14 · Claude Code $0.16 · Codex $0.81. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
+<p class="sf-bench-foot">Cost per solved task on one OpenRouter account: Pi $0.06 · Steerable $0.146 · Claude Code $0.16 · Codex $0.81. Z.AI's own number for this model on Claude Code is <a href="https://z.ai/blog/glm-5.3-flash">84.3%</a> with a 6-hour timeout; our 170-minute protocol lands Claude Code at 83%.</p>
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
 <div class="sf-bench-kicker">Cost × score · every marker measured on both axes</div>
-<p class="sf-bench-blurb">One harness across three models, against each model's own best published number. On DeepSeek-V4-Flash, Steerable is the highest point on the chart and beats DSH on both axes — <strong>84.3%</strong> at $0.17 against <strong>82.7%</strong> at $0.185. On Qwen3.8-27B it is beaten on both: <strong>75.3%</strong> at $0.85 against Artificial Analysis' independent Terminus 2 run at <strong>79.8%</strong> and $0.25.</p>
-<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1 score against cost per solved task. On GLM-5.3-Flash: Steerable 81.7 percent at 14 cents, Claude Code 83 percent at 16 cents, Pi 73 percent at 6 cents, Codex 58 percent at 81 cents. Steerable on DeepSeek-V4-Flash is the highest point at 84.3 percent and 17 cents, above DeepSeek Harness at 82.7 percent and 18.5 cents. Steerable on Qwen3.8-27B is 75.3 percent at 85 cents, below and to the right of an independent Terminus 2 run at xhigh reasoning effort scoring 79.8 percent at 25 cents.">
+<p class="sf-bench-blurb">One harness, one model, four harnesses on the same gateway — every marker measured on both axes. We previously showed Steerable on DeepSeek-V4-Flash and Qwen3.8-27B here, but those two points rest on runs we cannot produce a run list, per-trial telemetry, or a matched-effort protocol for, so they are withdrawn rather than published without evidence.</p>
+<svg class="sf-scatter" viewBox="0 0 400 316" role="img" aria-label="Terminal-Bench 2.1 score against cost per solved task on GLM-5.3-Flash: Steerable 80.7 percent at 14.6 cents, Claude Code 83 percent at 16 cents, Pi 73 percent at 6 cents, Codex 58 percent at 81 cents.">
 <line class="grid" x1="66.6" y1="14" x2="66.6" y2="260"/>
 <line class="grid" x1="136.7" y1="14" x2="136.7" y2="260"/>
 <line class="grid" x1="229.4" y1="14" x2="229.4" y2="260"/>
@@ -195,25 +195,13 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 <circle class="pt" cx="348.9" cy="244.6" r="5.5"/>
 <text class="lbl" x="340" y="236" text-anchor="end">Codex CLI</text>
 <text class="sub" x="340" y="245.5" text-anchor="end">GLM-5.3-Flash · 58% · $0.81</text>
-<circle class="pt pt--ref" cx="198.9" cy="54.7" r="5.5"/>
-<text class="lbl" x="208" y="54">DSH</text>
-<text class="sub" x="208" y="63.5">DeepSeek-V4-Flash · 82.7% · $0.185</text>
-<circle class="pt pt--ref" cx="229.4" cy="77.2" r="5.5"/>
-<text class="lbl" x="240" y="79">Terminus 2</text>
-<text class="sub" x="240" y="88.5">Qwen3.8-27B (xhigh) · 79.8% · $0.25</text>
 <circle class="pt pt--ours" cx="169.3" cy="62.4" r="7"/>
 <text class="lbl lbl--ours" x="158" y="73" text-anchor="end">Steerable</text>
-<text class="sub" x="158" y="82.5" text-anchor="end">GLM-5.3-Flash · 81.7% · $0.14</text>
-<circle class="pt pt--ours" cx="190.4" cy="42.4" r="7"/>
-<text class="lbl lbl--ours" x="190.4" y="23" text-anchor="middle">Steerable</text>
-<text class="sub" x="190.4" y="33.5" text-anchor="middle">DeepSeek-V4-Flash · 84.3% · $0.17</text>
-<circle class="pt pt--ours" cx="353.2" cy="111.6" r="7"/>
-<text class="lbl lbl--ours" x="344" y="110" text-anchor="end">Steerable</text>
-<text class="sub" x="344" y="119.5" text-anchor="end">Qwen3.8-27B · 75.3% · $0.85</text>
-<text class="legend" x="44" y="301">Purple is Steerable. Grey is another harness; hollow is the other party's own run.</text>
+<text class="sub" x="158" y="82.5" text-anchor="end">GLM-5.3-Flash · 80.7% · $0.146</text>
+<text class="legend" x="44" y="301">Purple is Steerable. Grey is another harness on the same model and gateway.</text>
 <text class="legend" x="44" y="311.5">The four GLM-5.3-Flash rows share one gateway. Every marker sits at its measured cost and score.</text>
 </svg>
-<p class="sf-bench-foot">GLM costs from OpenRouter analytics on the eval account. DeepSeek-V4-Flash-0731: Steerable 84.3% at $0.17 per solve (this repo, catalog-89, vendor endpoint, observed spend) against DeepSeek's published 82.7% on <a href="https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731">the model card</a>. DeepSeek publishes no cost for that run, so $0.185 comes from <a href="https://antigma.ai/eval">Antigma's Ante</a>, an independent open harness that reproduced the same 82.7% — $68.41 over 445 trials, 368 passed. Qwen3.8-27B: Steerable 75.3% at an estimated $0.85 (this repo, catalog-89; partial cost data on unpinned endpoints). Qwen's <a href="https://huggingface.co/Qwen/Qwen3.8-27B">model card</a> publishes Terminus 73.0% with no cost, so the reference here is <a href="https://artificialanalysis.ai/evaluations/terminalbench-v2-1">Artificial Analysis'</a> independent Terminus 2 run — 79.8% in an e2b sandbox, pass@1 over 3 repeats at xhigh effort, its list-price cost restated on a single-pass basis to match ours. That row is not effort-matched: Steerable pins <code>reasoning_effort=max</code> and the Z.AI endpoint for GLM only, and our Qwen run sent no reasoning field at all, so it ran at whatever the endpoint defaults to server-side — a tier we did not record. Codex completed the full 89-task catalog; protocol errors still depress its score.</p>
+<p class="sf-bench-foot">GLM costs from per-trial <code>result.json</code> telemetry on the eval account. Steerable pins <code>reasoning_effort=max</code> and the Z.AI endpoint for GLM. Codex completed the full 89-task catalog; protocol errors still depress its score. We previously also plotted Steerable on DeepSeek-V4-Flash (84.3%) and Qwen3.8-27B (75.3%) against each model's published number, but neither point is backed by a reproducible run list or per-trial telemetry in this repo — the Qwen run also ran at an unrecorded server-side reasoning tier, so it was not effort-matched to the reference it was drawn against — so both are withdrawn until they meet the same evidence bar as the GLM rows above.</p>
 </div>
 
 </div>
@@ -224,7 +212,7 @@ A Flash-cost model on Steerable lands in the same band as frontier models on the
 
 <div class="sf-bench-group">
 <div class="sf-bench-kicker">Frontier CLIs · public board</div>
-<p class="sf-bench-blurb">Different models and harnesses. Shows the band 81.7% sits in, not a controlled A/B.</p>
+<p class="sf-bench-blurb">Different models and harnesses. Shows the band 80.7% sits in, not a controlled A/B.</p>
 
 <div class="sf-bench-row">
 <div class="sf-bench-who">
