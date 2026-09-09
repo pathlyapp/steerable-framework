@@ -459,6 +459,7 @@ All three layers are **on by default** in the DeepPath desktop build:
   turn's egress arguments: with the egress proxy live the allow-list is a
   single localhost endpoint, which Seatbelt pins per host and reports
   `full`, so macOS requires it; bwrap and Landlock have no per-host pinning
+  <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
   and Windows has no rewriter backend, so those report `partial`/`none`
   and the desktop leaves `requireFull` off rather than refusing every shell
   call. Deriving it from a platform check instead denied all shell on Linux

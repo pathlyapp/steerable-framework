@@ -720,7 +720,9 @@ class Sidecar:
         ``execSandbox.requireFull`` refuses every command whose backend
         reports short of ``full``, and with egress open only Seatbelt can
         reach ``full`` (it pins per host); bwrap and Landlock have no
-        per-host pinning and Windows has no rewriter backend at all. A host
+        per-host pinning.
+        anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter)
+        Windows has no rewriter backend at all. A host
         that decides ``requireFull`` from its own platform guess therefore
         denies every shell call on the platforms it guessed wrong about.
         Probing with the ``network`` / ``allowedHosts`` the turn will send
