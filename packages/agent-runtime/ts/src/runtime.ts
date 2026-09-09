@@ -101,6 +101,38 @@ export interface HarnessDescription {
   default: Record<string, HarnessImplDescriptor[] | HarnessImplDescriptor>;
 }
 
+/** One model id the configured gateway accepts (`models.list`), joined
+ * with the bundled models.dev capability catalog by the same resolution
+ * the request path's reasoning-effort clamp uses. `joinedFrom` keeps the
+ * leaf-join provenance; `capabilities: 'unknown'` means no catalog tier
+ * matched, so reasoning levels are unavailable rather than empty. */
+export interface GatewayModelEntry {
+  id: string;
+  name: string | null;
+  window: number | null;
+  modalities: string[];
+  reasoningLevels: string[];
+  pricing: {
+    promptPerMtok: number | null;
+    completionPerMtok: number | null;
+  } | null;
+  joinedFrom: string | null;
+  capabilities: 'known' | 'unknown';
+}
+
+/** The `models.list` payload. `catalogStatus` is `live` when the listing
+ * was just fetched from the gateway, `stale` when served from cache after
+ * a refresh failure, and `offline` when the gateway is unreachable with no
+ * cache (then `models` is empty and `error` carries the cause). Discovery
+ * only — the catalog is not a routing whitelist. */
+export interface GatewayModelCatalog {
+  models: GatewayModelEntry[];
+  catalogStatus: 'live' | 'stale' | 'offline';
+  error?: string;
+  fetchedAt?: number;
+  current: { model: string | null; reasoningEffort: string | null };
+}
+
 /**
  * One built-in provider preset as served by `presets.describe`: the match
  * rule (`host` + `modelPrefix`) plus the parameter patch it applies. Host
@@ -565,6 +597,21 @@ export class AgentRuntime {
    */
   describeHarness(): Promise<HarnessDescription> {
     return this.process.request('harness.describe');
+  }
+
+  /**
+   * The gateway's live model catalog (`models.list`): the ids the
+   * configured `STEERABLE_BASE_URL` actually accepts, joined with
+   * models.dev capabilities — reasoning levels included — by the same
+   * resolution the request path's clamp uses, so a picker and the wire
+   * never disagree about a model's knob. Host model pickers render from
+   * this payload and badge the `stale`/`offline` states.
+   */
+  listModels(params?: {
+    baseUrl?: string;
+    apiKey?: string;
+  }): Promise<GatewayModelCatalog> {
+    return this.process.request('models.list', params);
   }
 
   // ---- plugins / presets / session tree --------------------------------
