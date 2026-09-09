@@ -1052,23 +1052,35 @@ async def test_chat_fork_unknown_trace_errors() -> None:
     assert "error" in resp
 
 
-def test_build_loop_config_default_budget_scales_with_window() -> None:
-    """No explicit budgetTokens → 2× the model's context window (production-
-    calibrated: mean trace ≈ 1.1× window; the old fixed 120k api cap cut 6%
-    of real tasks). Explicit budgetTokens still wins."""
+def test_build_loop_config_default_budget_scales_with_rounds_and_window() -> None:
+    """No explicit budgetTokens → enough for max_rounds rounds of a fully
+    cache-hit window, so the cumulative token axis stays a backstop behind
+    max_rounds instead of capping the round count. Explicit budgetTokens
+    still wins."""
     from steerable_sidecar.sidecar import _build_loop_config
 
     cfg = _build_loop_config({"model": "deepseek-v4"})
     assert cfg.budget is not None
-    assert cfg.budget.max_tokens == 2 * 131_072
+    assert cfg.budget.max_tokens == 80 * 131_072 // 10
 
     cfg_unknown = _build_loop_config({})
     assert cfg_unknown.budget is not None
-    assert cfg_unknown.budget.max_tokens == 2 * 60_000
+    assert cfg_unknown.budget.max_tokens == 80 * 60_000 // 10
 
     cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
     assert cfg_explicit.budget is not None
     assert cfg_explicit.budget.max_tokens == 50_000
+
+
+def test_build_loop_config_default_budget_floors_at_two_windows() -> None:
+    """A short-round config (subagent profiles run 8-16 rounds) would scale
+    below the production-calibrated 2× window — mean trace ≈ 1.1× window, and
+    the old fixed 120k api cap cut 6% of real tasks — so the floor holds."""
+    from steerable_sidecar.sidecar import _build_loop_config
+
+    cfg = _build_loop_config({"model": "deepseek-v4", "maxRounds": 12})
+    assert cfg.budget is not None
+    assert cfg.budget.max_tokens == 2 * 131_072
 
 
 def test_build_loop_config_tool_timeout_wiring() -> None:

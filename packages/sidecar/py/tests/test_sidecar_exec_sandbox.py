@@ -385,3 +385,90 @@ async def test_rewritten_command_actually_runs_confined(tmp_path) -> None:
     assert payload["success"] is False  # $HOME write denied by the kernel
     assert "sandbox-exec" in received[0]
     assert sys.platform == "darwin"
+
+
+async def _describe_sandbox(sidecar: Sidecar, params: dict | None = None) -> dict:
+    response = await sidecar.server.handle_frame(_frame("sandbox.describe", params))
+    assert "error" not in response, response
+    return response["result"]
+
+
+@pytest.mark.asyncio
+async def test_sandbox_describe_matches_what_require_full_would_enforce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe exists so a host can pick a posture its platform can
+    satisfy, which only works if the probe reports the same enforcement the
+    turn goes on to apply. Landlock below ABI 4 is the case that motivated
+    it: it reports partial, so a host that set require_full from a platform
+    guess would have every command refused."""
+    from steerable_sidecar.landlock import LandlockExecBackend
+
+    monkeypatch.setattr(
+        "steerable_sidecar.sidecar.select_exec_backend",
+        lambda **_: LandlockExecBackend(abi=3),
+    )
+    probe = await _describe_sandbox(
+        _sidecar_with_bash([], _ScriptedProvider([_text_round("hi")])),
+        {"network": True, "allowedHosts": ["127.0.0.1:8899"]},
+    )
+    assert probe == {"backend": "landlock", "enforcement": "partial"}
+
+    received: list[str] = []
+    provider = _ScriptedProvider(
+        [_tool_round(ToolCall(id="c1", name="bash", arguments={"command": "ls"})),
+         _text_round("denied, stopping")]
+    )
+    sidecar = _sidecar_with_bash(received, provider)
+    await _run_stream(
+        sidecar,
+        _base_params(
+            execSandbox={
+                "enabled": True,
+                "network": True,
+                "allowedHosts": ["127.0.0.1:8899"],
+                "requireFull": True,
+            }
+        ),
+    )
+
+    assert received == []
+    payload = (await _tool_payloads(sidecar))[0]
+    assert payload["data"]["_sandbox"] == {
+        "backend": probe["backend"],
+        "enforcement": probe["enforcement"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_sandbox_describe_reports_none_without_a_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "steerable_sidecar.sidecar.select_exec_backend", lambda **_: None
+    )
+    sidecar = _sidecar_with_bash([], _ScriptedProvider([_text_round("hi")]))
+
+    assert await _describe_sandbox(sidecar) == {
+        "backend": "none",
+        "enforcement": "none",
+    }
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+@pytest.mark.asyncio
+async def test_sandbox_describe_separates_localhost_pinning_from_open_egress() -> None:
+    """Egress is the whole of the enforcement answer, and it is the axis
+    hosts get wrong: the same machine reaches full with the egress proxy's
+    localhost endpoint and only partial against a provider host."""
+    sidecar = _sidecar_with_bash([], _ScriptedProvider([_text_round("hi")]))
+
+    pinned = await _describe_sandbox(
+        sidecar, {"network": True, "allowedHosts": ["127.0.0.1:8899"]}
+    )
+    assert pinned == {"backend": "seatbelt", "enforcement": "full"}
+
+    open_egress = await _describe_sandbox(
+        sidecar, {"network": True, "allowedHosts": ["api.deepseek.com:443"]}
+    )
+    assert open_egress == {"backend": "seatbelt", "enforcement": "partial"}

@@ -34,6 +34,7 @@ import asyncio
 import importlib.util
 import json
 import logging
+import math
 import os
 import platform
 import sys
@@ -49,7 +50,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from steerable_agent_runtime.llm import ProviderPreset
 
-from steerable_agent_harness import BudgetLimit
+from steerable_agent_harness import DEFAULT_CACHED_TOKEN_WEIGHT, BudgetLimit
 from steerable_agent_protocol.generated import (
     AgentSession,
     SidecarHealth,
@@ -267,6 +268,7 @@ class Sidecar:
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
+        register("sandbox.describe", self._handle_sandbox_describe)
         register("plugin.list", self._handle_plugin_list)
         register("plugin.enable", self._handle_plugin_enable)
         register("plugin.disable", self._handle_plugin_disable)
@@ -709,6 +711,38 @@ class Sidecar:
         from steerable_agent_runtime.llm import describe_compat_flags
 
         return {"flags": describe_compat_flags()}
+
+    async def _handle_sandbox_describe(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Report the per-exec enforcement this host can actually reach.
+
+        ``execSandbox.requireFull`` refuses every command whose backend
+        reports short of ``full``, and with egress open only Seatbelt can
+        reach ``full`` (it pins per host); bwrap and Landlock have no
+        per-host pinning.
+        anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter)
+        Windows has no rewriter backend at all. A host
+        that decides ``requireFull`` from its own platform guess therefore
+        denies every shell call on the platforms it guessed wrong about.
+        Probing with the ``network`` / ``allowedHosts`` the turn will send
+        returns the enforcement that turn would get, so the host can pick a
+        posture it can satisfy and disclose the real one.
+
+        ``writableRoots`` is deliberately not consulted: every backend
+        derives ``enforcement`` from egress alone, so the answer is exact
+        rather than an approximation, and probing cannot fail on a root that
+        does not exist yet.
+        """
+        params = params or {}
+        backend = select_exec_backend(
+            network=bool(params.get("network")),
+            allowed_hosts=params.get("allowedHosts") or None,
+            shell=str(params.get("shell") or "/bin/sh"),
+        )
+        if backend is None:
+            return {"backend": "none", "enforcement": "none"}
+        return {"backend": backend.name, "enforcement": backend.enforcement}
 
     def _require_plugin_registry(self) -> Any:
         """The plugin registry, or an RPC error when the subsystem is unwired."""
@@ -2851,10 +2885,20 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
         # with none — a default-on regression. Production distribution over
         # 31k api traces: mean 145k total tokens/trace ≈ 1.1× deepseek's
         # 131k window, and the api's fixed 120k cap cut 6% of real tasks
-        # (budget_exhausted terminal). Default to 2× the model's context
-        # window: real tasks fit, runaway cost stays bounded. maxRounds is
-        # the primary runaway guard; only the token axis of BudgetLimit is
-        # consumed by the loop today (steps/tool_calls stay inert).
+        # (budget_exhausted terminal). maxRounds is the primary runaway
+        # guard; only the token axis of BudgetLimit is consumed by the loop
+        # today (steps/tool_calls stay inert).
+        #
+        # The token axis is cumulative over the run while a context window is
+        # a per-request size, so a flat multiple of the window caps the round
+        # count instead of the spend: an agentic turn re-sends its prompt
+        # every round, and even a fully cache-hit window still bills
+        # ``cached_token_weight × window``. The former flat 2× therefore
+        # exhausted around round 13-20 of the bundled spec's max_rounds=80 —
+        # the backstop guard fired four times sooner than the primary one.
+        # Scaling with the round budget restores that order: the token axis
+        # binds only when rounds cost more than a cached full window. The 2×
+        # floor keeps short-round configs (subagent profiles) where they were.
         from steerable_agent_runtime.tokens import resolve_context_window
 
         window = resolve_context_window(
@@ -2864,7 +2908,10 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
             base_url=params.get("baseUrl"),
         )
         budget = BudgetLimit(
-            max_tokens=2 * window,
+            max_tokens=max(
+                2 * window,
+                math.floor(max_rounds * window * DEFAULT_CACHED_TOKEN_WEIGHT),
+            ),
             max_steps=max_rounds,
             max_tool_calls=10_000,
         )
