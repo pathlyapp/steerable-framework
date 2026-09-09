@@ -80,7 +80,12 @@ def parse_allow_entry(raw: str) -> AllowEntry:
 
 
 class AllowList:
-    """Closed set of allowed CONNECT targets. Empty input is an error."""
+    """Closed set of allowed CONNECT targets. Empty input is an error.
+
+    The constructor list is the immutable baseline; user-approved runtime
+    additions go through `add` into a session set that dies with the
+    process — a session grant can never silently become a durable one.
+    """
 
     def __init__(self, entries: list[str]):
         if not entries:
@@ -89,14 +94,25 @@ class AllowList:
                 "either a mistake or should not be run at all"
             )
         self._entries = tuple(parse_allow_entry(e) for e in entries)
+        self._session: set[AllowEntry] = set()
 
     @property
     def entries(self) -> tuple[AllowEntry, ...]:
         return self._entries
 
+    def add(self, raw: str) -> AllowEntry:
+        """Session-scoped runtime addition (user-approved via the control
+        endpoint). Parsed with the same strictness as baseline entries."""
+        entry = parse_allow_entry(raw)
+        self._session.add(entry)
+        logger.info("session allow added: %s", raw)
+        return entry
+
     def allows(self, host: str, port: int) -> bool:
         host = host.lower()
-        return any(e.allows(host, port) for e in self._entries)
+        return any(e.allows(host, port) for e in self._entries) or any(
+            e.allows(host, port) for e in self._session
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +125,14 @@ class ProxyConfig:
     inject: InjectRule | None = None
     #: JSONL path for forwarded request bodies (inject mode). None → no tee.
     record_requests: str | None = None
+    #: Bearer token for the loopback control endpoint (POST /allow →
+    #: session-scoped list addition). None → no control plane at all.
+    #: The token must never reach sandboxed children (their environment is
+    #: scrubbed), or a confined process could widen its own egress.
+    control_token: str | None = None
+    #: Control endpoint port; 0 = ephemeral (read back via
+    #: ``bound_control_port``).
+    control_port: int = 0
 
     def __post_init__(self) -> None:
         if self.allow is None:
@@ -125,12 +149,19 @@ class EgressProxyServer:
     def __init__(self, config: ProxyConfig):
         self.config = config
         self._server: asyncio.AbstractServer | None = None
+        self._control: asyncio.AbstractServer | None = None
 
     @property
     def bound_port(self) -> int:
         if self._server and self._server.sockets:
             return int(self._server.sockets[0].getsockname()[1])
         return self.config.bind_port
+
+    @property
+    def bound_control_port(self) -> int | None:
+        if self._control and self._control.sockets:
+            return int(self._control.sockets[0].getsockname()[1])
+        return None
 
     async def serve(self) -> None:
         self._server = await asyncio.start_server(
@@ -144,6 +175,18 @@ class EgressProxyServer:
             self.bound_port,
             len(self.config.allow.entries),
         )
+        if self.config.control_token:
+            self._control = await asyncio.start_server(
+                self._handle_control,
+                "127.0.0.1",  # loopback only, regardless of the proxy bind
+                self.config.control_port,
+            )
+            logger.info(
+                "egress control endpoint on 127.0.0.1:%s",
+                self.bound_control_port,
+            )
+            # Supervised spawns read the ephemeral port back from stdout.
+            print(f"EGRESS_CONTROL_PORT={self.bound_control_port}", flush=True)
         async with self._server:
             await self._server.serve_forever()
 
@@ -152,6 +195,84 @@ class EgressProxyServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        if self._control:
+            self._control.close()
+            await self._control.wait_closed()
+            self._control = None
+
+    # ---- control endpoint ------------------------------------------------
+
+    async def _handle_control(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """One endpoint: ``POST /allow {"host": "h[:port]"}`` + bearer.
+
+        The grant lands in the session set only — process exit clears it.
+        """
+        try:
+            head = await self._read_head(reader)
+            if head is None:
+                await self._reply(writer, 431, "Request Header Fields Too Large")
+                return
+            try:
+                request_line, _, header_block = head.partition(b"\r\n")
+                parts = request_line.decode("ascii").split(" ")
+                if len(parts) != 3:
+                    raise ValueError
+                method, path = parts[0], parts[1]
+                headers = {
+                    k.decode("ascii").strip().lower(): v.decode("ascii").strip()
+                    for line in header_block.split(b"\r\n")
+                    if b":" in line
+                    for k, _, v in [line.partition(b":")]
+                }
+            except (UnicodeDecodeError, ValueError):
+                await self._reply(writer, 400, "Bad Request")
+                return
+            if headers.get("authorization") != f"Bearer {self.config.control_token}":
+                await self._reply(writer, 401, "Unauthorized")
+                return
+            if method != "POST" or path != "/allow":
+                await self._reply(writer, 404, "Not Found")
+                return
+            try:
+                length = int(headers.get("content-length", "0"))
+            except ValueError:
+                await self._reply(writer, 400, "Bad Request")
+                return
+            if not 0 < length <= 4096:
+                await self._reply(writer, 400, "Bad Request")
+                return
+            body = await reader.readexactly(length)
+            try:
+                import json
+
+                payload = json.loads(body)
+                host = payload["host"]
+                if not isinstance(host, str):
+                    raise TypeError
+                entry = self.config.allow.add(host)
+            except (ValueError, KeyError, TypeError, asyncio.IncompleteReadError):
+                await self._reply(writer, 400, "Bad Request")
+                return
+            ports = ",".join(str(p) for p in sorted(entry.ports))
+            await self._reply_json(writer, 200, f'{{"allowed": "{entry.host}", "ports": "{ports}"}}')
+        except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except OSError:
+                pass
+
+    @staticmethod
+    async def _reply_json(writer: asyncio.StreamWriter, code: int, body: str) -> None:
+        writer.write(
+            f"HTTP/1.1 {code} OK\r\ncontent-type: application/json\r\n"
+            f"content-length: {len(body.encode())}\r\n\r\n{body}".encode()
+        )
+        await writer.drain()
 
     # ---- connection handling -------------------------------------------
 
@@ -191,7 +312,11 @@ class EgressProxyServer:
                 return
             if not self.config.allow.allows(host, port):
                 logger.info("deny %s:%d (not on allow-list)", host, port)
-                await self._reply(writer, 403, "Forbidden")
+                # The reason phrase is the only channel a CONNECT client can
+                # see (httpx surfaces it in ProxyError); it names the denied
+                # target so the sidecar can offer an approval round-trip.
+                # Hosts are charset-validated by the allow-entry grammar.
+                await self._reply(writer, 403, f"Forbidden; egress denied for {host}:{port}")
                 return
             try:
                 upstream_r, upstream_w = await asyncio.wait_for(

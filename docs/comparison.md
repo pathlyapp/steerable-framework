@@ -178,6 +178,16 @@ each tier is independently adoptable.
   enforced by the proxy plus the app-layer domain list, not the namespace —
   the UI says so honestly. When the proxy is live, shell egress pins to its
   localhost endpoint, Seatbelt reports `full`, and `requireFull` defaults on.
+  A denied CONNECT is no longer a dead end: the proxy's 403 names the
+  target, and the web tools offer a host approval round-trip — an allow
+  lands as a session-scoped allow-list addition via the proxy's loopback
+  control endpoint (bearer-token'd; the token never reaches sandboxed
+  children, so a confined process cannot widen its own egress) and the
+  fetch retries once. The approval UI defaults to deny for these prompts
+  and hides the durable variants (the list is process-lifetime; durable
+  grants belong to the configured domain list). The ambient-proxy fallback
+  is disclosed in the security settings panel with its reason, not just in
+  the main-process log.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream (post-hoc OTLP export only).
 - **Multi-agent: one delegate tool on a shared pool.** The model-facing
