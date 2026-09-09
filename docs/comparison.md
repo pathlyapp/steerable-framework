@@ -194,7 +194,10 @@ each tier is independently adoptable.
   surface is a single `delegate_subagent` tool — depth-1 by construction,
   named `subagent_type` profiles with per-profile tool domains that fail
   closed (`tool_not_delegated`), per-profile models (via the host's
-  provider factory), and opt-in concurrency. Underneath, delegations run
+  provider factory), per-profile system prompts seeded into the child
+  loop, and profile descriptions advertised in the tool schema so the
+  model picks a profile by purpose (CC `.claude/agents` parity), plus
+  opt-in concurrency. Underneath, delegations run
   on the framework's `AgentPool`, so concurrent profiles execute in
   parallel under one budget and child lifecycle lands as `agent.child`
   events hosts can render live. A six-tool orchestration family
@@ -202,9 +205,13 @@ each tier is independently adoptable.
   `agent_list` / `agent_interrupt`) remains available as an opt-in
   advanced mode for explicit coordination, sharing the same pool. The
   desktop additionally ships a cross-turn background Task family
-  (`task_run` / `task_status` / `task_result` on a host-side task table,
-  with a task panel UI) — tasks run on their own sidecar stream so they
-  outlive the parent turn, and compose with git-worktree isolation. What
+  (`task_run` / `task_send` / `task_status` / `task_result` on a
+  host-side task table, with a task panel UI) — tasks run on their own
+  sidecar stream so they outlive the parent turn, compose with
+  git-worktree isolation, and orchestrate: `dependsOn` schedules a task
+  to auto-start once its dependencies complete (fail-fast on a failed
+  dependency), and `task_send` steers a running task mid-flight
+  (agent-to-agent messaging). What
   stays out of scope by design in the framework: planning, DAGs, and
   groupchat. If you want batteries-included orchestration, LangGraph or
   the Agents SDK will get you there faster.

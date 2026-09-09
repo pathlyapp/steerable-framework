@@ -727,3 +727,129 @@ async def test_child_advertises_the_delegated_tool_surface() -> None:
     # child's — filtered to the delegated domain.
     assert seen_tools[0] == ["read_file", "write_file", "delegate_subagent"]
     assert seen_tools[1] == ["read_file"]
+
+
+@pytest.mark.asyncio
+async def test_profile_system_prompt_seeds_the_child() -> None:
+    # CC .claude/agents parity: a profile's system_prompt lands as the child
+    # loop's first message, ahead of the task; the default profile (None)
+    # leaves the seed untouched.
+    seen_messages: list[list] = []
+
+    class _SeedCapturingProvider:
+        name = "fake"
+        model = "fake-model"
+
+        async def complete(self, messages, *, tools=None, **kw):
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw):
+            seen_messages.append(list(messages))
+            entry = next(script)
+
+            async def _gen():
+                if entry.get("content"):
+                    yield LLMStreamChunk(content_delta=entry["content"])
+                for call in entry.get("tool_calls", []):
+                    yield LLMStreamChunk(tool_call_delta=call)
+                yield LLMStreamChunk(
+                    finish_reason="tool_calls" if entry.get("tool_calls") else "stop"
+                )
+
+            return _gen()
+
+    script = iter(
+        [
+            {
+                "tool_calls": [
+                    tc(
+                        "delegate_subagent",
+                        {"task": "scan", "subagent_type": "explore"},
+                    )
+                ]
+            },
+            {"content": "child answer"},
+            {"content": "parent done"},
+        ]
+    )
+    registry = SubagentRegistry()
+    registry.register(
+        "explore",
+        SubagentConfig(system_prompt="你是只读探索代理。禁止写操作。"),
+    )
+    provider = _SeedCapturingProvider()
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()), provider, registry=registry
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+    await executor.shutdown()
+
+    # Round 2 is the child's first request: system prompt first, task second.
+    child_seed = seen_messages[1]
+    assert child_seed[0].role == "system"
+    assert "只读探索代理" in "".join(
+        getattr(part, "text", "") for part in child_seed[0].content
+    )
+    assert child_seed[1].role == "user"
+
+
+@pytest.mark.asyncio
+async def test_default_profile_seeds_no_system_message() -> None:
+    seen_messages: list[list] = []
+
+    class _SeedCapturingProvider:
+        name = "fake"
+        model = "fake-model"
+
+        async def complete(self, messages, *, tools=None, **kw):
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw):
+            seen_messages.append(list(messages))
+            entry = next(script)
+
+            async def _gen():
+                if entry.get("content"):
+                    yield LLMStreamChunk(content_delta=entry["content"])
+                for call in entry.get("tool_calls", []):
+                    yield LLMStreamChunk(tool_call_delta=call)
+                yield LLMStreamChunk(
+                    finish_reason="tool_calls" if entry.get("tool_calls") else "stop"
+                )
+
+            return _gen()
+
+    script = iter(
+        [
+            {"tool_calls": [tc("delegate_subagent", {"task": "scan"})]},
+            {"content": "child answer"},
+            {"content": "parent done"},
+        ]
+    )
+    provider = _SeedCapturingProvider()
+    executor = SubagentExecutor(RouterToolExecutor(ToolRouter()), provider)
+    loop = CoreLoop(provider, executor, LoopConfig())
+    [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+    await executor.shutdown()
+
+    child_seed = seen_messages[1]
+    assert all(m.role != "system" for m in child_seed)
+
+
+def test_descriptor_advertises_profile_descriptions() -> None:
+    # CC Agent-tool parity: the model picks a profile by what it is for —
+    # each registered profile's description rides the tool description.
+    registry = SubagentRegistry()
+    registry.register(
+        "explore",
+        SubagentConfig(description="Read-only codebase reconnaissance."),
+    )
+    registry.register(
+        "coder",
+        SubagentConfig(description="Full-tool implementation work."),
+    )
+    d = subagent_tool_descriptor(registry=registry)
+    desc = d["function"]["description"]
+    assert "explore: Read-only codebase reconnaissance." in desc
+    assert "coder: Full-tool implementation work." in desc

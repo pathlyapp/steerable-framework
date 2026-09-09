@@ -1861,6 +1861,11 @@ class Sidecar:
                                 str(p["model"]) if p.get("model") is not None else None
                             ),
                             concurrent=bool(p.get("concurrent", False)),
+                            system_prompt=(
+                                str(p["systemPrompt"])
+                                if p.get("systemPrompt") is not None
+                                else None
+                            ),
                             description=(
                                 str(p["description"])
                                 if p.get("description") is not None
