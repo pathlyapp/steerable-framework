@@ -130,7 +130,8 @@ export interface GatewayModelCatalog {
   catalogStatus: 'live' | 'stale' | 'offline';
   error?: string;
   fetchedAt?: number;
-  current: { model: string | null; reasoningEffort: string | null };
+  /** Absent on the offline path (no gateway/env context to report). */
+  current?: { model: string | null; reasoningEffort: string | null };
 }
 
 /**
