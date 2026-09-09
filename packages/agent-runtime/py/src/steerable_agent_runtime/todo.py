@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import ToolDispatchError
+from .hooks import CompletionAction, CompletionDraft, NoopHooks
 
 #: The tool name the model calls.
 TODO_TOOL_NAME = "todo_write"
@@ -211,3 +212,69 @@ def todo_write_tool_descriptor() -> dict[str, Any]:
             "parameters": TODO_SCHEMA,
         },
     }
+
+
+#: Unfinished states the completion gate acts on. ``completed`` items never
+#: block finishing; a list that is all-completed is a finished plan.
+_UNFINISHED_STATUSES = ("pending", "in_progress")
+
+#: How many unfinished items the reminder names. Past this the listing stops
+#: being a reminder and starts being a context dump; the count line still
+#: carries the full total.
+_MAX_LISTED = 10
+
+
+class TodoCompletionGate(NoopHooks):
+    """``before_completion`` hook: veto ``completed`` while todos remain.
+
+    Long tasks stall when the model ends a turn with a text-only progress
+    note ("next I will do page 14") — the loop reads that as ``completed``
+    and waits for user input even though the chat's todo list still has
+    pending or in_progress items. The gate converts that completion into a
+    retry with a reminder naming the unfinished items, so the loop keeps
+    executing instead of stalling.
+
+    Bounded by the loop's completion-redo budget: a model that deliberately
+    leaves items unfinished (after explaining why) is still allowed to
+    finish once the budget is spent, and the loop discloses that acceptance.
+
+    Stateless across chats: the run's ``LoopContext.chat_id`` keys the store
+    lookup, matching the id ``todo_write`` dispatches with, so one gate
+    instance serves every chat the process hosts.
+    """
+
+    def __init__(self, store: TodoStore) -> None:
+        self._store = store
+
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: Any
+    ) -> CompletionAction:
+        """Retry when the run's chat has unfinished todos, else accept.
+
+        Only ``completed`` drafts are gated — ``budget_exhausted`` and error
+        stops have their own continuation paths, and vetoing them here would
+        fight those.
+        """
+        if draft.status != "completed":
+            return CompletionAction(kind="accept")
+        unfinished = [
+            item
+            for item in self._store.get(str(getattr(ctx, "chat_id", None) or ""))
+            if item["status"] in _UNFINISHED_STATUSES
+        ]
+        if not unfinished:
+            return CompletionAction(kind="accept")
+        listing = "\n".join(
+            f"- [{item['status']}] {item['content']}"
+            for item in unfinished[:_MAX_LISTED]
+        )
+        return CompletionAction(
+            kind="retry",
+            message=(
+                f"The todo list still has {len(unfinished)} unfinished "
+                f"item(s):\n{listing}\n"
+                "Keep executing them with tools instead of narrating "
+                "progress. If an item is genuinely done or no longer needed, "
+                "update the list with todo_write first, then finish."
+            ),
+        )

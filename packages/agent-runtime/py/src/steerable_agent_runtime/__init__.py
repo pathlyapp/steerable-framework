@@ -38,6 +38,7 @@ from .ask_user import (
 from .todo import (
     TODO_SCHEMA,
     TODO_TOOL_NAME,
+    TodoCompletionGate,
     TodoStore,
     make_todo_write_tool,
     todo_write_tool_descriptor,
@@ -395,6 +396,7 @@ __all__ = [
     "ToolExecutor",
     "ToolExposure",
     "ToolRouter",
+    "TodoCompletionGate",
     "TodoStore",
     "TraceRecorder",
     "TranscriptAppend",
