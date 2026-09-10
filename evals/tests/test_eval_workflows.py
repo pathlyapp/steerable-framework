@@ -189,6 +189,14 @@ def test_cheap12_probe_matrix_is_gateway_harnesses() -> None:
     assert "pi-glm skipped on Qwen" in WEEKLY
 
 
+def test_cheap12_probe_can_rerun_one_cell() -> None:
+    """A failed pi-glm cell must not re-queue the other three behind the
+    in-flight four-cell run. Non-default `agent` skips the other matrix legs."""
+    assert "EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+    assert 'EVAL_AGENT" != "steerable"' in WEEKLY
+    assert 'AGENT" != "$EVAL_AGENT"' in WEEKLY
+
+
 def test_cheap12_probe_cards_are_a_new_baseline() -> None:
     """A probe Mean posted as GHA cheap-12 is read as the old easy-12
     smoke, then mixed with catalog-89 80.7%."""

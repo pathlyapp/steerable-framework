@@ -16,7 +16,7 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness. `terminus-2` is Harbor's published TB harness (Qwen's 73.0% row)."
+        description: "Catalog split: which harness. cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell."
         type: choice
         options:
           - steerable
@@ -147,6 +147,7 @@ jobs:
       - name: Harbor cheap-12 probe
         env:
           AGENT: ${{ matrix.agent }}
+          EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
@@ -161,6 +162,14 @@ jobs:
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set +e
+          # cheap-12 probe default agent is steerable and means "all four
+          # cells". A non-default agent reruns that one cell without queuing
+          # behind the in-flight four-cell run (concurrency includes agent).
+          if [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
           case "$EVAL_MODEL" in
             *qwen*)
@@ -596,6 +605,12 @@ jobs:
                   else:
                       provider, default_effort = "z-ai", "high"
                   used = effort or default_effort
+                  dispatch_agent = (os.environ.get("EVAL_AGENT") or "steerable").strip()
+                  harnesses = (
+                      dispatch_agent
+                      if dispatch_agent and dispatch_agent != "steerable"
+                      else "steerable / claude-code-glm / pi-glm / terminus-2"
+                  )
                   title = f"开始 · cheap-12 probe × {model} @{used}"
                   body = (
                       "新基线，不上首页，不和 catalog-89 80.7% / 旧 easy-12 混用。"
@@ -603,7 +618,7 @@ jobs:
                       "\n绿: fix-git, kv-store-grpc, log-summary-date-ranges, openssl-selfsigned-cert, pypi-server, build-pmars, compile-compcert"
                       "\n翻面: raman-fitting (1/6), dna-insert (2/6), bn-fit-modify (4/6), extract-elf (5/6)"
                       "\n红: protein-assembly"
-                      "\nagent: steerable / claude-code-glm / pi-glm / terminus-2；Codex 跳过。"
+                      f"\nagent: {harnesses}；Codex 跳过。"
                       f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
                       " claude-code-glm 与 terminus-2 走网关默认路由。"
                       "\nPi×Qwen 跳过（thinking map 发不出 medium）。"

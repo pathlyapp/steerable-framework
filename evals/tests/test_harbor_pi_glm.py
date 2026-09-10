@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -92,10 +93,25 @@ def test_output_cap_matches_the_steerable_leg(model: dict[str, Any]) -> None:
 
 
 def test_context_window_is_glms_own(model: dict[str, Any]) -> None:
-    """`steerable_agent_runtime.model_info` records 1048576 for z-ai/glm.
-    Pi's 128000 default both compacts early and clamps maxTokens down once
-    a prompt passes ~58k tokens."""
+    """GLM-5.3-Flash is 1M. Pi's 128000 default both compacts early and
+    clamps maxTokens down once a prompt passes ~58k tokens."""
     assert model["contextWindow"] == 1_048_576
+
+
+def test_context_window_does_not_import_the_runtime() -> None:
+    """Harbor's tool env has PYTHONPATH=repo root. evals.* imports;
+    steerable_agent_runtime does not, and a module-level import 404s every
+    pi-glm trial before the first request."""
+    text = Path(__file__).resolve().parents[1].joinpath("harbor_pi_glm.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from steerable_agent_runtime" not in text
+    assert "import steerable_agent_runtime" not in text
+    from evals.harbor_pi_glm import context_window_for
+
+    assert context_window_for("z-ai/glm-5.3-flash") == 1_048_576
+    assert context_window_for("deepseek/deepseek-v4-flash") == 1_048_576
+    assert context_window_for("qwen/qwen3.8-27b") == 262_144
 
 
 def test_reasoning_is_declared_so_thinking_reaches_the_request(

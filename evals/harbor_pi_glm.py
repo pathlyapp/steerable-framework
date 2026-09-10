@@ -30,13 +30,17 @@ from harbor.agents.installed.pi import Pi
 from harbor.agents.model_connection import ResolvedModelConnection
 
 from evals.harbor_helpers import is_zai_glm
-from steerable_agent_runtime.model_info import resolve_model_info
 
 #: ``STEERABLE_MAX_TOKENS`` in ``harbor_steerable.run``. Parity, not a
 #: tunable: a different output cap makes the two legs different runs.
 _MAX_TOKENS = 65_536
 #: ``STEERABLE_TEMPERATURE`` in ``harbor_steerable.run``.
 _TEMPERATURE = 1.0
+#: Harbor imports this module in its isolated tool env. PYTHONPATH is the
+#: repo root, so ``evals.*`` resolves and ``steerable_agent_runtime`` does
+#: not. Keep the window table here; do not import the runtime package.
+_GLM_OR_DEEPSEEK_WINDOW = 1_048_576
+_QWEN38_WINDOW = 262_144
 #: Harbor's ``--thinking`` enum onto Pi's legal values ``low`` / ``high`` /
 #: ``max``. GLM's catalog is ``low`` / ``high`` / ``max``, so ``xhigh``
 #: maps to ``max``. DeepSeek-V4-Flash is ``high`` / ``xhigh`` — ``high``
@@ -66,6 +70,19 @@ def _openrouter_routing(model_id: str) -> dict[str, object]:
     return {"order": [pinned], "allow_fallbacks": False}
 
 
+def context_window_for(model_id: str) -> int:
+    """Pi ``contextWindow`` for a gateway model id.
+
+    Harbor's isolated interpreter cannot import ``steerable_agent_runtime``.
+    The runtime prefix table also maps bare ``deepseek`` to 131072, which
+    is the V3 window, not DeepSeek-V4-Flash's 1M.
+    """
+    lowered = model_id.lower()
+    if "qwen3.8" in lowered or "qwen3-8-27b" in lowered:
+        return _QWEN38_WINDOW
+    return _GLM_OR_DEEPSEEK_WINDOW
+
+
 class PiGlmHarborAgent(Pi):
     """Pi driving the product model with the product's request parameters."""
 
@@ -89,11 +106,10 @@ class PiGlmHarborAgent(Pi):
             # no generated model entry to correct.
             return None
         provider = next(iter(models_json["providers"].values()))
-        info = resolve_model_info(model_id)
         provider["models"] = [
             {
                 **provider["models"][0],
-                "contextWindow": info.context_window,
+                "contextWindow": context_window_for(model_id),
                 "maxTokens": _MAX_TOKENS,
                 # Without this Pi reports ["off"] as the only supported
                 # thinking level, clamps --thinking to off, and sends no
