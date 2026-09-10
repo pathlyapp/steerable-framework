@@ -437,6 +437,88 @@ async def test_compaction_preserves_system_and_first_user_message() -> None:
         assert call[1].role == "user" and call[1].content_text == "the original goal"
 
 
+def tool_result(call_id: str) -> LLMMessage:
+    return LLMMessage.text_of("tool", "ok", name="emit", tool_call_id=call_id)
+
+
+@pytest.mark.asyncio
+async def test_summarize_middle_widens_the_tail_off_an_orphan_tool_result() -> None:
+    # A count-only tail cut can land inside a tool-call group: the issuing
+    # assistant goes into the summarized middle while its results stay in the
+    # tail, and the request opens on a `tool` message nothing answered.
+    # DeepSeek rejects that with HTTP 400 invalid_request.
+    calls = [
+        ToolCall(id="call_a", name="emit", arguments={}),
+        ToolCall(id="call_b", name="emit", arguments={}),
+    ]
+    transcript = [
+        LLMMessage.text_of("system", "you are helpful"),
+        LLMMessage.text_of("user", "make a deck"),
+        LLMMessage.text_of("assistant", "reading the skill files"),
+        LLMMessage.text_of("assistant", "", tool_calls=calls),
+        tool_result("call_a"),
+        # the read path interleaves image messages between tool results
+        LLMMessage.text_of("user", "slide.png:"),
+        tool_result("call_b"),
+        LLMMessage.text_of("assistant", "wrapping up"),
+    ]
+    hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=3)
+
+    out = await hooks._summarize_middle(transcript)
+
+    assert CompactionHooks._orphan_tool_ids(out) == set()
+    assert any("[context compacted" in m.content_text for m in out)
+    # the group survived whole, in order, with its interleaved image message
+    assert [m.role for m in out[-5:]] == [
+        "assistant",
+        "tool",
+        "user",
+        "tool",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_summarize_middle_still_compacts_an_already_orphaned_transcript() -> None:
+    # The issuer is missing from the input (a host resuming from a truncated
+    # log), so widening could never repair the tail. Compaction proceeds
+    # rather than widening to the head and going silent for the rest of the
+    # run — the alternative to the provider 400 is a context overflow.
+    transcript = [
+        LLMMessage.text_of("user", "make a deck"),
+        LLMMessage.text_of("assistant", "first"),
+        tool_result("call_gone_a"),
+        tool_result("call_gone_b"),
+        LLMMessage.text_of("assistant", "wrapping up"),
+    ]
+    hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=2)
+
+    out = await hooks._summarize_middle(transcript)
+
+    assert len(out) < len(transcript)
+    assert any("[context compacted" in m.content_text for m in out)
+
+
+@pytest.mark.asyncio
+async def test_summarize_middle_keeps_an_aligned_tail_at_keep_last() -> None:
+    # No tool-call group is cut, so the tail stays exactly keep_last long —
+    # widening must not cost compaction on a clean boundary.
+    transcript = [
+        LLMMessage.text_of("system", "you are helpful"),
+        LLMMessage.text_of("user", "make a deck"),
+        LLMMessage.text_of("assistant", "first"),
+        LLMMessage.text_of("assistant", "second"),
+        LLMMessage.text_of("user", "keep going"),
+        LLMMessage.text_of("assistant", "third"),
+    ]
+    hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=3)
+
+    out = await hooks._summarize_middle(transcript)
+
+    assert [m.content_text for m in out[-3:]] == ["second", "keep going", "third"]
+    assert len(out) == 6  # system + goal + summary + 3 kept
+
+
 @pytest.mark.asyncio
 async def test_micro_compact_trigger_schedule() -> None:
     """Periodic prune fires on interval multiples (never round 0), and an

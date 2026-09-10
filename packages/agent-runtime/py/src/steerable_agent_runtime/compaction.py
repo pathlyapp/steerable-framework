@@ -22,7 +22,9 @@ Strategy (deterministic first, LLM optional):
       message; otherwise drop the middle span behind a marker.
 
 System messages and the first user message (the goal) are always kept; the
-most recent ``keep_last_messages`` are never touched. Between compactions
+most recent ``keep_last_messages`` are never touched, and the kept tail is
+widened when that count would cut a tool-call group in half (an orphan
+``tool`` message is a provider-level 400). Between compactions
 the transcript is append-only, so provider prompt caches keep hitting; a
 rewrite invalidates the cache once, then the prefix is stable again.
 
@@ -440,6 +442,50 @@ class CompactionHooks(NoopHooks):
             for i, m in enumerate(transcript)
         ]
 
+    @staticmethod
+    def _orphan_tool_ids(tail: Sequence[LLMMessage]) -> set[str]:
+        """``tool_call_id``s answered inside ``tail`` but issued before it."""
+        issued: set[str] = set()
+        orphans: set[str] = set()
+        for m in tail:
+            for call in m.tool_calls or ():
+                issued.add(call.id)
+            if (
+                m.role == "tool"
+                and m.tool_call_id is not None
+                and m.tool_call_id not in issued
+            ):
+                orphans.add(m.tool_call_id)
+        return orphans
+
+    def _tail_start(self, transcript: list[LLMMessage], head_end: int) -> int:
+        """Where the untouched tail begins: ``keep_last_messages`` back, then
+        widened until the tail answers no tool call it does not also issue.
+
+        OpenAI-compatible providers reject a ``tool`` message whose
+        ``tool_call_id`` was never issued by a preceding ``assistant``
+        message (DeepSeek answers HTTP 400 ``invalid_request``). A count-only
+        cut can land inside a tool-call group, summarizing the issuing
+        assistant away while its results stay in the tail. Widening only ever
+        keeps more, and is bounded by one round's tool calls — including the
+        ``user`` image messages the read path interleaves between results.
+
+        Only orphans this cut created are worth widening for. A transcript
+        that arrives already missing an issuer (a host that resumed from a
+        truncated log) would otherwise widen to ``head_end`` and disable
+        summarization for the rest of the run, trading a provider 400 for a
+        context overflow.
+        """
+        tail_start = max(head_end, len(transcript) - self._keep_last)
+        issuable = {
+            call.id for m in transcript[head_end:] for call in m.tool_calls or ()
+        }
+        while tail_start > head_end and (
+            self._orphan_tool_ids(transcript[tail_start:]) & issuable
+        ):
+            tail_start -= 1
+        return tail_start
+
     async def _summarize_middle(self, transcript: list[LLMMessage]) -> list[LLMMessage]:
         # Keep every system message plus the first user message (the goal) as
         # the head; keep the recent tail untouched; summarize the middle.
@@ -451,7 +497,7 @@ class CompactionHooks(NoopHooks):
                 head_end = i + 1
             else:
                 break
-        tail_start = max(head_end, len(transcript) - self._keep_last)
+        tail_start = self._tail_start(transcript, head_end)
         middle = transcript[head_end:tail_start]
         if not middle:
             return transcript
