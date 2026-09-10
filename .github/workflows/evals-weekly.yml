@@ -16,10 +16,11 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Catalog split: which harness. cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
+        description: "Catalog split: which harness (one cell per dispatch). cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
         type: choice
         options:
           - steerable
+          - claude-code-glm
           - pi-glm
           - terminus-2
         default: steerable
@@ -208,10 +209,10 @@ jobs:
               export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
               ;;
             *deepseek*)
-              # OpenRouter deepseek/deepseek-v4-flash is the 0423 snapshot;
-              # official `deepseek` is not in the serving list (15 hosts,
-              # Alibaba Cloud Int. is the official-cloud pin). Pinning
-              # `deepseek` 404s every trial (cheap-12 34439095549).
+              # Probe model is deepseek/deepseek-v4-flash-0731 (GA).
+              # The unsuffixed slug is the 0423 preview — do not use it.
+              # Official `deepseek` is still not a serving host; pin
+              # Alibaba Cloud Int. Pinning `deepseek` 404s.
               export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
               export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
               ;;
@@ -360,12 +361,36 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
     steps:
+      - id: gate
+        name: Decide whether this catalog cell runs
+        env:
+          AGENT: ${{ github.event.inputs.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          skip=0
+          if [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
+            skip=1
+            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
+            skip=1
+            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = 1 ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+          fi
       - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != '1'
       - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.skip != '1'
       - run: uv sync
+        if: steps.gate.outputs.skip != '1'
       - uses: ./.github/actions/setup-harbor
+        if: steps.gate.outputs.skip != '1'
       - run: docker info
+        if: steps.gate.outputs.skip != '1'
       - name: Harbor catalog shard
+        if: steps.gate.outputs.skip != '1'
         env:
           AGENT: ${{ github.event.inputs.agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
@@ -378,6 +403,8 @@ jobs:
           # cheap-12 job withholds it: only the leg that needs it gets it.
           OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
           OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
+          ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
           # Terminus-2 is host-side LiteLLM. It reads OPENAI_* and ignores
           # STEERABLE_*. Catalog is one agent, so this does not leak the
           # gateway key into Codex the way a cheap-12 OPENAI_* map would.
@@ -389,6 +416,27 @@ jobs:
           extra=()
           if [ -n "$EVAL_MODEL" ]; then
             extra+=(--model "$EVAL_MODEL")
+            # Same official-route pins as the cheap-12 probe. Empty model
+            # keeps the product catalog default (GLM @max via harbor_steerable).
+            export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
+            case "$EVAL_MODEL" in
+              *qwen*)
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
+                ;;
+              *deepseek*)
+                # Probe model is deepseek/deepseek-v4-flash-0731 (GA).
+                # The unsuffixed slug is the 0423 preview — do not use it.
+                # Official `deepseek` is still not a serving host; pin
+                # Alibaba Cloud Int. Pinning `deepseek` 404s.
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+                ;;
+              *)
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+                ;;
+            esac
           fi
           # Explicit dispatch input wins; the qwen fallback exists because
           # the catalog used to top out at medium for it. With the gateway
@@ -631,9 +679,27 @@ jobs:
               title = f"开始 · GHA catalog 89 × {agent}"
               body = f"{agent} × 全量 89 题，49 分片并行。"
               if model:
-                  suffix = f" × {model}" + (f" @{effort}" if effort else "")
-                  title = f"开始 · GHA catalog 89 × {agent}{suffix}"
-                  body = f"{agent}{suffix} × 全量 89 题，49 分片并行。"
+                  if "qwen" in model:
+                      provider, default_effort = "alibaba", "medium"
+                  elif "deepseek" in model:
+                      provider, default_effort = "alibaba", "high"
+                  else:
+                      provider, default_effort = "z-ai", "high"
+                  used = effort or default_effort
+                  title = f"开始 · catalog-89 × {agent} × {model} @{used}"
+                  body = (
+                      "新基线 n=1，不上首页。"
+                      "不要和 6 跑 80.7%（8e260de @max）或 cheap-12 混用。"
+                      f"\n{agent} × 全量 89 题，49 分片。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
+                      " claude-code-glm 与 terminus-2 走网关默认路由。"
+                      "\nPi×Qwen / CC×DeepSeek 跳过。Codex / DSH 跳过。"
+                      + (
+                          "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
+                          if "deepseek" in model
+                          else ""
+                      )
+                  )
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"
@@ -651,8 +717,8 @@ jobs:
                   if "qwen" in model:
                       provider, default_effort = "alibaba", "medium"
                   elif "deepseek" in model:
-                      # 0423 snapshot: official `deepseek` is not a serving
-                      # host. Alibaba Cloud Int. is the official-cloud pin.
+                      # 0731 GA. Official `deepseek` is not a serving host.
+                      # Alibaba Cloud Int. is the official-cloud pin.
                       provider, default_effort = "alibaba", "high"
                   else:
                       provider, default_effort = "z-ai", "high"
@@ -681,7 +747,7 @@ jobs:
                       "\nPi×Qwen 跳过（thinking map 发不出 medium）。"
                       "\nCC×DeepSeek 跳过（Anthropic 吃不下 DSML 工具调用）。"
                       + (
-                          "\nDeepSeek 0423 官方 deepseek 不提供，pin Alibaba Cloud Int.。"
+                          "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
                           if "deepseek" in model
                           else ""
                       )
@@ -737,6 +803,7 @@ jobs:
               if [ -n "$EVAL_EFFORT" ]; then
                 label="$label @$EVAL_EFFORT"
               fi
+              label="$label · 新基线不上首页"
             fi
           elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
             label="GHA failed-prev"

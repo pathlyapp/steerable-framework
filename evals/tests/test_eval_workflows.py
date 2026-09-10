@@ -74,6 +74,7 @@ def test_attribution_waits_for_every_scored_split() -> None:
 def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
     the same-model pi comparison has to be dispatchable there."""
+    assert "- claude-code-glm" in WEEKLY
     assert "- pi-glm" in WEEKLY
     assert "- terminus-2" in WEEKLY
     assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
@@ -113,6 +114,32 @@ def test_catalog_forwards_reasoning_effort() -> None:
     assert "EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}" in WEEKLY
     assert 'export STEERABLE_REASONING_EFFORT="$EVAL_EFFORT"' in WEEKLY
     assert 'label="$label @$EVAL_EFFORT"' in WEEKLY
+
+
+def test_catalog_model_override_pins_like_probe() -> None:
+    """A catalog --model without the probe pins silently uses OpenRouter's
+    default route and GLM @max, which is not the cost-effective baseline."""
+    catalog = WEEKLY.split("name: Harbor catalog shard", 1)[1]
+    assert "STEERABLE_OPENROUTER_ALLOW_FALLBACKS" in catalog
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"' in catalog
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"' in catalog
+    assert 'STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"' in catalog
+    assert (
+        "ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+    )
+    assert (
+        "ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' "
+        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+    )
+
+
+def test_catalog_skips_pi_qwen_and_cc_deepseek() -> None:
+    """Those cells are designed skips. A catalog dispatch must fail before
+    Docker, not after 49 shards of structural zeros."""
+    catalog = WEEKLY.split("name: TB 2.1 catalog", 1)[1]
+    assert "pi-glm skipped on Qwen" in catalog
+    assert "claude-code-glm skipped on DeepSeek" in catalog
 
 
 def test_weekly_uploads_the_pi_transcript() -> None:
@@ -205,13 +232,15 @@ def test_cheap12_probe_can_rerun_one_cell() -> None:
 
 
 def test_cheap12_probe_deepseek_pins_alibaba() -> None:
-    """OpenRouter ``deepseek/deepseek-v4-flash`` is the 0423 snapshot;
-    official ``deepseek`` is not in the serving list. Pin Alibaba Cloud
-    Int. (not DigitalOcean cheapest, not a 0731 model-id swap)."""
+    """OpenRouter probe slug is ``deepseek/deepseek-v4-flash-0731`` (GA).
+    The unsuffixed slug is the 0423 preview. Official ``deepseek`` is not
+    in the serving list; pin Alibaba Cloud Int."""
     assert "*deepseek*)" in WEEKLY
+    assert "deepseek-v4-flash-0731" in WEEKLY
     assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"' in WEEKLY
     assert 'STEERABLE_OPENROUTER_PROVIDER:-deepseek' not in WEEKLY
-    assert "DeepSeek 0423 官方 deepseek 不提供" in WEEKLY
+    assert "DeepSeek 0731 GA" in WEEKLY
+    assert "DeepSeek 0423 官方 deepseek 不提供" not in WEEKLY
 
 
 def test_cheap12_probe_cards_are_a_new_baseline() -> None:

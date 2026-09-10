@@ -95,7 +95,7 @@ Arm history on the road to `8e260de`. Flaky A/B of the `20a854d` verify gate is 
 | Oracle smoke | PR / push when `evals/**` changes, plus `workflow_dispatch` | Harbor `oracle` (Mean 1.0); product `steerable` canary when a key is set | `oracle-canary` (`fix-git`) |
 | L2 weekly | Monday cron + `workflow_dispatch` | `steerable`, `claude-code`, `codex`, `pi`, `pi-glm` | `cheap-12` (1 attempt) |
 | L2 failed-prev | `workflow_dispatch` on `Evals weekly` with split `failed-prev` | `steerable` | remaining catalog-89 zeros after run 33369888461 (31 ids, 24 shards) |
-| L2 catalog | `workflow_dispatch` on `Evals weekly` with split `catalog` | `steerable` | full `catalog` (89 ids, 49 shards) |
+| L2 catalog | `workflow_dispatch` on `Evals weekly` with split `catalog` | `steerable`, `claude-code-glm`, `pi-glm`, `terminus-2` | full `catalog` (89 ids, 49 shards) |
 
 L2 is **not** a required merge check. A matrix cell whose API key secret is empty is skipped. The product cell needs `STEERABLE_API_KEY` and `STEERABLE_BASE_URL` (the same OpenAI-compatible gateway used locally). Baseline cells need official Anthropic / OpenAI keys. The workflow fails if every live agent was skipped. Weekly Harbor uses `--n-concurrent 2` (local suite default stays 1). Feishu is best-effort: a webhook failure does not fail the eval. Mean is appended to the GitHub job summary when `GITHUB_STEP_SUMMARY` is set.
 
@@ -119,9 +119,9 @@ Stratified 12 from Terminal-Bench 2.1 catalog-89 (`evals/cheap12.py`): Hamilton 
 
 Green: `fix-git`, `kv-store-grpc`, `log-summary-date-ranges`, `openssl-selfsigned-cert`, `pypi-server`, `build-pmars`, `compile-compcert`. Flaky: `raman-fitting` (1/6), `dna-insert` (2/6), `bn-fit-modify` (4/6), `extract-elf` (5/6). Red: `protein-assembly`.
 
-A `workflow_dispatch` with split `cheap-12` **and** a `--model` starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2; Codex skipped). Official OpenRouter pins: GLM `z-ai` @high, DeepSeek `alibaba` (Alibaba Cloud Int.; OpenRouter's `deepseek/deepseek-v4-flash` is the 0423 snapshot and official `deepseek` does not serve it) @high, Qwen `alibaba` @medium. Pi×Qwen is skipped (Pi cannot emit `medium`). Claude Code × DeepSeek is skipped (Anthropic dialect does not parse DeepSeek DSML tool calls). Those Means are a **new baseline**: do not mix them with catalog-89 80.7% or the old easy-12 0.750/0.833, and do not put them on the homepage scatter.
+A `workflow_dispatch` with split `catalog` **and** a `--model` starts the 3-model × gateway-harness baseline on all 89 ids (steerable / claude-code-glm / pi-glm / terminus-2; Codex skipped). Official OpenRouter pins: GLM `z-ai` @high, DeepSeek `alibaba` (Alibaba Cloud Int.; slug `deepseek/deepseek-v4-flash-0731` GA, not the unsuffixed 0423 preview; official `deepseek` does not serve it) @high, Qwen `alibaba` @medium. Pi×Qwen is skipped (Pi cannot emit `medium`). Claude Code × DeepSeek is skipped (Anthropic dialect does not parse DeepSeek DSML tool calls). Those Means are **n=1 @high/medium**, not the six-run 80.7% @max at `8e260de`: do not mix them, and do not put them on the homepage scatter until confirmed.
 
-Monday cron with an empty model still runs the LIVE_AGENTS smoke on this same 12-id split.
+A `workflow_dispatch` with split `cheap-12` **and** a `--model` is the 12-id smoke of that same matrix. Monday cron with an empty model still runs the LIVE_AGENTS smoke on cheap-12.
 
 The weekly GHA job timeout is 240 minutes; `--n-concurrent 2` is the GHA override. Harbor prints `harbor progress: done/started` every minute so a long run is not mistaken for a hang.
 
