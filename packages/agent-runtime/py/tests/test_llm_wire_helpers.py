@@ -392,6 +392,44 @@ def test_openai_build_body_z_ai_coerces_required_tool_choice_to_auto() -> None:
     assert kept["tool_choice"] == "required"
 
 
+def test_openai_build_body_qwen_thinking_coerces_required_tool_choice_to_auto() -> None:
+    """OpenRouter Qwen thinking 400s ``tool_choice=required``; cheap-12
+    Qwen×steerable scored a structural 12×0 until this downgrade."""
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    qwen = OpenAICompatProvider(
+        name="t",
+        model="qwen/qwen3.8-27b",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    body = qwen._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert body["tool_choice"] == "auto"
+
+    deepseek = OpenAICompatProvider(
+        name="t",
+        model="deepseek/deepseek-v4-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key="k",
+    )
+    ds_body = deepseek._build_body(
+        messages=[LLMMessage.text_of("user", "hi")],
+        tools=[{"type": "function", "function": {"name": "bash"}}],
+        temperature=None,
+        max_tokens=None,
+        stream=True,
+        extra={"tool_choice": "required"},
+    )
+    assert ds_body["tool_choice"] == "auto"
+
+
 def test_http_error_copies_retry_after_header() -> None:
     from types import SimpleNamespace
 

@@ -69,6 +69,22 @@ def _z_ai_tool_choice_auto_only(model: str, base_url: str | None) -> bool:
     return _openrouter_host(base_url) and ("z-ai" in lowered or "glm" in lowered)
 
 
+def _thinking_rejects_forced_tool_choice(model: str, base_url: str | None) -> bool:
+    """Vendors whose thinking mode 400s ``tool_choice=required``.
+
+    Z.AI does this on GLM (direct or OpenRouter). Alibaba/Qwen thinking
+    returns ``The tool_choice parameter does not support being set to
+    required or object in thinking mode`` (cheap-12 Qwen×steerable was
+    12×0 until this path). DeepSeek thinking does the same on
+    ``api.deepseek.com`` (host flag) and on OpenRouter (host flags do not
+    apply).
+    """
+    if _z_ai_tool_choice_auto_only(model, base_url):
+        return True
+    lowered = (model or "").lower()
+    return "qwen" in lowered or "deepseek" in lowered
+
+
 def _env_flag(name: str) -> bool | None:
     raw = os.environ.get(name, "").strip().lower()
     if raw in {"1", "true", "yes", "on"}:
@@ -372,13 +388,13 @@ class OpenAICompatProvider:
         # ``tool_choice=required`` downgrade paths:
         #  - compat flag: vendors whose thinking mode 400s the forced value
         #    (DeepSeek: "Thinking mode does not support this tool_choice");
-        #  - Z.AI (direct or OpenRouter pin) 400s it outright — model-name
-        #    based, which host flags can't cover. Harbor still logs the hook;
-        #    the wire must send auto or the trial dies on round 0
-        #    (failed-prev 33335200327).
+        #  - model-name paths host flags cannot cover: Z.AI GLM, OpenRouter
+        #    Qwen thinking, OpenRouter DeepSeek thinking. Harbor still logs
+        #    the hook; the wire must send auto or the trial dies on round 0
+        #    (failed-prev 33335200327, cheap-12 Qwen×steerable 34439098611).
         if body.get("tool_choice") == "required" and (
             not compat.supports_forced_tool_choice
-            or _z_ai_tool_choice_auto_only(self.model, self.base_url)
+            or _thinking_rejects_forced_tool_choice(self.model, self.base_url)
         ):
             body["tool_choice"] = "auto"
         # W6-8: clamp the requested reasoning effort to a level the model

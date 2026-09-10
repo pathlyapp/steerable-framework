@@ -65,9 +65,10 @@ def _openrouter_routing(model_id: str) -> dict[str, object]:
     pinned = os.environ.get("STEERABLE_OPENROUTER_PROVIDER", "").strip()
     if not pinned and is_zai_glm(model_id):
         pinned = "z-ai"
-    if not pinned:
+    order = [part.strip() for part in pinned.split(",") if part.strip()]
+    if not order:
         return {"allow_fallbacks": False}
-    return {"order": [pinned], "allow_fallbacks": False}
+    return {"order": order, "allow_fallbacks": False}
 
 
 def context_window_for(model_id: str) -> int:

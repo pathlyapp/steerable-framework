@@ -91,7 +91,8 @@ def test_catalog_concurrency_separates_the_agents() -> None:
     assert (
         "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
         "${{ github.event.inputs.agent || 'steerable' }}-"
-        "${{ github.event.inputs.model || 'default' }}" in WEEKLY
+        "${{ github.event.inputs.model || 'default' }}-"
+        "${{ github.event.inputs.probe_agent || 'all' }}" in WEEKLY
     )
 
 
@@ -187,14 +188,29 @@ def test_cheap12_probe_matrix_is_gateway_harnesses() -> None:
     the job, not by dropping pi-glm from the matrix."""
     assert "agent: [steerable, claude-code-glm, pi-glm, terminus-2]" in WEEKLY
     assert "pi-glm skipped on Qwen" in WEEKLY
+    assert "claude-code-glm skipped on DeepSeek" in WEEKLY
 
 
 def test_cheap12_probe_can_rerun_one_cell() -> None:
     """A failed pi-glm cell must not re-queue the other three behind the
-    in-flight four-cell run. Non-default `agent` skips the other matrix legs."""
+    in-flight four-cell run. Non-default `agent` skips the other matrix legs.
+    `probe_agent` is the steerable-only (or CC-only) path: catalog `agent`
+    defaults to steerable, which otherwise means all four."""
     assert "EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
     assert 'EVAL_AGENT" != "steerable"' in WEEKLY
     assert 'AGENT" != "$EVAL_AGENT"' in WEEKLY
+    assert "PROBE_AGENT: ${{ github.event.inputs.probe_agent }}" in WEEKLY
+    assert 'AGENT" != "$PROBE_AGENT"' in WEEKLY
+
+
+def test_cheap12_probe_deepseek_pins_alibaba() -> None:
+    """OpenRouter ``deepseek/deepseek-v4-flash`` is the 0423 snapshot;
+    official ``deepseek`` is not in the serving list. Pin Alibaba Cloud
+    Int. (not DigitalOcean cheapest, not a 0731 model-id swap)."""
+    assert "*deepseek*)" in WEEKLY
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"' in WEEKLY
+    assert 'STEERABLE_OPENROUTER_PROVIDER:-deepseek' not in WEEKLY
+    assert "DeepSeek 0423 官方 deepseek 不提供" in WEEKLY
 
 
 def test_cheap12_probe_cards_are_a_new_baseline() -> None:

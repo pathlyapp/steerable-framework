@@ -16,13 +16,17 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Catalog split: which harness. cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell."
+        description: "Catalog split: which harness. cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
         type: choice
         options:
           - steerable
           - pi-glm
           - terminus-2
         default: steerable
+      probe_agent:
+        description: "cheap-12 probe cell. Empty = all four. Set steerable / claude-code-glm / pi-glm / terminus-2 to rerun one cell without queuing behind the four-cell run."
+        type: string
+        default: ""
       model:
         description: "Harbor --model override (provider/model). Empty keeps suite.yaml. cheap-12 + a model starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2), not the Monday LIVE_AGENTS smoke. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
@@ -58,7 +62,7 @@ concurrency:
   # The agent is part of the group so a pi-glm catalog and a steerable catalog
   # are separate queues: the group holds one running plus one pending run, and
   # sharing it would make a second dispatch cancel the pending one.
-  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}-${{ github.event.inputs.model || 'default' }}
+  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}-${{ github.event.inputs.model || 'default' }}-${{ github.event.inputs.probe_agent || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -148,6 +152,7 @@ jobs:
         env:
           AGENT: ${{ matrix.agent }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
+          PROBE_AGENT: ${{ github.event.inputs.probe_agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
@@ -163,8 +168,14 @@ jobs:
         run: |
           set +e
           # cheap-12 probe default agent is steerable and means "all four
-          # cells". A non-default agent reruns that one cell without queuing
-          # behind the in-flight four-cell run (concurrency includes agent).
+          # cells". probe_agent (or a non-default catalog agent) reruns one
+          # cell; concurrency includes both so a steerable-only rerun does
+          # not queue behind the in-flight four-cell run.
+          if [ -n "${PROBE_AGENT:-}" ] && [ "$AGENT" != "$PROBE_AGENT" ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: skipped (probe_agent is ${PROBE_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
             echo skipped > "eval-status-${AGENT}.txt"
             echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
@@ -177,7 +188,11 @@ jobs:
               export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
               ;;
             *deepseek*)
-              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-deepseek}"
+              # OpenRouter deepseek/deepseek-v4-flash is the 0423 snapshot;
+              # official `deepseek` is not in the serving list (15 hosts,
+              # Alibaba Cloud Int. is the official-cloud pin). Pinning
+              # `deepseek` 404s every trial (cheap-12 34439095549).
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
               export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
               ;;
             *)
@@ -188,6 +203,10 @@ jobs:
           if [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
             echo skipped > "eval-status-${AGENT}.txt"
             echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
+            code=3
+          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
             code=3
           else
             extra=()
@@ -217,11 +236,19 @@ jobs:
           run = os.environ.get("GITHUB_RUN_URL") or ""
           status_path = f"eval-status-{agent}.txt"
           status = open(status_path).read().strip() if os.path.exists(status_path) else "unknown"
+          # Cell-filter skips are noise. Card Pi×Qwen (a real skip) and
+          # ran/failed cells.
+          if status == "skipped" and not (
+              (agent == "pi-glm" and "qwen" in model)
+              or (agent == "claude-code-glm" and "deepseek" in model)
+          ):
+              raise SystemExit(0)
           title = f"{status} · cheap-12 probe × {agent}"
           body = (
               f"{model} @{effort} · provider `{provider}` · 新基线，不上首页，不和 80.7% 混用。"
               " steerable/pi-glm 钉官方路由；claude-code-glm 与 terminus-2 走网关默认。"
               + ("\nPi×Qwen 跳过：thinking map 发不出 medium。" if status == "skipped" and "qwen" in model and agent == "pi-glm" else "")
+              + ("\nCC×DeepSeek 跳过：Anthropic 方言吃不下 DSML 工具调用。" if status == "skipped" and "deepseek" in model and agent == "claude-code-glm" else "")
               + (f"\n[GHA run]({run})" if run else "")
           )
           color = "green" if status == "ran" else ("grey" if status == "skipped" else "red")
@@ -563,6 +590,7 @@ jobs:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
+          PROBE_AGENT: ${{ github.event.inputs.probe_agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
@@ -601,15 +629,22 @@ jobs:
                   if "qwen" in model:
                       provider, default_effort = "alibaba", "medium"
                   elif "deepseek" in model:
-                      provider, default_effort = "deepseek", "high"
+                      # 0423 snapshot: official `deepseek` is not a serving
+                      # host. Alibaba Cloud Int. is the official-cloud pin.
+                      provider, default_effort = "alibaba", "high"
                   else:
                       provider, default_effort = "z-ai", "high"
                   used = effort or default_effort
                   dispatch_agent = (os.environ.get("EVAL_AGENT") or "steerable").strip()
+                  probe_agent = (os.environ.get("PROBE_AGENT") or "").strip()
                   harnesses = (
-                      dispatch_agent
-                      if dispatch_agent and dispatch_agent != "steerable"
-                      else "steerable / claude-code-glm / pi-glm / terminus-2"
+                      probe_agent
+                      if probe_agent
+                      else (
+                          dispatch_agent
+                          if dispatch_agent and dispatch_agent != "steerable"
+                          else "steerable / claude-code-glm / pi-glm / terminus-2"
+                      )
                   )
                   title = f"开始 · cheap-12 probe × {model} @{used}"
                   body = (
@@ -622,6 +657,12 @@ jobs:
                       f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
                       " claude-code-glm 与 terminus-2 走网关默认路由。"
                       "\nPi×Qwen 跳过（thinking map 发不出 medium）。"
+                      "\nCC×DeepSeek 跳过（Anthropic 吃不下 DSML 工具调用）。"
+                      + (
+                          "\nDeepSeek 0423 官方 deepseek 不提供，pin Alibaba Cloud Int.。"
+                          if "deepseek" in model
+                          else ""
+                      )
                   )
               else:
                   title = "开始 · GHA cheap-12"

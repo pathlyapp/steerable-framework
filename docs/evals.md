@@ -119,7 +119,7 @@ Stratified 12 from Terminal-Bench 2.1 catalog-89 (`evals/cheap12.py`): Hamilton 
 
 Green: `fix-git`, `kv-store-grpc`, `log-summary-date-ranges`, `openssl-selfsigned-cert`, `pypi-server`, `build-pmars`, `compile-compcert`. Flaky: `raman-fitting` (1/6), `dna-insert` (2/6), `bn-fit-modify` (4/6), `extract-elf` (5/6). Red: `protein-assembly`.
 
-A `workflow_dispatch` with split `cheap-12` **and** a `--model` starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2; Codex skipped). Official OpenRouter pins: GLM `z-ai` @high, DeepSeek `deepseek` @high, Qwen `alibaba` @medium. Pi×Qwen is skipped (Pi cannot emit `medium`). Those Means are a **new baseline**: do not mix them with catalog-89 80.7% or the old easy-12 0.750/0.833, and do not put them on the homepage scatter.
+A `workflow_dispatch` with split `cheap-12` **and** a `--model` starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2; Codex skipped). Official OpenRouter pins: GLM `z-ai` @high, DeepSeek `alibaba` (Alibaba Cloud Int.; OpenRouter's `deepseek/deepseek-v4-flash` is the 0423 snapshot and official `deepseek` does not serve it) @high, Qwen `alibaba` @medium. Pi×Qwen is skipped (Pi cannot emit `medium`). Claude Code × DeepSeek is skipped (Anthropic dialect does not parse DeepSeek DSML tool calls). Those Means are a **new baseline**: do not mix them with catalog-89 80.7% or the old easy-12 0.750/0.833, and do not put them on the homepage scatter.
 
 Monday cron with an empty model still runs the LIVE_AGENTS smoke on this same 12-id split.
 

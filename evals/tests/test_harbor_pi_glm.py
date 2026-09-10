@@ -151,15 +151,27 @@ def test_route_is_pinned_to_zai(model: dict[str, Any]) -> None:
 
 
 def test_route_pin_follows_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "deepseek")
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "alibaba")
     agent = PiGlmHarborAgent(model_api="openai-completions")
     models_json = agent._build_custom_models_json(_Access(_GATEWAY), "deepseek/deepseek-v4-flash")
     assert models_json is not None
     provider = next(iter(models_json["providers"].values()))
     assert provider["models"][0]["compat"]["openRouterRouting"] == {
-        "order": ["deepseek"],
+        "order": ["alibaba"],
         "allow_fallbacks": False,
     }
+
+
+def test_route_pin_splits_comma_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "deepseek,alibaba")
+    agent = PiGlmHarborAgent(model_api="openai-completions")
+    models_json = agent._build_custom_models_json(_Access(_GATEWAY), "deepseek/deepseek-v4-flash")
+    assert models_json is not None
+    provider = next(iter(models_json["providers"].values()))
+    assert provider["models"][0]["compat"]["openRouterRouting"]["order"] == [
+        "deepseek",
+        "alibaba",
+    ]
 
 
 def test_model_id_survives_the_patch(model: dict[str, Any]) -> None:
