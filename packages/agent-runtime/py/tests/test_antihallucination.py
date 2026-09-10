@@ -17,6 +17,7 @@ from steerable_agent_runtime import (
     AntiHallucinationConfig,
     AntiHallucinationHooks,
     CoreLoop,
+    LoopConfig,
     LoopEvent,
     RouterToolExecutor,
     ToolRouter,
@@ -519,6 +520,42 @@ async def test_narration_round_on_empty_terminal() -> None:
         "summar" in m.content_text.lower() or "总结" in m.content_text
         for m in last_call
     )
+
+
+@pytest.mark.asyncio
+async def test_narration_at_max_rounds_wall_stays_budget_exhausted() -> None:
+    """The maxRounds wall interrupts work; the narration summary it triggers
+    is an interim report, not task completion. The terminal must keep
+    budget_exhausted so the host's auto-continue resumes with a fresh budget
+    (a completed status would silently stop a half-done task)."""
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("get_data", call_id="c1")]},
+            {"content": "", "tool_calls": [tc("get_data", {"source": "a"}, "c2")]},
+            {"content": "", "tool_calls": [tc("get_data", {"source": "b"}, "c3")]},
+            # narration wrap-up round (tools withheld): interim summary
+            {"content": "阶段性总结：已取数 3 次。"},
+        ]
+    )
+    hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(make_router_with_tool()),
+        LoopConfig(max_rounds=3),
+        hooks=hooks,
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "取数")], tools=TOOLS))
+
+    final = final_completion(events)
+    assert final["status"] == "budget_exhausted"
+    assert "maxRounds" in final["reason"]
+    # The interim summary still rides the completion and the transcript.
+    assert final["textLength"] == len("阶段性总结：已取数 3 次。")
+    narrations = [
+        e for e in events
+        if e.kind == "hook_action" and e.data.get("action") == "narrate"
+    ]
+    assert len(narrations) == 1
 
 
 @pytest.mark.asyncio

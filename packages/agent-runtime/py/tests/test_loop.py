@@ -410,7 +410,7 @@ async def test_token_budget_exhausted() -> None:
     events = await collect(loop.run([LLMMessage.text_of("user", "hi")]))
     decision = final_completion(events)
     assert decision["status"] == "budget_exhausted"
-    assert any(e.kind == "budget_exhausted" and e.data["kind"] == "tokens" for e in events)
+    assert any(e.kind == "budget_exhausted" and e.data["budget"] == "tokens" for e in events)
 
 
 @pytest.mark.asyncio
