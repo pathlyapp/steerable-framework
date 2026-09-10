@@ -88,7 +88,7 @@ class SuiteError(ValueError):
 
 def load_suite(path: Path | None = None) -> Suite:
     source = path or SUITE_PATH
-    raw = yaml.safe_load(source.read_text())
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise SuiteError(f"{source} must be a mapping")
     return _parse_suite(raw, source)
@@ -227,6 +227,21 @@ def harbor_task_name(dataset_name: str, task: str) -> str:
     return f"{prefix}{task}"
 
 
+def harbor_model_for_agent(agent: str, model: str) -> str:
+    """Map a steerable-style ``openai/vendor/name`` onto each adapter prefix.
+
+    Dispatch inputs are always the product form. Pi talks OpenRouter;
+    Claude Code's Anthropic dialect wants the gateway id with no
+    ``openai/`` prefix. Passing the product string unchanged 404s those
+    legs before any trial starts.
+    """
+    if agent == "pi-glm" and model.startswith("openai/"):
+        return "openrouter/" + model.removeprefix("openai/")
+    if agent == "claude-code-glm" and model.startswith("openai/"):
+        return model.removeprefix("openai/")
+    return model
+
+
 def harbor_argv(
     suite: Suite,
     *,
@@ -272,7 +287,9 @@ def harbor_argv(
         "--agent",
         spec.harbor,
     ]
-    chosen_model = model if model is not None else spec.model
+    chosen_model = (
+        harbor_model_for_agent(agent, model) if model is not None else spec.model
+    )
     if chosen_model:
         argv.extend(["--model", chosen_model])
     argv.extend(
@@ -314,7 +331,21 @@ def harbor_argv(
                 str(verifier_timeout_multiplier),
             ]
         )
-    for key, value in spec.kwargs:
+    kwargs = list(spec.kwargs)
+    effort = os.environ.get("STEERABLE_REASONING_EFFORT", "").strip().lower()
+    if effort:
+        if agent == "pi-glm":
+            harbor_thinking = "xhigh" if effort == "max" else effort
+            kwargs = [
+                (key, harbor_thinking if key == "thinking" else value)
+                for key, value in kwargs
+            ]
+        elif agent == "claude-code-glm":
+            kwargs = [
+                (key, effort if key == "reasoning_effort" else value)
+                for key, value in kwargs
+            ]
+    for key, value in kwargs:
         argv.extend(["--agent-kwarg", f"{key}={value}"])
     if harness is not None:
         # Absolute path: the harbor child runs with cwd=REPO_ROOT but the

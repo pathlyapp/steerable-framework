@@ -17,6 +17,7 @@ steerable averages 44/54 on the same tasks.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 try:
@@ -28,20 +29,19 @@ except ImportError:  # Python < 3.12 — evals unit tests still collect.
 from harbor.agents.installed.pi import Pi
 from harbor.agents.model_connection import ResolvedModelConnection
 
-#: GLM-5.3 / Flash native window, from the product runtime's capability
-#: table (``steerable_agent_runtime.model_info``). Pi's 128000 default
-#: clamps ``maxTokens`` once a prompt passes ~58k tokens and starts
-#: compacting eight times earlier than the model requires.
-_GLM_CONTEXT_WINDOW = 1_048_576
+from evals.harbor_helpers import is_zai_glm
+from steerable_agent_runtime.model_info import resolve_model_info
+
 #: ``STEERABLE_MAX_TOKENS`` in ``harbor_steerable.run``. Parity, not a
 #: tunable: a different output cap makes the two legs different runs.
-_GLM_MAX_TOKENS = 65_536
+_MAX_TOKENS = 65_536
 #: ``STEERABLE_TEMPERATURE`` in ``harbor_steerable.run``.
-_GLM_TEMPERATURE = 1.0
-#: Harbor's ``--thinking`` enum onto the three efforts GLM accepts
-#: (``model_info`` records ``low``/``high``/``max``). ``xhigh`` is the
-#: highest Harbor offers and ``max`` is what the steerable leg sends, so
-#: they have to be the pair that meets.
+_TEMPERATURE = 1.0
+#: Harbor's ``--thinking`` enum onto Pi's legal values ``low`` / ``high`` /
+#: ``max``. GLM's catalog is ``low`` / ``high`` / ``max``, so ``xhigh``
+#: maps to ``max``. DeepSeek-V4-Flash is ``high`` / ``xhigh`` — ``high``
+#: stays ``high``. Qwen3.8-27B is ``low`` / ``medium`` / ``xhigh``; Pi
+#: cannot emit ``medium``, so that cell is skipped on the probe matrix.
 _THINKING_LEVEL_MAP = {
     "minimal": "low",
     "low": "low",
@@ -49,6 +49,21 @@ _THINKING_LEVEL_MAP = {
     "high": "high",
     "xhigh": "max",
 }
+
+
+def _openrouter_routing(model_id: str) -> dict[str, object]:
+    """Pin the official OpenRouter provider when one is configured.
+
+    GLM's published TB score is Z.AI, not OpenRouter's cheapest GLM route.
+    A missing pin on a non-GLM model must not inherit ``z-ai`` — that
+    404s every trial.
+    """
+    pinned = os.environ.get("STEERABLE_OPENROUTER_PROVIDER", "").strip()
+    if not pinned and is_zai_glm(model_id):
+        pinned = "z-ai"
+    if not pinned:
+        return {"allow_fallbacks": False}
+    return {"order": [pinned], "allow_fallbacks": False}
 
 
 class PiGlmHarborAgent(Pi):
@@ -74,34 +89,29 @@ class PiGlmHarborAgent(Pi):
             # no generated model entry to correct.
             return None
         provider = next(iter(models_json["providers"].values()))
+        info = resolve_model_info(model_id)
         provider["models"] = [
             {
                 **provider["models"][0],
-                "contextWindow": _GLM_CONTEXT_WINDOW,
-                "maxTokens": _GLM_MAX_TOKENS,
+                "contextWindow": info.context_window,
+                "maxTokens": _MAX_TOKENS,
                 # Without this Pi reports ["off"] as the only supported
                 # thinking level, clamps --thinking to off, and sends no
                 # reasoning field at all.
                 "reasoning": True,
                 "thinkingLevelMap": _THINKING_LEVEL_MAP,
-                "samplingParams": {"temperature": _GLM_TEMPERATURE},
+                "samplingParams": {"temperature": _TEMPERATURE},
                 "compat": {
                     # The gateway hostname is neither openrouter.ai nor
                     # z.ai, so Pi's autodetect picks the plain OpenAI
                     # dialect. Say so explicitly: this is the dialect the
-                    # steerable leg speaks (``reasoning_effort: max``).
+                    # steerable leg speaks (``reasoning_effort``).
                     "thinkingFormat": "openai",
                     "supportsReasoningEffort": True,
                     # Autodetect would choose max_completion_tokens for an
                     # unrecognised host; Z.AI honours max_tokens.
                     "maxTokensField": "max_tokens",
-                    # STEERABLE_OPENROUTER_PROVIDER / _ALLOW_FALLBACKS.
-                    # OpenRouter's cheapest GLM route is not Z.AI, and the
-                    # published TB score is the Z.AI endpoint.
-                    "openRouterRouting": {
-                        "order": ["z-ai"],
-                        "allow_fallbacks": False,
-                    },
+                    "openRouterRouting": _openrouter_routing(model_id),
                 },
             }
         ]

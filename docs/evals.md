@@ -115,11 +115,15 @@ This aligns model request parameters, not the full evaluation protocol. Pi and S
 
 ## cheap-12
 
-Twelve Terminal-Bench 2.1 ids that avoid QEMU, GPU, video, and long compiles. They must stay a subset of the 89-id catalog (enforced in `evals/tests`).
+Stratified 12 from Terminal-Bench 2.1 catalog-89 (`evals/cheap12.py`): Hamilton allocation 7 stable-green / 4 flaky / 1 stable-red on the six `8e260de` runs. Within flaky, one id from each of the 1/6, 2/6, 4/6, 5/6 pass-rate bands (not two 5/6s) so the 12-task mean keeps variance. Within a cell: shortest `catalog_minutes`, skip exclusive-pack and vision (`code-from-image`). `fix-git` is forced into the green seven so oracle-canary stays a subset.
 
-`fix-git`, `openssl-selfsigned-cert`, `sqlite-db-truncate`, `nginx-request-logging`, `configure-git-webserver`, `sanitize-git-repo`, `polyglot-c-py`, `log-summary-date-ranges`, `filter-js-from-html`, `password-recovery`, `git-multibranch`, `sqlite-with-gcov`.
+Green: `fix-git`, `kv-store-grpc`, `log-summary-date-ranges`, `openssl-selfsigned-cert`, `pypi-server`, `build-pmars`, `compile-compcert`. Flaky: `raman-fitting` (1/6), `dna-insert` (2/6), `bn-fit-modify` (4/6), `extract-elf` (5/6). Red: `protein-assembly`.
 
-A product cheap-12 at `n_concurrent: 1` is a multi-hour job (local glm-5.3-flash, Mean 0.750: 2h06m). `filter-js-from-html` alone can take ~30 minutes. The weekly GHA job timeout is 240 minutes; `--n-concurrent 2` is the GHA override. Harbor prints `harbor progress: done/started` every minute so a long run is not mistaken for a hang.
+A `workflow_dispatch` with split `cheap-12` **and** a `--model` starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2; Codex skipped). Official OpenRouter pins: GLM `z-ai` @high, DeepSeek `deepseek` @high, Qwen `alibaba` @medium. Pi×Qwen is skipped (Pi cannot emit `medium`). Those Means are a **new baseline**: do not mix them with catalog-89 80.7% or the old easy-12 0.750/0.833, and do not put them on the homepage scatter.
+
+Monday cron with an empty model still runs the LIVE_AGENTS smoke on this same 12-id split.
+
+The weekly GHA job timeout is 240 minutes; `--n-concurrent 2` is the GHA override. Harbor prints `harbor progress: done/started` every minute so a long run is not mistaken for a hang.
 
 The full 89-id catalog is `Evals weekly` → `workflow_dispatch` → split `catalog` (never on a pull request). It splits the suite into 49 shards (`--shard N --shards 49`), each with a 360-minute timeout. Feishu merges shard `result.json` files into one Mean. QEMU, Windows 3.11, video, and long compiles live only in this split.
 

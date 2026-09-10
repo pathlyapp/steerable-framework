@@ -16,6 +16,7 @@ from evals.suite import (
     agent_ready,
     dataset_org,
     harbor_argv,
+    harbor_model_for_agent,
     harbor_task_name,
     load_suite,
     missing_env,
@@ -25,17 +26,17 @@ from evals.suite import (
 
 CHEAP_12 = (
     "fix-git",
-    "openssl-selfsigned-cert",
-    "sqlite-db-truncate",
-    "nginx-request-logging",
-    "configure-git-webserver",
-    "sanitize-git-repo",
-    "polyglot-c-py",
+    "kv-store-grpc",
     "log-summary-date-ranges",
-    "filter-js-from-html",
-    "password-recovery",
-    "git-multibranch",
-    "sqlite-with-gcov",
+    "openssl-selfsigned-cert",
+    "pypi-server",
+    "build-pmars",
+    "compile-compcert",
+    "raman-fitting",
+    "dna-insert",
+    "bn-fit-modify",
+    "extract-elf",
+    "protein-assembly",
 )
 
 FAILED_PREV = (
@@ -290,6 +291,73 @@ def test_pi_glm_argv_passes_the_gateway_protocol_to_harbor() -> None:
     assert "--agent-kwarg" in argv
     kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
     assert "model_api=openai-completions" in kwargs
+    assert "thinking=xhigh" in kwargs
+
+
+def test_harbor_model_for_agent_rewrites_adapter_prefixes() -> None:
+    """One dispatch input is the product openai/ form. Pi and Claude Code
+    404 if that string is forwarded unchanged."""
+    product = "openai/deepseek/deepseek-v4-flash"
+    assert harbor_model_for_agent("steerable", product) == product
+    assert harbor_model_for_agent("terminus-2", product) == product
+    assert (
+        harbor_model_for_agent("pi-glm", product)
+        == "openrouter/deepseek/deepseek-v4-flash"
+    )
+    assert harbor_model_for_agent("claude-code-glm", product) == "deepseek/deepseek-v4-flash"
+
+
+def test_harbor_argv_rewrites_probe_model_per_agent() -> None:
+    suite = load_suite()
+    product = "openai/qwen/qwen3.8-27b"
+    pi = harbor_argv(
+        suite,
+        agent="pi-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+        model=product,
+    )
+    cc = harbor_argv(
+        suite,
+        agent="claude-code-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+        model=product,
+    )
+    assert pi[pi.index("--model") + 1] == "openrouter/qwen/qwen3.8-27b"
+    assert cc[cc.index("--model") + 1] == "qwen/qwen3.8-27b"
+
+
+def test_claude_code_glm_effort_follows_steerable_effort_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "high")
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="claude-code-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "reasoning_effort=high" in kwargs
+    assert "reasoning_effort=max" not in kwargs
+
+
+def test_pi_glm_thinking_follows_steerable_effort_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe baseline uses high, not max. Suite.yaml still pins xhigh
+    for the product comparison; the env is the one-run override."""
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "high")
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="pi-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "thinking=high" in kwargs
+    assert "thinking=xhigh" not in kwargs
 
 
 def test_live_agents_include_product() -> None:

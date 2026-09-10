@@ -24,11 +24,11 @@ on:
           - terminus-2
         default: steerable
       model:
-        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
+        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. cheap-12 + a model starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2), not the Monday LIVE_AGENTS smoke. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
         default: ""
       reasoning_effort:
-        description: "STEERABLE_REASONING_EFFORT for the run (catalog split). Empty keeps the per-model default (qwen: medium). The level must exist in the model's catalog entry — an unsupported level now fails loud instead of being silently dropped."
+        description: "STEERABLE_REASONING_EFFORT. Empty keeps the per-model default (probe: GLM/DeepSeek high, Qwen medium — not max/xhigh). The level must exist in the model's catalog entry — an unsupported level now fails loud instead of being silently dropped."
         type: choice
         options:
           - ""
@@ -64,7 +64,7 @@ concurrency:
 jobs:
   eval:
     name: TB 2.1 cheap-12 × ${{ matrix.agent }}
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.split == 'cheap-12' }}
+    if: ${{ github.event_name == 'schedule' || (github.event.inputs.split == 'cheap-12' && github.event.inputs.model == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -125,6 +125,114 @@ jobs:
             # Harbor's Pi agent logs to agent/pi.txt, so a headless.log-only
             # glob leaves the pi legs with token counts and no transcript.
             evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
+            evals/jobs/${{ matrix.agent }}/**/exception.txt
+          if-no-files-found: ignore
+
+  probe:
+    name: TB 2.1 cheap-12 probe × ${{ matrix.agent }} × ${{ github.event.inputs.model }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'cheap-12' && github.event.inputs.model != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [steerable, claude-code-glm, pi-glm, terminus-2]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - uses: ./.github/actions/setup-harbor
+      - run: docker info
+      - name: Harbor cheap-12 probe
+        env:
+          AGENT: ${{ matrix.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+          EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+          ANTHROPIC_API_KEY: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
+          ANTHROPIC_BASE_URL: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ matrix.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ matrix.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
+          case "$EVAL_MODEL" in
+            *qwen*)
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
+              ;;
+            *deepseek*)
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-deepseek}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+              ;;
+            *)
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+              ;;
+          esac
+          if [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
+            code=3
+          else
+            extra=()
+            extra+=(--model "$EVAL_MODEL")
+            uv run python -m evals.run --agent "$AGENT" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3 "${extra[@]}"
+            code=$?
+            if [ "$code" -eq 3 ]; then
+              echo skipped > "eval-status-${AGENT}.txt"
+              echo "${AGENT}: skipped" >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$code" -eq 0 ]; then
+              echo ran > "eval-status-${AGENT}.txt"
+              echo "${AGENT}: ran" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo failed > "eval-status-${AGENT}.txt"
+              echo "${AGENT}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          python3 - << 'PY'
+          import json, os, urllib.request
+          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not url:
+              raise SystemExit(0)
+          agent = os.environ["AGENT"]
+          model = os.environ.get("EVAL_MODEL") or ""
+          effort = os.environ.get("STEERABLE_REASONING_EFFORT") or ""
+          provider = os.environ.get("STEERABLE_OPENROUTER_PROVIDER") or ""
+          run = os.environ.get("GITHUB_RUN_URL") or ""
+          status_path = f"eval-status-{agent}.txt"
+          status = open(status_path).read().strip() if os.path.exists(status_path) else "unknown"
+          title = f"{status} · cheap-12 probe × {agent}"
+          body = (
+              f"{model} @{effort} · provider `{provider}` · 新基线，不上首页，不和 80.7% 混用。"
+              " steerable/pi-glm 钉官方路由；claude-code-glm 与 terminus-2 走网关默认。"
+              + ("\nPi×Qwen 跳过：thinking map 发不出 medium。" if status == "skipped" and "qwen" in model and agent == "pi-glm" else "")
+              + (f"\n[GHA run]({run})" if run else "")
+          )
+          color = "green" if status == "ran" else ("grey" if status == "skipped" else "red")
+          payload = {"msg_type": "interactive", "card": {"header": {"title": {"tag": "plain_text", "content": title}, "template": color}, "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": body}}]}}
+          urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"), timeout=20).read()
+          PY
+          if [ "$code" -eq 0 ] || [ "$code" -eq 3 ]; then
+            exit 0
+          fi
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-${{ matrix.agent }}
+          path: |
+            eval-status-${{ matrix.agent }}.txt
+            evals/jobs/${{ matrix.agent }}/**/result.json
+            evals/jobs/${{ matrix.agent }}/**/agent/headless.log
+            evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/agent/trajectory.json
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
           if-no-files-found: ignore
@@ -478,8 +586,31 @@ jobs:
                   f"\nArm B:\n{overrides}"
               )
           else:
-              title = "开始 · GHA cheap-12"
-              body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
+              model = (os.environ.get("EVAL_MODEL") or "").strip()
+              effort = (os.environ.get("EVAL_EFFORT") or "").strip()
+              if model:
+                  if "qwen" in model:
+                      provider, default_effort = "alibaba", "medium"
+                  elif "deepseek" in model:
+                      provider, default_effort = "deepseek", "high"
+                  else:
+                      provider, default_effort = "z-ai", "high"
+                  used = effort or default_effort
+                  title = f"开始 · cheap-12 probe × {model} @{used}"
+                  body = (
+                      "新基线，不上首页，不和 catalog-89 80.7% / 旧 easy-12 混用。"
+                      "\n12 题 = 绿7 / 翻面4 / 红1（定比 8e260de catalog-89）。"
+                      "\n绿: fix-git, kv-store-grpc, log-summary-date-ranges, openssl-selfsigned-cert, pypi-server, build-pmars, compile-compcert"
+                      "\n翻面: raman-fitting (1/6), dna-insert (2/6), bn-fit-modify (4/6), extract-elf (5/6)"
+                      "\n红: protein-assembly"
+                      "\nagent: steerable / claude-code-glm / pi-glm / terminus-2；Codex 跳过。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
+                      " claude-code-glm 与 terminus-2 走网关默认路由。"
+                      "\nPi×Qwen 跳过（thinking map 发不出 medium）。"
+                  )
+              else:
+                  title = "开始 · GHA cheap-12"
+                  body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           payload = {
               "msg_type": "interactive",
@@ -499,7 +630,7 @@ jobs:
 
   gather:
     name: At least one live agent ran
-    needs: [eval, flaky, spiral, catalog, failed-prev]
+    needs: [eval, flaky, spiral, catalog, failed-prev, probe]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -533,6 +664,12 @@ jobs:
             label="GHA failed-prev"
           elif [ "$EVAL_SPLIT" = "flaky" ]; then
             label="GHA flaky A/B"
+          elif [ "$EVAL_SPLIT" = "cheap-12" ] && [ -n "$EVAL_MODEL" ]; then
+            label="cheap-12 probe × $EVAL_MODEL"
+            if [ -n "$EVAL_EFFORT" ]; then
+              label="$label @$EVAL_EFFORT"
+            fi
+            label="$label · 新基线不上首页"
           fi
           python3 -m evals.feishu \
             --root statuses \
@@ -565,7 +702,7 @@ jobs:
 
   attribution:
     name: Harness × model attribution report
-    needs: [eval, flaky, spiral, catalog, failed-prev]
+    needs: [eval, flaky, spiral, catalog, failed-prev, probe]
     if: always()
     runs-on: ubuntu-latest
     steps:

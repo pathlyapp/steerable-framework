@@ -67,8 +67,8 @@ def test_flaky_gather_runs_the_paired_scorer() -> None:
 
 def test_attribution_waits_for_every_scored_split() -> None:
     """needs: [eval] ran the report before a flaky/catalog matrix finished."""
-    assert "needs: [eval, flaky, spiral, catalog, failed-prev]" in WEEKLY
-    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev]") >= 2
+    assert "needs: [eval, flaky, spiral, catalog, failed-prev, probe]" in WEEKLY
+    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev, probe]") >= 2
 
 
 def test_catalog_dispatch_offers_both_harnesses() -> None:
@@ -167,6 +167,34 @@ def test_weekly_cheap_12_matrix_runs_every_live_agent() -> None:
     in the repo notices."""
     for agent in LIVE_AGENTS:
         assert agent in WEEKLY, f"cheap-12 matrix does not run {agent}"
+
+
+def test_cheap12_probe_is_gated_on_model() -> None:
+    """An empty model must keep the Monday LIVE_AGENTS smoke; a model
+    input is the new-baseline probe, not a silent mix of the two."""
+    assert (
+        "github.event.inputs.split == 'cheap-12' && github.event.inputs.model == ''"
+        in WEEKLY
+    )
+    assert (
+        "github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'cheap-12' && github.event.inputs.model != ''"
+        in WEEKLY
+    )
+
+
+def test_cheap12_probe_matrix_is_gateway_harnesses() -> None:
+    """Codex stays off this probe (Responses API). Pi×Qwen is skipped in
+    the job, not by dropping pi-glm from the matrix."""
+    assert "agent: [steerable, claude-code-glm, pi-glm, terminus-2]" in WEEKLY
+    assert "pi-glm skipped on Qwen" in WEEKLY
+
+
+def test_cheap12_probe_cards_are_a_new_baseline() -> None:
+    """A probe Mean posted as GHA cheap-12 is read as the old easy-12
+    smoke, then mixed with catalog-89 80.7%."""
+    assert "不上首页" in WEEKLY
+    assert "不和 catalog-89 80.7%" in WEEKLY
+    assert 'label="$label · 新基线不上首页"' in WEEKLY
 
 
 def test_arms_matrix_references_registered_harnesses() -> None:
