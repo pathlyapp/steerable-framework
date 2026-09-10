@@ -877,6 +877,13 @@ class CoreLoop:
             else None
         )
         wrap_up = False
+        # Terminal that triggered the current wrap-up when a budget wall
+        # (maxRounds) offered narration. The wrap-up summary is an interim
+        # report, not task completion: the no-tools terminal below restores
+        # this decision so the host's auto-continue sees budget_exhausted and
+        # resumes with a fresh budget instead of mistaking the summary for a
+        # finished task.
+        wrap_up_terminal: CompletionDecision | None = None
         wrap_up_tool_rounds_used = 0
         idle_cut_count = 0
 
@@ -1051,7 +1058,10 @@ class CoreLoop:
                 )
                 yield LoopEvent(
                     "budget_exhausted",
-                    {"kind": "rounds", "rounds": self._config.max_rounds},
+                    # "budget" not "kind": the sidecar wraps loop events as
+                    # {"kind": <event kind>, **data} — a data["kind"] would
+                    # clobber the envelope kind hosts dispatch on.
+                    {"budget": "rounds", "rounds": self._config.max_rounds},
                 )
                 narrate = await self._offer_narration(
                     "", round_index, had_tool_calls=True, ctx=ctx,
@@ -1060,6 +1070,7 @@ class CoreLoop:
                 if narrate is not None:
                     prompt, reason = narrate
                     completion_redos += 1
+                    wrap_up_terminal = decision
                     mark_wrap_up()
                     manager.append_fragment(NarrationRequest(prompt))
                     yield LoopEvent(
@@ -1362,7 +1373,7 @@ class CoreLoop:
                             if exhausted:
                                 yield LoopEvent(
                                     "budget_exhausted",
-                                    {"kind": "tokens", "used": budget_state.tokens_used},
+                                    {"budget": "tokens", "used": budget_state.tokens_used},
                                 )
                                 decision = CompletionDecision(
                                     status="budget_exhausted", reason="token budget exceeded"
@@ -1586,7 +1597,13 @@ class CoreLoop:
 
             # ── decide: no tool calls → terminal (unless a hook vetoes) ──
             if not tool_calls:
-                if content.strip():
+                if wrap_up_terminal is not None:
+                    # Budget-wall wrap-up: the narration summary is an interim
+                    # report, not a finished task. Restore the wall's terminal
+                    # (budget_exhausted) so the host auto-continues with a
+                    # fresh budget instead of stopping on a half-done task.
+                    decision = wrap_up_terminal
+                elif content.strip():
                     decision = CompletionDecision(
                         status="completed",
                         reason="assistant produced final response with no pending tools",
