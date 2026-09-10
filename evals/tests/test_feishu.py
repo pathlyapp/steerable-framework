@@ -89,6 +89,46 @@ def test_credits_status_withholds_the_partial_mean(tmp_path: Path) -> None:
     assert "steerable: 网关余额耗尽，本次不计分（仅 2 题跑完）" in body
 
 
+def test_zero_token_mean_is_not_quoted_as_a_score(tmp_path: Path) -> None:
+    """Round-0 API deaths look like Harbor Mean 0.000 with n_errored=0."""
+    (tmp_path / "eval-status-steerable.txt").write_text("ran\n")
+    job = tmp_path / "evals" / "jobs" / "steerable" / "2026-09-10__00-00-00"
+    trial = job / "fix-git__x"
+    trial.mkdir(parents=True)
+    (job / "result.json").write_text(
+        json.dumps(
+            {
+                "stats": {
+                    "n_completed_trials": 12,
+                    "n_errored_trials": 0,
+                    "evals": {
+                        "steerable": {
+                            "metrics": [{"mean": 0.0}],
+                            "reward_stats": {"reward": {"0.0": ["fix-git__x"]}},
+                        }
+                    },
+                }
+            }
+        )
+    )
+    (trial / "result.json").write_text(
+        json.dumps(
+            {
+                "agent_result": {"n_input_tokens": 0, "n_output_tokens": 0},
+                "verifier_result": {"rewards": {"reward": 0.0}},
+            }
+        )
+    )
+    rows = collect_rows(tmp_path)
+    assert rows[0][2] is not None
+    assert rows[0][2]["structural_zero"] is True
+    ok, title, body = build_message(rows, label="cheap-12 probe", run_url="")
+    assert ok is False
+    assert "0.000" not in title
+    assert "结构性零分" in body
+    assert "fix-git" not in body
+
+
 def test_title_starts_with_success_or_failure() -> None:
     rows = [
         (

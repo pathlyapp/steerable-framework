@@ -78,6 +78,8 @@ def trial_log_summaries(root: Path) -> dict[str, dict[str, Any]]:
             "errored": errored,
             "n_errored": len(errored),
             "n_completed": n_completed,
+            "n_input_tokens": 0,
+            "structural_zero": False,
         }
     return out
 
@@ -93,6 +95,8 @@ def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
             "errored": [],
             "n_errored": 0,
             "n_completed": 0,
+            "n_input_tokens": 0,
+            "structural_zero": False,
         }
     n_errored = int(stats.get("n_errored_trials") or 0)
     n_completed = int(stats.get("n_completed_trials") or 0)
@@ -137,6 +141,8 @@ def summarize_result(payload: dict[str, Any]) -> dict[str, Any]:
         "errored": errored,
         "n_errored": n_errored,
         "n_completed": n_completed,
+        "n_input_tokens": 0,
+        "structural_zero": False,
     }
 
 
@@ -150,6 +156,9 @@ def agent_line(agent: str, status: str, summary: dict[str, Any] | None) -> str:
         return f"{agent}: 失败（无 result.json）"
     if summary is None:
         return f"{agent}: {status}"
+    if summary.get("structural_zero"):
+        n = int(summary.get("n_completed") or 0)
+        return f"{agent}: 结构性零分（token=0，{n} 题），不计 Mean"
     mean = summary["mean"]
     mean_s = f"{mean:.3f}" if isinstance(mean, float) else "n/a"
     n_pass = len(summary["passed"])
@@ -170,6 +179,8 @@ def overall_ok(rows: list[tuple[str, str, dict[str, Any] | None]]) -> bool:
             return False
         if summary is None:
             return False
+        if summary.get("structural_zero"):
+            continue
         any_ran = True
         if summary["n_errored"]:
             return False
@@ -286,6 +297,8 @@ def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
             "errored": errored,
             "n_errored": len(errored),
             "n_completed": n_completed,
+            "n_input_tokens": sum(int(s.get("n_input_tokens") or 0) for s in parts),
+            "structural_zero": False,
         }
     passed: list[str] = []
     failed: list[str] = []
@@ -312,6 +325,8 @@ def merge_summaries(parts: list[dict[str, Any]]) -> dict[str, Any]:
         "errored": errored,
         "n_errored": n_errored,
         "n_completed": n_completed,
+        "n_input_tokens": sum(int(s.get("n_input_tokens") or 0) for s in parts),
+        "structural_zero": False,
     }
 
 
@@ -340,6 +355,34 @@ def _status_by_agent(root: Path) -> dict[str, str]:
     return out
 
 
+def _input_tokens_for_agent(root: Path, agent: str) -> int:
+    """Sum ``agent_result.n_input_tokens`` from trial ``result.json`` files.
+
+    Job-level Harbor json has the Mean but not tokens. A 12×0 with zero
+    tokens is a round-0 API death, not a harness score (EVALS 2.5.22).
+    """
+    total = 0
+    for path in root.rglob("result.json"):
+        if _JOB_DIR.match(path.parent.name):
+            continue
+        if agent_from_path(path) != agent:
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        agent_result = payload.get("agent_result")
+        if not isinstance(agent_result, dict):
+            continue
+        try:
+            total += int(agent_result.get("n_input_tokens") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
 def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
     grouped = payloads_by_agent(root)
     summaries = {
@@ -352,6 +395,14 @@ def collect_rows(root: Path) -> list[tuple[str, str, dict[str, Any] | None]]:
         existing = summaries.get(agent)
         summaries[agent] = (
             merge_summaries([logs, existing]) if existing else logs
+        )
+    for agent, summary in summaries.items():
+        tokens = _input_tokens_for_agent(root, agent)
+        summary["n_input_tokens"] = tokens
+        summary["structural_zero"] = (
+            summary.get("mean") == 0.0
+            and int(summary.get("n_completed") or 0) > 0
+            and tokens == 0
         )
     rows: list[tuple[str, str, dict[str, Any] | None]] = []
     for agent, status in sorted(_status_by_agent(root).items()):
@@ -385,7 +436,10 @@ def build_message(
     means = [
         f"{agent} {summary['mean']:.3f}"
         for agent, status, summary in rows
-        if summary and status != "credits" and isinstance(summary.get("mean"), float)
+        if summary
+        and status != "credits"
+        and not summary.get("structural_zero")
+        and isinstance(summary.get("mean"), float)
     ]
     title = f"{word} · {label}"
     if means:
@@ -393,6 +447,8 @@ def build_message(
     lines = [agent_line(agent, status, summary) for agent, status, summary in rows]
     for agent, _status, summary in rows:
         if not summary:
+            continue
+        if summary.get("structural_zero"):
             continue
         if summary["failed"]:
             lines.append(f"{agent} 未过: " + ", ".join(summary["failed"]))

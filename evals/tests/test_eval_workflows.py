@@ -201,6 +201,7 @@ def test_cheap12_probe_can_rerun_one_cell() -> None:
     assert 'AGENT" != "$EVAL_AGENT"' in WEEKLY
     assert "PROBE_AGENT: ${{ github.event.inputs.probe_agent }}" in WEEKLY
     assert 'AGENT" != "$PROBE_AGENT"' in WEEKLY
+    assert "steps.gate.outputs.skip" in WEEKLY
 
 
 def test_cheap12_probe_deepseek_pins_alibaba() -> None:

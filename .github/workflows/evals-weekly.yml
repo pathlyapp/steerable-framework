@@ -143,16 +143,50 @@ jobs:
       matrix:
         agent: [steerable, claude-code-glm, pi-glm, terminus-2]
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-      - uses: ./.github/actions/setup-harbor
-      - run: docker info
-      - name: Harbor cheap-12 probe
+      - id: gate
+        name: Decide whether this probe cell runs
         env:
           AGENT: ${{ matrix.agent }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
           PROBE_AGENT: ${{ github.event.inputs.probe_agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          skip=0
+          notify=0
+          if [ -n "${PROBE_AGENT:-}" ] && [ "$AGENT" != "$PROBE_AGENT" ]; then
+            skip=1
+            echo "${AGENT}: skipped (probe_agent is ${PROBE_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
+            skip=1
+            echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
+            skip=1
+            notify=1
+            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
+            skip=1
+            notify=1
+            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "notify=$notify" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = 1 ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != '1'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.skip != '1'
+      - run: uv sync
+        if: steps.gate.outputs.skip != '1'
+      - uses: ./.github/actions/setup-harbor
+        if: steps.gate.outputs.skip != '1'
+      - run: docker info
+        if: steps.gate.outputs.skip != '1'
+      - name: Harbor cheap-12 probe
+        if: steps.gate.outputs.skip != '1'
+        env:
+          AGENT: ${{ matrix.agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
@@ -167,20 +201,6 @@ jobs:
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set +e
-          # cheap-12 probe default agent is steerable and means "all four
-          # cells". probe_agent (or a non-default catalog agent) reruns one
-          # cell; concurrency includes both so a steerable-only rerun does
-          # not queue behind the in-flight four-cell run.
-          if [ -n "${PROBE_AGENT:-}" ] && [ "$AGENT" != "$PROBE_AGENT" ]; then
-            echo skipped > "eval-status-${AGENT}.txt"
-            echo "${AGENT}: skipped (probe_agent is ${PROBE_AGENT})" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
-            echo skipped > "eval-status-${AGENT}.txt"
-            echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
           export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
           case "$EVAL_MODEL" in
             *qwen*)
@@ -200,29 +220,19 @@ jobs:
               export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
               ;;
           esac
-          if [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
+          extra=()
+          extra+=(--model "$EVAL_MODEL")
+          uv run python -m evals.run --agent "$AGENT" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3 "${extra[@]}"
+          code=$?
+          if [ "$code" -eq 3 ]; then
             echo skipped > "eval-status-${AGENT}.txt"
-            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
-            code=3
-          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
-            echo skipped > "eval-status-${AGENT}.txt"
-            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
-            code=3
+            echo "${AGENT}: skipped" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" -eq 0 ]; then
+            echo ran > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: ran" >> "$GITHUB_STEP_SUMMARY"
           else
-            extra=()
-            extra+=(--model "$EVAL_MODEL")
-            uv run python -m evals.run --agent "$AGENT" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3 "${extra[@]}"
-            code=$?
-            if [ "$code" -eq 3 ]; then
-              echo skipped > "eval-status-${AGENT}.txt"
-              echo "${AGENT}: skipped" >> "$GITHUB_STEP_SUMMARY"
-            elif [ "$code" -eq 0 ]; then
-              echo ran > "eval-status-${AGENT}.txt"
-              echo "${AGENT}: ran" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo failed > "eval-status-${AGENT}.txt"
-              echo "${AGENT}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
-            fi
+            echo failed > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
           fi
           python3 - << 'PY'
           import json, os, urllib.request
@@ -236,19 +246,10 @@ jobs:
           run = os.environ.get("GITHUB_RUN_URL") or ""
           status_path = f"eval-status-{agent}.txt"
           status = open(status_path).read().strip() if os.path.exists(status_path) else "unknown"
-          # Cell-filter skips are noise. Card Pi×Qwen (a real skip) and
-          # ran/failed cells.
-          if status == "skipped" and not (
-              (agent == "pi-glm" and "qwen" in model)
-              or (agent == "claude-code-glm" and "deepseek" in model)
-          ):
-              raise SystemExit(0)
           title = f"{status} · cheap-12 probe × {agent}"
           body = (
               f"{model} @{effort} · provider `{provider}` · 新基线，不上首页，不和 80.7% 混用。"
               " steerable/pi-glm 钉官方路由；claude-code-glm 与 terminus-2 走网关默认。"
-              + ("\nPi×Qwen 跳过：thinking map 发不出 medium。" if status == "skipped" and "qwen" in model and agent == "pi-glm" else "")
-              + ("\nCC×DeepSeek 跳过：Anthropic 方言吃不下 DSML 工具调用。" if status == "skipped" and "deepseek" in model and agent == "claude-code-glm" else "")
               + (f"\n[GHA run]({run})" if run else "")
           )
           color = "green" if status == "ran" else ("grey" if status == "skipped" else "red")
@@ -259,6 +260,27 @@ jobs:
             exit 0
           fi
           exit "$code"
+      - name: Feishu real skip
+        if: steps.gate.outputs.notify == '1'
+        env:
+          AGENT: ${{ matrix.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - << 'PY'
+          import json, os, urllib.request
+          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not url:
+              raise SystemExit(0)
+          agent = os.environ["AGENT"]
+          model = os.environ.get("EVAL_MODEL") or ""
+          run = os.environ.get("GITHUB_RUN_URL") or ""
+          extra = "Pi×Qwen 跳过：thinking map 发不出 medium。" if agent == "pi-glm" else "CC×DeepSeek 跳过：Anthropic 方言吃不下 DSML 工具调用。"
+          body = f"{model} · 新基线，不上首页，不和 80.7% 混用。\n{extra}" + (f"\n[GHA run]({run})" if run else "")
+          payload = {"msg_type": "interactive", "card": {"header": {"title": {"tag": "plain_text", "content": f"skipped · cheap-12 probe × {agent}"}, "template": "grey"}, "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": body}}]}}
+          urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"), timeout=20).read()
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
