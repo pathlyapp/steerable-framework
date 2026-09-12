@@ -16,20 +16,22 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Catalog split: which harness (one cell per dispatch). cheap-12 + model: empty/steerable runs all four gateway harnesses; set pi-glm or terminus-2 to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
+        description: "Catalog split: which harness (one cell per dispatch). cheap-12 + model: empty/steerable runs all gateway harnesses; set one agent (including dsh / codex-glm) to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
         type: choice
         options:
           - steerable
           - claude-code-glm
           - pi-glm
           - terminus-2
+          - dsh
+          - codex-glm
         default: steerable
       probe_agent:
-        description: "cheap-12 probe cell. Empty = all four. Set steerable / claude-code-glm / pi-glm / terminus-2 to rerun one cell without queuing behind the four-cell run."
+        description: "cheap-12 probe cell. Empty = all six. Set steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm to rerun one cell without queuing behind the six-cell run."
         type: string
         default: ""
       model:
-        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. cheap-12 + a model starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2), not the Monday LIVE_AGENTS smoke. Catalog example: openai/qwen/qwen3.8-27b"
+        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. cheap-12 + a model starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm), not the Monday LIVE_AGENTS smoke. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
         default: ""
       reasoning_effort:
@@ -142,7 +144,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [steerable, claude-code-glm, pi-glm, terminus-2]
+        agent: [steerable, claude-code-glm, pi-glm, terminus-2, dsh, codex-glm]
     steps:
       - id: gate
         name: Decide whether this probe cell runs
@@ -153,24 +155,14 @@ jobs:
           EVAL_MODEL: ${{ github.event.inputs.model }}
         run: |
           skip=0
-          notify=0
           if [ -n "${PROBE_AGENT:-}" ] && [ "$AGENT" != "$PROBE_AGENT" ]; then
             skip=1
             echo "${AGENT}: skipped (probe_agent is ${PROBE_AGENT})" >> "$GITHUB_STEP_SUMMARY"
           elif [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
             skip=1
             echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
-            skip=1
-            notify=1
-            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
-            skip=1
-            notify=1
-            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
-          echo "notify=$notify" >> "$GITHUB_OUTPUT"
           if [ "$skip" = 1 ]; then
             echo skipped > "eval-status-${AGENT}.txt"
           fi
@@ -194,10 +186,10 @@ jobs:
           STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
           ANTHROPIC_API_KEY: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
           ANTHROPIC_BASE_URL: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
-          OPENROUTER_API_KEY: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
-          OPENROUTER_BASE_URL: ${{ matrix.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
-          OPENAI_API_KEY: ${{ matrix.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
-          OPENAI_BASE_URL: ${{ matrix.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENROUTER_API_KEY: ${{ (matrix.agent == 'pi-glm' || matrix.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ (matrix.agent == 'pi-glm' || matrix.agent == 'dsh') && secrets.STEERABLE_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ (matrix.agent == 'terminus-2' || matrix.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ (matrix.agent == 'terminus-2' || matrix.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -250,7 +242,7 @@ jobs:
           title = f"{status} · cheap-12 probe × {agent}"
           body = (
               f"{model} @{effort} · provider `{provider}` · 新基线，不上首页，不和 80.7% 混用。"
-              " steerable/pi-glm 钉官方路由；claude-code-glm 与 terminus-2 走网关默认。"
+              " steerable/pi-glm/dsh 钉官方路由；claude-code-glm、terminus-2 与 codex-glm 走网关默认。"
               + (f"\n[GHA run]({run})" if run else "")
           )
           color = "green" if status == "ran" else ("grey" if status == "skipped" else "red")
@@ -261,27 +253,6 @@ jobs:
             exit 0
           fi
           exit "$code"
-      - name: Feishu real skip
-        if: steps.gate.outputs.notify == '1'
-        env:
-          AGENT: ${{ matrix.agent }}
-          EVAL_MODEL: ${{ github.event.inputs.model }}
-          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
-          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          python3 - << 'PY'
-          import json, os, urllib.request
-          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
-          if not url:
-              raise SystemExit(0)
-          agent = os.environ["AGENT"]
-          model = os.environ.get("EVAL_MODEL") or ""
-          run = os.environ.get("GITHUB_RUN_URL") or ""
-          extra = "Pi×Qwen 跳过：thinking map 发不出 medium。" if agent == "pi-glm" else "CC×DeepSeek 跳过：Anthropic 方言吃不下 DSML 工具调用。"
-          body = f"{model} · 新基线，不上首页，不和 80.7% 混用。\n{extra}" + (f"\n[GHA run]({run})" if run else "")
-          payload = {"msg_type": "interactive", "card": {"header": {"title": {"tag": "plain_text", "content": f"skipped · cheap-12 probe × {agent}"}, "template": "grey"}, "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": body}}]}}
-          urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"), timeout=20).read()
-          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -291,6 +262,7 @@ jobs:
             evals/jobs/${{ matrix.agent }}/**/result.json
             evals/jobs/${{ matrix.agent }}/**/agent/headless.log
             evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/agent/dsh.txt
             evals/jobs/${{ matrix.agent }}/**/agent/trajectory.json
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
@@ -368,13 +340,6 @@ jobs:
           EVAL_MODEL: ${{ github.event.inputs.model }}
         run: |
           skip=0
-          if [ "$AGENT" = "pi-glm" ] && [[ "$EVAL_MODEL" == *qwen* ]]; then
-            skip=1
-            echo "pi-glm skipped on Qwen: Pi thinking map cannot emit medium" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$AGENT" = "claude-code-glm" ] && [[ "$EVAL_MODEL" == *deepseek* ]]; then
-            skip=1
-            echo "claude-code-glm skipped on DeepSeek: Anthropic dialect does not parse DSML tool calls" >> "$GITHUB_STEP_SUMMARY"
-          fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
           if [ "$skip" = 1 ]; then
             echo skipped > "eval-status-${AGENT}.txt"
@@ -401,15 +366,16 @@ jobs:
           # Same gateway as the product leg, so pi differs from steerable only
           # by harness. Withheld from the steerable dispatch for the reason the
           # cheap-12 job withholds it: only the leg that needs it gets it.
-          OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
-          OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENROUTER_API_KEY: ${{ (github.event.inputs.agent == 'pi-glm' || github.event.inputs.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ (github.event.inputs.agent == 'pi-glm' || github.event.inputs.agent == 'dsh') && secrets.STEERABLE_BASE_URL || '' }}
           ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
           ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
-          # Terminus-2 is host-side LiteLLM. It reads OPENAI_* and ignores
-          # STEERABLE_*. Catalog is one agent, so this does not leak the
-          # gateway key into Codex the way a cheap-12 OPENAI_* map would.
-          OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
-          OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
+          # Terminus-2 is host-side LiteLLM. Codex-glm is the Codex CLI
+          # pointed at the same gateway. Both read OPENAI_*. Catalog is
+          # one agent, so this does not leak the gateway key into stock
+          # Codex the way a cheap-12 OPENAI_* map would.
+          OPENAI_API_KEY: ${{ (github.event.inputs.agent == 'terminus-2' || github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ (github.event.inputs.agent == 'terminus-2' || github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
@@ -490,6 +456,7 @@ jobs:
             evals/jobs/${{ github.event.inputs.agent }}/*/*/result.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/headless.log
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/pi.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/dsh.txt
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.cont-*.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/verifier/test-stdout.txt
@@ -691,9 +658,9 @@ jobs:
                       "新基线 n=1，不上首页。"
                       "不要和 6 跑 80.7%（8e260de @max）或 cheap-12 混用。"
                       f"\n{agent} × 全量 89 题，49 分片。"
-                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
-                      " claude-code-glm 与 terminus-2 走网关默认路由。"
-                      "\nPi×Qwen / CC×DeepSeek 跳过。Codex / DSH 跳过。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm/dsh）。"
+                      " claude-code-glm、terminus-2 与 codex-glm 走网关默认路由。"
+                      "\nPi×Qwen：Pi CLI 发不出 medium，thinking 映射为 high。"
                       + (
                           "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
                           if "deepseek" in model
@@ -731,7 +698,7 @@ jobs:
                       else (
                           dispatch_agent
                           if dispatch_agent and dispatch_agent != "steerable"
-                          else "steerable / claude-code-glm / pi-glm / terminus-2"
+                          else "steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm"
                       )
                   )
                   title = f"开始 · cheap-12 probe × {model} @{used}"
@@ -741,11 +708,10 @@ jobs:
                       "\n绿: fix-git, kv-store-grpc, log-summary-date-ranges, openssl-selfsigned-cert, pypi-server, build-pmars, compile-compcert"
                       "\n翻面: raman-fitting (1/6), dna-insert (2/6), bn-fit-modify (4/6), extract-elf (5/6)"
                       "\n红: protein-assembly"
-                      f"\nagent: {harnesses}；Codex 跳过。"
-                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm）。"
-                      " claude-code-glm 与 terminus-2 走网关默认路由。"
-                      "\nPi×Qwen 跳过（thinking map 发不出 medium）。"
-                      "\nCC×DeepSeek 跳过（Anthropic 吃不下 DSML 工具调用）。"
+                      f"\nagent: {harnesses}。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm/dsh）。"
+                      " claude-code-glm、terminus-2 与 codex-glm 走网关默认路由。"
+                      "\nPi×Qwen：Pi CLI 发不出 medium，thinking 映射为 high。"
                       + (
                           "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
                           if "deepseek" in model

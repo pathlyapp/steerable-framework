@@ -133,6 +133,19 @@ def test_effort_travels_as_reasoning_effort(model: dict[str, Any]) -> None:
     assert model["compat"]["supportsReasoningEffort"] is True
 
 
+def test_qwen_uses_qwen_thinking_format() -> None:
+    """Qwen's catalog thinking is not the OpenAI reasoning_effort field.
+    Sending openai-format high after the medium→high map still 404s the
+    level; the qwen wire format is what Pi actually emits for that model."""
+    agent = PiGlmHarborAgent(model_api="openai-completions")
+    models_json = agent._build_custom_models_json(
+        _Access(_GATEWAY), "qwen/qwen3.8-27b"
+    )
+    assert models_json is not None
+    provider = next(iter(models_json["providers"].values()))
+    assert provider["models"][0]["compat"]["thinkingFormat"] == "qwen"
+
+
 def test_output_cap_uses_the_field_zai_honours(model: dict[str, Any]) -> None:
     """Pi's autodetect picks `max_completion_tokens` for a hostname it does
     not recognise as OpenRouter or Z.AI."""

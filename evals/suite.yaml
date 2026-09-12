@@ -462,13 +462,29 @@ agents:
       - ANTHROPIC_BASE_URL
     skipped: false
   dsh:
-    harbor: null
-    model: null
-    env_any: []
-    skipped: true
-    reason: >-
-      DeepSeek Harness has no Harbor BaseInstalledAgent. Headless
-      `pnpm dsh --profile headless` is not the L2 capability gate.
+    # Same gateway, DeepSeek Harness headless CLI. Harbor 0.22.0 has no
+    # first-party DSH agent (dsh-minimal is still an open PR). GHA catalog
+    # maps STEERABLE_* onto OPENROUTER_* only when this agent is dispatched.
+    harbor: evals.harbor_dsh:DshHarborAgent
+    model: openai/z-ai/glm-5.3-flash
+    kwargs:
+      version: 0.1.5-rc.1
+    env_any:
+      - OPENROUTER_API_KEY
+      - STEERABLE_API_KEY
+    skipped: false
+  # Same model, Codex CLI harness. Stock `codex` is official gpt-5.5 on
+  # api.openai.com. Harbor 0.22.0 truncates nested ids with split("/")[-1]
+  # (harbor#3013); this wrapper restores the gateway slug. Catalog-only:
+  # do not put the gateway key in OPENAI_API_KEY on cheap-12 LIVE_AGENTS.
+  codex-glm:
+    harbor: evals.harbor_codex_glm:CodexGlmHarborAgent
+    model: openai/z-ai/glm-5.3-flash
+    kwargs:
+      reasoning_effort: high
+    env_any:
+      - OPENAI_API_KEY
+    skipped: false
   # Harbor's first-party Terminus-2. Qwen's published TB 2.1 73.0% is this
   # harness, not steerable. Catalog-only: not in LIVE_AGENTS / cheap-12, so
   # the weekly matrix does not grow a sixth runner that needs OPENAI_*.

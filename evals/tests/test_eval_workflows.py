@@ -73,10 +73,12 @@ def test_attribution_waits_for_every_scored_split() -> None:
 
 def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
-    the same-model pi comparison has to be dispatchable there."""
+    the same-model comparisons have to be dispatchable there."""
     assert "- claude-code-glm" in WEEKLY
     assert "- pi-glm" in WEEKLY
     assert "- terminus-2" in WEEKLY
+    assert "- dsh" in WEEKLY
+    assert "- codex-glm" in WEEKLY
     assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
 
 
@@ -132,14 +134,19 @@ def test_catalog_model_override_pins_like_probe() -> None:
         "ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' "
         "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
     )
+    assert (
+        "OPENROUTER_API_KEY: ${{ (github.event.inputs.agent == 'pi-glm' "
+        "|| github.event.inputs.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}"
+        in WEEKLY
+    )
 
 
-def test_catalog_skips_pi_qwen_and_cc_deepseek() -> None:
-    """Those cells are designed skips. A catalog dispatch must fail before
-    Docker, not after 49 shards of structural zeros."""
+def test_catalog_runs_pi_qwen_and_cc_deepseek() -> None:
+    """Those cells used to be designed skips. A catalog dispatch must actually
+    start Harbor, not fail-closed before Docker."""
     catalog = WEEKLY.split("name: TB 2.1 catalog", 1)[1]
-    assert "pi-glm skipped on Qwen" in catalog
-    assert "claude-code-glm skipped on DeepSeek" in catalog
+    assert "pi-glm skipped on Qwen" not in catalog
+    assert "claude-code-glm skipped on DeepSeek" not in catalog
 
 
 def test_weekly_uploads_the_pi_transcript() -> None:
@@ -156,23 +163,32 @@ def test_catalog_start_card_names_the_agent() -> None:
     assert "产品 steerable × {model}" not in WEEKLY
 
 
+def test_weekly_uploads_the_dsh_transcript() -> None:
+    """DSH headless writes agent/dsh.txt. Without it a dsh failure arrives as
+    a reward and no transcript."""
+    assert "agent/dsh.txt" in WEEKLY
+
+
 def test_weekly_uploads_the_terminus_trajectory() -> None:
     """Terminus-2 writes agent/trajectory.json, not headless.log. Without
     that glob a failed trial arrives as a reward and no transcript."""
     assert "agent/trajectory.json" in WEEKLY
 
 
-def test_weekly_gives_the_gateway_openai_only_to_terminus() -> None:
-    """Terminus LiteLLM reads OPENAI_*. An unconditional catalog OPENAI_BASE_URL
-    would be fine today (one agent per dispatch) but the cheap-12 pattern is
-    the one that must not leak: only this leg gets the gateway as OPENAI_*."""
+def test_weekly_gives_the_gateway_openai_to_terminus_and_codex_glm() -> None:
+    """Terminus LiteLLM and Codex-glm both read OPENAI_*. An unconditional
+    catalog OPENAI_BASE_URL would be fine today (one agent per dispatch) but
+    the cheap-12 pattern is the one that must not leak: only these legs get
+    the gateway as OPENAI_*."""
     assert (
-        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
-        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+        "OPENAI_API_KEY: ${{ (github.event.inputs.agent == 'terminus-2' "
+        "|| github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}"
+        in WEEKLY
     )
     assert (
-        "OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' "
-        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+        "OPENAI_BASE_URL: ${{ (github.event.inputs.agent == 'terminus-2' "
+        "|| github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}"
+        in WEEKLY
     )
 
 
@@ -211,11 +227,14 @@ def test_cheap12_probe_is_gated_on_model() -> None:
 
 
 def test_cheap12_probe_matrix_is_gateway_harnesses() -> None:
-    """Codex stays off this probe (Responses API). Pi×Qwen is skipped in
-    the job, not by dropping pi-glm from the matrix."""
-    assert "agent: [steerable, claude-code-glm, pi-glm, terminus-2]" in WEEKLY
-    assert "pi-glm skipped on Qwen" in WEEKLY
-    assert "claude-code-glm skipped on DeepSeek" in WEEKLY
+    """Monday LIVE_AGENTS stays off this probe. Pi×Qwen and CC×DeepSeek
+    run; they are no longer skipped in the job."""
+    assert (
+        "agent: [steerable, claude-code-glm, pi-glm, terminus-2, dsh, codex-glm]"
+        in WEEKLY
+    )
+    assert "pi-glm skipped on Qwen" not in WEEKLY
+    assert "claude-code-glm skipped on DeepSeek" not in WEEKLY
 
 
 def test_cheap12_probe_can_rerun_one_cell() -> None:

@@ -45,7 +45,8 @@ _QWEN38_WINDOW = 262_144
 #: ``max``. GLM's catalog is ``low`` / ``high`` / ``max``, so ``xhigh``
 #: maps to ``max``. DeepSeek-V4-Flash is ``high`` / ``xhigh`` — ``high``
 #: stays ``high``. Qwen3.8-27B is ``low`` / ``medium`` / ``xhigh``; Pi
-#: cannot emit ``medium``, so that cell is skipped on the probe matrix.
+#: cannot emit ``medium``, so ``harbor_argv`` maps that env to ``high``
+#: and this table maps the key ``medium`` to Pi's ``high`` as well.
 _THINKING_LEVEL_MAP = {
     "minimal": "low",
     "low": "low",
@@ -122,8 +123,11 @@ class PiGlmHarborAgent(Pi):
                     # The gateway hostname is neither openrouter.ai nor
                     # z.ai, so Pi's autodetect picks the plain OpenAI
                     # dialect. Say so explicitly: this is the dialect the
-                    # steerable leg speaks (``reasoning_effort``).
-                    "thinkingFormat": "openai",
+                    # steerable leg speaks (``reasoning_effort``). Qwen
+                    # cells use Qwen's own thinking wire format.
+                    "thinkingFormat": (
+                        "qwen" if "qwen" in model_id.lower() else "openai"
+                    ),
                     "supportsReasoningEffort": True,
                     # Autodetect would choose max_completion_tokens for an
                     # unrecognised host; Z.AI honours max_tokens.

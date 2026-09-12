@@ -9,6 +9,8 @@ from evals.suite import (
     LIVE_AGENTS,
     PINNED_HARBOR_VERSION,
     PRODUCT_AGENT,
+    CODEX_GLM_IMPORT_PATH,
+    DSH_IMPORT_PATH,
     PI_GLM_IMPORT_PATH,
     STEERABLE_IMPORT_PATH,
     SUITE_PATH,
@@ -97,6 +99,8 @@ def test_steerable_is_the_harness_aware_agent() -> None:
         "pi-glm",
         "claude-code-glm",
         "terminus-2",
+        "dsh",
+        "codex-glm",
     ):
         assert suite.agents[name].accepts_harness is False
 
@@ -187,12 +191,35 @@ def test_oracle_canary_is_in_cheap_12() -> None:
     assert set(canary) <= set(suite.splits["cheap-12"])
 
 
-def test_dsh_is_skipped() -> None:
+def test_dsh_uses_the_headless_cli_adapter() -> None:
+    """Harbor 0.22.0 has no first-party DSH agent. The wrapper must be the
+    import path, not a skip, or catalog dispatch is a usage error."""
     suite = load_suite()
-    dsh = suite.agents["dsh"]
-    assert dsh.skipped is True
-    assert dsh.harbor is None
-    assert "Harbor" in (dsh.reason or "")
+    spec = suite.agents["dsh"]
+    assert spec.skipped is False
+    assert spec.harbor == DSH_IMPORT_PATH
+    assert spec.model == "openai/z-ai/glm-5.3-flash"
+    assert "OPENROUTER_API_KEY" in spec.env_any
+    assert dict(spec.kwargs)["version"] == "0.1.5-rc.1"
+    argv = harbor_argv(suite, agent="dsh", tasks=("fix-git",), jobs_dir=Path("/tmp/jobs"))
+    assert argv[argv.index("--agent") + 1] == DSH_IMPORT_PATH
+
+
+def test_codex_glm_uses_the_gateway_adapter() -> None:
+    """Stock `codex` truncates nested OpenRouter ids. The comparison cell
+    has to restore `z-ai/glm-5.3-flash` or every trial 404s."""
+    suite = load_suite()
+    spec = suite.agents["codex-glm"]
+    assert spec.skipped is False
+    assert spec.harbor == CODEX_GLM_IMPORT_PATH
+    assert spec.model == "openai/z-ai/glm-5.3-flash"
+    assert spec.env_any == ("OPENAI_API_KEY",)
+    assert dict(spec.kwargs)["reasoning_effort"] == "high"
+    argv = harbor_argv(
+        suite, agent="codex-glm", tasks=("fix-git",), jobs_dir=Path("/tmp/jobs")
+    )
+    assert argv[argv.index("--agent") + 1] == CODEX_GLM_IMPORT_PATH
+    assert argv[argv.index("--model") + 1] == "openai/z-ai/glm-5.3-flash"
 
 
 def test_pi_is_first_party_harbor_agent() -> None:
@@ -305,6 +332,8 @@ def test_harbor_model_for_agent_rewrites_adapter_prefixes() -> None:
         == "openrouter/deepseek/deepseek-v4-flash"
     )
     assert harbor_model_for_agent("claude-code-glm", product) == "deepseek/deepseek-v4-flash"
+    assert harbor_model_for_agent("codex-glm", product) == product
+    assert harbor_model_for_agent("dsh", product) == product
 
 
 def test_harbor_argv_rewrites_probe_model_per_agent() -> None:
@@ -341,6 +370,52 @@ def test_claude_code_glm_effort_follows_steerable_effort_env(
     )
     kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
     assert "reasoning_effort=high" in kwargs
+    assert "reasoning_effort=max" not in kwargs
+
+
+def test_pi_glm_medium_maps_to_high(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Qwen's catalog level is medium. Pi CLI rejects that token, so the
+    argv layer maps it to high and the cell starts instead of skipping."""
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "medium")
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="pi-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "thinking=high" in kwargs
+    assert "thinking=medium" not in kwargs
+
+
+def test_codex_glm_effort_follows_steerable_effort_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "high")
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="codex-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "reasoning_effort=high" in kwargs
+
+
+def test_codex_glm_max_maps_to_xhigh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex CLI has no `max`. Product catalog uses that name."""
+    monkeypatch.setenv("STEERABLE_REASONING_EFFORT", "max")
+    suite = load_suite()
+    argv = harbor_argv(
+        suite,
+        agent="codex-glm",
+        tasks=("fix-git",),
+        jobs_dir=Path("/tmp/jobs"),
+    )
+    kwargs = {argv[i + 1] for i, value in enumerate(argv) if value == "--agent-kwarg"}
+    assert "reasoning_effort=xhigh" in kwargs
     assert "reasoning_effort=max" not in kwargs
 
 
@@ -458,10 +533,13 @@ def test_gha_forwards_steerable_gateway_not_official_openai() -> None:
     # Vendor OPENAI_API_KEY would send Codex (if it ever shared this job) to
     # api.openai.com with the gateway key. Terminus-2 is host LiteLLM and
     # needs OPENAI_* mapped from STEERABLE_*, gated on this agent.
+    # needs OPENAI_* mapped from STEERABLE_*, gated on terminus-2 or
+    # codex-glm. Stock Monday Codex never sees this mapping.
     assert "secrets.OPENAI_API_KEY" not in catalog_env
     assert (
-        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
-        "&& secrets.STEERABLE_API_KEY || '' }}" in catalog_env
+        "OPENAI_API_KEY: ${{ (github.event.inputs.agent == 'terminus-2' "
+        "|| github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}"
+        in catalog_env
     )
     # All 49 shards draw on one gateway balance, and `fail-fast: false` means
     # nothing else stops them: without the cancel, the shards that outlive the
@@ -669,12 +747,13 @@ def test_harbor_argv_steerable_uses_import_path() -> None:
     assert argv[argv.index("--verifier-timeout-multiplier") + 1] == "2"
 
 
-def test_harbor_argv_rejects_dsh() -> None:
+def test_harbor_argv_dsh_uses_import_path() -> None:
     suite = load_suite()
-    with pytest.raises(SuiteError, match="cannot run Harbor"):
-        harbor_argv(
-            suite,
-            agent="dsh",
-            tasks=["fix-git"],
-            jobs_dir=Path("evals/jobs/dsh"),
-        )
+    argv = harbor_argv(
+        suite,
+        agent="dsh",
+        tasks=["fix-git"],
+        jobs_dir=Path("evals/jobs/dsh"),
+    )
+    assert argv[argv.index("--agent") + 1] == DSH_IMPORT_PATH
+    assert argv[argv.index("--model") + 1] == "openai/z-ai/glm-5.3-flash"
