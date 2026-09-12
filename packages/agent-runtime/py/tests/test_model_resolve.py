@@ -84,3 +84,44 @@ def test_provider_endpoint_none_for_first_party_default() -> None:
 
 def test_provider_endpoint_unknown_provider() -> None:
     assert provider_endpoint("no-such-provider") is None
+
+
+def test_describe_catalog_providers_covers_featured_vendors() -> None:
+    from steerable_agent_runtime.model_resolve import describe_catalog_providers
+
+    described = describe_catalog_providers()
+    by_id = {row["id"]: row for row in described}
+    assert "deepseek" in by_id
+    assert by_id["deepseek"]["apiBaseUrl"] == "https://api.deepseek.com"
+    assert by_id["deepseek"]["wireKind"] == "openai_compat"
+    assert "deepseek-v4-flash" in by_id["deepseek"]["models"]
+
+    assert by_id["anthropic"]["wireKind"] == "anthropic"
+    assert by_id["anthropic"]["apiBaseUrl"] == "https://api.anthropic.com"
+    assert any(m.startswith("claude-") for m in by_id["anthropic"]["models"])
+
+    assert by_id["google"]["wireKind"] == "google"
+    assert by_id["google"]["apiBaseUrl"] == "https://generativelanguage.googleapis.com"
+    assert "gemini-embedding-001" not in by_id["google"]["models"]
+
+    assert by_id["xai"]["wireKind"] == "openai-responses"
+    assert by_id["minimax"]["wireKind"] == "anthropic"
+    assert by_id["minimax"]["apiBaseUrl"] and "/anthropic" in by_id["minimax"]["apiBaseUrl"]
+
+    # First-party openai has no catalog api field; the describe row still
+    # fills the SDK default so a host picker can auto-set the URL.
+    assert by_id["openai"]["apiBaseUrl"] == "https://api.openai.com/v1"
+
+
+def test_describe_catalog_providers_skips_providers_without_chat_models() -> None:
+    from steerable_agent_runtime.model_resolve import describe_catalog_providers
+
+    described = describe_catalog_providers()
+    for row in described:
+        assert row["models"], row["id"]
+        assert row["wireKind"] in {
+            "openai_compat",
+            "anthropic",
+            "google",
+            "openai-responses",
+        }

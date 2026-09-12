@@ -19,7 +19,7 @@ silent defaults are exactly how the drift stayed invisible.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from .model_catalog import MODEL_ENTRIES, PROVIDER_ENTRIES
 
@@ -171,6 +171,82 @@ def provider_endpoint(provider: str) -> ProviderEndpoint | None:
         return None
     api, env = row
     return ProviderEndpoint(provider=provider, api_base_url=api, env_vars=env)
+
+
+#: Sidecar factory kinds the host settings picker maps onto. Catalog ids
+#: not in this table (and whose models are not all Anthropic-format) speak
+#: OpenAI-compatible chat completions.
+_WIRE_KIND_BY_PROVIDER: dict[str, str] = {
+    "anthropic": "anthropic",
+    "google": "google",
+    "google-vertex": "google",
+    "google-vertex-anthropic": "anthropic",
+    "xai": "openai-responses",
+}
+
+#: models.dev omits ``api`` for first-party SDKs. Host pickers still need a
+#: fillable URL so the user is not dropped into a blank field for OpenAI /
+#: Anthropic / Gemini / Groq / xAI.
+_SDK_DEFAULT_BASE_URLS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+    "google": "https://generativelanguage.googleapis.com",
+    "groq": "https://api.groq.com/openai/v1",
+    "xai": "https://api.x.ai/v1",
+}
+
+
+def _wire_kind(provider_id: str, api: str | None, formats: set[str]) -> str:
+    mapped = _WIRE_KIND_BY_PROVIDER.get(provider_id)
+    if mapped:
+        return mapped
+    if api and "/anthropic" in api.lower():
+        return "anthropic"
+    if formats and formats <= {"anthropic"}:
+        return "anthropic"
+    return "openai_compat"
+
+
+def describe_catalog_providers() -> list[dict[str, Any]]:
+    """Host settings pickers: one row per catalogued serving provider.
+
+    Same service pattern as ``compat.describe`` / ``presets.describe``: the
+    bundled catalog is the source of truth for default URLs and chat-capable
+    model ids. ``wireKind`` is the sidecar factory kind. ``apiBaseUrl`` is
+    None when neither the catalog nor the first-party SDK default knows an
+    endpoint — the host then collects one by hand. Embedding / TTS / video
+    ids (``tool_format == "none"``) are omitted so the model list is what a
+    chat agent can actually call.
+    """
+    models_by_provider: dict[str, list[str]] = {}
+    formats_by_provider: dict[str, set[str]] = {}
+    for key, row in MODEL_ENTRIES.items():
+        provider_id, _, model_id = key.partition("/")
+        if not provider_id or not model_id:
+            continue
+        _context, _modalities, tool_format, _reasoning = row
+        if tool_format == "none":
+            continue
+        models_by_provider.setdefault(provider_id, []).append(model_id)
+        formats_by_provider.setdefault(provider_id, set()).add(tool_format)
+
+    described: list[dict[str, Any]] = []
+    for provider_id in sorted(PROVIDER_ENTRIES):
+        api, env_vars = PROVIDER_ENTRIES[provider_id]
+        models = models_by_provider.get(provider_id, [])
+        if not models:
+            continue
+        formats = formats_by_provider.get(provider_id, set())
+        described.append(
+            {
+                "id": provider_id,
+                "apiBaseUrl": api or _SDK_DEFAULT_BASE_URLS.get(provider_id),
+                "envVars": list(env_vars),
+                "wireKind": _wire_kind(provider_id, api, formats),
+                "models": sorted(models),
+            }
+        )
+    return described
 
 
 def catalog_provider_for_base_url(base_url: str | None) -> str | None:

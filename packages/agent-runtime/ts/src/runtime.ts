@@ -626,6 +626,7 @@ export class AgentRuntime {
   listModels(params?: {
     baseUrl?: string;
     apiKey?: string;
+    refresh?: boolean;
   }): Promise<GatewayModelCatalog> {
     return this.process.request('models.list', params);
   }
@@ -655,6 +656,24 @@ export class AgentRuntime {
   /** The framework-owned provider-preset table for host settings UIs. */
   describePresets(): Promise<{ presets: ProviderPresetDescriptor[] }> {
     return this.process.request('presets.describe');
+  }
+
+  /**
+   * The bundled serving-provider catalog (`catalog.describe`): default
+   * URLs, sidecar wire kinds, and chat-capable model ids. Host vendor
+   * pickers render from this payload so a catalog refresh needs no
+   * host-side constant.
+   */
+  describeCatalog(): Promise<{
+    providers: Array<{
+      id: string;
+      apiBaseUrl: string | null;
+      envVars: string[];
+      wireKind: string;
+      models: string[];
+    }>;
+  }> {
+    return this.process.request('catalog.describe');
   }
 
   /** Which preset a (baseUrl, model) pair would auto-match; null when none. */

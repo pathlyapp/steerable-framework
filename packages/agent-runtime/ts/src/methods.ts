@@ -40,6 +40,7 @@ export const SIDECAR_METHODS = [
   'models.list',
   'presets.describe',
   'presets.resolve',
+  'catalog.describe',
   'plugin.list',
   'plugin.enable',
   'plugin.disable',
