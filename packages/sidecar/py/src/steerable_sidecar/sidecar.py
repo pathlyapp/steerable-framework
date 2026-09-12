@@ -275,6 +275,7 @@ class Sidecar:
         register("plugin.reload", self._handle_plugin_reload)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
+        register("catalog.describe", self._handle_catalog_describe)
         register("models.list", self._handle_models_list)
         register("harness.describe", self._handle_harness_describe)
         register("agent.chat.stream", self._handle_chat_stream)
@@ -836,6 +837,20 @@ class Sidecar:
         preset = preset_for(params.get("baseUrl"), params.get("model"))
         return {"preset": preset.to_dict() if preset is not None else None}
 
+    async def _handle_catalog_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Serve the bundled serving-provider catalog to host settings UIs.
+
+        Same service pattern as ``compat.describe`` / ``presets.describe``:
+        the framework owns default URLs, wire kinds, and chat-capable model
+        ids. Hosts render the vendor picker from this payload so a catalog
+        refresh needs no host-side constant.
+        """
+        from steerable_agent_runtime.model_resolve import describe_catalog_providers
+
+        return {"providers": describe_catalog_providers()}
+
     async def _handle_models_list(
         self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -876,7 +891,12 @@ class Sidecar:
                 kind="invalid_params",
             )
         try:
-            listing = await fetch_gateway_models(str(base_url), str(api_key) or None)
+            refresh = bool(params.get("refresh"))
+            listing = await fetch_gateway_models(
+                str(base_url),
+                str(api_key) or None,
+                **({"ttl_sec": 0} if refresh else {}),
+            )
         except GatewayCatalogError as exc:
             return {"models": [], "catalogStatus": "offline", "error": str(exc)}
         rows = merge_with_catalog(listing.entries)
@@ -3161,6 +3181,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                         name=provider_kind or "anthropic",
                         api_key=api_key,
                         model=str(model),
+                        base_url=base_url,
                     )
                 )
             )

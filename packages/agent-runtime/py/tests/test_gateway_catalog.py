@@ -179,6 +179,12 @@ async def test_fetch_caches_within_ttl(fake_httpx) -> None:
     assert second.entries == first.entries
 
 
+async def test_fetch_ttl_zero_bypasses_cache(fake_httpx) -> None:
+    await fetch_gateway_models("http://gw.test/v1")
+    await fetch_gateway_models("http://gw.test/v1", ttl_sec=0)
+    assert fake_httpx.calls == 2
+
+
 async def test_fetch_serves_stale_on_refresh_failure(fake_httpx) -> None:
     await fetch_gateway_models("http://gw.test/v1")
     fake_httpx.payload = ConnectionError("gateway down")

@@ -66,6 +66,18 @@ def test_anthropic_constructs() -> None:
     assert provider.model == "claude-sonnet-4-5"
 
 
+def test_anthropic_forwards_base_url() -> None:
+    provider = default_llm_provider_factory(
+        {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "apiKey": "k",
+            "baseUrl": "https://api.minimax.io/anthropic/v1",
+        }
+    )
+    assert provider.inner.base_url == "https://api.minimax.io/anthropic/v1"  # type: ignore[attr-defined]
+
+
 def test_unknown_provider_rejected() -> None:
     with pytest.raises(ValueError, match="unknown provider"):
         default_llm_provider_factory({"provider": "nope", "model": "m"})

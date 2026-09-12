@@ -196,6 +196,21 @@ async def test_presets_resolve_reports_the_auto_match(sidecar: Sidecar) -> None:
     assert response["result"]["preset"] is None
 
 
+async def test_catalog_describe_serves_the_bundled_provider_table(
+    sidecar: Sidecar,
+) -> None:
+    from steerable_agent_runtime.model_resolve import describe_catalog_providers
+
+    response = await _call(sidecar, "catalog.describe")
+    providers = response["result"]["providers"]
+    expected = describe_catalog_providers()
+    assert len(providers) == len(expected)
+    by_id = {row["id"]: row for row in providers}
+    assert by_id["deepseek"]["apiBaseUrl"] == "https://api.deepseek.com"
+    assert by_id["anthropic"]["wireKind"] == "anthropic"
+    assert "deepseek-v4-flash" in by_id["deepseek"]["models"]
+
+
 def test_resolve_preset_param_mapping() -> None:
     from steerable_agent_runtime.llm import ProviderPreset
     from steerable_sidecar.sidecar import _resolve_preset_param
@@ -242,6 +257,31 @@ async def test_models_list_offline_is_a_200_not_an_rpc_error(
     assert result["catalogStatus"] == "offline"
     assert result["models"] == []
     assert "connection refused" in result["error"]
+
+
+async def test_models_list_refresh_bypasses_ttl(sidecar: Sidecar, monkeypatch) -> None:
+    from steerable_agent_runtime.gateway_catalog import GatewayListing, parse_models_listing
+
+    seen: list[dict] = []
+
+    async def _live(base_url, api_key=None, **kwargs):
+        import time
+
+        seen.append(kwargs)
+        return GatewayListing(
+            entries=tuple(parse_models_listing({"data": [{"id": "live-1"}]})),
+            fetched_at=time.time(),
+            stale=False,
+        )
+
+    monkeypatch.setattr(
+        "steerable_agent_runtime.gateway_catalog.fetch_gateway_models", _live
+    )
+    response = await _call(
+        sidecar, "models.list", {"baseUrl": "http://gw/v1", "refresh": True}
+    )
+    assert response["result"]["catalogStatus"] == "live"
+    assert seen[0].get("ttl_sec") == 0
 
 
 async def test_models_list_serializes_joined_rows_and_registers_them(
