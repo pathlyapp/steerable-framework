@@ -73,7 +73,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 import httpx
 from steerable_agent_protocol.generated import ToolResult
@@ -82,6 +82,7 @@ from steerable_agent_runtime import ToolRouter
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DdgSearchProvider",
     "HostDelegatedSearchProvider",
     "TavilySearchProvider",
     "WebSearchHit",
@@ -196,6 +197,15 @@ def _domain_list(env: Mapping[str, str], name: str) -> tuple[str, ...]:
     )
 
 
+def _default_search_base_url(provider: str) -> str:
+    """Origin for the in-process search backend; path is appended by the provider."""
+    if provider == "brave":
+        return "https://api.search.brave.com"
+    if provider == "ddg":
+        return "https://html.duckduckgo.com"
+    return "https://api.tavily.com"
+
+
 @dataclass(frozen=True, slots=True)
 class WebToolsConfig:
     """Validated bounds for the web tools (deployment-varying choices).
@@ -236,6 +246,7 @@ class WebToolsConfig:
             or (env.get("BRAVE_SEARCH_API_KEY") or "").strip()
             or None
         )
+        provider = (env.get("STEERABLE_WEB_SEARCH_PROVIDER") or "").strip() or "tavily"
         return cls(
             fetch_timeout_ms=_bounded_int(
                 env, "STEERABLE_WEB_FETCH_TIMEOUT_MS", 30_000,
@@ -257,20 +268,13 @@ class WebToolsConfig:
                 env, "STEERABLE_WEB_SEARCH_MAX_RESULTS", 8,
                 minimum=1, ceiling=_SEARCH_RESULTS_CEILING,
             ),
-            search_provider=(
-                (env.get("STEERABLE_WEB_SEARCH_PROVIDER") or "").strip() or "tavily"
-            ),
+            search_provider=provider,
             search_api_key=api_key,
             # Default base URL follows the provider; an explicit
             # STEERABLE_WEB_SEARCH_BASE_URL always wins (self-hosted proxy).
             search_base_url=(
                 (env.get("STEERABLE_WEB_SEARCH_BASE_URL") or "").strip()
-                or (
-                    "https://api.search.brave.com"
-                    if (env.get("STEERABLE_WEB_SEARCH_PROVIDER") or "").strip()
-                    == "brave"
-                    else "https://api.tavily.com"
-                )
+                or _default_search_base_url(provider)
             ),
             allowed_domains=_domain_list(env, "STEERABLE_WEB_ALLOWED_DOMAINS"),
             blocked_domains=_domain_list(env, "STEERABLE_WEB_BLOCKED_DOMAINS"),
@@ -543,6 +547,169 @@ class BraveSearchProvider:
         return hits
 
 
+def _ddg_unwrap_url(href: str) -> str:
+    """Turn a DuckDuckGo lite redirect into the destination URL."""
+    raw = href.strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    parts = urlsplit(raw)
+    host = (parts.hostname or "").lower()
+    if host.endswith("duckduckgo.com") and parts.path.startswith("/l/"):
+        target = (parse_qs(parts.query).get("uddg") or [""])[0]
+        if target:
+            return unquote(target)
+    return raw
+
+
+def _class_tokens(attrs: list[tuple[str, str | None]]) -> frozenset[str]:
+    return frozenset((dict(attrs).get("class") or "").split())
+
+
+class _DdgLiteParser(HTMLParser):
+    """Pull title/url/snippet triples out of DuckDuckGo's lite HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.hits: list[WebSearchHit] = []
+        self._href: str | None = None
+        self._title: list[str] = []
+        self._snippet: list[str] = []
+        self._in_title = False
+        self._in_snippet = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tokens = _class_tokens(attrs)
+        if tag == "a" and ("result__a" in tokens or "result-link" in tokens):
+            self._flush()
+            href = dict(attrs).get("href")
+            self._href = _ddg_unwrap_url(href) if href else None
+            self._title = []
+            self._in_title = True
+            self._in_snippet = False
+            return
+        if tag in {"a", "td", "div"} and (
+            "result__snippet" in tokens or "result-snippet" in tokens
+        ):
+            self._snippet = []
+            self._in_snippet = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._in_title:
+            self._in_title = False
+        if tag in {"a", "td", "div"} and self._in_snippet:
+            self._in_snippet = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self._title.append(data)
+        elif self._in_snippet:
+            self._snippet.append(data)
+
+    def _flush(self) -> None:
+        url = (self._href or "").strip()
+        title = "".join(self._title).strip()
+        snippet = "".join(self._snippet).strip()
+        self._href = None
+        self._title = []
+        self._snippet = []
+        self._in_title = False
+        self._in_snippet = False
+        if url:
+            self.hits.append(WebSearchHit(title=title, url=url, snippet=snippet))
+
+    def close(self) -> None:
+        self._flush()
+        super().close()
+
+
+class DdgSearchProvider:
+    """DuckDuckGo lite HTML (``GET {base_url}/html/?q=``) — no API key.
+
+    This is an explicit opt-in backend (``STEERABLE_WEB_SEARCH_PROVIDER=ddg``),
+    not a silent fallback when Tavily is empty. Lite HTML is a public search
+    page, not a JSON API; markup changes can empty the hit list, which the
+    tool reports instead of inventing results.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://html.duckduckgo.com",
+        timeout_ms: int = 30_000,
+        allowed_domains: tuple[str, ...] = (),
+        blocked_domains: tuple[str, ...] = (),
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._endpoint = base_url.rstrip("/") + "/html/"
+        self._timeout = httpx.Timeout(timeout_ms / 1000)
+        self._allowed_domains = allowed_domains
+        self._blocked_domains = blocked_domains
+        self._client = client
+
+    async def search(self, query: str, *, max_results: int) -> list[WebSearchHit]:
+        if self._client is not None:
+            return await self._request(self._client, query, max_results)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            return await self._request(client, query, max_results)
+
+    def _policy_allows(self, url: str) -> bool:
+        host = (urlsplit(url).hostname or "").lower()
+        if not host:
+            return False
+        if any(_domain_matches(host, d) for d in self._blocked_domains):
+            return False
+        if self._allowed_domains and not any(
+            _domain_matches(host, d) for d in self._allowed_domains
+        ):
+            return False
+        return True
+
+    async def _request(
+        self, client: httpx.AsyncClient, query: str, max_results: int
+    ) -> list[WebSearchHit]:
+        try:
+            response = await client.get(
+                self._endpoint,
+                params={"q": query, "kl": "wt-wt"},
+                headers={"User-Agent": _USER_AGENT, "Accept": "text/html"},
+            )
+        except httpx.TimeoutException as exc:
+            raise WebSearchBackendError(
+                f"web search timed out: {exc.__class__.__name__}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise WebSearchBackendError(f"web search request failed: {exc}") from exc
+        if response.status_code in (401, 403):
+            raise WebSearchBackendError(
+                f"DuckDuckGo refused the request (HTTP {response.status_code}); "
+                "try again later or use a Tavily key"
+            )
+        if response.status_code == 202:
+            raise WebSearchBackendError(
+                "DuckDuckGo presented a bot check; try again later or use a Tavily key"
+            )
+        if response.status_code != 200:
+            raise WebSearchBackendError(
+                f"search provider returned HTTP {response.status_code}: "
+                f"{response.text[:200]}"
+            )
+        parser = _DdgLiteParser()
+        parser.feed(response.text)
+        parser.close()
+        if not parser.hits and "anomaly-modal" in response.text.lower():
+            raise WebSearchBackendError(
+                "DuckDuckGo presented a bot check; try again later or use a Tavily key"
+            )
+        hits: list[WebSearchHit] = []
+        for hit in parser.hits:
+            if not self._policy_allows(hit.url):
+                continue
+            hits.append(hit)
+            if len(hits) >= max_results:
+                break
+        return hits
+
+
 class WebSearchBackendError(Exception):
     """A configured search backend failed (distinct from "not configured",
     which keeps the tool unregistered)."""
@@ -575,6 +742,8 @@ def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | N
 
     ``host`` registers without a sidecar key so the Electron parent can
     execute hosted search. A Tavily key always wins over ``host``.
+    ``ddg`` registers without a key — it is an explicit opt-in, not a
+    fallback for an empty Tavily key.
     """
     name = config.search_provider
     if name == "host":
@@ -597,10 +766,17 @@ def default_web_search_provider(config: WebToolsConfig) -> WebSearchProvider | N
             allowed_domains=config.allowed_domains,
             blocked_domains=config.blocked_domains,
         )
+    if name == "ddg":
+        return DdgSearchProvider(
+            base_url=config.search_base_url,
+            timeout_ms=config.search_timeout_ms,
+            allowed_domains=config.allowed_domains,
+            blocked_domains=config.blocked_domains,
+        )
     if name != "tavily":
         raise ValueError(
             f"unknown web search provider {name!r} "
-            "(available: 'tavily', 'brave', 'host')"
+            "(available: 'tavily', 'brave', 'ddg', 'host')"
         )
     if not config.search_api_key:
         return None

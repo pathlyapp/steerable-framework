@@ -29,6 +29,7 @@ from steerable_agent_runtime.loop import LoopContext
 
 from steerable_sidecar.web_tools import (
     BraveSearchProvider,
+    DdgSearchProvider,
     HostDelegatedSearchProvider,
     TavilySearchProvider,
     WebSearchBackendError,
@@ -107,6 +108,13 @@ async def _call(router: ToolRouter, name: str, arguments: dict) -> Any:
 _PUBLIC_DNS = {"example.com": ["93.184.216.34"]}
 
 # ─── config ────────────────────────────────────────────────────────────────
+
+
+def test_config_ddg_default_base_url() -> None:
+    cfg = WebToolsConfig.resolve({"STEERABLE_WEB_SEARCH_PROVIDER": "ddg"})
+    assert cfg.search_provider == "ddg"
+    assert cfg.search_base_url == "https://html.duckduckgo.com"
+    assert cfg.search_api_key is None
 
 
 def test_config_defaults_are_bounded() -> None:
@@ -764,6 +772,74 @@ async def test_brave_auth_failure_is_actionable() -> None:
     result = await _call(router, "web_search", {"query": "q"})
     assert result.success is False
     assert "STEERABLE_WEB_SEARCH_API_KEY" in result.error
+
+
+# ─── ddg provider (explicit free backend, no key) ─────────────────────────────
+
+
+_DDG_LITE_HTML = """
+<html><body>
+<div class="result results_links">
+  <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa">Hello</a>
+  <a class="result__snippet">A snippet</a>
+</div>
+<div class="result">
+  <a class="result__a" href="https://evil.com/x">Blocked</a>
+  <a class="result__snippet">nope</a>
+</div>
+</body></html>
+"""
+
+
+def test_default_provider_factory_resolves_ddg_without_a_key() -> None:
+    provider = default_web_search_provider(WebToolsConfig(search_provider="ddg"))
+    assert isinstance(provider, DdgSearchProvider)
+
+
+def test_ddg_provider_registers_without_a_key() -> None:
+    router = ToolRouter()
+    registered = register_web_tools(
+        router, config=WebToolsConfig(search_provider="ddg"), environ={}
+    )
+    assert "web_search" in registered
+    assert router.get("web_search") is not None
+
+
+async def test_ddg_lite_html_mapping_and_uddg_unwrap() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text=_DDG_LITE_HTML)
+
+    provider = DdgSearchProvider(
+        timeout_ms=5_000,
+        blocked_domains=("evil.com",),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    hits = await provider.search("hello", max_results=8)
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.url.path.rstrip("/") == "/html"
+    assert request.url.params["q"] == "hello"
+    assert hits == [
+        WebSearchHit(title="Hello", url="https://example.com/a", snippet="A snippet")
+    ]
+
+
+async def test_ddg_bot_check_is_actionable() -> None:
+    provider = DdgSearchProvider(
+        timeout_ms=5_000,
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(403, text="denied")
+            )
+        ),
+    )
+    router = _make_router(search_provider=provider)
+    result = await _call(router, "web_search", {"query": "q"})
+    assert result.success is False
+    assert "DuckDuckGo" in result.error
 
 
 # ─── approval gating ────────────────────────────────────────────────────────
