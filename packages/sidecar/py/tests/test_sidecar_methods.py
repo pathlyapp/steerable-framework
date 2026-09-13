@@ -284,6 +284,41 @@ async def test_models_list_refresh_bypasses_ttl(sidecar: Sidecar, monkeypatch) -
     assert seen[0].get("ttl_sec") == 0
 
 
+async def test_models_list_forwards_provider_to_gateway_fetch(
+    sidecar: Sidecar, monkeypatch
+) -> None:
+    seen: list[dict] = []
+
+    async def _live(base_url, api_key=None, **kwargs):
+        import time
+
+        from steerable_agent_runtime.gateway_catalog import GatewayListing, parse_models_listing
+
+        seen.append({"base_url": base_url, "api_key": api_key, **kwargs})
+        return GatewayListing(
+            entries=tuple(parse_models_listing({"data": [{"id": "claude-sonnet-4-6"}]})),
+            fetched_at=time.time(),
+            stale=False,
+        )
+
+    monkeypatch.setattr(
+        "steerable_agent_runtime.gateway_catalog.fetch_gateway_models", _live
+    )
+    response = await _call(
+        sidecar,
+        "models.list",
+        {
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "sk-ant",
+            "provider": "anthropic",
+            "refresh": True,
+        },
+    )
+    assert response["result"]["catalogStatus"] == "live"
+    assert seen[0]["provider"] == "anthropic"
+    assert seen[0]["ttl_sec"] == 0
+
+
 async def test_models_list_serializes_joined_rows_and_registers_them(
     sidecar: Sidecar, monkeypatch
 ) -> None:

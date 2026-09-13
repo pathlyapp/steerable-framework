@@ -7,6 +7,7 @@ from steerable_agent_runtime.gateway_catalog import (
     GatewayCatalogError,
     clear_gateway_cache,
     fetch_gateway_models,
+    listing_request,
     merge_with_catalog,
     parse_models_listing,
 )
@@ -79,6 +80,45 @@ def test_parse_skips_id_less_entries_and_rejects_garbage() -> None:
         parse_models_listing([1, 2, 3])
 
 
+def test_parse_google_resource_name_as_id() -> None:
+    (row,) = parse_models_listing(
+        {
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "displayName": "Gemini 2.5 Flash",
+                }
+            ]
+        }
+    )
+    assert row.id == "gemini-2.5-flash"
+    assert row.name == "Gemini 2.5 Flash"
+
+
+def test_listing_request_matches_vendor_wire() -> None:
+    url, headers = listing_request("https://api.deepseek.com", "sk-x")
+    assert url == "https://api.deepseek.com/models"
+    assert headers["Authorization"] == "Bearer sk-x"
+
+    url, headers = listing_request(
+        "https://api.anthropic.com", "sk-ant", provider="anthropic"
+    )
+    assert url == "https://api.anthropic.com/v1/models"
+    assert headers["x-api-key"] == "sk-ant"
+    assert headers["anthropic-version"] == "2023-06-01"
+
+    url, headers = listing_request(
+        "https://api.anthropic.com/v1", "sk-ant", provider="anthropic"
+    )
+    assert url == "https://api.anthropic.com/v1/models"
+
+    url, headers = listing_request(
+        "https://generativelanguage.googleapis.com", "g-key", provider="google"
+    )
+    assert url == "https://generativelanguage.googleapis.com/v1beta/models"
+    assert headers["x-goog-api-key"] == "g-key"
+
+
 # ---------------------------------------------------------------------------
 # Catalog join
 # ---------------------------------------------------------------------------
@@ -112,6 +152,18 @@ def test_merge_marks_unknown_ids_without_blocking_them() -> None:
     assert row.id == "acme/internal-fine-tune-9"
 
 
+def test_merge_prefers_serving_provider_over_smallest_leaf_window() -> None:
+    # Bare DeepSeek ids on api.deepseek.com must not inherit Cloudflare's
+    # 131k clone; the first-party catalog row is 1M with thinking knobs.
+    (row,) = merge_with_catalog(
+        parse_models_listing({"data": [{"id": "deepseek-v4-pro"}]}),
+        base_url="https://api.deepseek.com",
+    )
+    assert row.joined_from == "deepseek/deepseek-v4-pro"
+    assert row.info.context_window == 1_000_000
+    assert row.info.reasoning_levels == frozenset({"high", "max"})
+
+
 def test_merge_levels_match_the_request_path() -> None:
     # The wire row must expose the same knob the request path enforces:
     # resolve_model_info unions hand-owned legacy levels (GLM's "max") with
@@ -143,6 +195,8 @@ class _FakeClient:
     """Counts GETs; fails when ``payload`` is an exception instance."""
 
     calls = 0
+    last_url = ""
+    last_headers: dict | None = None
     payload: object = {"data": [{"id": "openai/qwen/qwen3.8-27b"}]}
 
     def __init__(self, *args, **kwargs):
@@ -156,6 +210,8 @@ class _FakeClient:
 
     async def get(self, url, headers=None):
         type(self).calls += 1
+        type(self).last_url = url
+        type(self).last_headers = headers
         if isinstance(type(self).payload, Exception):
             raise type(self).payload
         return _FakeResponse(type(self).payload)
@@ -166,6 +222,8 @@ def fake_httpx(monkeypatch):
     import httpx
 
     _FakeClient.calls = 0
+    _FakeClient.last_url = ""
+    _FakeClient.last_headers = None
     _FakeClient.payload = {"data": [{"id": "openai/qwen/qwen3.8-27b"}]}
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     return _FakeClient
@@ -183,6 +241,14 @@ async def test_fetch_ttl_zero_bypasses_cache(fake_httpx) -> None:
     await fetch_gateway_models("http://gw.test/v1")
     await fetch_gateway_models("http://gw.test/v1", ttl_sec=0)
     assert fake_httpx.calls == 2
+
+
+async def test_fetch_uses_anthropic_listing_url(fake_httpx) -> None:
+    await fetch_gateway_models(
+        "https://api.anthropic.com", "sk-ant", provider="anthropic"
+    )
+    assert fake_httpx.last_url == "https://api.anthropic.com/v1/models"
+    assert fake_httpx.last_headers["x-api-key"] == "sk-ant"
 
 
 async def test_fetch_serves_stale_on_refresh_failure(fake_httpx) -> None:
