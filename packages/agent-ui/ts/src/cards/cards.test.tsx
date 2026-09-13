@@ -470,6 +470,28 @@ describe('CoverageReportCard selection mode', () => {
 });
 
 describe('ToolExecutionCard', () => {
+  it('keeps the status label on one line when the summary is long', () => {
+    render(
+      <ToolExecutionCard
+        payload={{
+          id: 't',
+          name: 'local_exec_shell',
+          status: 'succeeded',
+          summary: 'rm -f /tmp/r1.log; nohup /bin/zsh -c "sleep 999"',
+          args: null,
+          output: null,
+          error: null,
+          durationMs: 12,
+          icon: null,
+          expandable: true,
+        }}
+      />,
+    );
+    const label = screen.getByText('已完成');
+    expect(label.parentElement?.className).toMatch(/shrink-0/);
+    expect(label.parentElement?.className).toMatch(/whitespace-nowrap/);
+  });
+
   it('expands to show args/output and renders error', () => {
     render(
       <ToolExecutionCard

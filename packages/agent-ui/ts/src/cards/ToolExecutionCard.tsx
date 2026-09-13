@@ -103,13 +103,21 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
         aria-disabled={!expandable}
       >
         {expandable &&
-          (expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />)}
-        <ZapIcon size={12} className="text-[var(--agent-muted-foreground,#6b7280)]" />
-        <span className="font-medium text-[var(--agent-foreground,#111827)]">{payload.name}</span>
+          (expanded ? (
+            <ChevronDownIcon size={12} className="shrink-0" />
+          ) : (
+            <ChevronRightIcon size={12} className="shrink-0" />
+          ))}
+        <ZapIcon size={12} className="shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
+        <span className="shrink-0 font-medium text-[var(--agent-foreground,#111827)]">
+          {payload.name}
+        </span>
         {payload.summary && (
-          <span className="truncate text-[var(--agent-muted-foreground,#6b7280)]">{payload.summary}</span>
+          <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#6b7280)]">
+            {payload.summary}
+          </span>
         )}
-        <span className="ml-auto inline-flex items-center gap-1">
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
           <StatusIcon status={status} />
           <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
           {typeof payload.durationMs === 'number' && (
