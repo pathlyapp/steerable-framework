@@ -140,7 +140,16 @@ class LoopEvent:
 # ---------------------------------------------------------------------------
 
 CompletionStatus = Literal[
-    "executing", "completed", "failed", "budget_exhausted", "cancelled"
+    "executing",
+    "completed",
+    "failed",
+    "budget_exhausted",
+    "cancelled",
+    # Emitted when a tool returns a terminal result that asks the loop to
+    # suspend for user input (e.g. an interactive UI prompt such as
+    # ``ask_user``). Aligns with the replay contract's ``waiting_user`` —
+    # the turn ends here; the host resumes it once the user responds.
+    "waiting_user",
 ]
 
 
@@ -2011,6 +2020,71 @@ class CoreLoop:
                     )
                     manager.append(_tool_result_message(call, result))
 
+                    # Terminal tool result: the tool explicitly asks the loop
+                    # to end the turn here (``terminal=True`` — e.g. an
+                    # interactive UI prompt suspending for user input, or a
+                    # terminal failure that must not self-heal). Record the
+                    # batch like the abort path does (real results for executed
+                    # calls, synthetic skips for the rest — no dangling
+                    # tool_calls), then emit a terminal completion instead of
+                    # feeding the result back for another model round (which
+                    # would let the model append a closing note after an
+                    # interactive card that already said it).
+                    #
+                    # Only the explicit ``terminal=True`` flag is honored here:
+                    # a plain failure (``success=False`` without ``terminal``)
+                    # still flows back to the model so it can self-heal — that
+                    # is the loop's long-standing behavior and subagent /
+                    # error-recovery tests depend on it. (The broader
+                    # ``is_terminal_result`` helper also treats followup-less
+                    # failures as terminal; wiring that in would change the
+                    # loop's failure semantics, so it stays a replay/spec-side
+                    # predicate, not a loop-termination trigger.)
+                    if result.terminal is True:
+                        _append_unexecuted_tool_results(
+                            manager,
+                            batch=batch,
+                            batch_idx=batch_idx,
+                            batches=batches,
+                            call_idx=call_idx,
+                            errors=errors,
+                            results=results,
+                            skip_message=_TERMINAL_TOOL_SKIP_MESSAGE,
+                            skip_kind="loop.terminal_skip",
+                        )
+                        record_terminal_content(content, tool_calls)
+                        await self._flush_history(manager, chat_id)
+                        # The tool may declare the terminal status (a successful
+                        # interactive UI prompt uses "waiting_user"); otherwise
+                        # infer from success (terminal failure → "failed").
+                        declared_status = (
+                            result.data.get("terminal_status")
+                            if isinstance(result.data, dict)
+                            else None
+                        )
+                        if declared_status not in ("completed", "waiting_user"):
+                            declared_status = (
+                                "completed" if result.success else "failed"
+                            )
+                        yield emit_completion(
+                            step_summary(
+                                round_index=round_index,
+                                finish_reason="tool_calls",
+                                content=content,
+                                tool_calls=tool_calls,
+                            ),
+                            CompletionDecision(
+                                status=declared_status,
+                                reason=(
+                                    result.message
+                                    or result.error
+                                    or "terminal tool result"
+                                ),
+                                confidence=1.0,
+                            ),
+                        )
+                        return
+
                     # Approval abort ends the turn: record the batch like the
                     # breaker does (real results for executed calls, synthetic
                     # skips for the rest — no dangling tool_calls) and finish
@@ -2361,6 +2435,15 @@ _STEER_INTERRUPT_SKIP_MESSAGE = (
     "[not executed: the user sent a mid-turn message and this call was "
     "skipped so the model can respond to it. Do not claim this call "
     "produced a result.]"
+)
+
+#: Synthetic tool message for calls that never ran because an earlier call
+#: in the turn returned a terminal result (e.g. an interactive UI prompt
+#: asking the loop to suspend for user input). Same no-dangling-tool_calls
+#: invariant as the breaker/abort/cancel paths.
+_TERMINAL_TOOL_SKIP_MESSAGE = (
+    "[not executed: an earlier tool call in this turn returned a terminal "
+    "result and ended the turn. Do not claim this call produced a result.]"
 )
 
 
