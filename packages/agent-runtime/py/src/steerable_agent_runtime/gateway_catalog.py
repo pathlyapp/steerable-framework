@@ -135,9 +135,19 @@ def _parse_entry(entry: Any, *, key_hint: str | None) -> GatewayModel | None:
     if not isinstance(entry, dict):
         return None
     model_id = entry.get("id") or key_hint
+    resource_name = entry.get("name") if isinstance(entry.get("name"), str) else None
     if not isinstance(model_id, str) or not model_id:
-        return None
-    name = entry.get("name") or entry.get("display_name") or entry.get("displayName")
+        if resource_name and resource_name.startswith("models/"):
+            model_id = resource_name[7:]
+        else:
+            return None
+    display = entry.get("display_name") or entry.get("displayName")
+    if not isinstance(display, str) or not display:
+        display = (
+            None
+            if resource_name is not None and resource_name.startswith("models/")
+            else resource_name
+        )
     limit = entry.get("limit") if isinstance(entry.get("limit"), dict) else {}
     top_provider = (
         entry.get("top_provider") if isinstance(entry.get("top_provider"), dict) else {}
@@ -147,7 +157,7 @@ def _parse_entry(entry: Any, *, key_hint: str | None) -> GatewayModel | None:
     )
     return GatewayModel(
         id=model_id,
-        name=str(name) if isinstance(name, str) and name else model_id,
+        name=str(display) if isinstance(display, str) and display else model_id,
         context_window=_first_int(
             entry.get("context_length"),
             entry.get("context_window"),
@@ -200,17 +210,25 @@ def parse_models_listing(payload: Any) -> list[GatewayModel]:
 # ---------------------------------------------------------------------------
 
 
-def merge_with_catalog(models: Iterable[GatewayModel]) -> list[GatewayCatalogRow]:
-    """Join gateway rows with catalog capabilities (cross-provider leaf).
+def merge_with_catalog(
+    models: Iterable[GatewayModel],
+    *,
+    base_url: str | None = None,
+) -> list[GatewayCatalogRow]:
+    """Join gateway rows with catalog capabilities.
+
+    Serving-provider lookup (from the listing ``base_url``) is preferred
+    over the conservative cross-provider leaf: a DeepSeek first-party
+    listing of ``deepseek-v4-pro`` must join ``deepseek/deepseek-v4-pro``
+    (1M, high/max), not the smallest-window gateway clone. When the URL
+    is unknown, the leaf join remains the provenance marker.
 
     The gateway's own fields (window, modalities) win where advertised —
     they describe this deployment. Capability fields come from
-    ``resolve_model_info`` itself — the very resolution the request path's
-    ``clamp_reasoning_effort`` uses, legacy-union rule included — so
+    ``resolve_model_info`` with the same ``base_url`` the request path's
+    ``clamp_reasoning_effort`` uses, legacy-union rule included, so
     ``models.list`` and the request path never disagree about a model's
-    knob (a picker that hides a level the backend would accept is the same
-    class of drift as silently dropping one). ``joined_from`` keeps the
-    leaf-join provenance: ``None`` when no catalog tier matched, even if
+    knob. ``joined_from`` is ``None`` when no catalog tier matched, even if
     the hand-owned legacy table knows the model.
     """
     from .model_info import (
@@ -218,12 +236,19 @@ def merge_with_catalog(models: Iterable[GatewayModel]) -> list[GatewayCatalogRow
         ModelInfo,
         resolve_model_info,
     )
-    from .model_resolve import resolve_leaf_cross_provider
+    from .model_resolve import (
+        catalog_provider_for_base_url,
+        resolve_in_catalog,
+        resolve_leaf_cross_provider,
+    )
 
+    serving = catalog_provider_for_base_url(base_url)
     rows: list[GatewayCatalogRow] = []
     for model in models:
-        hit = resolve_leaf_cross_provider(model.id)
-        base = resolve_model_info(model.id)
+        hit = resolve_in_catalog(serving, model.id) if serving else None
+        if hit is None:
+            hit = resolve_leaf_cross_provider(model.id)
+        base = resolve_model_info(model.id, base_url=base_url)
         context_window = (
             model.context_window
             if model.context_window is not None
@@ -272,20 +297,53 @@ def clear_gateway_cache() -> None:
     _cache.clear()
 
 
+def listing_request(
+    base_url: str,
+    api_key: str | None,
+    *,
+    provider: str | None = None,
+) -> tuple[str, dict[str, str]]:
+    """Vendor listing URL and headers for the sidecar factory kind.
+
+    OpenAI-compat / ollama / openai-responses: ``GET {base}/models`` + Bearer.
+    Anthropic: ``GET {base}/v1/models`` + ``x-api-key``.
+    Google AI Studio: ``GET {base}/v1beta/models`` + ``x-goog-api-key``.
+    """
+    base = base_url.rstrip("/")
+    kind = (provider or "").replace("-", "_")
+    if kind == "anthropic":
+        url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+        headers: dict[str, str] = {"anthropic-version": "2023-06-01"}
+        if api_key:
+            headers["x-api-key"] = api_key
+        return url, headers
+    if kind == "google":
+        if base.endswith("/models"):
+            url = base
+        elif "/v1beta" in base:
+            url = f"{base}/models"
+        else:
+            url = f"{base}/v1beta/models"
+        return url, ({"x-goog-api-key": api_key} if api_key else {})
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    return f"{base}/models", headers
+
+
 async def fetch_gateway_models(
     base_url: str,
     api_key: str | None = None,
     *,
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     ttl_sec: float = DEFAULT_TTL_SEC,
+    provider: str | None = None,
 ) -> GatewayListing:
     """Fetch the gateway's live model listing, with a process-local cache.
 
-    A fresh-enough cached listing is served without network. On refresh
-    failure the previous listing is returned marked ``stale`` — the catalog
-    degrades instead of disappearing when the gateway flaps. With no cache
-    to fall back on, ``GatewayCatalogError`` is raised and the caller
-    decides (the sidecar answers ``catalog_status: "offline"``).
+    A fresh-enough cached listing is served without network. ``ttl_sec=0``
+    always hits the vendor (settings refresh). On refresh failure the
+    previous listing is returned marked ``stale``. With no cache to fall
+    back on, ``GatewayCatalogError`` is raised and the caller decides (the
+    sidecar answers ``catalog_status: "offline"``).
     """
     import httpx  # local import — keeps the runtime importable without httpx
 
@@ -293,11 +351,10 @@ async def fetch_gateway_models(
 
     key = _cache_key(base_url)
     cached = _cache.get(key)
-    if cached is not None and (time.monotonic() - cached[0]) < ttl_sec:
+    if ttl_sec > 0 and cached is not None and (time.monotonic() - cached[0]) < ttl_sec:
         return cached[1]
 
-    url = f"{base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    url, headers = listing_request(base_url, api_key, provider=provider)
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_sec),

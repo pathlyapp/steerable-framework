@@ -884,6 +884,7 @@ class Sidecar:
         params = params or {}
         base_url = params.get("baseUrl") or os.environ.get("STEERABLE_BASE_URL", "")
         api_key = params.get("apiKey") or os.environ.get("STEERABLE_API_KEY", "")
+        provider = params.get("provider")
         if not base_url:
             raise JsonRpcError(
                 "models.list requires baseUrl (or STEERABLE_BASE_URL)",
@@ -895,11 +896,12 @@ class Sidecar:
             listing = await fetch_gateway_models(
                 str(base_url),
                 str(api_key) or None,
+                provider=str(provider) if provider else None,
                 **({"ttl_sec": 0} if refresh else {}),
             )
         except GatewayCatalogError as exc:
             return {"models": [], "catalogStatus": "offline", "error": str(exc)}
-        rows = merge_with_catalog(listing.entries)
+        rows = merge_with_catalog(listing.entries, base_url=str(base_url))
         register_gateway_models(row.info for row in rows)
         return {
             "models": [

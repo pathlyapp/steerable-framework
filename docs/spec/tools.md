@@ -291,9 +291,10 @@ key still leaves `web_search` **unregistered**.
 `STEERABLE_WEB_SEARCH_PROVIDER=host` registers without a sidecar key so the
 Electron host can execute hosted search with the existing chat credential
 (OpenAI `api.openai.com` only). GLM, OpenRouter, and DeepSeek have no hosted
-search here — they need the Tavily settings key. There is no DuckDuckGo
-HTML scrape. Harbor keeps `--no-web-tools`. An unknown provider name
-raises at resolve time.
+search here — they need the Tavily settings key, or the explicit free
+backend `STEERABLE_WEB_SEARCH_PROVIDER=ddg` (DuckDuckGo lite HTML; not a
+silent fallback when the Tavily key is empty). Harbor keeps `--no-web-tools`.
+An unknown provider name raises at resolve time.
 
 ### Bounds
 

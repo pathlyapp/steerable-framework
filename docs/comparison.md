@@ -135,15 +135,17 @@ each tier is independently adoptable.
   external modification between read and write by content hash — a
   stronger check than Claude Code's mtime compare, in the spirit of
   DeepSeek Harness's versioned-handle CAS.
-- **Web tools carry the deployment policy knobs, with two first-party
-  search backends.** `web_search` / `web_fetch` ship with domain
+- **Web tools carry the deployment policy knobs, with four search
+  backends.** `web_search` / `web_fetch` ship with domain
   allow/block lists (passed to Tavily's native
   `include_domains`/`exclude_domains` and enforced post-hoc for every
   provider, so the policy is provider-independent) and per-session call
   caps (search defaults to 200, Claude Code's per-session WebSearch limit
-  parity). Two search providers ship: Tavily and Brave Search (an
-  independent-index first-party backend — `STEERABLE_WEB_SEARCH_PROVIDER=brave`
-  with `BRAVE_SEARCH_API_KEY`), plus the host-delegated path. What we still
+  parity). Search backends: Tavily (key), Brave Search
+  (`STEERABLE_WEB_SEARCH_PROVIDER=brave` + `BRAVE_SEARCH_API_KEY`),
+  host-delegated OpenAI hosted search, and an explicit no-key DuckDuckGo
+  lite backend (`STEERABLE_WEB_SEARCH_PROVIDER=ddg`; not a silent
+  fallback). What we still
   lack is a self-hosted usage-accounting service, and Harbor evals run
   `--no-web-tools` regardless.
 - **Provider compatibility is data, now including per-model optimal
