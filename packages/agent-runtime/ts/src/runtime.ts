@@ -627,6 +627,7 @@ export class AgentRuntime {
     baseUrl?: string;
     apiKey?: string;
     refresh?: boolean;
+    provider?: string;
   }): Promise<GatewayModelCatalog> {
     return this.process.request('models.list', params);
   }
