@@ -1,0 +1,156 @@
+/*
+ * Tailwind v4 入口 + Steerable design tokens。
+ *
+ * @steerable/agent-ui 的官方 `tailwind-preset.ts` 是为 Tailwind v3 的
+ * `presets: [...]` API 设计的；v4 取消了 preset 概念，token 改成在 CSS
+ * 里用 `@theme` 块声明。下面这份 token 镜像 framework Storybook 里
+ * preview.css 的定义（packages/agent-ui/ts/.storybook/preview.css），
+ * 保持与框架视觉一致。
+ *
+ * 如果将来 framework 发布了 v4 兼容的 preset CSS（subpath export），
+ * 切换到 `@import "@steerable/agent-ui/tailwind-preset.css"` 即可。
+ */
+@import "tailwindcss";
+
+@source "../**/*.{ts,tsx}";
+@source "../../node_modules/@steerable/agent-ui/dist/**/*.js";
+
+@theme {
+  --color-agent-canvas: hsl(0 0% 100%);
+  --color-agent-foreground: hsl(240 10% 3.9%);
+  --color-agent-muted: hsl(240 4.8% 95.9%);
+  --color-agent-muted-foreground: hsl(240 5% 32%);
+  --color-agent-border: hsl(240 5.9% 90%);
+  --color-agent-accent: hsl(217 91% 42%);
+  --color-agent-accent-foreground: hsl(0 0% 100%);
+  --color-agent-destructive: hsl(0 75% 42%);
+  --color-agent-tool-read: hsl(142 71% 22%);
+  --color-agent-tool-write: hsl(28 90% 28%);
+  --color-agent-tool-destructive: hsl(0 75% 42%);
+
+  --radius-agent-sm: calc(0.75rem - 4px);
+  --radius-agent-md: calc(0.75rem - 2px);
+  --radius-agent-lg: 0.75rem;
+
+  --animate-agent-cursor-blink: agent-cursor-blink 1s steps(1) infinite;
+  --animate-agent-shimmer: agent-shimmer 2s linear infinite;
+}
+
+@keyframes agent-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes agent-shimmer {
+  0%   { background-position: -1000px 0; }
+  100% { background-position: 1000px 0; }
+}
+
+:root {
+  color-scheme: light;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/*
+ * .markdown-content — applied to the wrapper around <Markdown>. Per-element
+ * margins are handled inside Markdown.tsx; this rule just collapses the
+ * first / last element's outer margin so a chat bubble doesn't accumulate
+ * dead space at the top or bottom edge.
+ */
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child  { margin-bottom: 0; }
+
+/*
+ * ToolExecutionCard header: CJK status labels (已完成 / 失败 / …) wrap at
+ * every character when the flex row is squeezed. Keep the trailing status
+ * cluster at content width; let the truncated summary take the leftover.
+ * Host-side until @steerable/agent-ui ships the same layout classes.
+ */
+.steerable-tool-execution > button > span.truncate {
+  min-width: 0;
+  flex: 1 1 0%;
+}
+
+.steerable-tool-execution > button > span.ml-auto {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/*
+ * ChatInput overlay: the contenteditable must keep a real text fill.
+ * macOS Pinyin inspects fill during the first letter's keydown — before
+ * `compositionstart` and before React's delegated keydown — so
+ * `color: transparent` or `-webkit-text-fill-color: transparent` on the
+ * editor commits that letter as ASCII (`ni好` instead of 你好).
+ *
+ * Glyphs therefore paint in the editor. The mirror only draws mention
+ * chip backgrounds; its own text is invisible so the two layers do not
+ * double-print. Hide the placeholder/mirror while IME marked text is
+ * showing so the underline is not covered.
+ */
+.chat-input-mirror {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+[data-mention-chip] {
+  pointer-events: auto;
+  color: #4f46e5;
+  -webkit-text-fill-color: currentColor;
+  background-color: color-mix(in oklab, var(--color-agent-canvas) 82%, #6366f1);
+}
+
+[data-mention-chip][data-mention-type="chat"] {
+  color: #059669;
+  -webkit-text-fill-color: currentColor;
+  background-color: color-mix(in oklab, var(--color-agent-canvas) 82%, #10b981);
+}
+
+[data-mention-chip][data-mention-type="skill"] {
+  color: #d97706;
+  -webkit-text-fill-color: currentColor;
+  background-color: color-mix(in oklab, var(--color-agent-canvas) 82%, #f59e0b);
+}
+
+[data-mention-chip][data-mention-type="mcp"] {
+  color: #0284c7;
+  -webkit-text-fill-color: currentColor;
+  background-color: color-mix(in oklab, var(--color-agent-canvas) 82%, #0ea5e9);
+}
+
+[data-mention-chip][data-mention-type="plain"] {
+  color: var(--color-agent-foreground);
+  -webkit-text-fill-color: currentColor;
+  background-color: color-mix(in oklab, var(--color-agent-canvas) 88%, #71717a);
+}
+
+[data-mention-chip] [data-mention-remove],
+[data-mention-chip] [data-mention-remove] * {
+  color: #fff;
+  -webkit-text-fill-color: #fff;
+}
+
+[data-mention-chip] [data-mention-remove] {
+  opacity: 0;
+}
+
+[data-mention-chip]:hover [data-mention-remove],
+[data-mention-chip]:focus-visible [data-mention-remove] {
+  opacity: 1;
+}
+
+.chat-input-surface:has(.chat-input-editor[data-composing]) .chat-input-placeholder,
+.chat-input-surface:has(.chat-input-editor[data-composing]) .chat-input-mirror {
+  visibility: hidden;
+}

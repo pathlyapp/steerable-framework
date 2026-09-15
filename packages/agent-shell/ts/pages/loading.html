@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>正在启动…</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f4f4f5;
+        color: #18181b;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      .card {
+        background: white;
+        border: 1px solid #e4e4e7;
+        border-radius: 12px;
+        padding: 20px 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card"><span id="brand"></span>正在启动…</div>
+    <script>
+      // 品牌名由主进程通过 query param 注入（两个 flavor 共用同一静态页）
+      (function () {
+        var b = new URLSearchParams(location.search).get('brand');
+        if (b) {
+          document.title = b;
+          document.getElementById('brand').textContent = b + ' ';
+        }
+      })();
+    </script>
+  </body>
+  </html>

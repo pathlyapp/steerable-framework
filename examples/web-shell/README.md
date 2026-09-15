@@ -23,8 +23,9 @@ VITE_TRANSPORT=sidecar VITE_SIDECAR_URL=http://127.0.0.1:5181/chat/stream pnpm -
 ```
 
 The dev server listens on port `5180`. Static build outputs go to `dist/` and
-are deployable as a flat folder (the framework's `docs.yml` GitHub Pages job
-serves them at `/demo/`).
+are deployable as a flat folder. (The website's `/demo/` now serves the
+mock-backed agent-shell build instead — see `packages/agent-shell/web`
+`app:build:demo`; this example remains the component-level reference app.)
 
 ## Model selector
 

@@ -16,19 +16,26 @@ on:
           - catalog
         default: cheap-12
       agent:
-        description: "Agent for the catalog split. `pi-glm` is the same model and gateway on pi's harness. `terminus-2` is Harbor's published TB harness (Qwen's 73.0% row)."
+        description: "Catalog split: which harness (one cell per dispatch). cheap-12 + model: empty/steerable runs all gateway harnesses; set one agent (including dsh / codex-glm) to rerun one probe cell. Prefer probe_agent for a single cheap-12 cell (including steerable-only)."
         type: choice
         options:
           - steerable
+          - claude-code-glm
           - pi-glm
           - terminus-2
+          - dsh
+          - codex-glm
         default: steerable
+      probe_agent:
+        description: "cheap-12 probe cell. Empty = all six. Set steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm to rerun one cell without queuing behind the six-cell run."
+        type: string
+        default: ""
       model:
-        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. Catalog example: openai/qwen/qwen3.8-27b"
+        description: "Harbor --model override (provider/model). Empty keeps suite.yaml. cheap-12 + a model starts the new-baseline probe (steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm), not the Monday LIVE_AGENTS smoke. Catalog example: openai/qwen/qwen3.8-27b"
         type: string
         default: ""
       reasoning_effort:
-        description: "STEERABLE_REASONING_EFFORT for the run (catalog split). Empty keeps the per-model default (qwen: medium). The level must exist in the model's catalog entry — an unsupported level now fails loud instead of being silently dropped."
+        description: "STEERABLE_REASONING_EFFORT. Empty keeps the per-model default (probe: GLM/DeepSeek high, Qwen medium — not max/xhigh). The level must exist in the model's catalog entry — an unsupported level now fails loud instead of being silently dropped."
         type: choice
         options:
           - ""
@@ -58,13 +65,13 @@ concurrency:
   # The agent is part of the group so a pi-glm catalog and a steerable catalog
   # are separate queues: the group holds one running plus one pending run, and
   # sharing it would make a second dispatch cancel the pending one.
-  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}-${{ github.event.inputs.model || 'default' }}
+  group: evals-${{ github.event.inputs.split || 'cheap-12' }}-${{ github.event.inputs.agent || 'steerable' }}-${{ github.event.inputs.model || 'default' }}-${{ github.event.inputs.probe_agent || 'all' }}
   cancel-in-progress: false
 
 jobs:
   eval:
     name: TB 2.1 cheap-12 × ${{ matrix.agent }}
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.split == 'cheap-12' }}
+    if: ${{ github.event_name == 'schedule' || (github.event.inputs.split == 'cheap-12' && github.event.inputs.model == '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -125,6 +132,138 @@ jobs:
             # Harbor's Pi agent logs to agent/pi.txt, so a headless.log-only
             # glob leaves the pi legs with token counts and no transcript.
             evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
+            evals/jobs/${{ matrix.agent }}/**/exception.txt
+          if-no-files-found: ignore
+
+  probe:
+    name: TB 2.1 cheap-12 probe × ${{ matrix.agent }} × ${{ github.event.inputs.model }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'cheap-12' && github.event.inputs.model != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [steerable, claude-code-glm, pi-glm, terminus-2, dsh, codex-glm]
+    steps:
+      - id: gate
+        name: Decide whether this probe cell runs
+        env:
+          AGENT: ${{ matrix.agent }}
+          EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
+          PROBE_AGENT: ${{ github.event.inputs.probe_agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          skip=0
+          if [ -n "${PROBE_AGENT:-}" ] && [ "$AGENT" != "$PROBE_AGENT" ]; then
+            skip=1
+            echo "${AGENT}: skipped (probe_agent is ${PROBE_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "${EVAL_AGENT:-}" ] && [ "$EVAL_AGENT" != "steerable" ] && [ "$AGENT" != "$EVAL_AGENT" ]; then
+            skip=1
+            echo "${AGENT}: skipped (agent input is ${EVAL_AGENT})" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = 1 ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+          fi
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != '1'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.skip != '1'
+      - run: uv sync
+        if: steps.gate.outputs.skip != '1'
+      - uses: ./.github/actions/setup-harbor
+        if: steps.gate.outputs.skip != '1'
+      - run: docker info
+        if: steps.gate.outputs.skip != '1'
+      - name: Harbor cheap-12 probe
+        if: steps.gate.outputs.skip != '1'
+        env:
+          AGENT: ${{ matrix.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+          EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
+          STEERABLE_API_KEY: ${{ secrets.STEERABLE_API_KEY }}
+          STEERABLE_BASE_URL: ${{ secrets.STEERABLE_BASE_URL }}
+          ANTHROPIC_API_KEY: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
+          ANTHROPIC_BASE_URL: ${{ matrix.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENROUTER_API_KEY: ${{ (matrix.agent == 'pi-glm' || matrix.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ (matrix.agent == 'pi-glm' || matrix.agent == 'dsh') && secrets.STEERABLE_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ (matrix.agent == 'terminus-2' || matrix.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ (matrix.agent == 'terminus-2' || matrix.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}
+          FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set +e
+          export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
+          case "$EVAL_MODEL" in
+            *qwen*)
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
+              ;;
+            *deepseek*)
+              # Probe model is deepseek/deepseek-v4-flash-0731 (GA).
+              # The unsuffixed slug is the 0423 preview — do not use it.
+              # Official `deepseek` is still not a serving host; pin
+              # Alibaba Cloud Int. Pinning `deepseek` 404s.
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+              ;;
+            *)
+              export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"
+              export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+              ;;
+          esac
+          extra=()
+          extra+=(--model "$EVAL_MODEL")
+          uv run python -m evals.run --agent "$AGENT" --split cheap-12 --skip-missing-env --n-concurrent 2 --agent-setup-timeout-multiplier 3 --environment-build-timeout-multiplier 3 --agent-timeout-multiplier 3 "${extra[@]}"
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: skipped" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" -eq 0 ]; then
+            echo ran > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: ran" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo failed > "eval-status-${AGENT}.txt"
+            echo "${AGENT}: failed ($code)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          python3 - << 'PY'
+          import json, os, urllib.request
+          url = (os.environ.get("FEISHU_BOT_WEBHOOK") or "").strip()
+          if not url:
+              raise SystemExit(0)
+          agent = os.environ["AGENT"]
+          model = os.environ.get("EVAL_MODEL") or ""
+          effort = os.environ.get("STEERABLE_REASONING_EFFORT") or ""
+          provider = os.environ.get("STEERABLE_OPENROUTER_PROVIDER") or ""
+          run = os.environ.get("GITHUB_RUN_URL") or ""
+          status_path = f"eval-status-{agent}.txt"
+          status = open(status_path).read().strip() if os.path.exists(status_path) else "unknown"
+          title = f"{status} · cheap-12 probe × {agent}"
+          body = (
+              f"{model} @{effort} · provider `{provider}` · 新基线，不上首页，不和 80.7% 混用。"
+              " steerable/pi-glm/dsh 钉官方路由；claude-code-glm、terminus-2 与 codex-glm 走网关默认。"
+              + (f"\n[GHA run]({run})" if run else "")
+          )
+          color = "green" if status == "ran" else ("grey" if status == "skipped" else "red")
+          payload = {"msg_type": "interactive", "card": {"header": {"title": {"tag": "plain_text", "content": title}, "template": color}, "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": body}}]}}
+          urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST"), timeout=20).read()
+          PY
+          if [ "$code" -eq 0 ] || [ "$code" -eq 3 ]; then
+            exit 0
+          fi
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-${{ matrix.agent }}
+          path: |
+            eval-status-${{ matrix.agent }}.txt
+            evals/jobs/${{ matrix.agent }}/**/result.json
+            evals/jobs/${{ matrix.agent }}/**/agent/headless.log
+            evals/jobs/${{ matrix.agent }}/**/agent/pi.txt
+            evals/jobs/${{ matrix.agent }}/**/agent/dsh.txt
+            evals/jobs/${{ matrix.agent }}/**/agent/trajectory.json
             evals/jobs/${{ matrix.agent }}/**/verifier/test-stdout.txt
             evals/jobs/${{ matrix.agent }}/**/exception.txt
           if-no-files-found: ignore
@@ -194,12 +333,29 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
     steps:
+      - id: gate
+        name: Decide whether this catalog cell runs
+        env:
+          AGENT: ${{ github.event.inputs.agent }}
+          EVAL_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          skip=0
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = 1 ]; then
+            echo skipped > "eval-status-${AGENT}.txt"
+          fi
       - uses: actions/checkout@v5
+        if: steps.gate.outputs.skip != '1'
       - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.skip != '1'
       - run: uv sync
+        if: steps.gate.outputs.skip != '1'
       - uses: ./.github/actions/setup-harbor
+        if: steps.gate.outputs.skip != '1'
       - run: docker info
+        if: steps.gate.outputs.skip != '1'
       - name: Harbor catalog shard
+        if: steps.gate.outputs.skip != '1'
         env:
           AGENT: ${{ github.event.inputs.agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
@@ -210,19 +366,43 @@ jobs:
           # Same gateway as the product leg, so pi differs from steerable only
           # by harness. Withheld from the steerable dispatch for the reason the
           # cheap-12 job withholds it: only the leg that needs it gets it.
-          OPENROUTER_API_KEY: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_API_KEY || '' }}
-          OPENROUTER_BASE_URL: ${{ github.event.inputs.agent == 'pi-glm' && secrets.STEERABLE_BASE_URL || '' }}
-          # Terminus-2 is host-side LiteLLM. It reads OPENAI_* and ignores
-          # STEERABLE_*. Catalog is one agent, so this does not leak the
-          # gateway key into Codex the way a cheap-12 OPENAI_* map would.
-          OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_API_KEY || '' }}
-          OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' && secrets.STEERABLE_BASE_URL || '' }}
+          OPENROUTER_API_KEY: ${{ (github.event.inputs.agent == 'pi-glm' || github.event.inputs.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}
+          OPENROUTER_BASE_URL: ${{ (github.event.inputs.agent == 'pi-glm' || github.event.inputs.agent == 'dsh') && secrets.STEERABLE_BASE_URL || '' }}
+          ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_API_KEY || '' }}
+          ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' && secrets.STEERABLE_BASE_URL || '' }}
+          # Terminus-2 is host-side LiteLLM. Codex-glm is the Codex CLI
+          # pointed at the same gateway. Both read OPENAI_*. Catalog is
+          # one agent, so this does not leak the gateway key into stock
+          # Codex the way a cheap-12 OPENAI_* map would.
+          OPENAI_API_KEY: ${{ (github.event.inputs.agent == 'terminus-2' || github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ (github.event.inputs.agent == 'terminus-2' || github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           extra=()
           if [ -n "$EVAL_MODEL" ]; then
             extra+=(--model "$EVAL_MODEL")
+            # Same official-route pins as the cheap-12 probe. Empty model
+            # keeps the product catalog default (GLM @max via harbor_steerable).
+            export STEERABLE_OPENROUTER_ALLOW_FALLBACKS="${STEERABLE_OPENROUTER_ALLOW_FALLBACKS:-0}"
+            case "$EVAL_MODEL" in
+              *qwen*)
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-medium}"
+                ;;
+              *deepseek*)
+                # Probe model is deepseek/deepseek-v4-flash-0731 (GA).
+                # The unsuffixed slug is the 0423 preview — do not use it.
+                # Official `deepseek` is still not a serving host; pin
+                # Alibaba Cloud Int. Pinning `deepseek` 404s.
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+                ;;
+              *)
+                export STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"
+                export STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"
+                ;;
+            esac
           fi
           # Explicit dispatch input wins; the qwen fallback exists because
           # the catalog used to top out at medium for it. With the gateway
@@ -276,6 +456,7 @@ jobs:
             evals/jobs/${{ github.event.inputs.agent }}/*/*/result.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/headless.log
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/pi.txt
+            evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/dsh.txt
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/agent/trajectory.cont-*.json
             evals/jobs/${{ github.event.inputs.agent }}/*/*/verifier/test-stdout.txt
@@ -446,6 +627,7 @@ jobs:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           EVAL_SPLIT: ${{ github.event.inputs.split || 'cheap-12' }}
           EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}
+          PROBE_AGENT: ${{ github.event.inputs.probe_agent }}
           EVAL_MODEL: ${{ github.event.inputs.model }}
           EVAL_EFFORT: ${{ github.event.inputs.reasoning_effort }}
           ARM_B_ENV: ${{ github.event.inputs.arm_b_env }}
@@ -464,9 +646,27 @@ jobs:
               title = f"开始 · GHA catalog 89 × {agent}"
               body = f"{agent} × 全量 89 题，49 分片并行。"
               if model:
-                  suffix = f" × {model}" + (f" @{effort}" if effort else "")
-                  title = f"开始 · GHA catalog 89 × {agent}{suffix}"
-                  body = f"{agent}{suffix} × 全量 89 题，49 分片并行。"
+                  if "qwen" in model:
+                      provider, default_effort = "alibaba", "medium"
+                  elif "deepseek" in model:
+                      provider, default_effort = "alibaba", "high"
+                  else:
+                      provider, default_effort = "z-ai", "high"
+                  used = effort or default_effort
+                  title = f"开始 · catalog-89 × {agent} × {model} @{used}"
+                  body = (
+                      "新基线 n=1，不上首页。"
+                      "不要和 6 跑 80.7%（8e260de @max）或 cheap-12 混用。"
+                      f"\n{agent} × 全量 89 题，49 分片。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm/dsh）。"
+                      " claude-code-glm、terminus-2 与 codex-glm 走网关默认路由。"
+                      "\nPi×Qwen：Pi CLI 发不出 medium，thinking 映射为 high。"
+                      + (
+                          "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
+                          if "deepseek" in model
+                          else ""
+                      )
+                  )
           elif split == "failed-prev":
               title = "开始 · GHA failed-prev"
               body = "产品 steerable × 上次 catalog 失败题（23），24 分片。用来迭代 harness，不是正式分。"
@@ -478,8 +678,49 @@ jobs:
                   f"\nArm B:\n{overrides}"
               )
           else:
-              title = "开始 · GHA cheap-12"
-              body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
+              model = (os.environ.get("EVAL_MODEL") or "").strip()
+              effort = (os.environ.get("EVAL_EFFORT") or "").strip()
+              if model:
+                  if "qwen" in model:
+                      provider, default_effort = "alibaba", "medium"
+                  elif "deepseek" in model:
+                      # 0731 GA. Official `deepseek` is not a serving host.
+                      # Alibaba Cloud Int. is the official-cloud pin.
+                      provider, default_effort = "alibaba", "high"
+                  else:
+                      provider, default_effort = "z-ai", "high"
+                  used = effort or default_effort
+                  dispatch_agent = (os.environ.get("EVAL_AGENT") or "steerable").strip()
+                  probe_agent = (os.environ.get("PROBE_AGENT") or "").strip()
+                  harnesses = (
+                      probe_agent
+                      if probe_agent
+                      else (
+                          dispatch_agent
+                          if dispatch_agent and dispatch_agent != "steerable"
+                          else "steerable / claude-code-glm / pi-glm / terminus-2 / dsh / codex-glm"
+                      )
+                  )
+                  title = f"开始 · cheap-12 probe × {model} @{used}"
+                  body = (
+                      "新基线，不上首页，不和 catalog-89 80.7% / 旧 easy-12 混用。"
+                      "\n12 题 = 绿7 / 翻面4 / 红1（定比 8e260de catalog-89）。"
+                      "\n绿: fix-git, kv-store-grpc, log-summary-date-ranges, openssl-selfsigned-cert, pypi-server, build-pmars, compile-compcert"
+                      "\n翻面: raman-fitting (1/6), dna-insert (2/6), bn-fit-modify (4/6), extract-elf (5/6)"
+                      "\n红: protein-assembly"
+                      f"\nagent: {harnesses}。"
+                      f"\nOpenRouter 官方 pin `{provider}` allow_fallbacks=0（steerable/pi-glm/dsh）。"
+                      " claude-code-glm、terminus-2 与 codex-glm 走网关默认路由。"
+                      "\nPi×Qwen：Pi CLI 发不出 medium，thinking 映射为 high。"
+                      + (
+                          "\nDeepSeek 0731 GA；官方 deepseek 不提供，pin Alibaba Cloud Int.。"
+                          if "deepseek" in model
+                          else ""
+                      )
+                  )
+              else:
+                  title = "开始 · GHA cheap-12"
+                  body = "产品 steerable 用网关 key；对照无官方 key 会跳过。"
           run = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
           payload = {
               "msg_type": "interactive",
@@ -499,7 +740,7 @@ jobs:
 
   gather:
     name: At least one live agent ran
-    needs: [eval, flaky, spiral, catalog, failed-prev]
+    needs: [eval, flaky, spiral, catalog, failed-prev, probe]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -528,11 +769,18 @@ jobs:
               if [ -n "$EVAL_EFFORT" ]; then
                 label="$label @$EVAL_EFFORT"
               fi
+              label="$label · 新基线不上首页"
             fi
           elif [ "$EVAL_SPLIT" = "failed-prev" ]; then
             label="GHA failed-prev"
           elif [ "$EVAL_SPLIT" = "flaky" ]; then
             label="GHA flaky A/B"
+          elif [ "$EVAL_SPLIT" = "cheap-12" ] && [ -n "$EVAL_MODEL" ]; then
+            label="cheap-12 probe × $EVAL_MODEL"
+            if [ -n "$EVAL_EFFORT" ]; then
+              label="$label @$EVAL_EFFORT"
+            fi
+            label="$label · 新基线不上首页"
           fi
           python3 -m evals.feishu \
             --root statuses \
@@ -565,7 +813,7 @@ jobs:
 
   attribution:
     name: Harness × model attribution report
-    needs: [eval, flaky, spiral, catalog, failed-prev]
+    needs: [eval, flaky, spiral, catalog, failed-prev, probe]
     if: always()
     runs-on: ubuntu-latest
     steps:

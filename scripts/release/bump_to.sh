@@ -46,6 +46,10 @@ ts_pkgs = [
     "packages/agent-harness/ts",
     "packages/agent-runtime/ts",
     "packages/agent-ui/ts",
+    # private 包（不上 npm）也随 lockstep bump，保持跨仓 file: 引用一致。
+    "packages/pack-sdk/ts",
+    "packages/agent-shell/ts",
+    "packages/agent-shell/web",
 ]
 py_pkgs = [
     "packages/agent-protocol/py",

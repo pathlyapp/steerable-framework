@@ -1,5 +1,6 @@
 packages:
   - "packages/*/ts"
+  - "packages/*/web"
   - "tests/conformance/ts"
   - "examples/ts-minimal"
   - "examples/web-shell"

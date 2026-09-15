@@ -1,0 +1,60 @@
+{
+  "name": "@steerable/agent-shell-web",
+  "version": "0.6.14",
+  "private": true,
+  "type": "module",
+  "description": "Steerable framework \u2014 product-neutral renderer SPA source for @steerable/agent-shell (React + Vite). Consumed by product web entry points via the `@/` alias (anchored at this package's src/) and the createProductViteConfig factory; never published to npm.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/agent-shell/web"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "exports": {
+    "./vite.base": "./vite.base.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "gen": "echo agent-shell-web",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "check:drift": "echo ok",
+    "app:build": "vite build --config vite.app.config.ts",
+    "app:build:demo": "vite build --config vite.demo.config.ts",
+    "app:dev": "vite --config vite.app.config.ts"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-ui": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "framer-motion": "^12.38.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-icons": "^5.5.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.30.0",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@steerable/pack-sdk": "workspace:*",
+    "@tailwindcss/vite": "^4.3.0",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "happy-dom": "^15.11.7",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.21",
+    "vitest": "^3.2.4"
+  }
+}

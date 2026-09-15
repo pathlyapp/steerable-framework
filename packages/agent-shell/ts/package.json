@@ -1,0 +1,59 @@
+{
+  "name": "@steerable/agent-shell",
+  "version": "0.6.14",
+  "private": true,
+  "description": "Steerable framework \u2014 product-neutral desktop/headless agent host (Tier 5). Electron main + preload + headless HTTP server (BS) sharing one storage/sidecar/tooling core; scenario packs extend it through the @steerable/pack-sdk contract and are composed at build time by the consuming product.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/agent-shell/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "type": "module",
+  "main": "dist/runtime.js",
+  "exports": {
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen": "echo agent-shell-ts",
+    "build": "tsc -p tsconfig.json && node copy-skills.mjs && node scripts/build-preload.mjs",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit && node scripts/check-shell-neutral.mjs",
+    "check:drift": "echo ok",
+    "shell:neutral": "node scripts/check-shell-neutral.mjs",
+    "web": "ELECTRON_RUN_AS_NODE=1 DEEPPATH_WEB_DIST=${DEEPPATH_WEB_DIST:-../web/app/dist} node node_modules/electron/cli.js dist/server/index.js",
+    "client": "DEEPPATH_FORCE_BUNDLED_WEB=1 DEEPPATH_WEB_DIST=${DEEPPATH_WEB_DIST:-../web/app/dist} node node_modules/electron/cli.js dist/main.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@steerable/agent-harness": "workspace:*",
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/pack-sdk": "workspace:*",
+    "better-sqlite3": "^11.9.1",
+    "conf": "10.2.0",
+    "dotenv": "^17.4.2",
+    "electron-log": "^5.4.3",
+    "electron-store": "^8.1.0",
+    "he": "^1.2.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/he": "^1.2.3",
+    "@types/node": "^22.10.5",
+    "electron": "^28.3.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "esbuild": "^0.25.0"
+  }
+}

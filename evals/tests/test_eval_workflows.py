@@ -67,15 +67,18 @@ def test_flaky_gather_runs_the_paired_scorer() -> None:
 
 def test_attribution_waits_for_every_scored_split() -> None:
     """needs: [eval] ran the report before a flaky/catalog matrix finished."""
-    assert "needs: [eval, flaky, spiral, catalog, failed-prev]" in WEEKLY
-    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev]") >= 2
+    assert "needs: [eval, flaky, spiral, catalog, failed-prev, probe]" in WEEKLY
+    assert WEEKLY.count("needs: [eval, flaky, spiral, catalog, failed-prev, probe]") >= 2
 
 
 def test_catalog_dispatch_offers_both_harnesses() -> None:
     """The catalog split is the only run that produces a reportable Mean, so
-    the same-model pi comparison has to be dispatchable there."""
+    the same-model comparisons have to be dispatchable there."""
+    assert "- claude-code-glm" in WEEKLY
     assert "- pi-glm" in WEEKLY
     assert "- terminus-2" in WEEKLY
+    assert "- dsh" in WEEKLY
+    assert "- codex-glm" in WEEKLY
     assert 'uv run python -m evals.run --agent "$AGENT" --split catalog' in WEEKLY
 
 
@@ -91,7 +94,8 @@ def test_catalog_concurrency_separates_the_agents() -> None:
     assert (
         "group: evals-${{ github.event.inputs.split || 'cheap-12' }}-"
         "${{ github.event.inputs.agent || 'steerable' }}-"
-        "${{ github.event.inputs.model || 'default' }}" in WEEKLY
+        "${{ github.event.inputs.model || 'default' }}-"
+        "${{ github.event.inputs.probe_agent || 'all' }}" in WEEKLY
     )
 
 
@@ -114,6 +118,37 @@ def test_catalog_forwards_reasoning_effort() -> None:
     assert 'label="$label @$EVAL_EFFORT"' in WEEKLY
 
 
+def test_catalog_model_override_pins_like_probe() -> None:
+    """A catalog --model without the probe pins silently uses OpenRouter's
+    default route and GLM @max, which is not the cost-effective baseline."""
+    catalog = WEEKLY.split("name: Harbor catalog shard", 1)[1]
+    assert "STEERABLE_OPENROUTER_ALLOW_FALLBACKS" in catalog
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"' in catalog
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-z-ai}"' in catalog
+    assert 'STEERABLE_REASONING_EFFORT="${EVAL_EFFORT:-high}"' in catalog
+    assert (
+        "ANTHROPIC_API_KEY: ${{ github.event.inputs.agent == 'claude-code-glm' "
+        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+    )
+    assert (
+        "ANTHROPIC_BASE_URL: ${{ github.event.inputs.agent == 'claude-code-glm' "
+        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+    )
+    assert (
+        "OPENROUTER_API_KEY: ${{ (github.event.inputs.agent == 'pi-glm' "
+        "|| github.event.inputs.agent == 'dsh') && secrets.STEERABLE_API_KEY || '' }}"
+        in WEEKLY
+    )
+
+
+def test_catalog_runs_pi_qwen_and_cc_deepseek() -> None:
+    """Those cells used to be designed skips. A catalog dispatch must actually
+    start Harbor, not fail-closed before Docker."""
+    catalog = WEEKLY.split("name: TB 2.1 catalog", 1)[1]
+    assert "pi-glm skipped on Qwen" not in catalog
+    assert "claude-code-glm skipped on DeepSeek" not in catalog
+
+
 def test_weekly_uploads_the_pi_transcript() -> None:
     """Harbor's Pi agent writes agent/pi.txt. Without it a pi failure arrives as
     token counts alone, and the first pi-glm run had to infer a runaway first
@@ -128,23 +163,32 @@ def test_catalog_start_card_names_the_agent() -> None:
     assert "产品 steerable × {model}" not in WEEKLY
 
 
+def test_weekly_uploads_the_dsh_transcript() -> None:
+    """DSH headless writes agent/dsh.txt. Without it a dsh failure arrives as
+    a reward and no transcript."""
+    assert "agent/dsh.txt" in WEEKLY
+
+
 def test_weekly_uploads_the_terminus_trajectory() -> None:
     """Terminus-2 writes agent/trajectory.json, not headless.log. Without
     that glob a failed trial arrives as a reward and no transcript."""
     assert "agent/trajectory.json" in WEEKLY
 
 
-def test_weekly_gives_the_gateway_openai_only_to_terminus() -> None:
-    """Terminus LiteLLM reads OPENAI_*. An unconditional catalog OPENAI_BASE_URL
-    would be fine today (one agent per dispatch) but the cheap-12 pattern is
-    the one that must not leak: only this leg gets the gateway as OPENAI_*."""
+def test_weekly_gives_the_gateway_openai_to_terminus_and_codex_glm() -> None:
+    """Terminus LiteLLM and Codex-glm both read OPENAI_*. An unconditional
+    catalog OPENAI_BASE_URL would be fine today (one agent per dispatch) but
+    the cheap-12 pattern is the one that must not leak: only these legs get
+    the gateway as OPENAI_*."""
     assert (
-        "OPENAI_API_KEY: ${{ github.event.inputs.agent == 'terminus-2' "
-        "&& secrets.STEERABLE_API_KEY || '' }}" in WEEKLY
+        "OPENAI_API_KEY: ${{ (github.event.inputs.agent == 'terminus-2' "
+        "|| github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_API_KEY || '' }}"
+        in WEEKLY
     )
     assert (
-        "OPENAI_BASE_URL: ${{ github.event.inputs.agent == 'terminus-2' "
-        "&& secrets.STEERABLE_BASE_URL || '' }}" in WEEKLY
+        "OPENAI_BASE_URL: ${{ (github.event.inputs.agent == 'terminus-2' "
+        "|| github.event.inputs.agent == 'codex-glm') && secrets.STEERABLE_BASE_URL || '' }}"
+        in WEEKLY
     )
 
 
@@ -167,6 +211,63 @@ def test_weekly_cheap_12_matrix_runs_every_live_agent() -> None:
     in the repo notices."""
     for agent in LIVE_AGENTS:
         assert agent in WEEKLY, f"cheap-12 matrix does not run {agent}"
+
+
+def test_cheap12_probe_is_gated_on_model() -> None:
+    """An empty model must keep the Monday LIVE_AGENTS smoke; a model
+    input is the new-baseline probe, not a silent mix of the two."""
+    assert (
+        "github.event.inputs.split == 'cheap-12' && github.event.inputs.model == ''"
+        in WEEKLY
+    )
+    assert (
+        "github.event_name == 'workflow_dispatch' && github.event.inputs.split == 'cheap-12' && github.event.inputs.model != ''"
+        in WEEKLY
+    )
+
+
+def test_cheap12_probe_matrix_is_gateway_harnesses() -> None:
+    """Monday LIVE_AGENTS stays off this probe. Pi×Qwen and CC×DeepSeek
+    run; they are no longer skipped in the job."""
+    assert (
+        "agent: [steerable, claude-code-glm, pi-glm, terminus-2, dsh, codex-glm]"
+        in WEEKLY
+    )
+    assert "pi-glm skipped on Qwen" not in WEEKLY
+    assert "claude-code-glm skipped on DeepSeek" not in WEEKLY
+
+
+def test_cheap12_probe_can_rerun_one_cell() -> None:
+    """A failed pi-glm cell must not re-queue the other three behind the
+    in-flight four-cell run. Non-default `agent` skips the other matrix legs.
+    `probe_agent` is the steerable-only (or CC-only) path: catalog `agent`
+    defaults to steerable, which otherwise means all four."""
+    assert "EVAL_AGENT: ${{ github.event.inputs.agent || 'steerable' }}" in WEEKLY
+    assert 'EVAL_AGENT" != "steerable"' in WEEKLY
+    assert 'AGENT" != "$EVAL_AGENT"' in WEEKLY
+    assert "PROBE_AGENT: ${{ github.event.inputs.probe_agent }}" in WEEKLY
+    assert 'AGENT" != "$PROBE_AGENT"' in WEEKLY
+    assert "steps.gate.outputs.skip" in WEEKLY
+
+
+def test_cheap12_probe_deepseek_pins_alibaba() -> None:
+    """OpenRouter probe slug is ``deepseek/deepseek-v4-flash-0731`` (GA).
+    The unsuffixed slug is the 0423 preview. Official ``deepseek`` is not
+    in the serving list; pin Alibaba Cloud Int."""
+    assert "*deepseek*)" in WEEKLY
+    assert "deepseek-v4-flash-0731" in WEEKLY
+    assert 'STEERABLE_OPENROUTER_PROVIDER="${STEERABLE_OPENROUTER_PROVIDER:-alibaba}"' in WEEKLY
+    assert 'STEERABLE_OPENROUTER_PROVIDER:-deepseek' not in WEEKLY
+    assert "DeepSeek 0731 GA" in WEEKLY
+    assert "DeepSeek 0423 官方 deepseek 不提供" not in WEEKLY
+
+
+def test_cheap12_probe_cards_are_a_new_baseline() -> None:
+    """A probe Mean posted as GHA cheap-12 is read as the old easy-12
+    smoke, then mixed with catalog-89 80.7%."""
+    assert "不上首页" in WEEKLY
+    assert "不和 catalog-89 80.7%" in WEEKLY
+    assert 'label="$label · 新基线不上首页"' in WEEKLY
 
 
 def test_arms_matrix_references_registered_harnesses() -> None:

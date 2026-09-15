@@ -7,7 +7,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"
-      - "examples/web-shell/**"
+      - "packages/agent-shell/web/**"
       - "spec/blocks/**"
       - ".github/workflows/docs.yml"
   pull_request:
@@ -15,7 +15,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"
-      - "examples/web-shell/**"
+      - "packages/agent-shell/web/**"
       - "spec/blocks/**"
       - ".github/workflows/docs.yml"
 
@@ -52,10 +52,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # web-shell resolves workspace packages (@steerable/agent-ui,
-      # @steerable/agent-protocol) through their built `dist/` entry points,
-      # so the TS workspace must be built first — same install → build order
-      # as ci.yml. Skipping this fails the web-shell `tsc` step with TS2307.
+      # The Storybook build and the agent-shell demo build both resolve
+      # workspace packages (@steerable/agent-ui, @steerable/agent-protocol,
+      # @steerable/pack-sdk) through their built `dist/` entry points, so the
+      # TS workspace must be built first — same install → build order as
+      # ci.yml.
       - run: pnpm build
       # Storybook is generated *into* the mkdocs site so a single Pages
       # deployment serves both `/` (docs) and `/storybook/` (UI).
@@ -69,16 +70,18 @@ jobs:
           mkdir -p _site/storybook
           cp -R packages/agent-ui/ts/storybook-static/. _site/storybook/
 
-      # --- Web-shell reference app (Vite) -------------------------------------
-      # Build the framework's runnable reference app and embed it at /demo/.
-      # The web-shell uses `base: './'` in vite.config so all assets are
-      # relative -- the same dist works under any deploy prefix.
-      - name: Build web-shell
-        run: pnpm --filter steerable-example-web-shell build
-      - name: Embed web-shell into mkdocs site
+      # --- Agent-shell demo (Vite) --------------------------------------------
+      # Build the Tier 5 host shell as a static, mock-backed demo and embed it
+      # at /demo/. The app-demo entry installs the browser Electron mock
+      # (fixture data + simulated streaming) before bootstrap, so visitors get
+      # the real shell UI without a backend. The demo config uses `base: './'`
+      # so the same dist works under any deploy prefix.
+      - name: Build agent-shell demo
+        run: pnpm --filter @steerable/agent-shell-web app:build:demo
+      - name: Embed agent-shell demo into mkdocs site
         run: |
           mkdir -p _site/demo
-          cp -R examples/web-shell/dist/. _site/demo/
+          cp -R packages/agent-shell/web/app-demo/dist/. _site/demo/
 
       # D4 (docs render smoke test): mkdocs build --strict already passes when
       # markdown is *parseable*, but that is not enough. Pinning

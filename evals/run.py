@@ -227,13 +227,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run pinned Terminal-Bench 2.1 tasks through Harbor. "
-            f"Live agents: {', '.join(LIVE_AGENTS)}. DSH is skipped."
+            f"Live agents: {', '.join(LIVE_AGENTS)}. "
+            "Gateway comparison agents: claude-code-glm, pi-glm, terminus-2, "
+            "codex-glm, dsh."
         )
     )
     parser.add_argument(
         "--agent",
         required=True,
-        help="oracle, steerable, claude-code, codex, or pi",
+        help="oracle, steerable, claude-code, claude-code-glm, codex, "
+        "codex-glm, pi, pi-glm, terminus-2, or dsh",
     )
     parser.add_argument("--split", default="cheap-12", help="split name from suite.yaml")
     parser.add_argument(

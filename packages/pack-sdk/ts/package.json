@@ -1,0 +1,37 @@
+{
+  "name": "@steerable/pack-sdk",
+  "version": "0.6.14",
+  "private": true,
+  "type": "module",
+  "description": "Scenario pack contract for @steerable/agent-shell (pure types, zero runtime). A scenario pack declares every extension a vertical scenario needs \u2014 services, tools, tables, skills, agent seeds, IPC, HTTP routes, preload bridge, renderer slots, branding \u2014 and the host composes the selected packs at build time.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable-framework.git",
+    "directory": "packages/pack-sdk/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable-framework/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts"
+    },
+    "./web": {
+      "types": "./types/web.d.ts"
+    }
+  },
+  "scripts": {
+    "gen": "echo pack-sdk-ts",
+    "build": "echo types-only",
+    "test": "vitest run --passWithNoTests",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
