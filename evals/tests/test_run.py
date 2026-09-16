@@ -177,11 +177,12 @@ def test_skip_missing_env_exits_3_for_pi(capsys, monkeypatch) -> None:
     assert "ANTHROPIC_API_KEY" in captured.err
 
 
-def test_dsh_is_usage_error(capsys) -> None:
-    code = main(["--agent", "dsh", "--split", "cheap-12", "--dry-run"])
+def test_dsh_dry_run_prints_harbor_command(capsys) -> None:
+    code = main(["--agent", "dsh", "--split", "oracle-canary", "--dry-run"])
     captured = capsys.readouterr()
-    assert code == EXIT_USAGE
-    assert "Harbor" in captured.err
+    assert code == EXIT_OK
+    assert "evals.harbor_dsh:DshHarborAgent" in captured.out
+    assert "--include-task-name terminal-bench/fix-git" in captured.out
 
 
 def test_print_summary_requires_mean_and_rejects_errors(

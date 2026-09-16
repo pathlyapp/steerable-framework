@@ -12,7 +12,9 @@
     "check:drift": "pnpm -r run check:drift",
     "shell:dev": "pnpm --filter steerable-example-web-shell dev",
     "shell:build": "pnpm --filter steerable-example-web-shell build",
-    "shell:preview": "pnpm --filter steerable-example-web-shell preview"
+    "shell:preview": "pnpm --filter steerable-example-web-shell preview",
+    "agent-shell:web": "pnpm --filter @steerable/agent-shell-web app:build && pnpm --filter @steerable/agent-shell build && pnpm --filter @steerable/agent-shell web",
+    "agent-shell:client": "pnpm --filter @steerable/agent-shell-web app:build && pnpm --filter @steerable/agent-shell build && pnpm --filter @steerable/agent-shell client"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",
@@ -20,7 +22,10 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "better-sqlite3",
+      "electron",
+      "esbuild",
+      "node-pty"
     ]
   }
 }

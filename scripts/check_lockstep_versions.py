@@ -34,6 +34,10 @@ TS_PACKAGES: list[tuple[str, str]] = [
     ("@steerable/agent-harness",  "packages/agent-harness/ts/package.json"),
     ("@steerable/agent-runtime",  "packages/agent-runtime/ts/package.json"),
     ("@steerable/agent-ui",       "packages/agent-ui/ts/package.json"),
+    # pack-sdk / agent-shell 是 private（不上 npm），但版本号随 lockstep 一起 bump。
+    ("@steerable/pack-sdk",       "packages/pack-sdk/ts/package.json"),
+    ("@steerable/agent-shell",    "packages/agent-shell/ts/package.json"),
+    ("@steerable/agent-shell-web", "packages/agent-shell/web/package.json"),
 ]
 
 PY_PACKAGES: list[tuple[str, str]] = [

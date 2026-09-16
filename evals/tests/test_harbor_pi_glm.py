@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -92,10 +93,25 @@ def test_output_cap_matches_the_steerable_leg(model: dict[str, Any]) -> None:
 
 
 def test_context_window_is_glms_own(model: dict[str, Any]) -> None:
-    """`steerable_agent_runtime.model_info` records 1048576 for z-ai/glm.
-    Pi's 128000 default both compacts early and clamps maxTokens down once
-    a prompt passes ~58k tokens."""
+    """GLM-5.3-Flash is 1M. Pi's 128000 default both compacts early and
+    clamps maxTokens down once a prompt passes ~58k tokens."""
     assert model["contextWindow"] == 1_048_576
+
+
+def test_context_window_does_not_import_the_runtime() -> None:
+    """Harbor's tool env has PYTHONPATH=repo root. evals.* imports;
+    steerable_agent_runtime does not, and a module-level import 404s every
+    pi-glm trial before the first request."""
+    text = Path(__file__).resolve().parents[1].joinpath("harbor_pi_glm.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from steerable_agent_runtime" not in text
+    assert "import steerable_agent_runtime" not in text
+    from evals.harbor_pi_glm import context_window_for
+
+    assert context_window_for("z-ai/glm-5.3-flash") == 1_048_576
+    assert context_window_for("deepseek/deepseek-v4-flash") == 1_048_576
+    assert context_window_for("qwen/qwen3.8-27b") == 262_144
 
 
 def test_reasoning_is_declared_so_thinking_reaches_the_request(
@@ -117,6 +133,19 @@ def test_effort_travels_as_reasoning_effort(model: dict[str, Any]) -> None:
     assert model["compat"]["supportsReasoningEffort"] is True
 
 
+def test_qwen_uses_qwen_thinking_format() -> None:
+    """Qwen's catalog thinking is not the OpenAI reasoning_effort field.
+    Sending openai-format high after the medium→high map still 404s the
+    level; the qwen wire format is what Pi actually emits for that model."""
+    agent = PiGlmHarborAgent(model_api="openai-completions")
+    models_json = agent._build_custom_models_json(
+        _Access(_GATEWAY), "qwen/qwen3.8-27b"
+    )
+    assert models_json is not None
+    provider = next(iter(models_json["providers"].values()))
+    assert provider["models"][0]["compat"]["thinkingFormat"] == "qwen"
+
+
 def test_output_cap_uses_the_field_zai_honours(model: dict[str, Any]) -> None:
     """Pi's autodetect picks `max_completion_tokens` for a hostname it does
     not recognise as OpenRouter or Z.AI."""
@@ -132,6 +161,30 @@ def test_route_is_pinned_to_zai(model: dict[str, Any]) -> None:
         "order": ["z-ai"],
         "allow_fallbacks": False,
     }
+
+
+def test_route_pin_follows_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "alibaba")
+    agent = PiGlmHarborAgent(model_api="openai-completions")
+    models_json = agent._build_custom_models_json(_Access(_GATEWAY), "deepseek/deepseek-v4-flash")
+    assert models_json is not None
+    provider = next(iter(models_json["providers"].values()))
+    assert provider["models"][0]["compat"]["openRouterRouting"] == {
+        "order": ["alibaba"],
+        "allow_fallbacks": False,
+    }
+
+
+def test_route_pin_splits_comma_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEERABLE_OPENROUTER_PROVIDER", "deepseek,alibaba")
+    agent = PiGlmHarborAgent(model_api="openai-completions")
+    models_json = agent._build_custom_models_json(_Access(_GATEWAY), "deepseek/deepseek-v4-flash")
+    assert models_json is not None
+    provider = next(iter(models_json["providers"].values()))
+    assert provider["models"][0]["compat"]["openRouterRouting"]["order"] == [
+        "deepseek",
+        "alibaba",
+    ]
 
 
 def test_model_id_survives_the_patch(model: dict[str, Any]) -> None:

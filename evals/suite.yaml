@@ -2,8 +2,9 @@
 # which Terminal-Bench 2.1 tasks and Harbor agents the regression wrapper
 # may run. Homemade prompts are not a CI gate.
 #
-# cheap-12 avoids QEMU, GPU, video, and long compiles. It must stay a
-# subset of catalog. failed-prev is remaining catalog-89 zeros after
+# cheap-12 is a 7/4/1 stratified sample of catalog-89 (evals/cheap12.py),
+# not a hand-picked easy subset. Means from this split are a new baseline:
+# do not mix them with catalog-89 or the old easy-12. failed-prev is remaining catalog-89 zeros after
 # catalog 33369888461 (31 ids: 30 reward=0, video-processing exception).
 # Harness iteration does not rerun all 89. The catalog lists the 89 task
 # ids published at git_rev; do not invent extra ids.
@@ -364,19 +365,26 @@ splits:
     - protein-assembly
     - regex-chess
     - video-processing
+  # Stratified 12 from catalog-89 (evals/cheap12.py). Hamilton 7 green /
+  # 4 flaky / 1 red on the 8e260de 6-run tiers. Within-cell: shortest
+  # catalog_minutes, skip exclusive-pack and vision. New probe baseline;
+  # do not mix Means with the old easy-12 or the catalog-89 score of record.
   cheap-12:
+    # stable green 6/6 (7). fix-git is oracle-canary.
     - fix-git
-    - openssl-selfsigned-cert
-    - sqlite-db-truncate
-    - nginx-request-logging
-    - configure-git-webserver
-    - sanitize-git-repo
-    - polyglot-c-py
+    - kv-store-grpc
     - log-summary-date-ranges
-    - filter-js-from-html
-    - password-recovery
-    - git-multibranch
-    - sqlite-with-gcov
+    - openssl-selfsigned-cert
+    - pypi-server
+    - build-pmars
+    - compile-compcert
+    # flaky: one each from 1/6, 2/6, 4/6, 5/6
+    - raman-fitting
+    - dna-insert
+    - bn-fit-modify
+    - extract-elf
+    # stable red 0/6 (1)
+    - protein-assembly
   oracle-canary:
     - fix-git
 
@@ -454,13 +462,29 @@ agents:
       - ANTHROPIC_BASE_URL
     skipped: false
   dsh:
-    harbor: null
-    model: null
-    env_any: []
-    skipped: true
-    reason: >-
-      DeepSeek Harness has no Harbor BaseInstalledAgent. Headless
-      `pnpm dsh --profile headless` is not the L2 capability gate.
+    # Same gateway, DeepSeek Harness headless CLI. Harbor 0.22.0 has no
+    # first-party DSH agent (dsh-minimal is still an open PR). GHA catalog
+    # maps STEERABLE_* onto OPENROUTER_* only when this agent is dispatched.
+    harbor: evals.harbor_dsh:DshHarborAgent
+    model: openai/z-ai/glm-5.3-flash
+    kwargs:
+      version: 0.1.5-rc.1
+    env_any:
+      - OPENROUTER_API_KEY
+      - STEERABLE_API_KEY
+    skipped: false
+  # Same model, Codex CLI harness. Stock `codex` is official gpt-5.5 on
+  # api.openai.com. Harbor 0.22.0 truncates nested ids with split("/")[-1]
+  # (harbor#3013); this wrapper restores the gateway slug. Catalog-only:
+  # do not put the gateway key in OPENAI_API_KEY on cheap-12 LIVE_AGENTS.
+  codex-glm:
+    harbor: evals.harbor_codex_glm:CodexGlmHarborAgent
+    model: openai/z-ai/glm-5.3-flash
+    kwargs:
+      reasoning_effort: high
+    env_any:
+      - OPENAI_API_KEY
+    skipped: false
   # Harbor's first-party Terminus-2. Qwen's published TB 2.1 73.0% is this
   # harness, not steerable. Catalog-only: not in LIVE_AGENTS / cheap-12, so
   # the weekly matrix does not grow a sixth runner that needs OPENAI_*.

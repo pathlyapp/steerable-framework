@@ -13,9 +13,20 @@ SUITE_PATH = Path(__file__).resolve().parent / "suite.yaml"
 BASELINE_AGENTS = ("claude-code", "codex", "pi", "pi-glm")
 PRODUCT_AGENT = "steerable"
 LIVE_AGENTS = (*BASELINE_AGENTS, PRODUCT_AGENT)
-REQUIRED_AGENTS = ("oracle", "claude-code", "codex", "pi", "pi-glm", "dsh", PRODUCT_AGENT)
+REQUIRED_AGENTS = (
+    "oracle",
+    "claude-code",
+    "codex",
+    "pi",
+    "pi-glm",
+    "dsh",
+    "codex-glm",
+    PRODUCT_AGENT,
+)
 STEERABLE_IMPORT_PATH = "evals.harbor_steerable:SteerableHarborAgent"
 PI_GLM_IMPORT_PATH = "evals.harbor_pi_glm:PiGlmHarborAgent"
+CODEX_GLM_IMPORT_PATH = "evals.harbor_codex_glm:CodexGlmHarborAgent"
+DSH_IMPORT_PATH = "evals.harbor_dsh:DshHarborAgent"
 PINNED_HARBOR_VERSION = "0.22.0"
 _SHA1_HEX_LEN = 40
 # QEMU/VNC, MIPS ELF compiles, long ffmpeg/OCR, wall-clock SQL
@@ -88,7 +99,7 @@ class SuiteError(ValueError):
 
 def load_suite(path: Path | None = None) -> Suite:
     source = path or SUITE_PATH
-    raw = yaml.safe_load(source.read_text())
+    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise SuiteError(f"{source} must be a mapping")
     return _parse_suite(raw, source)
@@ -227,6 +238,21 @@ def harbor_task_name(dataset_name: str, task: str) -> str:
     return f"{prefix}{task}"
 
 
+def harbor_model_for_agent(agent: str, model: str) -> str:
+    """Map a steerable-style ``openai/vendor/name`` onto each adapter prefix.
+
+    Dispatch inputs are always the product form. Pi talks OpenRouter;
+    Claude Code's Anthropic dialect wants the gateway id with no
+    ``openai/`` prefix. Passing the product string unchanged 404s those
+    legs before any trial starts.
+    """
+    if agent == "pi-glm" and model.startswith("openai/"):
+        return "openrouter/" + model.removeprefix("openai/")
+    if agent == "claude-code-glm" and model.startswith("openai/"):
+        return model.removeprefix("openai/")
+    return model
+
+
 def harbor_argv(
     suite: Suite,
     *,
@@ -272,7 +298,9 @@ def harbor_argv(
         "--agent",
         spec.harbor,
     ]
-    chosen_model = model if model is not None else spec.model
+    chosen_model = (
+        harbor_model_for_agent(agent, model) if model is not None else spec.model
+    )
     if chosen_model:
         argv.extend(["--model", chosen_model])
     argv.extend(
@@ -314,7 +342,35 @@ def harbor_argv(
                 str(verifier_timeout_multiplier),
             ]
         )
-    for key, value in spec.kwargs:
+    kwargs = list(spec.kwargs)
+    effort = os.environ.get("STEERABLE_REASONING_EFFORT", "").strip().lower()
+    if effort:
+        if agent == "pi-glm":
+            if effort == "max":
+                harbor_thinking = "xhigh"
+            elif effort == "medium":
+                # Pi CLI only accepts low/high/max. Qwen's catalog level
+                # is medium; map to high so the cell actually starts.
+                harbor_thinking = "high"
+            else:
+                harbor_thinking = effort
+            kwargs = [
+                (key, harbor_thinking if key == "thinking" else value)
+                for key, value in kwargs
+            ]
+        elif agent == "claude-code-glm":
+            kwargs = [
+                (key, effort if key == "reasoning_effort" else value)
+                for key, value in kwargs
+            ]
+        elif agent == "codex-glm":
+            # Codex CLI has no `max`; the product catalog uses that name.
+            codex_effort = "xhigh" if effort == "max" else effort
+            kwargs = [
+                (key, codex_effort if key == "reasoning_effort" else value)
+                for key, value in kwargs
+            ]
+    for key, value in kwargs:
         argv.extend(["--agent-kwarg", f"{key}={value}"])
     if harness is not None:
         # Absolute path: the harbor child runs with cwd=REPO_ROOT but the
@@ -398,8 +454,17 @@ def _parse_suite(raw: dict, source: Path) -> Suite:
     if missing_agents:
         raise SuiteError(f"{source}: missing agents: {', '.join(missing_agents)}")
     dsh = agents["dsh"]
-    if not dsh.skipped:
-        raise SuiteError(f"{source}: agents.dsh must be skipped until a Harbor adapter exists")
+    if dsh.skipped or dsh.harbor != DSH_IMPORT_PATH:
+        raise SuiteError(
+            f"{source}: agents.dsh.harbor must be {DSH_IMPORT_PATH!r} — "
+            "the headless CLI wrapper, not a skip and not Harbor dsh-minimal"
+        )
+    codex_glm = agents["codex-glm"]
+    if codex_glm.skipped or codex_glm.harbor != CODEX_GLM_IMPORT_PATH:
+        raise SuiteError(
+            f"{source}: agents.codex-glm.harbor must be {CODEX_GLM_IMPORT_PATH!r} — "
+            "stock 'codex' truncates nested OpenRouter ids (harbor#3013)"
+        )
     if agents["pi"].harbor != "pi":
         raise SuiteError(f"{source}: agents.pi.harbor must be 'pi' (Harbor first-party agent)")
     # Stock `harbor: pi` writes a models.json model of `{"id": …}` and lets

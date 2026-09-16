@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>离线</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f4f4f5;
+        color: #18181b;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      .card {
+        background: white;
+        border: 1px solid #e4e4e7;
+        border-radius: 12px;
+        padding: 20px 24px;
+        max-width: 420px;
+        text-align: center;
+      }
+      button {
+        margin-top: 12px;
+        border: 1px solid #d4d4d8;
+        background: #fafafa;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div>无法连接到 Agent Web 界面。</div>
+      <div style="margin-top: 6px; color: #71717a">请确认 web 资源已下载或开发服务已启动。</div>
+      <button onclick="window.location.reload()">重试</button>
+    </div>
+    <script>
+      (function () {
+        var b = new URLSearchParams(location.search).get('brand');
+        if (b) document.title = b + ' · 离线';
+      })();
+    </script>
+  </body>
+  </html>

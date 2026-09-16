@@ -11,7 +11,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 [![CI](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-success)](https://steerableframework.com/)
 [![Storybook](https://img.shields.io/badge/storybook-live-ff4785)](https://steerableframework.com/storybook/)
-[![Live demo](https://img.shields.io/badge/live%20demo-web--shell-22c55e)](https://steerableframework.com/demo/)
+[![Live demo](https://img.shields.io/badge/live%20demo-agent--shell-22c55e)](https://steerableframework.com/demo/)
 
 [![npm: agent-protocol](https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-protocol)
 [![npm: agent-ui](https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-ui)
@@ -27,8 +27,8 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 > **80.7% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, six-run mean. [Numbers and protocol](#terminal-bench-21).
 
 > **Want to see it running before reading anything?**
-> `git clone … && pnpm install && pnpm shell:dev` (or open the [hosted live demo](https://steerableframework.com/demo/)).
-> Zero external services required — the default mock transport replays the 14 rich chat cards out of the box.
+> Open the [hosted live demo](https://steerableframework.com/demo/) — the real Tier 5 agent shell UI running in your browser on mock data, no backend or API key required.
+> Locally: `git clone … && pnpm install && pnpm agent-shell:web` boots the same shell against your own model.
 
 </div>
 
