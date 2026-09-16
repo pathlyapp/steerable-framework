@@ -371,12 +371,18 @@ export function AgentLayout() {
   }, [persistRightPanel]);
 
   // Codex 式 auto-reveal：agent 的命令进入可见 PTY 时，main 广播
-  // `terminal:reveal`，这里自动展开终端面板。幂等——已打开时是 no-op；
+  // `terminal:reveal`。自动展开必须尊重右栏互斥规则：
+  //   - 栏位空闲（null）→ 打开终端；
+  //   - 终端已打开 → 切回终端视图（可能当前在看后台任务过程）；
+  //   - 其它槽位（如 PPT 预览）已激活 → 保持现状，不抢前台。
   // 用户手动关掉后，下一条命令会再次拉开（符合"看 agent 打字"的意图）。
   useEffect(() => {
     const bridge = getElectronBridge();
     if (!bridge?.terminal?.onReveal) return;
     return bridge.terminal.onReveal(() => {
+      if (rightPanelRef.current !== null && rightPanelRef.current !== 'terminal') {
+        return;
+      }
       setInspectedTask(null);
       rightPanelRef.current = 'terminal';
       setRightPanelState('terminal');
