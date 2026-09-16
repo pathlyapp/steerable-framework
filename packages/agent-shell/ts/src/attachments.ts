@@ -57,11 +57,20 @@ export function isValidChatAttachmentsKey(chatId: string): boolean {
 }
 
 /**
+ * 当前会话的附件目录路径，**不创建目录**（供拼系统提示等只读场景使用）。
+ * chatId 非法时仍然返回路径但由调用方在写入前用
+ * {@link isValidChatAttachmentsKey} 校验。
+ */
+export function chatAttachmentsDirPath(chatId: string): string {
+  return path.join(getUserDataDir(), ATTACHMENTS_DIR_NAME, chatId);
+}
+
+/**
  * 当前会话的附件目录（会确保目录存在）。chatId 非法时仍然返回路径但由
  * 调用方在写入前用 {@link isValidChatAttachmentsKey} 校验。
  */
 export function getChatAttachmentsDir(chatId: string): string {
-  const dir = path.join(getUserDataDir(), ATTACHMENTS_DIR_NAME, chatId);
+  const dir = chatAttachmentsDirPath(chatId);
   mkdirSync(dir, { recursive: true });
   return dir;
 }

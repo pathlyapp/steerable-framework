@@ -49,6 +49,13 @@ import {
   takePendingFirstMessage,
 } from "@/lib/pending-first-message";
 import { BRAND_NAME, pickDefaultAgentId } from "@/brand";
+import {
+  appendAttachmentRefs,
+  collectImageAttachments,
+  formatAttachmentFailures,
+  saveChatAttachments,
+  type AttachmentFile,
+} from "@/lib/attachments";
 
 /**
  * `GET /api/v2/chats/:id/messages` returns rows in `createdAt DESC` (latest
@@ -871,6 +878,7 @@ function AgentChatView({
         </div>
       )}
       <LocalChatPanel
+        chatId={chatId}
         messages={effectiveMessages}
         isStreaming={effectiveIsStreaming}
         onSubmit={handleSubmit}
@@ -1017,7 +1025,7 @@ function EmptyChatGate() {
   const [searchParams] = useSearchParams();
   const projectIdFromUrl = searchParams.get("projectId");
   const [inputValue, setInputValue] = useState("");
-  const [files, setFiles] = useState<{ name: string; path: string }[]>([]);
+  const [files, setFiles] = useState<AttachmentFile[]>([]);
   const [mentionReferences, setMentionReferences] = useState<
     MentionReference[]
   >([]);
@@ -1083,31 +1091,26 @@ function EmptyChatGate() {
 
   const handleSubmit = useCallback(async () => {
     if (isCreating) return;
-    let trimmed = inputValue.trim();
-    if (!trimmed && files.length === 0) return;
+    const rawText = inputValue.trim();
+    if (!rawText && files.length === 0) return;
     trackBehavior('composer_send', {
       empty: false,
       home: true,
       mode: mode === 'plan' ? 'plan' : 'agent',
       execPolicy,
-      length: trimmed.length,
+      length: rawText.length,
     });
 
-    // 与 LocalChatPanel.handleSubmit 相同的装配规则：文件路径附到正文，
-    // @ 引用进 metadata，plan 模式打 metadata.mode。
-    if (files.length > 0) {
-      const fileRefs = files.map((f) => `- \`${f.path}\``).join("\n");
-      trimmed = trimmed
-        ? `${trimmed}\n\n---\n关联文件:\n${fileRefs}`
-        : `关联文件:\n${fileRefs}`;
-    }
     const mentionedAgentIds = mentionReferences
       .filter((ref) => ref.type === "agent")
       .map((ref) => ref.id);
     const referencedChatIds = mentionReferences
       .filter((ref) => ref.type === "chat")
       .map((ref) => ref.id);
-    const metadata = {
+    // 文件路径引用与图像元数据在会话建好、附件落盘之后再装配（见下）——
+    // 落地页提交时还没有 chatId，不能像旧代码那样直接用 `f.path`（浏览器
+    // 模式下它是空串，会把一条空引用写进正文，模型以为收到了文件却读不到）。
+    const baseMetadata = {
       ...(mode === "plan" ? { mode: "plan" as const } : {}),
       ...(execPolicy === "full" ? { execPolicy: "full" as const } : {}),
       ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
@@ -1125,9 +1128,30 @@ function EmptyChatGate() {
         ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
       });
       if (!id) throw new Error("创建对话失败，请重试");
+
+      // 会话已建，把附件落进会话空间（与 LocalChatPanel 同一套语义）：
+      // 所有文件都写落盘路径引用（agent 用 local_read_file 读回）；仅图片
+      // 额外进 metadata.images 走多模态，非图片文件不会被图片逻辑吞掉。
+      const { files: resolvedFiles, failures } = await saveChatAttachments(id, files);
+      if (failures.length > 0) {
+        // 落地页一旦跳转就没法让用户重试了，所以这里宁可中止本次发送：
+        // 删掉刚建的空会话，保留输入框（含失败文件），把原因显示出来。
+        await ctx.deleteChat(id);
+        setCreateError(formatAttachmentFailures(failures));
+        setIsCreating(false);
+        return;
+      }
+
+      const content = appendAttachmentRefs(rawText, resolvedFiles);
+      const imageAttachments = collectImageAttachments(resolvedFiles);
+      const metadata = {
+        ...baseMetadata,
+        ...(imageAttachments.length > 0 ? { images: imageAttachments } : {}),
+      };
+
       setPendingFirstMessage({
         chatId: id,
-        content: trimmed,
+        content,
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       });
       navigate(`/agent/${id}`);

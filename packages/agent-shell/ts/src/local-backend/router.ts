@@ -70,6 +70,7 @@ import { resolveBranchActivation } from './branch-helper.js';
 import { detectInterruptedTurn } from './interrupted-helper.js';
 import { dropCurrentUserMessage } from './history-helper.js';
 import { parseImageAttachments, processImageAttachments } from '../image-attachment.js';
+import { chatAttachmentsDirPath } from '../attachments.js';
 import { loadProjectRuleFiles } from '../project-rules.js';
 import type { TaskService } from './task-service.js';
 import { registerLiveStream, getLiveStream, removeLiveStream } from './live-stream.js';
@@ -2476,7 +2477,11 @@ export class LocalBackendRouter {
         `你的文件读写（local_read_file / local_write_file）和命令执行（local_exec_shell）都被限制在该目录内：` +
         `文件路径越界会被拒绝；命令默认在项目根目录下运行，显式指定的 cwd 越界也会被拒绝。` +
         `请一律使用项目目录内的路径（相对路径按项目根目录解析）。` +
-        `如确需访问项目外的文件，向用户说明该限制，并请其把文件放入项目目录后再操作。`;
+        `如确需访问项目外的文件，向用户说明该限制，并请其把文件放入项目目录后再操作。\n` +
+        `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 不在项目目录内，` +
+        `但它已作为**只读放行根**开放给 local_read_file（用绝对路径可直接读取，不会被项目围栏拒绝）。` +
+        `用户附到本条消息的文件都放在那里；需要转换（docx / pdf / xlsx / pptx 等）时，` +
+        `把该绝对路径交给 local_exec_shell 的转换脚本处理即可，**不要**因为它在项目目录外就拒绝读取或要求用户重新拷贝。`;
 
       // W6-5 + W6-7a：项目级规则文件（AGENTS.md / CLAUDE.md）是不可信输入，
       // 仅在用户显式信任该项目后才注入模型上下文——未信任一律不读取、不注入

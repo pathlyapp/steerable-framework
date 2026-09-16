@@ -41,7 +41,22 @@ const STREAM_PATH_PATTERNS = [
   /^\/api\/v2\/chats\/[^/]+\/messages\/[^/]+\/regenerate$/,
 ];
 
-const MAX_BODY_BYTES = 25 * 1024 * 1024;
+/**
+ * 请求体上限。会话附件（`/host/attachments/save`）在浏览器模式走 base64，
+ * 相对原始字节膨胀约 4/3，所以这里必须比 `ATTACHMENT_MAX_BYTES`（25MB，
+ * 按**解码后**字节校验）留出足够 headroom，否则一个合法的 20MB 文件也会
+ * 在进到 saveAttachmentFiles 之前就被 body 上限挡掉。批量多个文件共享同一
+ * 上限（超出返回 413，前端据此提示用户分开上传）。
+ */
+const MAX_BODY_BYTES = 64 * 1024 * 1024;
+
+/** body 超限专用错误：外层据此回 413 + 可读原因，而不是笼统的 500。 */
+class BodyTooLargeError extends Error {
+  constructor(readonly limit: number) {
+    super(`request body too large (max ${Math.round(limit / 1024 / 1024)}MB)`);
+    this.name = 'BodyTooLargeError';
+  }
+}
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -90,7 +105,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new Error('request body too large');
+    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError(MAX_BODY_BYTES);
     chunks.push(chunk as Buffer);
   }
   if (chunks.length === 0) return undefined;
@@ -398,6 +413,14 @@ export function createBsServer(deps: BsServerDeps): Server {
       }
       sendJson(res, 404, { detail: 'not found' });
     })().catch((err) => {
+      // body 超限是可预期的客户端问题（附件太大/一次传太多），回 413 +
+      // 可读原因，让前端把它显示给用户，而不是笼统的 500 "internal error"。
+      if (err instanceof BodyTooLargeError) {
+        log.warn('[bs] request body too large', { url: req.url, limit: err.limit });
+        if (!res.headersSent) sendJson(res, 413, { detail: err.message });
+        else res.end();
+        return;
+      }
       log.error('[bs] unhandled request error', err);
       if (!res.headersSent) sendJson(res, 500, { detail: 'internal error' });
       else res.end();

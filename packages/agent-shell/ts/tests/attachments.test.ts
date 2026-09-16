@@ -1,8 +1,10 @@
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  chatAttachmentsDirPath,
   getChatAttachmentsDir,
   isValidChatAttachmentsKey,
   saveAttachmentFiles,
@@ -31,6 +33,12 @@ describe('attachments / 会话附件空间', () => {
   it('getChatAttachmentsDir 落在 userData/attachments/<chatId> 下并确保目录存在', () => {
     const dir = getChatAttachmentsDir(CHAT_ID);
     expect(dir).toBe(path.join(dataDir, 'attachments', CHAT_ID));
+  });
+
+  it('chatAttachmentsDirPath 只算路径、不建目录（供拼系统提示等只读场景）', () => {
+    const dir = chatAttachmentsDirPath(CHAT_ID);
+    expect(dir).toBe(path.join(dataDir, 'attachments', CHAT_ID));
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('chatId 白名单：UUID 合法，路径穿越/空串非法', () => {

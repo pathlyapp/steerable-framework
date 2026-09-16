@@ -16,7 +16,9 @@ import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import {
-  isImageFile,
+  appendAttachmentRefs,
+  collectImageAttachments,
+  formatAttachmentFailures,
   saveChatAttachments,
   type AttachmentFile,
 } from '@/lib/attachments';
@@ -192,6 +194,7 @@ export function LocalChatPanel({
 }: LocalChatPanelProps) {
   const [inputValue, setInputValue] = useState('');
   const [files, setFiles] = useState<AttachmentFile[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
   const inputRef = useRef<ChatInputHandle>(null);
 
@@ -209,19 +212,27 @@ export function LocalChatPanel({
     if (!trimmed && files.length === 0) return;
 
     // 把上传的文件持久化到会话空间：成功项用落盘路径（稳定、可被 agent
-    // 读回），失败项退回原源路径。落地页（无 chatId）由调用方创建会话后
-    // 自行持久化，这里 chatId 为空时原样用源路径。
-    const resolvedFiles = chatId ? await saveChatAttachments(chatId, files) : files;
+    // 读回），失败项若在 Electron 下有源路径则退回源路径；浏览器模式下没有
+    // 任何可用路径的失败项会被剔除并上报，绝不把空路径写进正文。
+    const { files: resolvedFiles, failures } = chatId
+      ? await saveChatAttachments(chatId, files)
+      : { files, failures: [] };
+
+    if (failures.length > 0) {
+      // 本次消息至少保留可用的文件继续发送，但失败项必须让用户看到。
+      setAttachmentError(formatAttachmentFailures(failures));
+    } else {
+      setAttachmentError(null);
+    }
 
     // Append file references to the user message content
-    if (resolvedFiles.length > 0) {
-      const fileRefs = resolvedFiles.map(f => `- \`${f.path}\``).join('\n');
-      if (trimmed) {
-        trimmed = `${trimmed}\n\n---\n关联文件:\n${fileRefs}`;
-      } else {
-        trimmed = `关联文件:\n${fileRefs}`;
-      }
+    const content = appendAttachmentRefs(trimmed, resolvedFiles);
+    if (resolvedFiles.length === 0 && !trimmed) {
+      // 唯一的文件全是失败项、又没有正文 —— 没有可发送的内容，保留输入框
+      // （含失败文件）让用户重试或移除。
+      return;
     }
+    trimmed = content;
 
     const mentionedAgentIds = mentionReferences
       .filter((ref) => ref.type === 'agent')
@@ -232,9 +243,7 @@ export function LocalChatPanel({
     // W6-3: image attachments ride as metadata so the main process reads the
     // bytes into base64 ImageParts; the text path refs above stay so the
     // persisted record reflects that an image was attached.
-    const imageAttachments = resolvedFiles
-      .filter((f) => isImageFile(f.path))
-      .map((f) => ({ path: f.path, name: f.name }));
+    const imageAttachments = collectImageAttachments(resolvedFiles);
     const metadata = {
       ...(mode === 'plan' ? { mode: 'plan' as const } : {}),
       ...(execPolicy === 'full' ? { execPolicy: 'full' as const } : {}),
@@ -249,8 +258,10 @@ export function LocalChatPanel({
     // (and any attachments/mentions) whenever the submit rejected.
     const submittedFiles = files;
     const submittedMentions = mentionReferences;
+    // 失败项留在输入框里，用户可以直接重试 / 移除；成功项随消息发出后清掉。
+    const failedFiles = failures.map((f) => f.file);
     setInputValue('');
-    setFiles([]);
+    setFiles(failedFiles);
     setMentionReferences([]);
     try {
       await onSubmit({
@@ -300,39 +311,54 @@ export function LocalChatPanel({
   }, [showEmptyHero]);
 
   const chatInputNode = (
-    <ChatInput
-      ref={inputRef}
-      value={inputValue}
-      onChange={setInputValue}
-      onSubmit={handleSubmit}
-      onCancel={onCancel}
-      onSteer={onSteer}
-      onFollowUp={onFollowUp}
-      pendingFollowUps={pendingFollowUps}
-      onRemoveFollowUp={onRemoveFollowUp}
-      isStreaming={isStreaming}
-      disabled={disabled}
-      placeholder={
-        mode === 'plan'
-          ? '描述你的目标，Agent 将先制定计划…'
-          : inputPlaceholder
-      }
-      currentAgent={currentAgent}
-      agents={agents}
-      chats={chats}
-      selectedAgentId={selectedAgentId}
-      onSelectAgent={onSelectAgent}
-      onOpenSettings={onOpenSettings}
-      toolbarExtras={inputToolbarExtras}
-      leadingChrome={inputLeadingChrome}
-      mode={mode}
-      onModeChange={onModeChange}
-      execPolicy={execPolicy}
-      onExecPolicyChange={onExecPolicyChange}
-      files={files}
-      onFilesChange={setFiles}
-      onMentionReferencesChange={setMentionReferences}
-    />
+    <>
+      {attachmentError && (
+        <p
+          className="mx-3 mb-1 text-xs text-agent-destructive"
+          role="alert"
+          data-testid="attachment-error"
+        >
+          {attachmentError}
+        </p>
+      )}
+      <ChatInput
+        ref={inputRef}
+        value={inputValue}
+        onChange={setInputValue}
+        onSubmit={handleSubmit}
+        onCancel={onCancel}
+        onSteer={onSteer}
+        onFollowUp={onFollowUp}
+        pendingFollowUps={pendingFollowUps}
+        onRemoveFollowUp={onRemoveFollowUp}
+        isStreaming={isStreaming}
+        disabled={disabled}
+        placeholder={
+          mode === 'plan'
+            ? '描述你的目标，Agent 将先制定计划…'
+            : inputPlaceholder
+        }
+        currentAgent={currentAgent}
+        agents={agents}
+        chats={chats}
+        selectedAgentId={selectedAgentId}
+        onSelectAgent={onSelectAgent}
+        onOpenSettings={onOpenSettings}
+        toolbarExtras={inputToolbarExtras}
+        leadingChrome={inputLeadingChrome}
+        mode={mode}
+        onModeChange={onModeChange}
+        execPolicy={execPolicy}
+        onExecPolicyChange={onExecPolicyChange}
+        files={files}
+        onFilesChange={(next) => {
+          setFiles(next);
+          // 用户手动增删文件后，上一次提交的失败提示已过期。
+          if (attachmentError) setAttachmentError(null);
+        }}
+        onMentionReferencesChange={setMentionReferences}
+      />
+    </>
   );
 
   return (
