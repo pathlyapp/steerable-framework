@@ -589,12 +589,14 @@ def _encode_message(
         out["reasoning_details"] = message.reasoning_details
     elif message.reasoning:
         out[flags.reasoning_echo_field] = message.reasoning
-    elif message.tool_calls and flags.echo_empty_reasoning_for_tool_calls:
-        # DeepSeek thinking mode: an assistant message carrying ``tool_calls``
-        # must round-trip the reasoning field even when that round produced no
-        # reasoning — omitting the key 400s the follow-up ("The
-        # `reasoning_content` in the thinking mode must be passed back to the
-        # API."). A resumed record can carry such rounds, so send "".
+    elif message.role == "assistant" and flags.echo_empty_reasoning_for_tool_calls:
+        # DeepSeek thinking mode: **every** assistant message in the replayed
+        # history must carry the reasoning key, not just tool-call rounds.
+        # A round can legitimately emit no reasoning (a short final summary,
+        # a narration-requested close-out, a cut/resumed draft); omitting the
+        # key 400s the very next request with "The `reasoning_content` in the
+        # thinking mode must be passed back to the API.". Send "" so the
+        # key round-trips even when this particular round produced none.
         out[flags.reasoning_echo_field] = ""
     return out
 

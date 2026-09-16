@@ -133,17 +133,18 @@ def test_registry_deepseek_disables_forced_tool_choice() -> None:
     entry = compat_for_base_url("https://api.deepseek.com")
     assert entry is not None
     assert entry.supports_forced_tool_choice is False
-    # Thinking mode also 400s a tool-call assistant message whose
-    # reasoning_content key is absent (even with empty reasoning), so the
-    # entry pins the empty-string echo on.
+    # Thinking mode also 400s an assistant message whose reasoning_content
+    # key is absent (even with empty reasoning), so the entry pins the
+    # empty-string echo on for every assistant message.
     assert entry.echo_empty_reasoning_for_tool_calls is True
     assert entry.reasoning_echo_field == "reasoning_content"
 
 
-def test_deepseek_build_body_echoes_empty_reasoning_on_tool_calls() -> None:
-    """A resumed record can carry tool-call rounds that produced no reasoning
-    at all; the DeepSeek request body must still include ``reasoning_content``
-    (empty string) or the follow-up 400s (live-verified 2026-09-13)."""
+def test_deepseek_build_body_echoes_empty_reasoning_on_all_assistant_messages() -> None:
+    """A replayed record can carry assistant rounds that produced no reasoning
+    at all (tool-call rounds and plain final summaries alike); the DeepSeek
+    request body must still include ``reasoning_content`` (empty string) or the
+    follow-up 400s (live-verified 2026-09-13; reproduced 2026-09-16)."""
     from steerable_agent_protocol.generated import ToolCall
 
     from steerable_agent_runtime.llm import LLMMessage

@@ -24,9 +24,10 @@ export interface OpenAICompatOverrides {
   reasoningEchoField?: string;
   supportsForcedToolChoice?: boolean;
   /**
-   * thinking 模式下带 tool_calls 的 assistant 消息即使没产出思考，也必须
-   * 回传 reasoning 字段（空串）——DeepSeek 缺键即 400；框架按 baseUrl
-   * 自动为 api.deepseek.com 打开，这里只是允许设置页显式覆盖。
+   * thinking 模式下**所有** assistant 消息即使没产出思考，也必须回传
+   * reasoning 字段（空串）——DeepSeek 缺键即 400，不只是带 tool_calls 的
+   * 轮次；框架按 baseUrl 自动为 api.deepseek.com 打开，这里只是允许设置页
+   * 显式覆盖。
    */
   echoEmptyReasoningForToolCalls?: boolean;
   cachedTokensFields?: string[];

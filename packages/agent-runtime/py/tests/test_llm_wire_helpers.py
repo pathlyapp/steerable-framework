@@ -182,13 +182,12 @@ def test_openai_encode_reasoning_echo_field_from_compat() -> None:
     assert _encode_message(msg, compat=from_dict)["reasoning_content"] == "think step"
 
 
-def test_openai_encode_empty_reasoning_on_tool_calls_for_deepseek() -> None:
-    """A tool-call assistant round that produced no reasoning must still carry
-    the reasoning key for DeepSeek thinking mode — omitting it 400s the next
-    request (live-verified 2026-09-13: a budget-wall resume replayed a record
-    whose early rounds had no reasoning and the first resumed request failed
-    with "The `reasoning_content` in the thinking mode must be passed back to
-    the API."). Reference vendors omit the field instead."""
+def test_openai_encode_empty_reasoning_on_all_assistant_messages_for_deepseek() -> None:
+    """Every replayed assistant message must carry the reasoning key for
+    DeepSeek thinking mode when that round produced no reasoning — omitting it
+    on a plain summary (or a tool-call round) 400s the next request
+    (live-verified 2026-09-13; reproduced 2026-09-16 on a narration-requested
+    final summary). Reference vendors omit the field instead."""
     from steerable_agent_runtime.llm import OpenAICompatFlags, compat_for_base_url
 
     call = [ToolCall(id="c1", name="bash", arguments={"command": "ls"})]
@@ -204,10 +203,11 @@ def test_openai_encode_empty_reasoning_on_tool_calls_for_deepseek() -> None:
 
     # Reference default: no empty echo, key omitted.
     assert "reasoning" not in _encode_message(no_reasoning)
-    # And a plain assistant message without tool_calls stays clean too.
-    assert "reasoning_content" not in _encode_message(
-        LLMMessage.text_of("assistant", "done"), compat=deepseek
-    )
+    # Plain assistant messages need the same empty echo: a final summary or
+    # narration close-out round can legitimately produce no reasoning.
+    plain = LLMMessage.text_of("assistant", "done")
+    assert _encode_message(plain, compat=deepseek)["reasoning_content"] == ""
+    assert "reasoning" not in _encode_message(plain)
     # Explicit camelCase override round-trips through from_dict.
     forced = OpenAICompatFlags.from_dict(
         {"reasoningEchoField": "reasoning_content", "echoEmptyReasoningForToolCalls": True}
