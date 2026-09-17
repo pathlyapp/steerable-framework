@@ -1,0 +1,7 @@
+# 全仓库统一 LF：codegen 产物（generated/）与脚本都以 LF 存储和检出，
+# 避免 Windows 上 core.autocrlf=true 把 LF 工作区文件标成"已修改"（幻影改动）。
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF 才能被 cmd.exe 正确解析（防御性声明）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
