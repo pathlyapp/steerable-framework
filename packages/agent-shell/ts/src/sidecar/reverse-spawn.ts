@@ -46,7 +46,8 @@ export function resolveWinSpawnHelperPath(): string | null {
   // 显式覆盖（测试/调试逃生门）：设置后只认这一条路径。指向不存在的
   // 路径即可强制走"helper 缺失"的失败分支，与 dev checkout 是否已构建
   // Rust 二进制无关，保证失败分支的测试确定性。
-  const override = process.env.DEEPPATH_WIN_SPAWN_HELPER;
+  const override =
+    process.env.DEEPPATH_WIN_SPAWN_HELPER ?? process.env.STEERABLE_WIN_SPAWN_HELPER;
   if (override !== undefined) {
     return override && existsSync(override) ? override : null;
   }
@@ -55,7 +56,11 @@ export function resolveWinSpawnHelperPath(): string | null {
   if (resourcesPath) {
     candidates.push(join(resourcesPath, 'win-spawn-helper', binary));
   }
-  // Dev checkout: native/ builds into resources/windows-spawn-helper/.
+  // Host dev checkout (cwd = app repo): native/ copies into resources/.
+  // Shell is a published package, so __dirname is inside node_modules and
+  // cannot see the host's extraResources.
+  candidates.push(join(process.cwd(), 'resources', 'windows-spawn-helper', binary));
+  // Legacy: when this file lived in the same repo as the helper.
   candidates.push(join(__dirname, '..', '..', 'resources', 'windows-spawn-helper', binary));
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
