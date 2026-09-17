@@ -18,6 +18,8 @@ import {
   type SkillItem,
 } from '@/lib/slash-sources';
 import { PlanTodoList } from './PlanTodoList';
+import { FilePathCode } from './FilePathCode';
+import { looksLikeFilePath } from './path-mentions';
 
 /**
  * Markdown renderer shared by `UserMessage` and `AssistantMessage`.
@@ -146,7 +148,31 @@ const components: Components = {
   ),
 
   // ── Code (inline + block) ─────────────────────────────────────────────
-  code: (props) => {
+  code: renderCode(null),
+  pre: (props: ComponentPropsWithoutRef<'pre'>) => {
+    // A ```plan fence arrives as <pre><code class="language-plan">…</code></pre>.
+    // The code renderer above already swaps the inner node for PlanTodoList;
+    // here we drop the <pre> shell so the card isn't boxed in a code block.
+    if (containsPlanCode(props.children)) {
+      return <>{props.children}</>;
+    }
+    return (
+      <pre
+        {...props}
+        className="my-2 overflow-x-auto rounded-md border border-agent-border bg-agent-muted/60 p-2.5 text-[12px] leading-relaxed text-agent-foreground"
+      />
+    );
+  },
+};
+
+/**
+ * 行内代码 / 代码块渲染器。`chatId` 只影响行内代码：形状上像本地路径的
+ * 字面量交给 FilePathCode，由它经后端确认存在后变成可点击（相对路径按
+ * 该对话绑定的项目根解析）。代码块内的路径不参与——整块代码是给人读/
+ * 复制的，逐 token 挑路径会把块结构打散。
+ */
+function renderCode(chatId: string | null): Components['code'] {
+  return (props) => {
     const { children, className, ...rest } = props as ComponentPropsWithoutRef<'code'> & {
       // react-markdown v9 dropped the `inline` typed prop. Distinguish by
       // language fence (the only time class is set is for fenced blocks
@@ -167,6 +193,14 @@ const components: Components = {
         </code>
       );
     }
+    const text = childrenToText(children);
+    if (looksLikeFilePath(text)) {
+      return (
+        <FilePathCode {...rest} candidate={text.trim()} chatId={chatId}>
+          {children}
+        </FilePathCode>
+      );
+    }
     return (
       <code
         {...rest}
@@ -175,22 +209,8 @@ const components: Components = {
         {children}
       </code>
     );
-  },
-  pre: (props: ComponentPropsWithoutRef<'pre'>) => {
-    // A ```plan fence arrives as <pre><code class="language-plan">…</code></pre>.
-    // The code renderer above already swaps the inner node for PlanTodoList;
-    // here we drop the <pre> shell so the card isn't boxed in a code block.
-    if (containsPlanCode(props.children)) {
-      return <>{props.children}</>;
-    }
-    return (
-      <pre
-        {...props}
-        className="my-2 overflow-x-auto rounded-md border border-agent-border bg-agent-muted/60 p-2.5 text-[12px] leading-relaxed text-agent-foreground"
-      />
-    );
-  },
-};
+  };
+}
 
 function isPlanCodeClass(className: unknown): boolean {
   return typeof className === 'string' && className.split(/\s+/).includes('language-plan');
@@ -359,6 +379,11 @@ interface MarkdownProps {
   skills?: SkillItem[];
   /** MCP tools behind `/mcp__srv__tool` chips. */
   mcpTools?: McpToolItem[];
+  /**
+   * 当前对话。行内代码里的路径要按它绑定的项目根解析相对路径；缺省时
+   * 相对路径按 home 解析（同无项目对话里 exec 的缺省 cwd）。
+   */
+  chatId?: string | null;
 }
 
 /**
@@ -401,15 +426,19 @@ export function Markdown({
   chats = [],
   skills = [],
   mcpTools = [],
+  chatId = null,
 }: MarkdownProps) {
-  const baseComponents: Components = inlineParagraph
-    ? {
-        ...components,
-        p: (props: ComponentPropsWithoutRef<'p'>) => (
-          <span style={{ whiteSpace: 'pre-line' }} {...props} />
-        ),
-      }
-    : components;
+  const baseComponents: Components = {
+    ...components,
+    code: renderCode(chatId),
+    ...(inlineParagraph
+      ? {
+          p: (props: ComponentPropsWithoutRef<'p'>) => (
+            <span style={{ whiteSpace: 'pre-line' }} {...props} />
+          ),
+        }
+      : {}),
+  };
 
   const finalComponents = withTokens(baseComponents, (node) =>
     renderTextWithMentions(node, agents, chats, skills, mcpTools),

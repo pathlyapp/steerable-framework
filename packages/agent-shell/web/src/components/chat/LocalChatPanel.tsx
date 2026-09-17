@@ -15,6 +15,7 @@ import { MessageList } from './MessageList';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
+import type { TurnFile } from './turn-files';
 import {
   isImageFile,
   saveChatAttachments,
@@ -97,6 +98,10 @@ export interface LocalChatPanelProps {
   currentTurnTimeline?: TurnBlock[];
   currentTurnStartedAtMs?: number;
   durationByMessageId?: Record<string, number>;
+  /** 回合产物文件列表（按落库消息 id 键控），转发给 MessageList。 */
+  turnFilesByMessageId?: Record<string, TurnFile[]>;
+  /** 当轮产物文件（流尾声到达、尚未归档到落库 id 的尾部消息用）。 */
+  currentTurnFiles?: TurnFile[];
   /** P3.1: in-flight child agents + per-message reconciliation map. */
   currentTurnChildren?: ChildInfo[];
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
@@ -166,6 +171,8 @@ export function LocalChatPanel({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  turnFilesByMessageId,
+  currentTurnFiles,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -374,6 +381,7 @@ export function LocalChatPanel({
                 isStreaming={isStreaming}
                 agents={agents}
                 chats={chats}
+                chatId={chatId}
                 currentAgent={currentAgent}
                 executedActionsByMessageId={executedActionsByMessageId}
                 currentTurnActions={currentTurnActions}
@@ -381,6 +389,8 @@ export function LocalChatPanel({
                 currentTurnTimeline={currentTurnTimeline}
                 currentTurnStartedAtMs={currentTurnStartedAtMs}
                 durationByMessageId={durationByMessageId}
+                turnFilesByMessageId={turnFilesByMessageId}
+                currentTurnFiles={currentTurnFiles}
                 currentTurnChildren={currentTurnChildren}
                 orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
                 currentRound={currentRound}

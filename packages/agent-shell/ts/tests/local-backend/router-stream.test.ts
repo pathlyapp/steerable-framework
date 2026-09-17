@@ -12,6 +12,9 @@
  * 假实现；不起 HTTP 服务器、不访问网络。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   h,
@@ -934,5 +937,175 @@ describe('后台标题生成', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(h.store.getChat(chat.id)?.title).toBe('用户改的标题');
     expect(calls.filter((c) => c.event === 'chat-title-updated')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 回合产物文件列表（turn_files）
+// ---------------------------------------------------------------------------
+
+describe('回合产物文件列表', () => {
+  /** 建一个绑定到真实临时项目目录的会话（扫描根 = 项目根）。 */
+  async function seedProjectChat() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-router-'));
+    const projectRegistry = makeProjectRegistry([
+      { id: 'proj-1', name: '演示项目', folderPath: dir, trusted: true },
+    ]);
+    const chat = h.store.createChat('新对话', 'agent-a', 'proj-1');
+    return { dir, chat, toolRouter: makeToolRouter({ projectRegistry }) };
+  }
+
+  it('回合内写到项目根的文件经 turn_files 事件下发（先于 message_id）并落 metadata', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream(async (opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_exec_shell', arguments: { command: 'gen ppt' } });
+        // 脚本间接产物：不经写工具参数，只能靠工作区扫描发现。
+        await fs.writeFile(path.join(dir, '自我介绍.pptx'), 'ppt-bytes');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_exec_shell',
+          arguments: { command: 'gen ppt' },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('PPT 已生成');
+      });
+      const cap = makeEmitCapture();
+      const res = await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '做个 PPT' } },
+        cap.emit,
+      );
+      expect(res.status).toBe(200);
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string; kind: string; size: number }> }).files;
+      expect(files).toEqual([
+        { path: path.join(dir, '自我介绍.pptx'), kind: expect.stringMatching(/^(created|modified)$/), size: 9 },
+      ]);
+
+      // 顺序约定：turn_files 在 message_id 之前（前端按 message_id 归档本轮队列）。
+      const types = cap
+        .events()
+        .map((c) => (typeof c.data === 'object' && c.data !== null ? (c.data as { type?: string }).type : null));
+      expect(types.indexOf('turn_files')).toBeGreaterThanOrEqual(0);
+      expect(types.indexOf('turn_files')).toBeLessThan(types.indexOf('message_id'));
+
+      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.turnFiles).toHaveLength(1);
+      expect(metadata.turnFiles[0].path).toBe(path.join(dir, '自我介绍.pptx'));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('写工具落到项目根之外的路径经参数并集进入列表', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-outside-'));
+    try {
+      const outsideFile = path.join(outside, 'report.md');
+      installStream(async (opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_write_file', arguments: { path: outsideFile } });
+        await fs.writeFile(outsideFile, '# 报告');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_write_file',
+          arguments: { path: outsideFile },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('写好了');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '写报告' } },
+        cap.emit,
+      );
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string }> }).files;
+      expect(files.map((f) => f.path)).toEqual([outsideFile]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('回合没有产物时不发 turn_files，metadata 不带 turnFiles', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream((opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_read_file', arguments: { path: '/etc/hosts' } });
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_read_file',
+          arguments: { path: '/etc/hosts' },
+          result: { success: true, content: 'hosts' },
+          success: true,
+        });
+        opts.onText('读完了');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '读一下' } },
+        cap.emit,
+      );
+
+      expect(cap.byType('turn_files')).toHaveLength(0);
+      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.turnFiles).toBeUndefined();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('未绑定项目的会话没有扫描根，不产事件', async () => {
+    const chat = seedChat();
+    installStream((opts) => opts.onText('纯聊天'));
+    const cap = makeEmitCapture();
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      cap.emit,
+    );
+    expect(cap.byType('turn_files')).toHaveLength(0);
+  });
+
+  it('未绑定项目的会话：exec cwd 浅扫描 + 命令文本路径字面量捕获脚本产物', async () => {
+    // 无项目对话里 exec 的 cwd 与脚本 save 路径都不在任何递归根里——
+    // 工作区扫描覆盖不到，靠 exec 线索兜底（真实场景：脚本在 home 写 PPT）。
+    const chat = seedChat();
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-unbound-'));
+    try {
+      const ppt = path.join(work, '自我介绍_张三.pptx');
+      installStream(async (opts) => {
+        const command = `python3 -c "from pptx import Presentation; prs.save('${ppt}')"`;
+        opts.onToolStart({ id: 'call-1', tool: 'local_exec_shell', arguments: { command, cwd: work } });
+        await fs.writeFile(ppt, 'ppt-bytes');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_exec_shell',
+          arguments: { command, cwd: work },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('PPT 已生成');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter().handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '创建自我介绍ppt' } },
+        cap.emit,
+      );
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string }> }).files;
+      expect(files.map((f) => f.path)).toEqual([ppt]);
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
   });
 });

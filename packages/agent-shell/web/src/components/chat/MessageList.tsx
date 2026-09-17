@@ -17,6 +17,7 @@ import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { ChatMode } from './ChatInput';
 import type { TurnBlock } from './turn-timeline';
+import type { TurnFile } from './turn-files';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
 
 /**
@@ -55,6 +56,11 @@ interface MessageListProps {
   emptyState?: ReactNode;
   agents: LocalChatAgent[];
   chats?: LocalChat[];
+  /**
+   * 当前对话。正文行内代码里的路径按其绑定项目根解析后，确认存在的变成
+   * 可点击（见 FilePathCode）。
+   */
+  chatId?: string | null;
   currentAgent: LocalChatAgent | null;
   /**
    * Tool calls keyed by the persisted message id (post-stream). Used for
@@ -73,6 +79,17 @@ interface MessageListProps {
   currentTurnStartedAtMs?: number;
   /** Frozen duration keyed by assistant message id (live freeze + history). */
   durationByMessageId?: Record<string, number>;
+  /**
+   * 回合产物文件列表，按落库消息 id 键控（live 回合在 message_id 事件时
+   * 归档；历史回合从 messageMetadata.turnFiles 水合）。
+   */
+  turnFilesByMessageId?: Record<string, TurnFile[]>;
+  /**
+   * 当轮产物文件：turn_files 事件在流尾声到达，此时尾部助手消息仍挂着
+   * 占位 id（框架不会在 message_id 后改写它），归档 map 按键查不到——
+   * 与 currentTurnActions 同款尾部回退。
+   */
+  currentTurnFiles?: TurnFile[];
   /**
    * Tool calls accumulated for the in-flight assistant message that the
    * backend hasn't assigned a DB id to yet. Rendered under the latest
@@ -124,6 +141,7 @@ export function MessageList({
   emptyState,
   agents,
   chats = [],
+  chatId = null,
   currentAgent,
   executedActionsByMessageId,
   currentTurnActions,
@@ -131,6 +149,8 @@ export function MessageList({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  turnFilesByMessageId,
+  currentTurnFiles,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -253,6 +273,12 @@ export function MessageList({
               const turnTimeline = persistedTimeline
                 ?? (isStreamingTail || isCurrentTimelineTail ? currentTurnTimeline : undefined);
 
+              const persistedTurnFiles = turnFilesByMessageId?.[message.id];
+              const isTurnFilesTail =
+                isLast && currentTurnFiles !== undefined && currentTurnFiles.length > 0;
+              const turnFiles = persistedTurnFiles
+                ?? (isTurnFilesTail ? currentTurnFiles : undefined);
+
               const metadataJson =
                 typeof message.messageMetadata === 'string'
                   ? message.messageMetadata
@@ -277,6 +303,7 @@ export function MessageList({
                   isStreaming={isStreamingTail}
                   agents={agents}
                   chats={chats}
+                  chatId={chatId}
                   currentAgent={currentAgent}
                   executedActions={actions}
                   timeline={turnTimeline}
@@ -286,6 +313,7 @@ export function MessageList({
                   onRegenerate={onRegenerate}
                   startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
                   durationMs={durationMs}
+                  turnFiles={turnFiles}
                   onShare={message.id === lastAssistantId ? onShare : undefined}
                 />
               );

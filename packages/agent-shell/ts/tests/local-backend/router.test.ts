@@ -1569,3 +1569,121 @@ describe('占位与 fallback 路由', () => {
     expect(post.data).toEqual({ success: true, message: 'noop (local fallback)' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// open-path 路由（回合产物列表的「点击打开」）
+// ---------------------------------------------------------------------------
+
+describe('open-path 路由', () => {
+  it('绝对路径 → 调 shellOpenPath 并返回 success:true', async () => {
+    const router = makeRouter();
+    const res = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/open-path',
+      body: { path: '/tmp/自我介绍.pptx' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.data).toEqual({ success: true });
+    expect(h.shellOpenPath).toHaveBeenCalledWith('/tmp/自我介绍.pptx');
+  });
+
+  it('空路径 / 相对路径 → 400，不触发打开', async () => {
+    const router = makeRouter();
+    const relative = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/open-path',
+      body: { path: 'reports/a.txt' },
+    });
+    expect(relative.status).toBe(400);
+
+    const missing = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/open-path',
+      body: {},
+    });
+    expect(missing.status).toBe(400);
+    expect(h.shellOpenPath).not.toHaveBeenCalled();
+  });
+
+  it('宿主打开失败 → 200 + success:false 带错误消息', async () => {
+    h.shellOpenPath.mockResolvedValue('ENOENT: no such file or directory');
+    const router = makeRouter();
+    const res = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/open-path',
+      body: { path: '/tmp/gone.txt' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({ success: false });
+    expect((res.data as { error: string }).error).toContain('ENOENT');
+  });
+});
+
+describe('resolve-paths 路由', () => {
+  it('绑定项目的会话：相对路径按项目根落地，不存在的候选不回', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-paths-'));
+    try {
+      fs.writeFileSync(path.join(dir, '自我介绍.pptx'), 'ppt');
+      const registry = makeProjectRegistry([
+        { id: 'proj-1', name: '演示项目', folderPath: dir, trusted: true },
+      ]);
+      const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+      const chat = h.store.createChat('新对话', 'agent-a', 'proj-1');
+
+      const res = await router.handle({
+        method: 'POST',
+        path: '/api/v2/local/resolve-paths',
+        body: { chatId: chat.id, candidates: ['./自我介绍.pptx', './不存在.pptx'] },
+      });
+      expect(res.status).toBe(200);
+      expect(res.data).toEqual({
+        resolved: [
+          {
+            candidate: './自我介绍.pptx',
+            path: path.join(dir, '自我介绍.pptx'),
+            isDirectory: false,
+          },
+        ],
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('未绑定项目的会话：相对路径按 home 落地', async () => {
+    const name = `resolve-paths-home-${Date.now()}.txt`;
+    const target = path.join(os.homedir(), name);
+    fs.writeFileSync(target, 'x');
+    try {
+      const router = makeRouter();
+      const chat = h.store.createChat('新对话', 'agent-a');
+      const res = await router.handle({
+        method: 'POST',
+        path: '/api/v2/local/resolve-paths',
+        body: { chatId: chat.id, candidates: [`./${name}`] },
+      });
+      expect(res.data).toEqual({
+        resolved: [{ candidate: `./${name}`, path: target, isDirectory: false }],
+      });
+    } finally {
+      fs.rmSync(target, { force: true });
+    }
+  });
+
+  it('候选为空 / 非字符串时直接回空列表', async () => {
+    const router = makeRouter();
+    const empty = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/resolve-paths',
+      body: { candidates: [] },
+    });
+    expect(empty.data).toEqual({ resolved: [] });
+
+    const malformed = await router.handle({
+      method: 'POST',
+      path: '/api/v2/local/resolve-paths',
+      body: { candidates: [1, null, {}] },
+    });
+    expect(malformed.data).toEqual({ resolved: [] });
+  });
+});

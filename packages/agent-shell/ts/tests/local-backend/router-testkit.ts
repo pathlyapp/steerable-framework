@@ -482,6 +482,8 @@ const harness = vi.hoisted(() => {
     buildInsightsExportPayload: vi.fn(() => ({ exported: true })),
     flushInsightsOutbox: vi.fn(async () => ({ sent: 0 })),
     uploadInsightsBundle: vi.fn(async () => true),
+    /** open-path 路由的宿主打开能力（'' = 成功，非空 = 错误消息）。 */
+    shellOpenPath: vi.fn(async (_target: string) => ''),
   };
 });
 
@@ -503,7 +505,10 @@ vi.mock('../../src/llm/index.js', () => ({
   whenSidecarSupervisor: async () => h.pendingSupervisor,
 }));
 
-vi.mock('../../src/runtime.js', () => ({ getAppRootDir: () => '/tmp/app-root' }));
+vi.mock('../../src/runtime.js', () => ({
+  getAppRootDir: () => '/tmp/app-root',
+  shellOpenPath: (target: string) => h.shellOpenPath(target),
+}));
 
 // ToolRouter 仅以类型出现在 router.ts；提供空类避免加载真实模块（它会拖入
 // local-executor / node-pty 等重依赖）。用例一律持有 stub 实例。
@@ -657,6 +662,8 @@ export function resetRouterTestkit(): void {
   h.flushInsightsOutbox.mockResolvedValue({ sent: 0 });
   h.uploadInsightsBundle.mockReset();
   h.uploadInsightsBundle.mockResolvedValue(true);
+  h.shellOpenPath.mockReset();
+  h.shellOpenPath.mockResolvedValue('');
 }
 
 // ---------------------------------------------------------------------------

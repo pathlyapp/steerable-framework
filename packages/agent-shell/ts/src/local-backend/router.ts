@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { getAppRootDir } from '../runtime.js';
+import { getAppRootDir, shellOpenPath } from '../runtime.js';
 import { llmService, getSidecarSupervisor, whenSidecarSupervisor } from '../llm/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,6 +80,8 @@ import {
   collectPackWorldState,
 } from './pack-turn-hooks.js';
 import { matchPackBackendRoute } from './pack-backend-routes.js';
+import { collectTurnFiles } from './turn-files.js';
+import { resolveMentionedPaths } from './mentioned-paths.js';
 
 export interface LocalBackendRequest {
   method: string;
@@ -1810,6 +1812,39 @@ export class LocalBackendRouter {
       };
     }
 
+    // 回合产物列表的「点击打开」：用系统默认应用打开本地路径（与 agent 的
+    // local_open_path 工具同一宿主能力，这里给渲染层一个 HTTP 入口，CS/BS
+    // 两种模式都经 localBackend.request 到达）。
+    if (method === 'POST' && pathname === '/api/v2/local/open-path') {
+      const payload = this.toRecord(request.body);
+      const target = typeof payload.path === 'string' ? payload.path.trim() : '';
+      if (!target || !path.isAbsolute(target)) {
+        return { status: 400, data: { detail: 'absolute path is required' } };
+      }
+      const openError = await shellOpenPath(target);
+      if (openError) {
+        return { status: 200, data: { success: false, error: openError } };
+      }
+      return { status: 200, data: { success: true } };
+    }
+
+    // 正文里提到的路径能否点击打开：渲染层把行内代码里「像路径」的字面量
+    // 批量送来，这里落地成绝对路径并 stat 验证，只有真实存在的才回。相对
+    // 路径按对话绑定的项目根解析，无项目时按 home（同 exec 缺省 cwd 的回落）。
+    if (method === 'POST' && pathname === '/api/v2/local/resolve-paths') {
+      const payload = this.toRecord(request.body);
+      const candidates = Array.isArray(payload.candidates)
+        ? payload.candidates.filter((item): item is string => typeof item === 'string')
+        : [];
+      if (candidates.length === 0) {
+        return { status: 200, data: { resolved: [] } };
+      }
+      const chatId = typeof payload.chatId === 'string' ? payload.chatId : '';
+      const baseDir = (chatId ? this.resolveChatProject(chatId)?.folderPath : null) ?? os.homedir();
+      const resolved = await resolveMentionedPaths({ candidates, baseDir });
+      return { status: 200, data: { resolved } };
+    }
+
     // ─── 场景包路由（1.2：/api/v2/<包前缀>/* 由包经 pack-backend-routes
     // 注册表贡献；在宿主自带路由之后、fallback 之前匹配，包不能遮蔽宿主
     // 路由）。 ───
@@ -1869,6 +1904,7 @@ export class LocalBackendRouter {
    *   `accumulatedContent += parsedData.content` 一行追加渲染。
    * - 同步真实 messageId：`data: {"type":"message_id","messageId":"..."}`
    * - 工具执行结果（无需用户确认）：`data: {"type":"executed_actions","actions":[...]}`
+   * - 回合产物文件列表（仅非空时发，在 message_id 之前）：`data: {"type":"turn_files","files":[...]}`
    * - 错误：保留 `event:error` + `data: {"message":"..."}`（前端会忽略，但日志/未来 UI 用）
    * - 结束：标准 SSE `[DONE]` 串。
    */
@@ -3078,6 +3114,14 @@ export class LocalBackendRouter {
     const live = registerLiveStream(chatId, { executedActions, timeline, children });
     // 场景包的回合观察器（如识别包技能调用并广播产物更新）。
     const packObservers = beginPackTurnObservers({ chatId, broadcast: this.broadcast ?? undefined });
+    // 回合产物文件列表（回合收尾时收集）：扫描根与 exec 沙箱可写根同源
+    // （项目根 + 包工作区），与沙箱是否启用无关——「完整权限」下根列表只是
+    // 不再被强制，产物仍大概率落在这里；根之外的显式写由工具参数并集补。
+    const turnStartedAtMs = Date.now();
+    const turnFileRoots = [
+      ...collectPackExecWritableRoots(chatId),
+      ...(chatProject ? [chatProject.folderPath] : []),
+    ];
 
     try {
       const coreLoopOptions: StreamCoreLoopTurnOptions = {
@@ -3337,6 +3381,19 @@ export class LocalBackendRouter {
       localStore.getTurnActive(chatId)?.startedAt,
       Date.now(),
     );
+    // 回合产物文件列表（成功/失败/取消都收集——半截回合写出的文件同样是
+    // 产物）。收集失败只记日志，永远不该拖垮回合收尾。
+    let turnFiles: Awaited<ReturnType<typeof collectTurnFiles>> = [];
+    try {
+      turnFiles = await collectTurnFiles({
+        roots: turnFileRoots,
+        sinceMs: turnStartedAtMs,
+        actions: executedActions,
+        projectRoot: chatProject?.folderPath ?? null,
+      });
+    } catch (turnFilesErr) {
+      console.warn('[local-backend] collect turn files failed', turnFilesErr);
+    }
     const assistant = localStore.addMessage(
       chatId,
       'assistant',
@@ -3351,6 +3408,7 @@ export class LocalBackendRouter {
         traceId: outcomeTraceId,
         ...(durationMs != null ? { durationMs } : {}),
         ...(autoContinuations > 0 ? { autoContinuations } : {}),
+        ...(turnFiles.length > 0 ? { turnFiles } : {}),
       })
     );
     try {
@@ -3427,6 +3485,11 @@ export class LocalBackendRouter {
             console.warn('[local-backend] telemetry trace export failed', err);
           });
       }
+    }
+    // 产物文件列表赶在 message_id 之前发：前端按 message_id 把本轮队列
+    // 归档到落库消息上，顺序保证产物列表随同一批次归档。
+    if (turnFiles.length > 0) {
+      emit(this.sseData({ type: 'turn_files', files: turnFiles }));
     }
     emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
     emit('data: [DONE]\n\n');

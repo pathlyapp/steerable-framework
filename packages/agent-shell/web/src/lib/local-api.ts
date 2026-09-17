@@ -332,6 +332,37 @@ export async function cancelChatTurn(chatId: string) {
   });
 }
 
+/**
+ * 用系统默认应用打开本地绝对路径（回合产物列表的点击行为）。
+ * 成功时后端返回 `{ success: true }`；打开失败返回 `{ success: false, error }`。
+ */
+export async function openLocalPath(targetPath: string) {
+  return bridge().localBackend.request<{ success: boolean; error?: string }>({
+    method: 'POST',
+    path: '/api/v2/local/open-path',
+    body: { path: targetPath },
+  });
+}
+
+/** 后端确认存在的路径：`candidate` 是正文里的原字面量，`path` 是落地绝对路径。 */
+export interface ResolvedLocalPath {
+  candidate: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+/**
+ * 批量确认正文里提到的路径是否真实存在（用于决定行内代码要不要变成可点击）。
+ * 相对路径由后端按对话绑定的项目根解析，无项目时按 home；不存在的候选不回。
+ */
+export async function resolveLocalPaths(candidates: string[], chatId?: string | null) {
+  return bridge().localBackend.request<{ resolved: ResolvedLocalPath[] }>({
+    method: 'POST',
+    path: '/api/v2/local/resolve-paths',
+    body: { candidates, ...(chatId ? { chatId } : {}) },
+  });
+}
+
 /* ---------------- Projects（项目模式） ---------------- */
 
 export interface LocalProject {
