@@ -7,13 +7,19 @@
  * the helper side.
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createProcessSpawnHandler,
   resolveWinSpawnHelperPath,
 } from '../../src/sidecar/reverse-spawn.js';
+
+type ElectronProcess = NodeJS.Process & {
+  resourcesPath?: string;
+  defaultApp?: boolean;
+};
 
 describe('host.process.spawn handler', () => {
   it('fails closed on non-Windows platforms', async () => {
@@ -63,5 +69,102 @@ describe('host.process.spawn handler', () => {
     if (process.platform !== 'win32') return;
     const handler = createProcessSpawnHandler();
     await expect(handler({ command: '  ' })).rejects.toThrow(/missing command/);
+  });
+});
+
+describe('resolveWinSpawnHelperPath', () => {
+  const electron = process as ElectronProcess;
+  const envKeys = ['DEEPPATH_WIN_SPAWN_HELPER', 'STEERABLE_WIN_SPAWN_HELPER'] as const;
+  let scratch = '';
+  let prevCwd = '';
+  let prevResourcesPath: string | undefined;
+  let prevDefaultApp: boolean | undefined;
+  const prevEnv: Record<(typeof envKeys)[number], string | undefined> = {
+    DEEPPATH_WIN_SPAWN_HELPER: undefined,
+    STEERABLE_WIN_SPAWN_HELPER: undefined,
+  };
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'win-spawn-helper-resolve-'));
+    prevCwd = process.cwd();
+    prevResourcesPath = electron.resourcesPath;
+    prevDefaultApp = electron.defaultApp;
+    for (const key of envKeys) prevEnv[key] = process.env[key];
+    delete process.env.DEEPPATH_WIN_SPAWN_HELPER;
+    delete process.env.STEERABLE_WIN_SPAWN_HELPER;
+    delete electron.resourcesPath;
+    delete electron.defaultApp;
+  });
+
+  afterEach(() => {
+    process.chdir(prevCwd);
+    if (prevResourcesPath === undefined) delete electron.resourcesPath;
+    else electron.resourcesPath = prevResourcesPath;
+    if (prevDefaultApp === undefined) delete electron.defaultApp;
+    else electron.defaultApp = prevDefaultApp;
+    for (const key of envKeys) {
+      if (prevEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = prevEnv[key];
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  function touch(root: string, relativeDir: string): string {
+    const full = join(root, relativeDir, 'win-spawn-helper.exe');
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, '');
+    return full;
+  }
+
+  it('honors STEERABLE_WIN_SPAWN_HELPER when DEEPPATH_ is unset', () => {
+    const helper = touch(scratch, 'override');
+    process.env.STEERABLE_WIN_SPAWN_HELPER = helper;
+    expect(resolveWinSpawnHelperPath()).toBe(helper);
+  });
+
+  it('prefers DEEPPATH_WIN_SPAWN_HELPER over STEERABLE_WIN_SPAWN_HELPER', () => {
+    const deeppath = touch(scratch, 'deeppath');
+    const steerable = touch(scratch, 'steerable');
+    process.env.DEEPPATH_WIN_SPAWN_HELPER = deeppath;
+    process.env.STEERABLE_WIN_SPAWN_HELPER = steerable;
+    expect(resolveWinSpawnHelperPath()).toBe(deeppath);
+  });
+
+  it('returns null when the override path is missing', () => {
+    process.env.STEERABLE_WIN_SPAWN_HELPER = join(scratch, 'missing', 'win-spawn-helper.exe');
+    expect(resolveWinSpawnHelperPath()).toBeNull();
+  });
+
+  it('finds the host checkout helper under cwd/resources', () => {
+    touch(scratch, join('resources', 'windows-spawn-helper'));
+    process.chdir(scratch);
+    expect(resolveWinSpawnHelperPath()).toBe(
+      join(process.cwd(), 'resources', 'windows-spawn-helper', 'win-spawn-helper.exe'),
+    );
+  });
+
+  it('finds the helper via cwd when running unpackaged Electron', () => {
+    touch(scratch, join('resources', 'windows-spawn-helper'));
+    electron.resourcesPath = join(scratch, 'electron-resources');
+    electron.defaultApp = true;
+    process.chdir(scratch);
+    expect(resolveWinSpawnHelperPath()).toBe(
+      join(process.cwd(), 'resources', 'windows-spawn-helper', 'win-spawn-helper.exe'),
+    );
+  });
+
+  it('prefers packaged extraResources over cwd', () => {
+    const packaged = touch(join(scratch, 'packaged'), 'win-spawn-helper');
+    touch(scratch, join('resources', 'windows-spawn-helper'));
+    electron.resourcesPath = join(scratch, 'packaged');
+    process.chdir(scratch);
+    expect(resolveWinSpawnHelperPath()).toBe(packaged);
+  });
+
+  it('does not take a cwd helper in a packaged Electron app', () => {
+    touch(scratch, join('resources', 'windows-spawn-helper'));
+    electron.resourcesPath = join(scratch, 'packaged');
+    process.chdir(scratch);
+    expect(resolveWinSpawnHelperPath()).toBeNull();
   });
 });
