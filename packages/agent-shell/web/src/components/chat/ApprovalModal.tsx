@@ -1,25 +1,21 @@
-import { useEffect, useState } from 'react';
 import { LuShieldAlert, LuTriangleAlert } from 'react-icons/lu';
 import {
-  getElectronBridge,
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
 } from '@/lib/electron-bridge';
 
 /**
- * ApprovalModalHost — W4-1 审批代数的 Electron UI 半侧。
+ * ApprovalPromptMenu — W4-1 审批代数的输入区 UI。
  *
- * 挂载一次（AgentPage），订阅主进程广播的 `approval:request`，弹出模态
- * 让用户对工具调用做 7 变体决策（允许/拒绝 × 一次性/会话/持久 + 中止）。
- * 决定经 `approval:decide` IPC 回到主进程，再应答 sidecar 的反向调用。
+ * 由 ApprovalPromptProvider 提供当前请求，在普通输入框的位置让用户对
+ * 工具调用做 7 变体决策（允许/拒绝 × 一次性/会话/持久 + 中止）。
  *
  * 持久化语义（与框架 ApprovalExecutor 对齐）：
  *   - 一次性：只作用于本次调用，不缓存。
  *   - 会话：按 category（默认=工具名）缓存在本 chat 的会话级 cache。
  *   - 持久：写入 ~/.steerable/approvals.json，跨会话生效。
  *
- * 队列为 FIFO：模型一批并发多个工具调用时逐个请示（sidecar 串行等待
- * 每个应答）。组件卸载/无窗口时主进程 fail-closed 为 deny_once。
+ * 请求队列及刷新恢复由 Provider 管理。
  */
 
 const MODE_LABEL: Record<string, string> = {
@@ -88,26 +84,15 @@ function DecisionRow({
   );
 }
 
-export function ApprovalModalHost() {
-  const [queue, setQueue] = useState<ApprovalPromptRequest[]>([]);
-
-  useEffect(() => {
-    const bridge = getElectronBridge();
-    if (!bridge?.approval) return;
-    return bridge.approval.onRequest((request) => {
-      setQueue((prev) => [...prev, request]);
-    });
-  }, []);
-
-  const current = queue[0] ?? null;
-  if (!current) return null;
-
-  const decide = (kind: ApprovalDecisionKind) => {
-    const bridge = getElectronBridge();
-    setQueue((prev) => prev.slice(1));
-    void bridge?.approval?.decide({ requestId: current.requestId, kind });
-  };
-
+export function ApprovalPromptMenu({
+  request: current,
+  pendingCount,
+  onDecide,
+}: {
+  request: ApprovalPromptRequest;
+  pendingCount: number;
+  onDecide: (kind: ApprovalDecisionKind) => void;
+}) {
   const destructive = current.mode === 'destructive';
   // 网络出口拓宽（W-egress-ask）：sidecar 的 web 工具被 egress 代理 403
   // 后发起。白名单是代理进程级的（会话寿命），所以「始终」变体对网络
@@ -121,13 +106,9 @@ export function ApprovalModalHost() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="工具调用审批"
-      data-testid="approval-dialog"
+      className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-sm text-agent-foreground shadow-xl"
+      data-testid="approval-composer"
     >
-      <div className="w-full max-w-lg rounded-agent-lg border border-agent-border bg-agent-canvas shadow-xl">
         <div className="flex items-center gap-2 border-b border-agent-border px-4 py-3">
           {destructive ? (
             <LuTriangleAlert className="h-4 w-4 shrink-0 text-agent-destructive" />
@@ -154,9 +135,9 @@ export function ApprovalModalHost() {
                 </>
               )}
             </div>
-            {queue.length > 1 && (
+            {pendingCount > 0 && (
               <div className="mt-0.5 text-[11px] text-agent-muted-foreground">
-                还有 {queue.length - 1} 个待审批
+                还有 {pendingCount} 个待审批
               </div>
             )}
           </div>
@@ -195,7 +176,7 @@ export function ApprovalModalHost() {
                 ? ALLOW_BUTTONS.filter((b) => b.kind !== 'allow_always')
                 : ALLOW_BUTTONS
             }
-            onPick={decide}
+            onPick={onDecide}
           />
           <div className="flex items-center justify-between gap-2">
             <DecisionRow
@@ -204,11 +185,11 @@ export function ApprovalModalHost() {
                   ? DENY_BUTTONS.filter((b) => b.kind !== 'deny_always')
                   : DENY_BUTTONS
               }
-              onPick={decide}
+              onPick={onDecide}
             />
             <button
               type="button"
-              onClick={() => decide('abort')}
+              onClick={() => onDecide('abort')}
               className="shrink-0 rounded-agent-md bg-agent-destructive px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
               data-testid="approval-abort"
             >
@@ -221,9 +202,8 @@ export function ApprovalModalHost() {
               : '「会话」决定在本对话内记住；「始终」决定写入本机 ~/.steerable/approvals.json，跨对话生效。不操作约 2 分钟后按拒绝处理。'}
           </p>
         </div>
-      </div>
     </div>
   );
 }
 
-export default ApprovalModalHost;
+export default ApprovalPromptMenu;

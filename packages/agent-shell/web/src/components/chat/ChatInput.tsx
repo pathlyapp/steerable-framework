@@ -42,6 +42,10 @@ import {
   type McpToolItem,
   type SkillItem,
 } from '@/lib/slash-sources';
+import { useAskUserPrompt } from './AskUserPromptProvider';
+import { AskUserQuestionMenu } from './AskUserQuestionMenu';
+import { useApprovalPrompt } from './ApprovalPromptProvider';
+import { ApprovalPromptMenu } from './ApprovalModal';
 import { ExecPolicyPicker } from './ExecPolicyPicker';
 
 export type ChatMode = 'agent' | 'plan';
@@ -704,6 +708,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     },
     ref,
   ) {
+    const askUserPrompt = useAskUserPrompt();
+    const approvalPrompt = useApprovalPrompt();
     const editorRef = useRef<HTMLDivElement>(null);
     const agentMenuRef = useRef<HTMLDivElement>(null);
     const skillOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -1503,6 +1509,42 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
       editorRef.current?.focus();
     };
+
+    if (approvalPrompt?.current) {
+      return (
+        <div className="chat-input-container @container relative px-3 pb-3 pt-1">
+          <ApprovalPromptMenu
+            key={approvalPrompt.current.requestId}
+            request={approvalPrompt.current}
+            pendingCount={approvalPrompt.pendingCount}
+            onDecide={approvalPrompt.decide}
+          />
+        </div>
+      );
+    }
+
+    if (askUserPrompt?.current) {
+      const request = askUserPrompt.current;
+      return (
+        <div
+          className="chat-input-container @container relative px-3 pb-3 pt-1"
+          data-testid="ask-user-composer"
+        >
+          <AskUserQuestionMenu
+            key={request.requestId}
+            intro={request.intro}
+            questions={request.questions}
+            onSubmit={askUserPrompt.answer}
+            onAutoContinue={() => askUserPrompt.answer({})}
+            bottomHint={
+              askUserPrompt.pendingCount > 0
+                ? `还有 ${askUserPrompt.pendingCount} 组问题待回答`
+                : undefined
+            }
+          />
+        </div>
+      );
+    }
 
     return (
       // @container：底栏元素的显隐/宽度用容器查询（@sm = 384px）而不是

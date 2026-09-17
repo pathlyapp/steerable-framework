@@ -4,8 +4,8 @@ import { LuPanelLeftOpen } from 'react-icons/lu';
 import { AgentSidebar } from '@/components/AgentSidebar';
 import { TerminalPanel } from '@/components/TerminalPanel';
 import { TaskProcessPanel, type InspectedTask } from '@/components/chat/TaskProcessPanel';
-import { ApprovalModalHost } from '@/components/chat/ApprovalModal';
-import { AskUserModalHost } from '@/components/chat/AskUserModalHost';
+import { AskUserPromptProvider } from '@/components/chat/AskUserPromptProvider';
+import { ApprovalPromptProvider } from '@/components/chat/ApprovalPromptProvider';
 import { InsightsConsentBanner } from '@/components/settings/InsightsSettingsPanel';
 import { trackBehavior } from '@/lib/insights';
 import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
@@ -88,7 +88,7 @@ export type AgentOutletContext = UseChatsAndAgentsResult & {
   inspectTask: (task: InspectedTask) => void;
 };
 
-export function AgentLayout() {
+function AgentLayoutContent() {
   const data = useChatsAndAgents();
   const { chatId } = useParams<{ chatId?: string }>();
 
@@ -548,12 +548,16 @@ export function AgentLayout() {
           )}
         </div>
       </div>
-      {/* W4-1 审批弹窗挂在 layout 层而非 chat 视图：审批请求属于正在跑的
-          回合，回合不因用户切走页面而暂停——挂在 AgentChatView 下时，用户
-          导航到首页/别的对话会让模态永不渲染，请求只能等超时 fail-closed。 */}
-      {isElectron() && <ApprovalModalHost />}
-      {/* W8 提问卡片同理：挂在 layout 层，页面切换不丢待答问题。 */}
-      {isElectron() && <AskUserModalHost />}
     </div>
+  );
+}
+
+export function AgentLayout() {
+  return (
+    <ApprovalPromptProvider>
+      <AskUserPromptProvider>
+        <AgentLayoutContent />
+      </AskUserPromptProvider>
+    </ApprovalPromptProvider>
   );
 }

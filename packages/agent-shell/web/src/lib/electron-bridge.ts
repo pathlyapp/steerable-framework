@@ -213,6 +213,7 @@ export interface ElectronBridge {
       kind: ApprovalDecisionKind;
       reason?: string;
     }) => Promise<void>;
+    pending: () => Promise<ApprovalPromptRequest[]>;
   };
   /**
    * W8 结构化提问：sidecar ask_user 工具的请示经主进程/BS 服务器广播到
@@ -225,6 +226,7 @@ export interface ElectronBridge {
       requestId: string;
       answers: Record<string, string | string[]>;
     }) => Promise<void>;
+    pending: () => Promise<AskUserPromptRequest[]>;
   };
   terminal?: {
     /** Ensures a session exists (reuses last one if alive). */

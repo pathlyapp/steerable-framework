@@ -44,6 +44,7 @@ export interface ApprovalPromptRequest {
 }
 
 interface PendingApproval {
+  prompt: ApprovalPromptRequest;
   resolve: (decision: { kind: ApprovalDecisionKind; reason: string }) => void;
 }
 
@@ -62,6 +63,8 @@ export interface ApprovalBridgeDeps {
 export interface ApprovalBridge {
   /** Reverse-channel handler for the sidecar's `approval.request`. */
   handler: SidecarReverseHandler;
+  /** Requests still awaiting a renderer decision, used after page refresh. */
+  pending: () => ApprovalPromptRequest[];
   /**
    * IPC entry point for the renderer's answer (`ipcMain.handle(
    * 'approval:decide')`). Unknown requestIds are dropped (late answer to an
@@ -100,7 +103,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
       };
       deps.onLog?.(`approval: prompting for ${toolName} (${prompt.mode}/${prompt.category})`);
       return await new Promise((resolve) => {
-        pending.set(requestId, { resolve });
+        pending.set(requestId, { prompt, resolve });
         try {
           deps.broadcast('approval:request', prompt);
         } catch (err) {
@@ -109,6 +112,8 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         }
       });
     },
+
+    pending: () => Array.from(pending.values(), ({ prompt }) => prompt),
 
     decide: (payload) => {
       const p = (payload ?? {}) as {

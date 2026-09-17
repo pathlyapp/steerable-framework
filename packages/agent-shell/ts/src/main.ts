@@ -611,12 +611,14 @@ function setupIpcHandlers(): void {
   ipcMain.handle('approval:decide', (_event, payload: unknown) =>
     approvalBridge.decide(payload),
   );
+  ipcMain.handle('approval:pending', () => approvalBridge.pending());
 
   // W8: the renderer's ask-user card answers here; routed to the pending
   // sidecar `ask_user.request` call (fail-open empty answers on mismatch).
   ipcMain.handle('ask-user:answer', (_event, payload: unknown) =>
     askUserBridge.answer(payload),
   );
+  ipcMain.handle('ask-user:pending', () => askUserBridge.pending());
 
   ipcMain.handle('local:update-safety-config', async (_event, config: CommandSafetyConfigPayload) => {
     localExecutor.updateSafetyConfig(config);

@@ -112,18 +112,30 @@ describe('host 端点形状', () => {
     );
   });
 
-  it('approval.decide 与 askUser.answer 打到各自端点', async () => {
-    const fetchMock = stubFetch(() => jsonResponse({}));
+  it('approval.decide 与 askUser 请求打到各自端点', async () => {
+    const fetchMock = stubFetch((input) =>
+      String(input).endsWith('/pending') ? jsonResponse([]) : jsonResponse({}),
+    );
     const bridge = createHttpBridge();
     await bridge.approval!.decide({ requestId: 'r1', kind: 'allow_once' });
+    await expect(bridge.approval!.pending()).resolves.toEqual([]);
     await bridge.askUser!.answer({ requestId: 'r2', answers: { q: 'a' } });
+    await expect(bridge.askUser!.pending()).resolves.toEqual([]);
     expect(fetchMock).toHaveBeenCalledWith(
       '/host/approval/decide',
       expect.objectContaining({ method: 'POST' }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
+      '/host/approval/pending',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
       '/host/ask-user/answer',
       expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/host/ask-user/pending',
+      expect.objectContaining({ method: 'GET' }),
     );
   });
 

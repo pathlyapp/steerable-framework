@@ -249,9 +249,9 @@ const electronAPI = {
   },
   /**
    * W4-1 审批代数：sidecar 的 ApprovalExecutor 经反向通道请示，主进程把
-   * 请求广播到 renderer（approval:request），审批弹窗应答后走
-   * approval:decide 回到主进程。订阅返回 unsubscribe；同一时刻只有一个
-   * 弹窗监听者（AgentPage 挂载的 ApprovalModalHost）。
+   * 请求广播到 renderer（approval:request），输入区审批菜单应答后走
+   * approval:decide 回到主进程。pending 供刷新后的 renderer 恢复仍在等待
+   * 的请求。
    */
   approval: {
     onRequest: (
@@ -289,12 +289,24 @@ const electronAPI = {
     }): Promise<void> => {
       await ipcRenderer.invoke('approval:decide', decision);
     },
+    pending: async (): Promise<
+      Array<{
+        requestId: string;
+        toolName: string;
+        arguments: Record<string, unknown>;
+        mode: string;
+        category: string;
+        round: number;
+      }>
+    > => {
+      return await ipcRenderer.invoke('approval:pending');
+    },
   },
   /**
    * W8 结构化提问：sidecar 的 ask_user 工具经反向通道请示，主进程把
    * 请求广播到 renderer（ask-user:request），问题卡片应答后走
-   * ask-user:answer 回到主进程。订阅返回 unsubscribe；同一时刻只有一个
-   * 卡片监听者（AgentLayout 挂载的 AskUserModalHost）。
+   * ask-user:answer 回到主进程。pending 供刷新后的 renderer 恢复仍在等待
+   * 的请求。
    */
   askUser: {
     onRequest: (
@@ -320,6 +332,15 @@ const electronAPI = {
       answers: Record<string, string | string[]>;
     }): Promise<void> => {
       await ipcRenderer.invoke('ask-user:answer', reply);
+    },
+    pending: async (): Promise<
+      Array<{
+        requestId: string;
+        intro: string;
+        questions: Array<Record<string, unknown>>;
+      }>
+    > => {
+      return await ipcRenderer.invoke('ask-user:pending');
     },
   },
   local: {

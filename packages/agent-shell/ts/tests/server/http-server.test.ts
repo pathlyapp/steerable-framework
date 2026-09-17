@@ -41,7 +41,9 @@ const mocks = vi.hoisted(() => ({
   terminalKill: vi.fn(),
   terminalExec: vi.fn(),
   approvalDecide: vi.fn(),
+  approvalPending: vi.fn(),
   askUserAnswer: vi.fn(),
+  askUserPending: vi.fn(),
   maybeExecInTerminal: vi.fn(),
   busAttach: vi.fn(),
   scriptList: vi.fn(),
@@ -81,8 +83,14 @@ function makeDeps(webDistDir: string): BsServerDeps {
       kill: mocks.terminalKill,
       exec: mocks.terminalExec,
     } as unknown as BsServerDeps['terminalManager'],
-    approvalBridge: { decide: mocks.approvalDecide } as unknown as BsServerDeps['approvalBridge'],
-    askUserBridge: { answer: mocks.askUserAnswer } as unknown as BsServerDeps['askUserBridge'],
+    approvalBridge: {
+      decide: mocks.approvalDecide,
+      pending: mocks.approvalPending,
+    } as unknown as BsServerDeps['approvalBridge'],
+    askUserBridge: {
+      answer: mocks.askUserAnswer,
+      pending: mocks.askUserPending,
+    } as unknown as BsServerDeps['askUserBridge'],
     maybeExecInTerminal: mocks.maybeExecInTerminal,
     bus: { attach: mocks.busAttach } as unknown as BsServerDeps['bus'],
     webDistDir,
@@ -270,16 +278,23 @@ describe('BS HTTP server', () => {
       expect(body).toEqual({ ok: false, reason: 'no_active_coreloop_turn' });
     });
 
-    it('approval/decide 与 ask-user/answer 透传到 bridge', async () => {
+    it('approval/decide 与 ask-user 端点透传到 bridge', async () => {
       mocks.approvalDecide.mockResolvedValue({ kind: 'allow_once' });
       expect(await (await post('/host/approval/decide', { id: 'a1' })).json()).toEqual({
         kind: 'allow_once',
       });
       expect(mocks.approvalDecide).toHaveBeenCalledWith({ id: 'a1' });
+      const approvalPending = [{ requestId: 'a1', toolName: 'bash' }];
+      mocks.approvalPending.mockReturnValue(approvalPending);
+      expect(await (await get('/host/approval/pending')).json()).toEqual(approvalPending);
 
       mocks.askUserAnswer.mockReturnValue({ ok: true });
       await post('/host/ask-user/answer', { id: 'q1', answer: 'y' });
       expect(mocks.askUserAnswer).toHaveBeenCalledWith({ id: 'q1', answer: 'y' });
+
+      const pending = [{ requestId: 'q1', intro: '', questions: [] }];
+      mocks.askUserPending.mockReturnValue(pending);
+      expect(await (await get('/host/ask-user/pending')).json()).toEqual(pending);
     });
 
     it('local/exec-shell：优先 maybeExecInTerminal，返回 null 时回落 executor', async () => {

@@ -22,6 +22,7 @@ export interface AskUserPromptRequest {
 }
 
 interface PendingAskUser {
+  prompt: AskUserPromptRequest;
   resolve: (result: { answers: Record<string, string | string[]> }) => void;
 }
 
@@ -35,6 +36,8 @@ export interface AskUserBridgeDeps {
 export interface AskUserBridge {
   /** 注册为 sidecar 的 `ask_user.request` 反向方法处理器。 */
   handler: SidecarReverseHandler;
+  /** 返回仍在等待 renderer 应答的请求，供刷新后的页面恢复提问。 */
+  pending: () => AskUserPromptRequest[];
   /** renderer `ask-user:answer` 的入口；返回是否匹配到待应答请求。 */
   answer: (payload: unknown) => { ok: boolean };
 }
@@ -63,7 +66,7 @@ export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
         questions: questions as Array<Record<string, unknown>>,
       };
       return new Promise((resolve) => {
-        pending.set(requestId, { resolve });
+        pending.set(requestId, { prompt, resolve });
         try {
           deps.broadcast('ask-user:request', prompt);
         } catch (err) {
@@ -73,6 +76,8 @@ export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
         }
       });
     },
+
+    pending: () => Array.from(pending.values(), ({ prompt }) => prompt),
 
     answer: (payload) => {
       const p = (payload ?? {}) as { requestId?: unknown; answers?: unknown };
