@@ -239,6 +239,32 @@ class FakeLocalStore {
     return record;
   }
 
+  getMessage(chatId: string, messageId: string): ChatMessageRecord | null {
+    return this.state.messages.find((m) => m.chatId === chatId && m.id === messageId) ?? null;
+  }
+
+  patchMessageMetadata(
+    chatId: string,
+    messageId: string,
+    patch: Record<string, unknown>,
+  ): ChatMessageRecord | null {
+    const msg = this.getMessage(chatId, messageId);
+    if (!msg) return null;
+    let current: Record<string, unknown> = {};
+    if (msg.messageMetadata) {
+      try {
+        const parsed = JSON.parse(msg.messageMetadata) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        current = {};
+      }
+    }
+    msg.messageMetadata = JSON.stringify({ ...current, ...patch });
+    return msg;
+  }
+
   deleteMessagesFrom(chatId: string, messageId: string): number {
     const target = this.state.messages.find((m) => m.chatId === chatId && m.id === messageId);
     if (!target) return 0;
@@ -467,6 +493,11 @@ const harness = vi.hoisted(() => {
     findSkill: vi.fn(),
     installSkillFromDirectory: vi.fn(() => ({ name: 'imported-skill', dest: '/tmp/dest' })),
     generateChatTitle: vi.fn(async () => ({ title: '生成的标题', usedFallback: false })),
+    generateSuggestedReplies: vi.fn(async () => ({
+      suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+      usedFallback: false,
+    })),
+    fallbackSuggestedReplies: vi.fn(() => ['兜底-1', '兜底-2', '兜底-3']),
     diagnoseLlmConnection: vi.fn(async () => ({ ok: true, steps: [] })),
     parseImageAttachments: vi.fn((value: unknown) => (Array.isArray(value) ? value : [])),
     processImageAttachments: vi.fn(() => ({ images: [], notes: [] as string[] })),
@@ -561,6 +592,11 @@ vi.mock('../../src/local-backend/ai-title.js', () => ({
   generateChatTitle: h.generateChatTitle,
 }));
 
+vi.mock('../../src/local-backend/ai-suggestions.js', () => ({
+  generateSuggestedReplies: h.generateSuggestedReplies,
+  fallbackSuggestedReplies: h.fallbackSuggestedReplies,
+}));
+
 vi.mock('../../src/local-backend/llm-diagnose.js', () => ({
   diagnoseLlmConnection: h.diagnoseLlmConnection,
 }));
@@ -643,6 +679,13 @@ export function resetRouterTestkit(): void {
   h.installSkillFromDirectory.mockReturnValue({ name: 'imported-skill', dest: '/tmp/dest' });
   h.generateChatTitle.mockReset();
   h.generateChatTitle.mockResolvedValue({ title: '生成的标题', usedFallback: false });
+  h.generateSuggestedReplies.mockReset();
+  h.generateSuggestedReplies.mockResolvedValue({
+    suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+    usedFallback: false,
+  });
+  h.fallbackSuggestedReplies.mockReset();
+  h.fallbackSuggestedReplies.mockReturnValue(['兜底-1', '兜底-2', '兜底-3']);
   h.diagnoseLlmConnection.mockReset();
   h.diagnoseLlmConnection.mockResolvedValue({ ok: true, steps: [] });
   h.parseImageAttachments.mockReset();

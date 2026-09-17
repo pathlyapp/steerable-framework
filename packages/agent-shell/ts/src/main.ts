@@ -109,7 +109,7 @@ const RETRY_DELAYS = [2000, 5000, 10000, 30000];
 // 导致模型退化成"假后台"）。CS 的差异只剩广播（IPC）与生命周期。
 const runtime = createHostRuntime({
   broadcast: (channel, payload) => broadcastTerminalEvent(channel, payload),
-  // LocalBackendRouter 的后台事件（目前只有 chat-title-updated）只推主窗口。
+  // LocalBackendRouter 的后台事件（chat-title-updated / suggested-replies）只推主窗口。
   // 没拿到 mainWindow 时静默丢——title 是 nice-to-have，不该让启动顺序影响功能。
   broadcastMain: (eventName, payload) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;

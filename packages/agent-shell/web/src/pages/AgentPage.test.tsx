@@ -8,6 +8,7 @@
  *     流式中停止按钮经 transport.cancelActive 真正取消后端回合，错误落进消息；
  *   - W7-1 中断恢复卡（继续走 resume 通道 / 忽略仅本次挂载隐藏）；
  *   - plan 模式回合结束后的「开始执行计划」操作条；
+ *   - 助手回复后的 3 条下一轮输入建议（历史 metadata 水合 / 广播到达）；
  *   - 切走再切回时用 live-stream 快照叠出远端运行中的回合。
  * 子组件自身的交互（ChatInput 排队、ChatHeader 分支菜单、ModelPicker 目录）
  * 由各自的测试覆盖，这里只验页面级接线。
@@ -25,6 +26,9 @@ const captureScreenshot = vi.fn();
 const streamMock = vi.fn();
 const steerMock = vi.fn();
 const cancelActiveMock = vi.fn();
+let suggestedRepliesHandler:
+  | ((payload: { chatId: string; messageId: string; suggestions: string[] }) => void)
+  | null = null;
 const regenerateChatMessage = vi.fn();
 const getChatLiveStream = vi.fn();
 const listProjects = vi.fn();
@@ -47,6 +51,16 @@ vi.mock('@/lib/electron-bridge', () => ({
             startStream: vi.fn(async () => null),
             cancelStream: vi.fn(),
             steerChat: (_chatId: string, content: string) => steerMock(content),
+          },
+          onSuggestedReplies: (callback: (payload: {
+            chatId: string;
+            messageId: string;
+            suggestions: string[];
+          }) => void) => {
+            suggestedRepliesHandler = callback;
+            return () => {
+              if (suggestedRepliesHandler === callback) suggestedRepliesHandler = null;
+            };
           },
         }
       : null,
@@ -246,6 +260,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   electronState.active = true;
+  suggestedRepliesHandler = null;
   bridgeRequest.mockImplementation(defaultBridgeRequest);
   getChatLiveStream.mockResolvedValue({ active: false });
   listProjects.mockResolvedValue({ projects: [] });
@@ -623,5 +638,79 @@ describe('AgentPage 远端回合恢复', () => {
     expect(await screen.findByText('远端正在输出')).toBeTruthy();
     // 远端运行中等同流式：输入区显示停止按钮
     expect(await screen.findByRole('button', { name: '停止生成' })).toBeTruthy();
+  });
+});
+
+describe('AgentPage 追问建议', () => {
+  it('历史助手消息带 suggestedReplies 时渲染芯片，点击即发出', async () => {
+    bridgeRequest.mockImplementation((input: { method: string; path: string }) => {
+      if (input.path.includes('/messages')) {
+        return Promise.resolve({
+          messages: [
+            {
+              id: 'm2',
+              chatId: 'chat-1',
+              role: 'assistant',
+              content: 'PPT 已生成。如需修改内容或调整样式，请告诉我。',
+              createdAt: '2026-09-17T08:01:00.000Z',
+              messageMetadata: JSON.stringify({
+                suggestedReplies: ['调整封面配色', '把个人简介写得更具体', '再加一页项目案例'],
+              }),
+            },
+            {
+              id: 'm1',
+              chatId: 'chat-1',
+              role: 'user',
+              content: '制作自我介绍ppt',
+              createdAt: '2026-09-17T08:00:00.000Z',
+            },
+          ],
+          interrupted: false,
+        });
+      }
+      return defaultBridgeRequest(input);
+    });
+    renderPage('/agent/chat-1', makeCtx());
+    expect(await screen.findByTestId('suggested-replies')).toBeTruthy();
+    fireEvent.click(screen.getByText('调整封面配色'));
+    await waitFor(() =>
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({ content: '调整封面配色' }),
+        expect.any(Function),
+      ),
+    );
+  });
+
+  it('回合结束后收到 suggested-replies 广播则画出芯片', async () => {
+    streamMock.mockImplementation(
+      async (_input: unknown, onEvent: (event: SSEEvent) => void) => {
+        onEvent({ type: 'content', content: 'PPT 已生成' });
+        onEvent({
+          type: 'agent',
+          event: 'turn_timeline',
+          payload: { blocks: [{ type: 'text', content: 'PPT 已生成' }] },
+        });
+        onEvent({
+          type: 'agent',
+          event: 'message_id',
+          payload: { messageId: 'asst-db-1' },
+        });
+        onEvent({ type: 'done' });
+      },
+    );
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+    await typeComposer('做个 ppt');
+    pressEnter();
+    await screen.findByText('PPT 已生成');
+    await waitFor(() => expect(suggestedRepliesHandler).toBeTruthy());
+    act(() => {
+      suggestedRepliesHandler?.({
+        chatId: 'chat-1',
+        messageId: 'asst-db-1',
+        suggestions: ['调整封面配色', '把个人简介写得更具体', '再加一页项目案例'],
+      });
+    });
+    expect(await screen.findByText('调整封面配色')).toBeTruthy();
   });
 });

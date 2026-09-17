@@ -1,7 +1,7 @@
 /**
  * BS 模式的 SSE 事件总线：替代 Electron 的 `webContents.send(channel, payload)`
  * 广播。所有宿主事件（terminal:data、approval:request、chat-title-updated、
- * 场景包事件……）经这一条 `GET /api/v2/events` 长连接推给浏览器，
+ * suggested-replies、场景包事件……）经这一条 `GET /api/v2/events` 长连接推给浏览器，
  * channel 名与 IPC 通道保持一致，前端 http-bridge 按名分发。
  */
 import type { ServerResponse } from 'node:http';

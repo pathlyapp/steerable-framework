@@ -28,6 +28,10 @@ import { foldOrchestrationChildEvents } from "@/components/chat/orchestration-ch
 import { parseTurnBlocks, type TurnBlock } from "@/components/chat/turn-timeline";
 import { parseTurnFiles, type TurnFile } from "@/components/chat/turn-files";
 import { readPersistedDurationMs } from "@/components/chat/elapsed";
+import {
+  extractLatestSuggestedReplies,
+  type SuggestedRepliesState,
+} from "@/components/chat/suggested-replies-model";
 import { useChatTasks } from "@/components/chat/useChatTasks";
 import { LuListChecks, LuArrowRight } from "react-icons/lu";
 import { LocalLlmSettingsModal } from "@/components/LocalLlmSettingsModal";
@@ -229,6 +233,8 @@ function AgentChatLoader({
   const [initialTurnFiles, setInitialTurnFiles] = useState<
     Record<string, TurnFile[]>
   >({});
+  const [initialSuggestedReplies, setInitialSuggestedReplies] =
+    useState<SuggestedRepliesState | null>(null);
   // W7-1: 后端在 messages 响应里下发 interrupted（上一轮崩溃/强杀中断）。
   const [initialInterrupted, setInitialInterrupted] = useState(false);
   // 运行中回合的实时快照：切走再切回时用它在历史消息之上叠出「正在运行」
@@ -258,11 +264,17 @@ function AgentChatLoader({
           getChatLiveStream(chatId),
         ]);
         if (cancelled) return;
-        setInitialMessages(chronological(response.messages));
+        const ordered = chronological(response.messages);
+        setInitialMessages(ordered);
         setInitialExecutedActions(extractPersistedActions(response.messages));
         setInitialTimelines(extractPersistedTimelines(response.messages));
         setInitialDurations(extractPersistedDurations(response.messages));
         setInitialTurnFiles(extractPersistedTurnFiles(response.messages));
+        setInitialSuggestedReplies(
+          extractLatestSuggestedReplies(
+            ordered as ChatMessageWithMetadata[],
+          ),
+        );
         setInitialInterrupted(response.interrupted === true);
         setInitialLiveStream(live ?? { active: false });
       } catch (err) {
@@ -273,6 +285,7 @@ function AgentChatLoader({
         setInitialTimelines({});
         setInitialDurations({});
         setInitialTurnFiles({});
+        setInitialSuggestedReplies(null);
         setInitialInterrupted(false);
         setInitialLiveStream({ active: false });
       }
@@ -298,6 +311,7 @@ function AgentChatLoader({
       initialTimelines={initialTimelines}
       initialDurations={initialDurations}
       initialTurnFiles={initialTurnFiles}
+      initialSuggestedReplies={initialSuggestedReplies}
       initialInterrupted={initialInterrupted}
       initialLiveStream={initialLiveStream}
       hydrationError={hydrationError}
@@ -313,6 +327,7 @@ interface AgentChatViewProps {
   initialTimelines: Record<string, TurnBlock[]>;
   initialDurations: Record<string, number>;
   initialTurnFiles: Record<string, TurnFile[]>;
+  initialSuggestedReplies: SuggestedRepliesState | null;
   /** W7-1: 打开会话时上一轮处于中断态（崩溃/强杀，无完成记录）。 */
   initialInterrupted: boolean;
   /** 打开会话时的运行中回合快照（切回恢复运行状态用）。 */
@@ -328,6 +343,7 @@ function AgentChatView({
   initialTimelines,
   initialDurations,
   initialTurnFiles,
+  initialSuggestedReplies,
   initialInterrupted,
   initialLiveStream,
   hydrationError,
@@ -464,6 +480,11 @@ function AgentChatView({
   const [planReady, setPlanReady] = useState(false);
   const planTurnRef = useRef(false);
   const wasStreamingRef = useRef(false);
+  const [suggestedReplies, setSuggestedReplies] =
+    useState<SuggestedRepliesState | null>(initialSuggestedReplies);
+  const [tailAssistantDbId, setTailAssistantDbId] = useState<string | null>(
+    initialSuggestedReplies?.messageId ?? null,
+  );
 
   const handleModeChange = useCallback((next: ChatMode) => {
     setMode(next);
@@ -594,6 +615,7 @@ function AgentChatView({
         }));
       }
       pendingTurnFilesRef.current = [];
+      setTailAssistantDbId(messageId);
     }
     // AI 标题更新走的是后台 IPC 广播（chat-title-updated）而不是 SSE——
     // 见 AgentLayout 里的订阅。SSE 通道在 [DONE] 之后就不再监听了，title-gen
@@ -753,6 +775,8 @@ function AgentChatView({
       setPlanReady(false);
       // 手动发起新一轮即取代中断态——用户已经继续往前走了。
       setInterrupted(false);
+      setSuggestedReplies(null);
+      setTailAssistantDbId(null);
       // 模型选择器的每轮覆盖随 metadata 下发：model 覆盖设置里的全局
       // 模型；reasoningEffort 由 sidecar 按目录严格校验（不支持即报错，
       // 不静默丢弃）。都为 null 时保持设置/预制默认。
@@ -769,6 +793,26 @@ function AgentChatView({
     },
     [sendUserMessage, modelOverride, effortOverride, execPolicy],
   );
+
+  const handleSelectSuggestion = useCallback(
+    (text: string) => {
+      void handleSubmit({ content: text });
+    },
+    [handleSubmit],
+  );
+
+  useEffect(() => {
+    const bridge = getElectronBridge();
+    if (!bridge?.onSuggestedReplies) return;
+    return bridge.onSuggestedReplies((payload) => {
+      if (payload.chatId !== chatId) return;
+      if (!Array.isArray(payload.suggestions) || payload.suggestions.length === 0) return;
+      setSuggestedReplies({
+        messageId: payload.messageId,
+        suggestions: payload.suggestions,
+      });
+    });
+  }, [chatId]);
 
   // 包槽位 fallback 发送通道（如文档包的单页修改在 sidecar 未就绪时把
   // 后端拼好的指令退回主聊天）：AgentLayout 持有发送器 ref，这里挂载时
@@ -924,6 +968,22 @@ function AgentChatView({
       )
     : currentTurnChildren;
 
+  let lastAssistantId: string | undefined;
+  for (let i = effectiveMessages.length - 1; i >= 0; i -= 1) {
+    if (effectiveMessages[i].role === "assistant") {
+      lastAssistantId = effectiveMessages[i].id;
+      break;
+    }
+  }
+  const visibleSuggestedReplies =
+    !effectiveIsStreaming &&
+    !interrupted &&
+    suggestedReplies &&
+    (suggestedReplies.messageId === lastAssistantId ||
+      suggestedReplies.messageId === tailAssistantDbId)
+      ? suggestedReplies.suggestions
+      : undefined;
+
   return (
     <div className="flex h-full w-full flex-col">
       {hydrationError && (
@@ -988,6 +1048,8 @@ function AgentChatView({
         onInspectTask={handleInspectTask}
         onDismissFinishedTask={dismissFinished}
         onShare={isElectron() ? handleShare : undefined}
+        suggestedReplies={visibleSuggestedReplies}
+        onSelectSuggestion={handleSelectSuggestion}
         onOpenSettings={
           isElectron() ? () => setLlmSettingsOpen(true) : undefined
         }

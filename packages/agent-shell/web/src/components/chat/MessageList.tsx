@@ -13,6 +13,7 @@ import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { InterruptedTurnCard } from './InterruptedTurnCard';
 import { TaskOutcomeCards } from './TaskOutcomeCards';
+import { SuggestedReplies } from './SuggestedReplies';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { ChatMode } from './ChatInput';
@@ -133,6 +134,11 @@ interface MessageListProps {
   onDismissFinishedTask?: (taskId: string) => void;
   /** 分享当前对话（截图）。只画在最近一条助手消息的时间戳行上。 */
   onShare?: () => Promise<boolean>;
+  /**
+   * 最近一条助手回复下的下一轮输入建议（WorkBuddy 式）。只在非流式时渲染。
+   */
+  suggestedReplies?: string[];
+  onSelectSuggestion?: (text: string) => void;
 }
 
 export function MessageList({
@@ -163,6 +169,8 @@ export function MessageList({
   onInspectTask,
   onDismissFinishedTask,
   onShare,
+  suggestedReplies,
+  onSelectSuggestion,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -216,10 +224,11 @@ export function MessageList({
   const lastTimelineSig = currentTurnTimeline
     ?.map((block) => (block.type === 'tools' ? `t${block.actions.length}` : `c${block.content.length}`))
     .join('|') ?? '';
+  const suggestedSig = suggestedReplies?.join('\0') ?? '';
   useEffect(() => {
     if (!isAtBottom) return;
     scrollToBottom('smooth');
-  }, [lastMessageId, lastContentLen, lastTimelineSig, isAtBottom, scrollToBottom]);
+  }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, isAtBottom, scrollToBottom]);
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -297,25 +306,36 @@ export function MessageList({
                   ?? inferDurationMs(previousUserCreatedAt, message.createdAt);
 
               return (
-                <AssistantMessage
-                  key={message.id}
-                  message={message}
-                  isStreaming={isStreamingTail}
-                  agents={agents}
-                  chats={chats}
-                  chatId={chatId}
-                  currentAgent={currentAgent}
-                  executedActions={actions}
-                  timeline={turnTimeline}
-                  orchestrationChildren={childList}
-                  currentRound={isStreamingTail ? currentRound : undefined}
-                  isPlanMode={isPlanMode}
-                  onRegenerate={onRegenerate}
-                  startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
-                  durationMs={durationMs}
-                  turnFiles={turnFiles}
-                  onShare={message.id === lastAssistantId ? onShare : undefined}
-                />
+                <div key={message.id}>
+                  <AssistantMessage
+                    message={message}
+                    isStreaming={isStreamingTail}
+                    agents={agents}
+                    chats={chats}
+                    chatId={chatId}
+                    currentAgent={currentAgent}
+                    executedActions={actions}
+                    timeline={turnTimeline}
+                    orchestrationChildren={childList}
+                    currentRound={isStreamingTail ? currentRound : undefined}
+                    isPlanMode={isPlanMode}
+                    onRegenerate={onRegenerate}
+                    startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
+                    durationMs={durationMs}
+                    turnFiles={turnFiles}
+                    onShare={message.id === lastAssistantId ? onShare : undefined}
+                  />
+                  {!isStreaming &&
+                  message.id === lastAssistantId &&
+                  suggestedReplies &&
+                  suggestedReplies.length > 0 &&
+                  onSelectSuggestion ? (
+                    <SuggestedReplies
+                      suggestions={suggestedReplies}
+                      onSelect={onSelectSuggestion}
+                    />
+                  ) : null}
+                </div>
               );
             })}
             {/* W7-1: 中断提示卡在消息列尾部、与最后一条用户消息同列——

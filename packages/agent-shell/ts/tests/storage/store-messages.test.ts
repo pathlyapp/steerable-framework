@@ -42,6 +42,29 @@ describe('LocalStore / 消息写入与读取', () => {
     expect(msg.messageMetadata).toBe(meta);
   });
 
+  it('patchMessageMetadata 浅合并 JSON，损坏元数据从空对象重写', () => {
+    const { store } = createTestStore(LocalStore);
+    const chat = store.createChat('x');
+    const msg = store.addMessage(
+      chat.id,
+      'assistant',
+      '答',
+      JSON.stringify({ completionStatus: 'completed' }),
+    );
+    const patched = store.patchMessageMetadata(chat.id, msg.id, {
+      suggestedReplies: ['a', 'b', 'c'],
+    });
+    expect(JSON.parse(patched!.messageMetadata!)).toEqual({
+      completionStatus: 'completed',
+      suggestedReplies: ['a', 'b', 'c'],
+    });
+    expect(store.patchMessageMetadata(chat.id, 'ghost', { x: 1 })).toBeNull();
+
+    const broken = store.addMessage(chat.id, 'assistant', '坏', 'not-json');
+    const rewritten = store.patchMessageMetadata(chat.id, broken.id, { suggestedReplies: ['x'] });
+    expect(JSON.parse(rewritten!.messageMetadata!)).toEqual({ suggestedReplies: ['x'] });
+  });
+
   it('addMessage 刷新所属会话的 updated_at', () => {
     vi.useFakeTimers();
     const { store } = createTestStore(LocalStore);

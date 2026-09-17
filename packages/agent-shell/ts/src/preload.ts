@@ -130,6 +130,39 @@ const electronAPI = {
     };
   },
   /**
+   * 回合追问建议就绪。Backend 在助手回复完成后 fire-and-forget 生成 3 条
+   * 下一轮用户输入；启发式兜底会立刻推一次，LLM 成功后再替换。返回 unsubscribe。
+   */
+  onSuggestedReplies: (
+    callback: (payload: {
+      chatId: string;
+      messageId: string;
+      suggestions: string[];
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: { chatId?: string; messageId?: string; suggestions?: unknown },
+    ) => {
+      if (
+        typeof payload?.chatId === 'string' &&
+        typeof payload?.messageId === 'string' &&
+        Array.isArray(payload.suggestions) &&
+        payload.suggestions.every((item) => typeof item === 'string')
+      ) {
+        callback({
+          chatId: payload.chatId,
+          messageId: payload.messageId,
+          suggestions: payload.suggestions,
+        });
+      }
+    };
+    ipcRenderer.on('suggested-replies', handler);
+    return () => {
+      ipcRenderer.removeListener('suggested-replies', handler);
+    };
+  },
+  /**
    * 会话补建通知：Backend 在向本地不存在的 chatId 首次发送时按 URL 里的 id
    * 现场补建会话，并广播 `chat-created`（{chatId, agentId}）。返回 unsubscribe
    * （多处订阅用 add/remove 配对）。

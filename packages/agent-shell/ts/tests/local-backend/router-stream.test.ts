@@ -941,6 +941,111 @@ describe('后台标题生成', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 后台追问建议（WorkBuddy 式 3 条下一轮输入）
+// ---------------------------------------------------------------------------
+
+describe('后台追问建议', () => {
+  it('完成回合先广播启发式兜底，LLM 成功后再替换', async () => {
+    const chat = seedChat();
+    installStream((opts) => opts.onText('PPT 已生成'));
+    let finishLlm: (value: {
+      suggestions: string[];
+      usedFallback: boolean;
+    }) => void = () => {};
+    h.generateSuggestedReplies.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishLlm = resolve;
+        }),
+    );
+    const { broadcast, calls } = makeBroadcast();
+    await makeRouter({ broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '制作自我介绍ppt' } },
+      makeEmitCapture().emit,
+    );
+
+    const assistant = h.store.listMessages(chat.id, 10).find((m) => m.role === 'assistant')!;
+    expect(h.fallbackSuggestedReplies).toHaveBeenCalledWith('制作自我介绍ppt', 'PPT 已生成');
+    expect(calls).toContainEqual({
+      event: 'suggested-replies',
+      payload: {
+        chatId: chat.id,
+        messageId: assistant.id,
+        suggestions: ['兜底-1', '兜底-2', '兜底-3'],
+      },
+    });
+    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
+      suggestedReplies: ['兜底-1', '兜底-2', '兜底-3'],
+    });
+
+    finishLlm({
+      suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+      usedFallback: false,
+    });
+    await vi.waitFor(() => {
+      expect(calls).toContainEqual({
+        event: 'suggested-replies',
+        payload: {
+          chatId: chat.id,
+          messageId: assistant.id,
+          suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+        },
+      });
+    });
+    expect(JSON.parse(h.store.getMessage(chat.id, assistant.id)!.messageMetadata!)).toMatchObject({
+      suggestedReplies: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+    });
+  });
+
+  it('LLM 走兜底时不发第二次广播', async () => {
+    h.generateSuggestedReplies.mockResolvedValue({
+      suggestions: ['兜底-1', '兜底-2', '兜底-3'],
+      usedFallback: true,
+    });
+    const chat = seedChat();
+    installStream((opts) => opts.onText('回答'));
+    const { broadcast, calls } = makeBroadcast();
+    await makeRouter({ broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '你好' } },
+      makeEmitCapture().emit,
+    );
+    await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1);
+  });
+
+  it('取消 / 失败 / 空回复不生成建议', async () => {
+    const cancelled = seedChat();
+    installStream(() => {
+      throw new DOMException('aborted', 'AbortError');
+    });
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${cancelled.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+
+    h.fallbackSuggestedReplies.mockClear();
+    const failed = seedChat();
+    installStream(() => {}, { status: 'failed', reason: 'HTTP 401' });
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${failed.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+
+    h.fallbackSuggestedReplies.mockClear();
+    const empty = seedChat();
+    installStream(() => {});
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${empty.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 回合产物文件列表（turn_files）
 // ---------------------------------------------------------------------------
 

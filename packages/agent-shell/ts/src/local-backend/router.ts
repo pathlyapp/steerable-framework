@@ -56,6 +56,10 @@ import { parseUserMessageTriggers } from './message-triggers.js';
 import { findSkill, getUserSkillsDir, loadSkills, classifySkillOrigin, listSkillRoots } from './skill-loader.js';
 import { installSkillFromDirectory } from './skill-install.js';
 import { generateChatTitle } from './ai-title.js';
+import {
+  fallbackSuggestedReplies,
+  generateSuggestedReplies,
+} from './ai-suggestions.js';
 import { detectDeferredExecution } from './deferred-detector.js';
 import {
   formatHistoryForSummary,
@@ -3494,7 +3498,64 @@ export class LocalBackendRouter {
     emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
     emit('data: [DONE]\n\n');
     this.runTitleGenInBackground(chatId, shouldGenerateTitle, firstUserMessageForTitle);
+    this.runSuggestedRepliesInBackground({
+      chatId,
+      messageId: assistant.id,
+      userText: firstUserMessageForTitle,
+      assistantText,
+      completionStatus,
+    });
     return { status: 200 };
+  }
+
+  /**
+   * 回合结束后生成 3 条下一轮用户输入建议。先同步推启发式兜底（芯片立刻出现），
+   * 再 fire-and-forget 跑 LLM，成功则替换。走 broadcast 而不是 SSE：`[DONE]`
+   * 之后渲染端已经不再监听这条流。
+   */
+  private runSuggestedRepliesInBackground(args: {
+    chatId: string;
+    messageId: string;
+    userText: string;
+    assistantText: string;
+    completionStatus: string;
+  }): void {
+    const { chatId, messageId, userText, assistantText, completionStatus } = args;
+    if (completionStatus === 'cancelled' || completionStatus === 'failed') return;
+    if (!assistantText.trim()) return;
+
+    const fallback = fallbackSuggestedReplies(userText, assistantText);
+    this.publishSuggestedReplies(chatId, messageId, fallback);
+
+    void (async () => {
+      try {
+        const result = await generateSuggestedReplies(userText, assistantText, {
+          perAttemptTimeoutMs: 60_000,
+        });
+        if (result.usedFallback) return;
+        const same =
+          result.suggestions.length === fallback.length &&
+          result.suggestions.every((item, i) => item === fallback[i]);
+        if (same) return;
+        this.publishSuggestedReplies(chatId, messageId, result.suggestions);
+      } catch (err) {
+        console.warn('[local-backend] suggested-replies failed', { chatId, err });
+      }
+    })();
+  }
+
+  private publishSuggestedReplies(
+    chatId: string,
+    messageId: string,
+    suggestions: string[],
+  ): void {
+    if (suggestions.length === 0) return;
+    try {
+      localStore.patchMessageMetadata(chatId, messageId, { suggestedReplies: suggestions });
+    } catch (err) {
+      console.warn('[local-backend] suggested-replies persist failed', { chatId, messageId, err });
+    }
+    this.broadcast?.('suggested-replies', { chatId, messageId, suggestions });
   }
 
   /**

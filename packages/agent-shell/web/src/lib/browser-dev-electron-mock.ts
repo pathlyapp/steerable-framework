@@ -39,6 +39,10 @@ interface BrowserMockState {
   fixtureMeta: Pick<BrowserDevFixture, 'exportedAt' | 'source'> | null;
 }
 
+const suggestedReplyListeners = new Set<
+  (payload: { chatId: string; messageId: string; suggestions: string[] }) => void
+>();
+
 const USER_ID = 'browser-preview-user';
 const now = new Date();
 
@@ -576,6 +580,7 @@ async function startStream(
           { type: 'text', content: reply },
         ],
         durationMs: 1_200,
+        suggestedReplies: ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'],
       }),
     });
     assistantMessage.createdAt = new Date().toISOString();
@@ -588,6 +593,10 @@ async function startStream(
     pushSse(onEvent, '[DONE]');
     onEvent({ type: 'end', status: 200 });
     state.activeStreams.delete(streamId);
+    const suggestions = ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'];
+    for (const listener of suggestedReplyListeners) {
+      listener({ chatId, messageId: assistantMessage.id, suggestions });
+    }
   }, 440 + chunks.length * 80);
 
   return streamId;
@@ -629,6 +638,12 @@ export function installBrowserDevElectronMock() {
     onMenuOpenTerminal: () => undefined,
     offMenuOpenTerminal: () => undefined,
     onChatTitleUpdated: () => () => undefined,
+    onSuggestedReplies: (callback) => {
+      suggestedReplyListeners.add(callback);
+      return () => {
+        suggestedReplyListeners.delete(callback);
+      };
+    },
   } satisfies ElectronBridge;
 
   console.info(

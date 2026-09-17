@@ -241,6 +241,12 @@ export function createHttpBridge(): ElectronBridge {
     onChatTitleUpdated: (callback) =>
       subscribeChannel<{ chatId: string; title: string }>('chat-title-updated', callback),
 
+    onSuggestedReplies: (callback) =>
+      subscribeChannel<{ chatId: string; messageId: string; suggestions: string[] }>(
+        'suggested-replies',
+        callback,
+      ),
+
     onChatCreated: (callback) =>
       subscribeChannel<{ chatId: string; agentId?: string | null }>('chat-created', callback),
 

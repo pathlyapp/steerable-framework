@@ -146,6 +146,11 @@ export interface LocalChatPanelProps {
   onDismissFinishedTask?: (taskId: string) => void;
   /** 分享当前对话（截图）。落到最近一条助手消息的时间戳行。 */
   onShare?: () => Promise<boolean>;
+  /**
+   * 最近一条助手回复下的下一轮输入建议。点击即作为新用户消息发出。
+   */
+  suggestedReplies?: string[];
+  onSelectSuggestion?: (text: string) => void;
 }
 
 export function LocalChatPanel({
@@ -196,6 +201,8 @@ export function LocalChatPanel({
   onInspectTask,
   onDismissFinishedTask,
   onShare,
+  suggestedReplies,
+  onSelectSuggestion,
 }: LocalChatPanelProps) {
   const [inputValue, setInputValue] = useState('');
   const [files, setFiles] = useState<AttachmentFile[]>([]);
@@ -404,6 +411,8 @@ export function LocalChatPanel({
                 onInspectTask={onInspectTask}
                 onDismissFinishedTask={onDismissFinishedTask}
                 onShare={onShare}
+                suggestedReplies={suggestedReplies}
+                onSelectSuggestion={onSelectSuggestion}
               />
               {inputBanner}
               {chatInputNode}
