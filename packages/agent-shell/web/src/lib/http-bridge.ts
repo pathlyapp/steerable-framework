@@ -289,8 +289,6 @@ export function createHttpBridge(): ElectronBridge {
           'terminal:exit',
           callback,
         ),
-      onReveal: (callback) =>
-        subscribeChannel<{ sessionId: string }>('terminal:reveal', callback),
     },
 
   };

@@ -32,9 +32,8 @@ import {
  *     view stays mounted while the user switches chats. Toggled from the
  *     sidebar 终端 button or Cmd+T (`menu:open-terminal`, subscribed in
  *     AgentSidebar). Open state + width persist to localStorage.
- *   - Auto-reveal: when the agent runs a shell command through the
- *     visible PTY, main broadcasts `terminal:reveal` and this layout
- *     opens the panel (idempotent) so the user watches the agent type.
+ *     Agent shell commands still run in the shared PTY; the panel is not
+ *     auto-opened when that happens.
  *   - Closing the panel only unmounts the xterm VIEW; the PTY session is
  *     a main-process singleton and keeps running. Reopening replays the
  *     output buffer via `terminal:ensure`.
@@ -368,20 +367,6 @@ export function AgentLayout() {
     rightPanelRef.current = 'terminal';
     setRightPanelState('terminal');
     persistRightPanel('terminal');
-  }, [persistRightPanel]);
-
-  // Codex 式 auto-reveal：agent 的命令进入可见 PTY 时，main 广播
-  // `terminal:reveal`，这里自动展开终端面板。幂等——已打开时是 no-op；
-  // 用户手动关掉后，下一条命令会再次拉开（符合"看 agent 打字"的意图）。
-  useEffect(() => {
-    const bridge = getElectronBridge();
-    if (!bridge?.terminal?.onReveal) return;
-    return bridge.terminal.onReveal(() => {
-      setInspectedTask(null);
-      rightPanelRef.current = 'terminal';
-      setRightPanelState('terminal');
-      persistRightPanel('terminal');
-    });
   }, [persistRightPanel]);
 
   // 包槽位的自动展开（如文档包：后端在本轮产出新设计稿时广播包事件）。

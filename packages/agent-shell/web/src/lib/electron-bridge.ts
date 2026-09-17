@@ -230,13 +230,6 @@ export interface ElectronBridge {
         signal: string | null;
       }) => void,
     ) => () => void;
-    /**
-     * agent 命令进入可见 PTY 时由 main 广播（`terminal:reveal`）——渲染端
-     * 据此自动展开内嵌终端面板（Codex 式 auto-reveal）。已打开时是 no-op。
-     */
-    onReveal: (
-      callback: (payload: { sessionId: string }) => void,
-    ) => () => void;
   };
   // 场景包的 invoke 命名空间（如包 preload 贡献的 `<pack>` / `<pack>Mock`）
   // 不进本接口——包用自己的结构化收窄访问器（见各包 web/bridge.ts），

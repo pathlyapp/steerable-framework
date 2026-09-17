@@ -1,8 +1,7 @@
 /**
- * 可见 PTY 执行路由（Codex 式"看 agent 打字"）：shell 命令优先打进共享的
- * 可见终端，多行/heredoc 等 sentinel 抓不住的形态回退 headless。
- * Electron main 与 BS server 共用；`terminal:reveal` 等事件经注入的
- * broadcast 出口（Electron 窗口广播 / BS SSE 总线）。
+ * 可见 PTY 执行路由：shell 命令优先打进共享的可见终端，多行/heredoc 等
+ * sentinel 抓不住的形态回退 headless。Electron main 与 BS server 共用。
+ * 命令进入 PTY 时不通知 renderer 展开面板——终端只由用户手动打开。
  */
 import log from 'electron-log';
 import {
@@ -16,12 +15,9 @@ import {
 } from '../local-executor.js';
 import type { TerminalManager } from '../terminal-manager.js';
 
-export type HostBroadcast = (channel: string, payload: unknown) => void;
-
 export interface VisibleTerminalExecDeps {
   localExecutor: LocalExecutor;
   terminalManager: TerminalManager;
-  broadcast: HostBroadcast;
 }
 
 /**
@@ -46,7 +42,7 @@ export function mapSessionShell(shell: string): LocalExecResult['shell'] {
  * process.
  */
 export function createVisibleTerminalExec(deps: VisibleTerminalExecDeps) {
-  const { localExecutor, terminalManager, broadcast } = deps;
+  const { localExecutor, terminalManager } = deps;
 
   return async function maybeExecInTerminal(req: LocalExecRequest): Promise<LocalExecResult | null> {
     if (req.command) {
@@ -89,9 +85,6 @@ export function createVisibleTerminalExec(deps: VisibleTerminalExecDeps) {
     }
 
     const session = terminalManager.ensurePrimary({ cwd: req.cwd });
-    // Codex 式面板自动展开：命令进入可见 PTY 时通知 renderer 打开内嵌终端
-    // 面板。幂等——面板已打开时 renderer 端是 no-op。
-    broadcast('terminal:reveal', { sessionId: session.id });
     const resolvedShell = mapSessionShell(session.shell);
     // 项目模式（ToolRouter 会把项目根塞进 req.cwd）：可见 PTY 是共享交互
     // 会话，已有 session 不会随 ensurePrimary 改目录——显式 cd 过去。

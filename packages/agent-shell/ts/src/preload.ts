@@ -504,12 +504,6 @@ const electronAPI = {
       ipcRenderer.on('terminal:spawned', fn);
       return () => ipcRenderer.removeListener('terminal:spawned', fn);
     },
-    onReveal: (callback: (payload: { sessionId: string }) => void) => {
-      const fn = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) =>
-        callback(payload);
-      ipcRenderer.on('terminal:reveal', fn);
-      return () => ipcRenderer.removeListener('terminal:reveal', fn);
-    },
   },
 };
 
