@@ -119,7 +119,7 @@ const PPT_OFFER_FALLBACK = ['调整幻灯片的内容和文案', '调整配色�
  */
 export function fallbackSuggestedReplies(userText: string, assistantText: string): string[] {
   const blob = `${userText}\n${assistantText}`;
-  if (/\.pptx\b|幻灯片|演示文稿|\bppt\b/i.test(blob)) {
+  if (/\.pptx\b|幻灯片|演示文稿|\bppt\b/i.test(blob)) { // shell-neutral:allow — Office 扩展名 'ppt'/'.pptx'，不是产品品牌
     if (/修改内容|调整样式/.test(assistantText)) {
       return uniqueThree(PPT_OFFER_FALLBACK, PPT_FALLBACK);
     }
