@@ -37,6 +37,7 @@ describe('createApprovalBridge', () => {
     expect(sent[0].toolName).toBe('local_exec_shell');
     expect(sent[0].mode).toBe('destructive');
     expect(sent[0].requestId).toBeTruthy();
+    expect(bridge.pending()).toEqual(sent);
 
     const ack = bridge.decide({
       requestId: sent[0].requestId,
@@ -44,6 +45,7 @@ describe('createApprovalBridge', () => {
       reason: 'user clicked',
     });
     expect(ack).toEqual({ ok: true });
+    expect(bridge.pending()).toEqual([]);
 
     await expect(pending).resolves.toEqual({
       kind: 'allow_for_session',

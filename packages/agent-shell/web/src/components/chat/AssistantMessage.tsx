@@ -11,6 +11,8 @@ import { getFriendlyDate } from './timestamp';
 import { useCopy } from './useCopy';
 import type { TurnBlock } from './turn-timeline';
 import { TurnProcessGroup } from './TurnProcessGroup';
+import { TurnFilesCard } from './TurnFilesCard';
+import type { TurnFile } from './turn-files';
 
 /**
  * AssistantMessage — Tier-1 port of `deeppath`'s assistant-bubble.
@@ -55,6 +57,11 @@ interface AssistantMessageProps {
    */
   agents: LocalChatAgent[];
   chats?: LocalChat[];
+  /**
+   * 当前对话。正文行内代码里的路径按它绑定的项目根解析相对路径后，
+   * 确认存在的会变成可点击（见 FilePathCode）。
+   */
+  chatId?: string | null;
   /** Active chat-level agent — used as a fallback during streaming. */
   currentAgent: LocalChatAgent | null;
   /**
@@ -91,6 +98,12 @@ interface AssistantMessageProps {
   startedAtMs?: number;
   /** Frozen wall-clock of a finished turn. */
   durationMs?: number;
+  /**
+   * 本回合产生/修改的文件列表（local-backend 回合收尾时收集，经
+   * `turn_files` SSE + messageMetadata.turnFiles 持久化）。渲染在回答
+   * 气泡之下，点击用系统默认应用打开。空/undefined = 不渲染。
+   */
+  turnFiles?: TurnFile[];
   /**
    * 分享当前对话（截图复制到剪贴板）。只传给最近一条助手消息，画在时间戳
    * 行上，跟复制 / 重新生成同一排。
@@ -198,6 +211,7 @@ export function AssistantMessage({
   isStreaming,
   agents,
   chats = [],
+  chatId = null,
   currentAgent,
   executedActions,
   timeline,
@@ -207,6 +221,7 @@ export function AssistantMessage({
   onRegenerate,
   startedAtMs,
   durationMs,
+  turnFiles,
   onShare,
 }: AssistantMessageProps) {
   const content = message.content || '';
@@ -263,6 +278,7 @@ export function AssistantMessage({
             durationMs={durationMs}
             agents={agents}
             chats={chats}
+            chatId={chatId}
             emptyFallback={
               failure ? (
                 <TurnErrorBubble reason={failure.reason} />
@@ -290,7 +306,7 @@ export function AssistantMessage({
             renderAnswer={(block, isLast) => (
               <div className={bubbleClass(isPlanMode)}>
                 <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
-                  <Markdown agents={agents} chats={chats}>{block.content}</Markdown>
+                  <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
                 </div>
                 {isStreaming && isLast && <StreamingCursor />}
               </div>
@@ -312,7 +328,7 @@ export function AssistantMessage({
             {displayContent ? (
               <div className={bubbleClass(isPlanMode)}>
                 <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
-                  <Markdown agents={agents} chats={chats}>{displayContent}</Markdown>
+                  <Markdown agents={agents} chats={chats} chatId={chatId}>{displayContent}</Markdown>
                 </div>
                 {isStreaming && <StreamingCursor />}
               </div>
@@ -337,6 +353,13 @@ export function AssistantMessage({
               </div>
             ) : null}
           </>
+        )}
+        {/* 回合产物文件列表：钉在回答之下、时间戳行之上（Codex 式收尾）。
+            回合收尾才有数据，流式期间天然为空。 */}
+        {!isStreaming && turnFiles && turnFiles.length > 0 && (
+          <div className="mt-1.5">
+            <TurnFilesCard files={turnFiles} />
+          </div>
         )}
         <div className="mt-1 flex items-center gap-2 text-[11px] text-agent-muted-foreground">
           <span>

@@ -241,6 +241,12 @@ export function createHttpBridge(): ElectronBridge {
     onChatTitleUpdated: (callback) =>
       subscribeChannel<{ chatId: string; title: string }>('chat-title-updated', callback),
 
+    onSuggestedReplies: (callback) =>
+      subscribeChannel<{ chatId: string; messageId: string; suggestions: string[] }>(
+        'suggested-replies',
+        callback,
+      ),
+
     onChatCreated: (callback) =>
       subscribeChannel<{ chatId: string; agentId?: string | null }>('chat-created', callback),
 
@@ -268,6 +274,7 @@ export function createHttpBridge(): ElectronBridge {
       decide: async (decision) => {
         await http('POST', '/host/approval/decide', decision);
       },
+      pending: () => http<ApprovalPromptRequest[]>('GET', '/host/approval/pending'),
     },
 
     askUser: {
@@ -276,6 +283,7 @@ export function createHttpBridge(): ElectronBridge {
       answer: async (reply) => {
         await http('POST', '/host/ask-user/answer', reply);
       },
+      pending: () => http<AskUserPromptRequest[]>('GET', '/host/ask-user/pending'),
     },
 
     terminal: {
@@ -289,8 +297,6 @@ export function createHttpBridge(): ElectronBridge {
           'terminal:exit',
           callback,
         ),
-      onReveal: (callback) =>
-        subscribeChannel<{ sessionId: string }>('terminal:reveal', callback),
     },
 
   };

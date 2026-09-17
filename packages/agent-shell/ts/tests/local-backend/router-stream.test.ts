@@ -12,6 +12,9 @@
  * 假实现；不起 HTTP 服务器、不访问网络。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   h,
@@ -934,5 +937,280 @@ describe('后台标题生成', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(h.store.getChat(chat.id)?.title).toBe('用户改的标题');
     expect(calls.filter((c) => c.event === 'chat-title-updated')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 后台追问建议（WorkBuddy 式 3 条下一轮输入）
+// ---------------------------------------------------------------------------
+
+describe('后台追问建议', () => {
+  it('完成回合先广播启发式兜底，LLM 成功后再替换', async () => {
+    const chat = seedChat();
+    installStream((opts) => opts.onText('PPT 已生成'));
+    let finishLlm: (value: {
+      suggestions: string[];
+      usedFallback: boolean;
+    }) => void = () => {};
+    h.generateSuggestedReplies.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishLlm = resolve;
+        }),
+    );
+    const { broadcast, calls } = makeBroadcast();
+    await makeRouter({ broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '制作自我介绍ppt' } },
+      makeEmitCapture().emit,
+    );
+
+    const assistant = h.store.listMessages(chat.id, 10).find((m) => m.role === 'assistant')!;
+    expect(h.fallbackSuggestedReplies).toHaveBeenCalledWith('制作自我介绍ppt', 'PPT 已生成');
+    expect(calls).toContainEqual({
+      event: 'suggested-replies',
+      payload: {
+        chatId: chat.id,
+        messageId: assistant.id,
+        suggestions: ['兜底-1', '兜底-2', '兜底-3'],
+      },
+    });
+    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
+      suggestedReplies: ['兜底-1', '兜底-2', '兜底-3'],
+    });
+
+    finishLlm({
+      suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+      usedFallback: false,
+    });
+    await vi.waitFor(() => {
+      expect(calls).toContainEqual({
+        event: 'suggested-replies',
+        payload: {
+          chatId: chat.id,
+          messageId: assistant.id,
+          suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+        },
+      });
+    });
+    expect(JSON.parse(h.store.getMessage(chat.id, assistant.id)!.messageMetadata!)).toMatchObject({
+      suggestedReplies: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+    });
+  });
+
+  it('LLM 走兜底时不发第二次广播', async () => {
+    h.generateSuggestedReplies.mockResolvedValue({
+      suggestions: ['兜底-1', '兜底-2', '兜底-3'],
+      usedFallback: true,
+    });
+    const chat = seedChat();
+    installStream((opts) => opts.onText('回答'));
+    const { broadcast, calls } = makeBroadcast();
+    await makeRouter({ broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '你好' } },
+      makeEmitCapture().emit,
+    );
+    await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1);
+  });
+
+  it('取消 / 失败 / 空回复不生成建议', async () => {
+    const cancelled = seedChat();
+    installStream(() => {
+      throw new DOMException('aborted', 'AbortError');
+    });
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${cancelled.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+
+    h.fallbackSuggestedReplies.mockClear();
+    const failed = seedChat();
+    installStream(() => {}, { status: 'failed', reason: 'HTTP 401' });
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${failed.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+
+    h.fallbackSuggestedReplies.mockClear();
+    const empty = seedChat();
+    installStream(() => {});
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${empty.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 回合产物文件列表（turn_files）
+// ---------------------------------------------------------------------------
+
+describe('回合产物文件列表', () => {
+  /** 建一个绑定到真实临时项目目录的会话（扫描根 = 项目根）。 */
+  async function seedProjectChat() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-router-'));
+    const projectRegistry = makeProjectRegistry([
+      { id: 'proj-1', name: '演示项目', folderPath: dir, trusted: true },
+    ]);
+    const chat = h.store.createChat('新对话', 'agent-a', 'proj-1');
+    return { dir, chat, toolRouter: makeToolRouter({ projectRegistry }) };
+  }
+
+  it('回合内写到项目根的文件经 turn_files 事件下发（先于 message_id）并落 metadata', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream(async (opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_exec_shell', arguments: { command: 'gen ppt' } });
+        // 脚本间接产物：不经写工具参数，只能靠工作区扫描发现。
+        await fs.writeFile(path.join(dir, '自我介绍.pptx'), 'ppt-bytes');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_exec_shell',
+          arguments: { command: 'gen ppt' },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('PPT 已生成');
+      });
+      const cap = makeEmitCapture();
+      const res = await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '做个 PPT' } },
+        cap.emit,
+      );
+      expect(res.status).toBe(200);
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string; kind: string; size: number }> }).files;
+      expect(files).toEqual([
+        { path: path.join(dir, '自我介绍.pptx'), kind: expect.stringMatching(/^(created|modified)$/), size: 9 },
+      ]);
+
+      // 顺序约定：turn_files 在 message_id 之前（前端按 message_id 归档本轮队列）。
+      const types = cap
+        .events()
+        .map((c) => (typeof c.data === 'object' && c.data !== null ? (c.data as { type?: string }).type : null));
+      expect(types.indexOf('turn_files')).toBeGreaterThanOrEqual(0);
+      expect(types.indexOf('turn_files')).toBeLessThan(types.indexOf('message_id'));
+
+      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.turnFiles).toHaveLength(1);
+      expect(metadata.turnFiles[0].path).toBe(path.join(dir, '自我介绍.pptx'));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('写工具落到项目根之外的路径经参数并集进入列表', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-outside-'));
+    try {
+      const outsideFile = path.join(outside, 'report.md');
+      installStream(async (opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_write_file', arguments: { path: outsideFile } });
+        await fs.writeFile(outsideFile, '# 报告');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_write_file',
+          arguments: { path: outsideFile },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('写好了');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '写报告' } },
+        cap.emit,
+      );
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string }> }).files;
+      expect(files.map((f) => f.path)).toEqual([outsideFile]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('回合没有产物时不发 turn_files，metadata 不带 turnFiles', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream((opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_read_file', arguments: { path: '/etc/hosts' } });
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_read_file',
+          arguments: { path: '/etc/hosts' },
+          result: { success: true, content: 'hosts' },
+          success: true,
+        });
+        opts.onText('读完了');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '读一下' } },
+        cap.emit,
+      );
+
+      expect(cap.byType('turn_files')).toHaveLength(0);
+      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.turnFiles).toBeUndefined();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('未绑定项目的会话没有扫描根，不产事件', async () => {
+    const chat = seedChat();
+    installStream((opts) => opts.onText('纯聊天'));
+    const cap = makeEmitCapture();
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      cap.emit,
+    );
+    expect(cap.byType('turn_files')).toHaveLength(0);
+  });
+
+  it('未绑定项目的会话：exec cwd 浅扫描 + 命令文本路径字面量捕获脚本产物', async () => {
+    // 无项目对话里 exec 的 cwd 与脚本 save 路径都不在任何递归根里——
+    // 工作区扫描覆盖不到，靠 exec 线索兜底（真实场景：脚本在 home 写 PPT）。
+    const chat = seedChat();
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-unbound-'));
+    try {
+      const ppt = path.join(work, '自我介绍_张三.pptx');
+      installStream(async (opts) => {
+        const command = `python3 -c "from pptx import Presentation; prs.save('${ppt}')"`;
+        opts.onToolStart({ id: 'call-1', tool: 'local_exec_shell', arguments: { command, cwd: work } });
+        await fs.writeFile(ppt, 'ppt-bytes');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_exec_shell',
+          arguments: { command, cwd: work },
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('PPT 已生成');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter().handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '创建自我介绍ppt' } },
+        cap.emit,
+      );
+
+      const fileEvents = cap.byType('turn_files');
+      expect(fileEvents).toHaveLength(1);
+      const files = (fileEvents[0].data as { files: Array<{ path: string }> }).files;
+      expect(files.map((f) => f.path)).toEqual([ppt]);
+    } finally {
+      await fs.rm(work, { recursive: true, force: true });
+    }
   });
 });

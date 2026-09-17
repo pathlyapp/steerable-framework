@@ -130,6 +130,39 @@ const electronAPI = {
     };
   },
   /**
+   * 回合追问建议就绪。Backend 在助手回复完成后 fire-and-forget 生成 3 条
+   * 下一轮用户输入；启发式兜底会立刻推一次，LLM 成功后再替换。返回 unsubscribe。
+   */
+  onSuggestedReplies: (
+    callback: (payload: {
+      chatId: string;
+      messageId: string;
+      suggestions: string[];
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: { chatId?: string; messageId?: string; suggestions?: unknown },
+    ) => {
+      if (
+        typeof payload?.chatId === 'string' &&
+        typeof payload?.messageId === 'string' &&
+        Array.isArray(payload.suggestions) &&
+        payload.suggestions.every((item) => typeof item === 'string')
+      ) {
+        callback({
+          chatId: payload.chatId,
+          messageId: payload.messageId,
+          suggestions: payload.suggestions,
+        });
+      }
+    };
+    ipcRenderer.on('suggested-replies', handler);
+    return () => {
+      ipcRenderer.removeListener('suggested-replies', handler);
+    };
+  },
+  /**
    * 会话补建通知：Backend 在向本地不存在的 chatId 首次发送时按 URL 里的 id
    * 现场补建会话，并广播 `chat-created`（{chatId, agentId}）。返回 unsubscribe
    * （多处订阅用 add/remove 配对）。
@@ -216,9 +249,9 @@ const electronAPI = {
   },
   /**
    * W4-1 审批代数：sidecar 的 ApprovalExecutor 经反向通道请示，主进程把
-   * 请求广播到 renderer（approval:request），审批弹窗应答后走
-   * approval:decide 回到主进程。订阅返回 unsubscribe；同一时刻只有一个
-   * 弹窗监听者（AgentPage 挂载的 ApprovalModalHost）。
+   * 请求广播到 renderer（approval:request），输入区审批菜单应答后走
+   * approval:decide 回到主进程。pending 供刷新后的 renderer 恢复仍在等待
+   * 的请求。
    */
   approval: {
     onRequest: (
@@ -256,12 +289,24 @@ const electronAPI = {
     }): Promise<void> => {
       await ipcRenderer.invoke('approval:decide', decision);
     },
+    pending: async (): Promise<
+      Array<{
+        requestId: string;
+        toolName: string;
+        arguments: Record<string, unknown>;
+        mode: string;
+        category: string;
+        round: number;
+      }>
+    > => {
+      return await ipcRenderer.invoke('approval:pending');
+    },
   },
   /**
    * W8 结构化提问：sidecar 的 ask_user 工具经反向通道请示，主进程把
    * 请求广播到 renderer（ask-user:request），问题卡片应答后走
-   * ask-user:answer 回到主进程。订阅返回 unsubscribe；同一时刻只有一个
-   * 卡片监听者（AgentLayout 挂载的 AskUserModalHost）。
+   * ask-user:answer 回到主进程。pending 供刷新后的 renderer 恢复仍在等待
+   * 的请求。
    */
   askUser: {
     onRequest: (
@@ -287,6 +332,15 @@ const electronAPI = {
       answers: Record<string, string | string[]>;
     }): Promise<void> => {
       await ipcRenderer.invoke('ask-user:answer', reply);
+    },
+    pending: async (): Promise<
+      Array<{
+        requestId: string;
+        intro: string;
+        questions: Array<Record<string, unknown>>;
+      }>
+    > => {
+      return await ipcRenderer.invoke('ask-user:pending');
     },
   },
   local: {
@@ -503,12 +557,6 @@ const electronAPI = {
       const fn = (_event: Electron.IpcRendererEvent, session: TerminalSession) => callback(session);
       ipcRenderer.on('terminal:spawned', fn);
       return () => ipcRenderer.removeListener('terminal:spawned', fn);
-    },
-    onReveal: (callback: (payload: { sessionId: string }) => void) => {
-      const fn = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) =>
-        callback(payload);
-      ipcRenderer.on('terminal:reveal', fn);
-      return () => ipcRenderer.removeListener('terminal:reveal', fn);
     },
   },
 };

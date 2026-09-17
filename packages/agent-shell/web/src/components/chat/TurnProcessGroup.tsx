@@ -60,11 +60,13 @@ function ProcessBlocks({
   isStreaming,
   agents,
   chats,
+  chatId,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
   agents: LocalChatAgent[];
   chats: LocalChat[];
+  chatId?: string | null;
 }) {
   const lastIndex = blocks.length - 1;
   return (
@@ -77,7 +79,7 @@ function ProcessBlocks({
               key={`reasoning-${index}`}
               className="text-xs leading-relaxed text-agent-muted-foreground"
             >
-              <Markdown agents={agents} chats={chats}>{block.content}</Markdown>
+              <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
               {isStreaming && isLast && (
                 <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
               )}
@@ -92,7 +94,7 @@ function ProcessBlocks({
             key={`text-${index}`}
             className="markdown-content text-xs leading-relaxed text-agent-muted-foreground"
           >
-            <Markdown agents={agents} chats={chats}>{block.content}</Markdown>
+            <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
           </div>
         );
       })}
@@ -105,6 +107,7 @@ export function TurnProcessGroup({
   isStreaming,
   agents,
   chats,
+  chatId,
   emptyFallback,
   streamingHint,
   startedAtMs,
@@ -115,6 +118,7 @@ export function TurnProcessGroup({
   isStreaming: boolean;
   agents: LocalChatAgent[];
   chats: LocalChat[];
+  chatId?: string | null;
   emptyFallback: ReactNode;
   /** Shown while streaming after a tools row and before the summary lands. */
   streamingHint?: ReactNode;
@@ -180,6 +184,7 @@ export function TurnProcessGroup({
           isStreaming={isStreaming && answer.length === 0}
           agents={agents}
           chats={chats}
+          chatId={chatId}
         />
       )}
       {showStreamingHint ? streamingHint : null}

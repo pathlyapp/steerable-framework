@@ -239,6 +239,32 @@ class FakeLocalStore {
     return record;
   }
 
+  getMessage(chatId: string, messageId: string): ChatMessageRecord | null {
+    return this.state.messages.find((m) => m.chatId === chatId && m.id === messageId) ?? null;
+  }
+
+  patchMessageMetadata(
+    chatId: string,
+    messageId: string,
+    patch: Record<string, unknown>,
+  ): ChatMessageRecord | null {
+    const msg = this.getMessage(chatId, messageId);
+    if (!msg) return null;
+    let current: Record<string, unknown> = {};
+    if (msg.messageMetadata) {
+      try {
+        const parsed = JSON.parse(msg.messageMetadata) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        current = {};
+      }
+    }
+    msg.messageMetadata = JSON.stringify({ ...current, ...patch });
+    return msg;
+  }
+
   deleteMessagesFrom(chatId: string, messageId: string): number {
     const target = this.state.messages.find((m) => m.chatId === chatId && m.id === messageId);
     if (!target) return 0;
@@ -467,6 +493,11 @@ const harness = vi.hoisted(() => {
     findSkill: vi.fn(),
     installSkillFromDirectory: vi.fn(() => ({ name: 'imported-skill', dest: '/tmp/dest' })),
     generateChatTitle: vi.fn(async () => ({ title: '生成的标题', usedFallback: false })),
+    generateSuggestedReplies: vi.fn(async () => ({
+      suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+      usedFallback: false,
+    })),
+    fallbackSuggestedReplies: vi.fn(() => ['兜底-1', '兜底-2', '兜底-3']),
     diagnoseLlmConnection: vi.fn(async () => ({ ok: true, steps: [] })),
     parseImageAttachments: vi.fn((value: unknown) => (Array.isArray(value) ? value : [])),
     processImageAttachments: vi.fn(() => ({ images: [], notes: [] as string[] })),
@@ -482,6 +513,8 @@ const harness = vi.hoisted(() => {
     buildInsightsExportPayload: vi.fn(() => ({ exported: true })),
     flushInsightsOutbox: vi.fn(async () => ({ sent: 0 })),
     uploadInsightsBundle: vi.fn(async () => true),
+    /** open-path 路由的宿主打开能力（'' = 成功，非空 = 错误消息）。 */
+    shellOpenPath: vi.fn(async (_target: string) => ''),
   };
 });
 
@@ -503,7 +536,10 @@ vi.mock('../../src/llm/index.js', () => ({
   whenSidecarSupervisor: async () => h.pendingSupervisor,
 }));
 
-vi.mock('../../src/runtime.js', () => ({ getAppRootDir: () => '/tmp/app-root' }));
+vi.mock('../../src/runtime.js', () => ({
+  getAppRootDir: () => '/tmp/app-root',
+  shellOpenPath: (target: string) => h.shellOpenPath(target),
+}));
 
 // ToolRouter 仅以类型出现在 router.ts；提供空类避免加载真实模块（它会拖入
 // local-executor / node-pty 等重依赖）。用例一律持有 stub 实例。
@@ -554,6 +590,11 @@ vi.mock('../../src/local-backend/skill-install.js', () => ({
 
 vi.mock('../../src/local-backend/ai-title.js', () => ({
   generateChatTitle: h.generateChatTitle,
+}));
+
+vi.mock('../../src/local-backend/ai-suggestions.js', () => ({
+  generateSuggestedReplies: h.generateSuggestedReplies,
+  fallbackSuggestedReplies: h.fallbackSuggestedReplies,
 }));
 
 vi.mock('../../src/local-backend/llm-diagnose.js', () => ({
@@ -638,6 +679,13 @@ export function resetRouterTestkit(): void {
   h.installSkillFromDirectory.mockReturnValue({ name: 'imported-skill', dest: '/tmp/dest' });
   h.generateChatTitle.mockReset();
   h.generateChatTitle.mockResolvedValue({ title: '生成的标题', usedFallback: false });
+  h.generateSuggestedReplies.mockReset();
+  h.generateSuggestedReplies.mockResolvedValue({
+    suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+    usedFallback: false,
+  });
+  h.fallbackSuggestedReplies.mockReset();
+  h.fallbackSuggestedReplies.mockReturnValue(['兜底-1', '兜底-2', '兜底-3']);
   h.diagnoseLlmConnection.mockReset();
   h.diagnoseLlmConnection.mockResolvedValue({ ok: true, steps: [] });
   h.parseImageAttachments.mockReset();
@@ -657,6 +705,8 @@ export function resetRouterTestkit(): void {
   h.flushInsightsOutbox.mockResolvedValue({ sent: 0 });
   h.uploadInsightsBundle.mockReset();
   h.uploadInsightsBundle.mockResolvedValue(true);
+  h.shellOpenPath.mockReset();
+  h.shellOpenPath.mockResolvedValue('');
 }
 
 // ---------------------------------------------------------------------------

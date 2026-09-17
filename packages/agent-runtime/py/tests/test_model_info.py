@@ -222,6 +222,29 @@ def test_builtin_table_is_consistent() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_qwen36_27b_medium_effort_survives_openrouter_empty_catalog_levels() -> None:
+    # Harbor --model openai/qwen/qwen3.6-27b becomes STEERABLE_MODEL
+    # qwen/qwen3.6-27b against OpenRouter. The bundled openrouter/ entry
+    # lists no reasoning_levels; without the hand-owned union, weekly-probe
+    # medium fails loud (EVALS 2.5.22) and the catalog run never thinks.
+    info = resolve_model_info(
+        "qwen/qwen3.6-27b",
+        provider="openai",
+        base_url="https://openrouter.ai/api/v1",
+    )
+    assert "medium" in info.reasoning_levels
+    assert (
+        clamp_reasoning_effort(
+            "qwen/qwen3.6-27b",
+            "medium",
+            provider="openai",
+            base_url="https://openrouter.ai/api/v1",
+            strict=True,
+        )
+        == "medium"
+    )
+
+
 def test_leaf_join_fills_reasoning_levels_for_gateway_namespaced_ids() -> None:
     # The 2.5.22 repro: the gateway's own "openai/" namespace has no catalog
     # entries, so every same-provider tier missed and the env effort was

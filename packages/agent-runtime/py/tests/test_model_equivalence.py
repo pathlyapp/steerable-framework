@@ -66,6 +66,12 @@ EQUIVALENCE_TABLE: tuple[tuple[str, str, str, str], ...] = (
         "register_model_info runtime overrides (W5.2.2)",
     ),
     (
+        "qwen3.6-27b",
+        "openrouter",
+        "qwen/qwen3.6-27b",
+        "",
+    ),
+    (
         "qwen3",
         "ollama",
         "qwen3-32b",

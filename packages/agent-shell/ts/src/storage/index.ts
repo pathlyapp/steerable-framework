@@ -906,6 +906,36 @@ export class LocalStore {
   }
 
   /**
+   * 浅合并助手消息的 JSON metadata（例如回合结束后写入 suggestedReplies）。
+   * 不碰 updated_at：这类补丁不是用户可见的会话活动。
+   * metadata 损坏或非对象时从空对象开始合。
+   */
+  patchMessageMetadata(
+    chatId: string,
+    messageId: string,
+    patch: Record<string, unknown>,
+  ): ChatMessageRecord | null {
+    const msg = this.getMessage(chatId, messageId);
+    if (!msg) return null;
+    let current: Record<string, unknown> = {};
+    if (msg.messageMetadata) {
+      try {
+        const parsed = JSON.parse(msg.messageMetadata) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        current = {};
+      }
+    }
+    const next = JSON.stringify({ ...current, ...patch });
+    this.db
+      .prepare(`UPDATE chat_messages SET message_metadata = ? WHERE id = ? AND chat_id = ?`)
+      .run(next, messageId, chatId);
+    return this.getMessage(chatId, messageId);
+  }
+
+  /**
    * W1.2.1: replace the chat's whole message list with a branch projection.
    * The desktop store is the UI projection of the ACTIVE framework record —
    * switching branches re-projects it. The previous projection is not lost:

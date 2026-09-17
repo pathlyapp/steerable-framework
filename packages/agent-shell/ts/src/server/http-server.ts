@@ -272,10 +272,18 @@ export function createBsServer(deps: BsServerDeps): Server {
       sendJson(res, 200, await approvalBridge.decide(body));
       return;
     }
+    if (method === 'GET' && pathname === '/host/approval/pending') {
+      sendJson(res, 200, approvalBridge.pending());
+      return;
+    }
 
     // ─── ask_user（对齐 ask-user:answer IPC） ───
     if (method === 'POST' && pathname === '/host/ask-user/answer') {
       sendJson(res, 200, askUserBridge.answer(body));
+      return;
+    }
+    if (method === 'GET' && pathname === '/host/ask-user/pending') {
+      sendJson(res, 200, askUserBridge.pending());
       return;
     }
 

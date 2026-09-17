@@ -154,6 +154,17 @@ export interface ElectronBridge {
     callback: (payload: { chatId: string; title: string }) => void,
   ) => () => void;
   /**
+   * 回合追问建议就绪。Backend 在助手回复完成后推 `{chatId, messageId, suggestions}`
+   * （先启发式、后 LLM 替换）。返回解除订阅函数。
+   */
+  onSuggestedReplies?: (
+    callback: (payload: {
+      chatId: string;
+      messageId: string;
+      suggestions: string[];
+    }) => void,
+  ) => () => void;
+  /**
    * 会话补建通知。Backend 在「向一个本地不存在的 chatId 首次发送」时按 URL
    * 里的 id 现场补建会话（见 router.handleStream），随后广播 `chat-created`
    * （{chatId, agentId}）；渲染端据此 refresh 一次侧栏，避免"URL 能聊、列表
@@ -202,6 +213,7 @@ export interface ElectronBridge {
       kind: ApprovalDecisionKind;
       reason?: string;
     }) => Promise<void>;
+    pending: () => Promise<ApprovalPromptRequest[]>;
   };
   /**
    * W8 结构化提问：sidecar ask_user 工具的请示经主进程/BS 服务器广播到
@@ -214,6 +226,7 @@ export interface ElectronBridge {
       requestId: string;
       answers: Record<string, string | string[]>;
     }) => Promise<void>;
+    pending: () => Promise<AskUserPromptRequest[]>;
   };
   terminal?: {
     /** Ensures a session exists (reuses last one if alive). */
@@ -229,13 +242,6 @@ export interface ElectronBridge {
         code: number;
         signal: string | null;
       }) => void,
-    ) => () => void;
-    /**
-     * agent 命令进入可见 PTY 时由 main 广播（`terminal:reveal`）——渲染端
-     * 据此自动展开内嵌终端面板（Codex 式 auto-reveal）。已打开时是 no-op。
-     */
-    onReveal: (
-      callback: (payload: { sessionId: string }) => void,
     ) => () => void;
   };
   // 场景包的 invoke 命名空间（如包 preload 贡献的 `<pack>` / `<pack>Mock`）

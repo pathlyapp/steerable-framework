@@ -42,6 +42,10 @@ import {
   type McpToolItem,
   type SkillItem,
 } from '@/lib/slash-sources';
+import { useAskUserPrompt } from './AskUserPromptProvider';
+import { AskUserQuestionMenu } from './AskUserQuestionMenu';
+import { useApprovalPrompt } from './ApprovalPromptProvider';
+import { ApprovalPromptMenu } from './ApprovalModal';
 import { ExecPolicyPicker } from './ExecPolicyPicker';
 
 export type ChatMode = 'agent' | 'plan';
@@ -704,6 +708,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     },
     ref,
   ) {
+    const askUserPrompt = useAskUserPrompt();
+    const approvalPrompt = useApprovalPrompt();
     const editorRef = useRef<HTMLDivElement>(null);
     const agentMenuRef = useRef<HTMLDivElement>(null);
     const skillOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -731,6 +737,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const compositionEndAtRef = useRef<number>(0);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // 工具栏"空间不足时优先隐藏快捷键提示"的测量 refs，见下方 useLayoutEffect。
+    const toolbarRowRef = useRef<HTMLDivElement>(null);
+    const toolbarLeftRef = useRef<HTMLDivElement>(null);
+    const hintRef = useRef<HTMLDivElement>(null);
+    const sendButtonRef = useRef<HTMLButtonElement>(null);
+    const [hintsSuppressed, setHintsSuppressed] = useState(false);
     const [localFiles, setLocalFiles] = useState<AttachmentFile[]>([]);
     const actualFiles = files ?? localFiles;
     const actualOnFilesChange = onFilesChange ?? setLocalFiles;
@@ -1049,6 +1061,50 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
     }, [isStreaming, onCancel]);
+
+    // 快捷键提示是工具栏里优先级最低的元素：空间不够时第一个隐藏（先于
+    // 左侧选择器截断）。容器查询只看输入盒宽度、看不到左侧内容（模型 id
+    // 长度可变）的实际占用，所以直接测量：左组自然宽度 + 提示 + 发送键
+    // 放不下就收起提示。测量时临时取消左组 flex 收缩并强制显示提示，
+    // 拿到的都是不依赖当前收起状态的自然宽度——结果稳定，不会来回闪烁。
+    useLayoutEffect(() => {
+      const row = toolbarRowRef.current;
+      const left = toolbarLeftRef.current;
+      if (!row || !left) return;
+
+      const check = () => {
+        if (row.clientWidth === 0) return; // 无布局环境（happy-dom）不干预
+        const hint = hintRef.current;
+        const send = sendButtonRef.current;
+        const prevShrink = left.style.flexShrink;
+        left.style.flexShrink = '0';
+        const prevHintDisplay = hint?.style.display ?? '';
+        if (hint) hint.style.display = 'block';
+        const needed =
+          left.getBoundingClientRect().width +
+          (hint?.getBoundingClientRect().width ?? 0) +
+          (send?.getBoundingClientRect().width ?? 0) +
+          16; // gap-2 ×2：左右组之间 + 提示与发送键之间
+        left.style.flexShrink = prevShrink;
+        if (hint) hint.style.display = prevHintDisplay;
+        const available = row.clientWidth - 16; // px-2 两侧
+        const suppress = needed > available + 1;
+        setHintsSuppressed((prev) => (prev === suppress ? prev : suppress));
+      };
+
+      check();
+      const resizeObs = new ResizeObserver(check);
+      resizeObs.observe(row);
+      // 左组内容变化（切换模型/沙箱档、设置齿轮挂载）不改变行宽，
+      // ResizeObserver 观察不到，用 MutationObserver 兜底重新测量。
+      const mutationObs = new MutationObserver(check);
+      mutationObs.observe(left, { childList: true, subtree: true, characterData: true });
+      return () => {
+        resizeObs.disconnect();
+        mutationObs.disconnect();
+      };
+      // isStreaming 切换提示文案（kbd 标签不同、宽度不同），需要重测。
+    }, [isStreaming]);
 
     const trimmed = value.trim();
     const canSend = (trimmed.length > 0 || actualFiles.length > 0) && !disabled && !isStreaming;
@@ -1454,6 +1510,42 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       editorRef.current?.focus();
     };
 
+    if (approvalPrompt?.current) {
+      return (
+        <div className="chat-input-container @container relative px-3 pb-3 pt-1">
+          <ApprovalPromptMenu
+            key={approvalPrompt.current.requestId}
+            request={approvalPrompt.current}
+            pendingCount={approvalPrompt.pendingCount}
+            onDecide={approvalPrompt.decide}
+          />
+        </div>
+      );
+    }
+
+    if (askUserPrompt?.current) {
+      const request = askUserPrompt.current;
+      return (
+        <div
+          className="chat-input-container @container relative px-3 pb-3 pt-1"
+          data-testid="ask-user-composer"
+        >
+          <AskUserQuestionMenu
+            key={request.requestId}
+            intro={request.intro}
+            questions={request.questions}
+            onSubmit={askUserPrompt.answer}
+            onAutoContinue={() => askUserPrompt.answer({})}
+            bottomHint={
+              askUserPrompt.pendingCount > 0
+                ? `还有 ${askUserPrompt.pendingCount} 组问题待回答`
+                : undefined
+            }
+          />
+        </div>
+      );
+    }
+
     return (
       // @container：底栏元素的显隐/宽度用容器查询（@sm = 384px）而不是
       // 视口断点——侧边栏占宽后，视口够宽但输入框本身可能已经很窄。
@@ -1708,11 +1800,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               ))}
             </div>
           )}
-          <div className="flex items-center justify-between gap-2 px-2 pb-2 pt-1">
+          <div
+            ref={toolbarRowRef}
+            className="flex items-center justify-between gap-2 px-2 pb-2 pt-1"
+          >
             {/* Left toolbar: mode + exec sandbox + host extras + settings.
                 Agent picker lives in the meta row above the box, next to
                 the project badge. min-w-0 允许窄屏时胶囊截断收缩。 */}
-            <div className="flex min-w-0 items-center gap-1">
+            <div ref={toolbarLeftRef} className="flex min-w-0 items-center gap-1">
               {mode && onModeChange && (
                 <ModeToggle
                   mode={mode}
@@ -1732,7 +1827,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 type="button"
                 onClick={handlePickFiles}
                 disabled={disabled || isStreaming}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 title="上传文件（可多选）"
                 aria-label="上传文件"
               >
@@ -1752,7 +1847,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
                   title="LLM 设置"
                   aria-label="LLM 设置"
                   data-testid="chat-llm-settings"
@@ -1761,9 +1856,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-2">
-              {/* 快捷键提示只在输入盒足够宽时出现（容器查询，非视口） */}
-              <div className="hidden text-[11px] text-agent-muted-foreground/80 @min-[520px]:block">
+            {/* shrink-0：发送键是固定尺寸圆钮，窄容器下不允许被压扁；
+                收缩量由左侧可截断的选择器吸收。 */}
+            <div className="flex shrink-0 items-center gap-2">
+              {/* 快捷键提示：空间不足时优先隐藏（测量逻辑见上方 effect） */}
+              <div
+                ref={hintRef}
+                className={`${hintsSuppressed ? 'hidden' : 'block'} text-[11px] text-agent-muted-foreground/80`}
+              >
                 {isStreaming ? (
                   <>
                     <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
@@ -1815,15 +1915,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 )}
               </div>
               <button
+                ref={sendButtonRef}
                 type="button"
                 onClick={handleSendClick}
                 disabled={!isStreaming && !canSend}
                 className={
                   isStreaming
-                    ? 'flex h-8 w-8 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
+                    ? 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
                     : canSend
-                      ? 'flex h-8 w-8 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
-                      : 'flex h-8 w-8 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
+                      ? 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
+                      : 'flex h-8 w-8 shrink-0 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
                 }
                 title={
                   isStreaming
@@ -1867,8 +1968,10 @@ function ModeToggle({
   onChange: (mode: ChatMode) => void;
 }) {
   return (
+    // shrink-0：分段控件被 flex 压缩会压扁文字；极窄容器（<@sm）退化为
+    // 纯图标（title 兜底语义），把收缩量让给可截断的选择器。
     <div
-      className="inline-flex h-7 items-center rounded-full border border-agent-border bg-agent-canvas p-0.5"
+      className="inline-flex h-7 shrink-0 items-center rounded-full border border-agent-border bg-agent-canvas p-0.5"
       role="radiogroup"
       aria-label="对话模式"
       data-testid="mode-toggle"
@@ -1889,7 +1992,7 @@ function ModeToggle({
         ].join(' ')}
       >
         <LuInfinity className="h-3.5 w-3.5" />
-        <span>Agent</span>
+        <span className="@max-sm:hidden">Agent</span>
       </button>
       <button
         type="button"
@@ -1907,7 +2010,7 @@ function ModeToggle({
         ].join(' ')}
       >
         <LuListChecks className="h-3.5 w-3.5" />
-        <span>Plan</span>
+        <span className="@max-sm:hidden">Plan</span>
       </button>
     </div>
   );

@@ -148,6 +148,7 @@ export function ChatPanelPreviewPage() {
     currentTurnStartedAtMs?: number;
     durationByMessageId?: Record<string, number>;
     currentRound: number;
+    suggestedReplies?: string[];
   }
   const config = useMemo<SceneConfig>(() => {
     switch (scene) {
@@ -203,6 +204,7 @@ export function ChatPanelPreviewPage() {
           timelineByMsgId: { m2: MOCK_TIMELINE },
           durationByMessageId: { m2: 83_000 },
           currentRound: 1,
+          suggestedReplies: ['修一下失败的断言颜色', '把测试再跑一遍', '解释这次失败的原因'],
         };
     }
   }, [scene]);
@@ -252,6 +254,8 @@ export function ChatPanelPreviewPage() {
           currentTurnStartedAtMs={config.currentTurnStartedAtMs}
           durationByMessageId={config.durationByMessageId}
           currentRound={config.currentRound}
+          suggestedReplies={config.suggestedReplies}
+          onSelectSuggestion={(text) => console.log('[preview] suggestion:', text)}
           onOpenSettings={() =>
             console.log('[preview] open llm settings (noop in harness)')
           }

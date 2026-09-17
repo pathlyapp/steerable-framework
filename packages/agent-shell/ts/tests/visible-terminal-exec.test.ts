@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   detectDangerousCommand: vi.fn(() => null as string | null),
   ensurePrimary: vi.fn(),
   terminalExec: vi.fn(),
-  broadcast: vi.fn(),
   getConfiguredExecTimeoutMs: vi.fn(() => null as number | null),
 }));
 
@@ -39,7 +38,6 @@ function makeExec() {
   const deps = {
     localExecutor: { detectDangerousCommand: mocks.detectDangerousCommand },
     terminalManager: { ensurePrimary: mocks.ensurePrimary, exec: mocks.terminalExec },
-    broadcast: mocks.broadcast,
   };
   return createVisibleTerminalExec(deps as never);
 }
@@ -90,10 +88,9 @@ describe('maybeExecInTerminal · 路由决策', () => {
     expect(mocks.ensurePrimary).not.toHaveBeenCalled();
   });
 
-  it('正常命令：reveal 广播 + 执行 + 结果带真实 shell 枚举', async () => {
+  it('正常命令：执行 + 结果带真实 shell 枚举', async () => {
     const exec = makeExec();
     const result = await exec({ command: 'ls' });
-    expect(mocks.broadcast).toHaveBeenCalledWith('terminal:reveal', { sessionId: 'main' });
     expect(mocks.terminalExec).toHaveBeenCalledWith('main', 'ls', undefined, true);
     expect(result).toMatchObject({ success: true, stdout: 'out', shell: 'zsh' });
   });
