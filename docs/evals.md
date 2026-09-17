@@ -94,7 +94,7 @@ Claude Code × DeepSeek is pulled down by `reasoning_content` / thinking-flag fa
 | ----- | ---- | ------------ | ------------ | --------------- | --- |
 | Steerable | **54/89 = 60.7%** | 256.6 M | $129.67 | $2.40 | [35081136413](https://github.com/pathlyapp/steerable-framework/actions/runs/35081136413) |
 
-Same protocol as Qwen3.8-27B Steerable **61/89 = 68.5%** / $4.12: **−7.8 points**, cheaper list dollars (Alibaba Qwen3.6-27B $0.45 / $2.70 per 1M vs Qwen3.8 $0.425 / $2.55). Cache tokens were 0, so list $ is `input × $0.45 + output × $2.70` per 1M (5.3 M output). The GHA run concluded `failure` because shard 4/49 (`qemu-alpine-ssh`) exited 143 (agent SIGTERM); that trial is one of the 35 fails and the denominator stays 89. Shard 8 retried `mailman` (pass); the token total includes both attempts. Pass/fail ids: [`evals/notes/qwen36-27b-catalog.md`](../evals/notes/qwen36-27b-catalog.md).
+Same protocol as Qwen3.8-27B Steerable **61/89 = 68.5%** / $4.12: **−7.8 points**, cheaper list dollars (Alibaba Qwen3.6-27B $0.45 / $2.70 per 1M vs Qwen3.8 $0.425 / $2.55). Cache tokens were 0, so list $ is `input × $0.45 + output × $2.70` per 1M (5.3 M output). The GHA run concluded `failure` because shard 4/49 (`qemu-alpine-ssh`) exited 143 (agent SIGTERM); that trial is one of the 35 fails and the denominator stays 89. Shard 8 retried `mailman` (pass); the token total includes both attempts. Pass/fail ids: [`evals/notes/qwen36-27b-catalog.md`](https://github.com/pathlyapp/steerable-framework/blob/develop/evals/notes/qwen36-27b-catalog.md).
 
 ## Task stratification at `8e260de`
 
