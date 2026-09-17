@@ -5,8 +5,8 @@
  * 「先建旧文件 → 记下 sinceMs → 再动新文件」排开，mtime 用 appendFile
  * 真实推进（不手设 utimes，避免与 birthtime 语义打架）。
  *
- * kind 标签依赖文件系统 birthtime 支持：支持时新建 = 'created'；不支持
- * （birthtimeMs = 0）时降级为 'modified'——用例按运行环境的能力断言。
+ * kind 标签跟生产代码同一条规则：birthtimeMs >= sinceMs 才是 created。
+ * Linux 常暴露 > 0 但早于 sinceMs 的截断 birthtime，不能只看 birthtimeMs > 0。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
@@ -17,17 +17,17 @@ import { collectTurnFiles } from '../../src/local-backend/turn-files.js';
 
 let root: string;
 
-/** 回合开始时间戳；beforeEach 在建完「旧文件」之前推进，用例各自再定。 */
-async function tick(): Promise<number> {
-  // 拉开一个可分辨的 mtime 间隔（低端文件系统粒度 1ms 起步）。
-  await new Promise((resolve) => setTimeout(resolve, 15));
+/**
+ * 扫描器对 mtime/birthtime 有 1s 容差（Linux 截断）。「旧文件应被排除」
+ * 的用例必须等过这 1s，否则刚写入的旧文件会被容差收进来。
+ */
+async function sinceAfterExisting(): Promise<number> {
+  await new Promise((resolve) => setTimeout(resolve, 1100));
   return Date.now();
 }
 
-/** 该运行环境的文件系统是否暴露可靠 birthtime（决定 kind 断言的期望值）。 */
-async function supportsBirthtime(file: string): Promise<boolean> {
-  const stat = await fs.stat(file);
-  return stat.birthtimeMs > 0;
+function turnStart(): number {
+  return Date.now();
 }
 
 beforeEach(async () => {
@@ -40,7 +40,7 @@ afterEach(async () => {
 
 describe('collectTurnFiles 工作区扫描', () => {
   it('回合内新建的文件被收集，kind 按 birthtime 能力标 created/modified', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const created = path.join(root, '自我介绍.pptx');
     await fs.writeFile(created, 'ppt-bytes');
 
@@ -49,13 +49,14 @@ describe('collectTurnFiles 工作区扫描', () => {
     expect(files).toHaveLength(1);
     expect(files[0].path).toBe(created);
     expect(files[0].size).toBe(9);
-    expect(files[0].kind).toBe((await supportsBirthtime(created)) ? 'created' : 'modified');
+    const stat = await fs.stat(created);
+    expect(files[0].kind).toBe(stat.birthtimeMs >= sinceMs ? 'created' : 'modified');
   });
 
   it('回合前已存在、回合内被修改的文件标 modified', async () => {
     const existing = path.join(root, 'README.md');
     await fs.writeFile(existing, 'old');
-    const sinceMs = await tick();
+    const sinceMs = await sinceAfterExisting();
     await fs.appendFile(existing, '-new');
 
     const files = await collectTurnFiles({ roots: [root], sinceMs });
@@ -67,7 +68,7 @@ describe('collectTurnFiles 工作区扫描', () => {
 
   it('回合前存在且未触碰的文件不出现', async () => {
     await fs.writeFile(path.join(root, 'old.txt'), 'stale');
-    const sinceMs = await tick();
+    const sinceMs = await sinceAfterExisting();
 
     const files = await collectTurnFiles({ roots: [root], sinceMs });
 
@@ -75,7 +76,7 @@ describe('collectTurnFiles 工作区扫描', () => {
   });
 
   it('忽略目录（node_modules / .git / .steerable）里的新文件不出现', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     for (const dir of ['node_modules', '.git', '.steerable']) {
       await fs.mkdir(path.join(root, dir), { recursive: true });
       await fs.writeFile(path.join(root, dir, 'noise.js'), 'x');
@@ -90,7 +91,7 @@ describe('collectTurnFiles 工作区扫描', () => {
   it('不跟随符号链接（指到根外的目录不被扫）', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-outside-'));
     try {
-      const sinceMs = await tick();
+      const sinceMs = turnStart();
       await fs.writeFile(path.join(outside, 'leak.txt'), 'x');
       await fs.symlink(outside, path.join(root, 'linked'));
 
@@ -105,7 +106,7 @@ describe('collectTurnFiles 工作区扫描', () => {
   it('多个根的结果合并并按路径排序', async () => {
     const other = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-pack-'));
     try {
-      const sinceMs = await tick();
+      const sinceMs = turnStart();
       const b = path.join(other, 'b.md');
       const a = path.join(root, 'a.md');
       await fs.writeFile(b, 'b');
@@ -120,7 +121,7 @@ describe('collectTurnFiles 工作区扫描', () => {
   });
 
   it('扫描窗口内被删掉的文件不出现', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const gone = path.join(root, 'gone.txt');
     await fs.writeFile(gone, 'x');
     await fs.rm(gone);
@@ -137,7 +138,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
     const sub = path.join(root, 'project');
     await fs.mkdir(sub);
     const outsideFile = path.join(root, 'downloads-report.pdf');
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     await fs.writeFile(outsideFile, 'pdf');
 
     const files = await collectTurnFiles({
@@ -152,7 +153,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
   });
 
   it('相对路径参数按 projectRoot 解析', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const rel = path.join(root, 'out', 'result.txt');
     await fs.mkdir(path.dirname(rel), { recursive: true });
     await fs.writeFile(rel, 'r');
@@ -170,7 +171,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
   });
 
   it('success === false 的写调用不进列表', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const target = path.join(root, 'failed.txt');
     await fs.writeFile(target, 'partial');
 
@@ -186,7 +187,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
   });
 
   it('只读工具（local_read_file 等）的参数不进列表', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const target = path.join(root, 'read.txt');
     await fs.writeFile(target, 'r');
 
@@ -202,7 +203,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
   });
 
   it('写工具指向的文件已不存在时跳过', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const files = await collectTurnFiles({
       roots: [],
       sinceMs,
@@ -215,7 +216,7 @@ describe('collectTurnFiles 写工具参数并集', () => {
   });
 
   it('扫描与参数并集按路径去重', async () => {
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const target = path.join(root, 'dup.txt');
     await fs.writeFile(target, 'd');
 
@@ -238,7 +239,7 @@ describe('collectTurnFiles exec cwd 浅扫描', () => {
     const work = path.join(root, 'work');
     await fs.mkdir(proj);
     await fs.mkdir(path.join(work, 'sub'), { recursive: true });
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const top = path.join(work, '报告.pptx');
     await fs.writeFile(top, 'ppt');
     await fs.writeFile(path.join(work, 'sub', 'nested.pptx'), 'ppt');
@@ -258,7 +259,7 @@ describe('collectTurnFiles exec cwd 浅扫描', () => {
   it('缺省 cwd + 无项目对话：回落到 home 顶层（无项目 exec 产物最常见的落点）', async () => {
     const home = path.join(root, 'fake-home');
     await fs.mkdir(home);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const ppt = path.join(home, '自我介绍_张三.pptx');
     await fs.writeFile(ppt, 'ppt');
     await fs.writeFile(path.join(home, '.zsh_history'), 'noise');
@@ -278,7 +279,7 @@ describe('collectTurnFiles exec cwd 浅扫描', () => {
   it('缺省 cwd + 有项目：回落到项目根，由递归扫描覆盖（不重复）', async () => {
     const proj = path.join(root, 'project');
     await fs.mkdir(proj);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const out = path.join(proj, 'out.txt');
     await fs.writeFile(out, 'o');
 
@@ -298,7 +299,7 @@ describe('collectTurnFiles exec cwd 浅扫描', () => {
   it('非 exec 工具的 cwd 字段不触发浅扫描', async () => {
     const work = path.join(root, 'work');
     await fs.mkdir(work);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     await fs.writeFile(path.join(work, 'x.txt'), 'x');
 
     const files = await collectTurnFiles({
@@ -320,7 +321,7 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     const elsewhere = path.join(root, 'elsewhere');
     await fs.mkdir(cwd);
     await fs.mkdir(elsewhere);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const ppt = path.join(elsewhere, '自我介绍_张三.pptx');
     await fs.writeFile(ppt, 'ppt');
 
@@ -342,7 +343,7 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
   it('裸路径（shell 重定向）与 run_snippet 的 code 字段都被提取', async () => {
     const cwd = path.join(root, 'cwd');
     await fs.mkdir(cwd);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const csv = path.join(root, 'report.csv');
     const png = path.join(root, 'chart.png');
     await fs.writeFile(csv, 'a,b');
@@ -365,7 +366,7 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     const cwd = path.join(root, 'cwd');
     await fs.mkdir(home);
     await fs.mkdir(cwd);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
     const doc = path.join(home, 'notes.md');
     await fs.writeFile(doc, 'n');
 
@@ -386,7 +387,7 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     await fs.mkdir(cwd);
     const stale = path.join(root, 'stale.pptx');
     await fs.writeFile(stale, 'old');
-    const sinceMs = await tick();
+    const sinceMs = await sinceAfterExisting();
 
     const files = await collectTurnFiles({
       roots: [],
@@ -404,7 +405,7 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     const bundle = path.join(root, 'Demo.app');
     await fs.mkdir(cwd);
     await fs.mkdir(bundle);
-    const sinceMs = await tick();
+    const sinceMs = turnStart();
 
     const files = await collectTurnFiles({
       roots: [],

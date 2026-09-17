@@ -84,6 +84,13 @@ const EXEC_TOOL_NAMES = new Set(['local_exec_shell', 'local_run_snippet']);
 const MAX_PATH_LITERALS_PER_ACTION = 50;
 
 /**
+ * Linux overlay/tmpfs 常把 mtime/birthtime 截到 1s。回合开始后立刻写出的
+ * 产物会 stat 成略早于 sinceMs，被水位线丢掉。1s 容差远小于一轮对话，
+ * 只影响展示列表，允许把回合前 1s 内的文件算进来。
+ */
+const TOUCHED_SLACK_MS = 1000;
+
+/**
  * 引号包裹的绝对路径字面量：python 代码里的 doc.save('/x/a.pdf')、shell
  * 里的 "/x/a.pdf"。要求以 /、~/ 或 Windows 盘符开头、带扩展名结尾。
  * 贪婪匹配到闭引号再回溯到最后一个点——目录名里带点（.venv/python3.11）
@@ -190,7 +197,9 @@ async function statTurnFile(full: string, sinceMs: number): Promise<TurnFile | n
   }
   // 路径字面量可能指到目录（如 xxx.app 包）；产物列表只收文件。
   if (!stat.isFile()) return null;
-  const touched = stat.mtimeMs >= sinceMs || stat.birthtimeMs >= sinceMs;
+  const touched =
+    stat.mtimeMs + TOUCHED_SLACK_MS >= sinceMs ||
+    stat.birthtimeMs + TOUCHED_SLACK_MS >= sinceMs;
   if (!touched) return null;
   return { path: full, kind: kindOf(stat, sinceMs), size: stat.size };
 }
