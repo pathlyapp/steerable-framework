@@ -533,7 +533,7 @@ export class LocalStore {
         icon: 'Cpu',
         color: '#4f46e5',
         description: '默认本地助手，可调用 shell、文件与 MCP 工具。',
-        rolePrompt: '你是本地离线助手，回答时清晰、可执行。',
+        rolePrompt: '你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。',
         forbiddenPrompt: null,
         skillIds: JSON.stringify([]),
         toolPolicy: JSON.stringify({ mode: 'all', tools: [] }),
@@ -548,6 +548,14 @@ export class LocalStore {
       });
     } else {
       this.db.prepare(`UPDATE chat_agents SET name = ? WHERE id = ?`).run('电脑操作员', LOCAL_ASSISTANT_AGENT_ID);
+      const local = this.db
+        .prepare(`SELECT role_prompt FROM chat_agents WHERE id = ?`)
+        .get(LOCAL_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
+      if (local?.role_prompt === '你是本地离线助手，回答时清晰、可执行。') {
+        this.db
+          .prepare(`UPDATE chat_agents SET role_prompt = ? WHERE id = ?`)
+          .run('你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。', LOCAL_ASSISTANT_AGENT_ID);
+      }
     }
 
     const hasAllRound = this.db

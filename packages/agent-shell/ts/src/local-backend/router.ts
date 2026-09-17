@@ -47,6 +47,7 @@ import { buildExecSandbox, parseExecPolicy } from '../sidecar/exec-sandbox.js';
 import { SidecarSupervisor } from '../sidecar/index.js';
 import { diagnoseLlmConnection } from './llm-diagnose.js';
 import {
+  brandSkillVars,
   buildSystemPrompt,
   buildForcedSkillMessage,
   conditionsFromTools,
@@ -249,6 +250,11 @@ interface TurnAgents {
   orderedAgentIds: string[];
   /** 配了 rolePrompt 的智能体，按顺序拼装人设前言。 */
   personaAgents: ChatAgentRecord[];
+  /**
+   * 本轮自称：第一个解析到的智能体显示名。没有绑定/提及智能体时为空，
+   * `{agentName}` 回落产品品牌。
+   */
+  identityName: string | null;
   /** 合并后的技能/工具能力面（多智能体取最宽松）。 */
   capability: AgentCapability;
 }
@@ -2315,7 +2321,7 @@ export class LocalBackendRouter {
    *
    * @param chatId 当前对话 id。
    * @param payload 前端提交的流请求体。
-   * @returns 本轮的智能体顺序、人设智能体，以及合并后的能力面。
+   * @returns 本轮的智能体顺序、人设智能体、自称，以及合并后的能力面。
    */
   private resolveTurnAgents(
     chatId: string,
@@ -2343,8 +2349,10 @@ export class LocalBackendRouter {
     return {
       orderedAgentIds,
       // 能力面来自全部解析到的智能体，人设前言只用配了 rolePrompt 的那些——
-      // 自建智能体可以只勾技能、不写人设。
+      // 自建智能体可以只勾技能、不写人设。自称始终跟第一个解析到的智能体，
+      // 不要求写了人设——否则没 rolePrompt 的角色会回落成产品品牌。
       personaAgents: agents.filter((agent) => Boolean(agent.rolePrompt)),
+      identityName: agents[0]?.name.trim() || null,
       capability: mergeAgentCapabilities(agents),
     };
   }
@@ -2418,7 +2426,7 @@ export class LocalBackendRouter {
 
     const settings = llmService.getSettings();
 
-    const { personaAgents, capability } = turnAgents;
+    const { personaAgents, capability, identityName } = turnAgents;
     let personaPreamble = '';
     if (personaAgents.length === 1) {
       personaPreamble = `【当前角色】${personaAgents[0].name}\n${personaAgents[0].rolePrompt}`;
@@ -2496,6 +2504,7 @@ export class LocalBackendRouter {
         excludeSkillNames,
         pinnedSkillNames: capability.pinnedSkills,
         personaPreamble: effectivePersonaPreamble,
+        identityName,
         realityCheckSuffix: realityCheck,
         forcedMcpTool,
         ignoreConditions: capability.loadAllSkills,
@@ -2574,7 +2583,10 @@ export class LocalBackendRouter {
       const forcedSkill = await findSkill(forcedSkillName, { exclude: forcedSkillExcludes });
       if (forcedSkill) {
         // 场景包的正文占位符变量（如包技能正文里的工作区路径占位符）。
-        finalUserContent = `${buildForcedSkillMessage(forcedSkill, collectPackForcedSkillVars(chatId))}\n\n---\n\n${latestUserMessage}`;
+        finalUserContent = `${buildForcedSkillMessage(forcedSkill, {
+          ...brandSkillVars({ identityName }),
+          ...collectPackForcedSkillVars(chatId),
+        })}\n\n---\n\n${latestUserMessage}`;
       }
     }
 

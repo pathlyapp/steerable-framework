@@ -242,7 +242,7 @@ export function ChatPanelPreviewPage() {
           onCancel={() => {}}
           className="flex-1"
           header={
-            <ChatHeader chat={MOCK_CHAT} agent={MOCK_AGENT} />
+            <ChatHeader chat={MOCK_CHAT} />
           }
           inputPlaceholder="预览模式 — 输入不会真的发送…"
           agents={[MOCK_AGENT]}

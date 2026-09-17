@@ -187,6 +187,40 @@ describe('prompt-builder / 智能体勾选的技能', () => {
   });
 });
 
+describe('prompt-builder / 智能体自称', () => {
+  const IDENTITY = makeSkill({
+    name: 'identity',
+    dirName: '00-identity',
+    priority: 1000,
+    layer: 'eager',
+    content: '你是 **{agentName}**。问你是谁时回答 "{agentName}"。',
+  });
+
+  it('有 identityName 时技能正文 {agentName} 用智能体显示名', async () => {
+    mocks.loadSkills.mockResolvedValue([IDENTITY]);
+    const { prompt } = await buildSystemPrompt({
+      eagerOnly: true,
+      identityName: '电脑操作员',
+    });
+    expect(prompt).toContain('你是 **电脑操作员**');
+    expect(prompt).toContain('回答 "电脑操作员"');
+    expect(prompt).not.toContain('{agentName}');
+  });
+
+  it('没有 identityName 时 {agentName} 回落产品品牌', async () => {
+    mocks.loadSkills.mockResolvedValue([IDENTITY]);
+    const { prompt } = await buildSystemPrompt({ eagerOnly: true });
+    expect(prompt).toContain('你是 **Agent**');
+    expect(prompt).not.toContain('{agentName}');
+  });
+
+  it('没有技能时 fallback 自称也用 identityName', async () => {
+    mocks.loadSkills.mockResolvedValue([]);
+    const { prompt } = await buildSystemPrompt({ identityName: '电脑操作员' });
+    expect(prompt).toContain('你是 电脑操作员');
+  });
+});
+
 describe('prompt-builder / "/技能名" 一次性注入（buildForcedSkillMessage）', () => {
   it('渲染指令头 + 技能正文，不再经过系统提示词', async () => {
     mocks.findSkill.mockResolvedValue(USER);

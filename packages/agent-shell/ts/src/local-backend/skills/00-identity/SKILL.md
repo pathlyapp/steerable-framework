@@ -1,6 +1,6 @@
 ---
 name: identity
-description: Defines the product agent's core role, working environment, and language convention. Always loaded as the foundational skill. Brand placeholders ({agentName}) are rendered from the product-injected brand.
+description: Defines the core role, working environment, and language convention. Always loaded as the foundational skill. {agentName} is the current chat agent display name (product brand if none).
 priority: 1000
 tags: [identity, base]
 ---

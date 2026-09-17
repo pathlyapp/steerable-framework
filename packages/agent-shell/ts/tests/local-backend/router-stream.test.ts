@@ -702,6 +702,23 @@ describe('流式回合的提示词与工具面', () => {
     );
     expect(seen[0].systemPrompt).toContain('【当前角色】审稿人');
     expect(seen[0].systemPrompt).toContain('你是严格的审稿人');
+    expect(seen[0].systemPrompt).toContain('你是 审稿人');
+  });
+
+  it('绑定智能体即使没有 rolePrompt，系统提示词自称也用智能体显示名', async () => {
+    const agent = h.store.createChatAgent({ name: '电脑操作员' });
+    const chat = h.store.createChat('对话', agent.id, null);
+    const { seen } = installStream(() => {});
+    await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { message: '你是谁' },
+      },
+      makeEmitCapture().emit,
+    );
+    expect(seen[0].systemPrompt).toContain('你是 电脑操作员');
+    expect(seen[0].systemPrompt).not.toContain('【当前角色】');
   });
 
   it('绑定项目的会话：系统提示词追加项目围栏；信任项目时注入规则文件', async () => {

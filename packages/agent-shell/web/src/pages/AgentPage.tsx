@@ -1008,7 +1008,6 @@ function AgentChatView({
         header={
           <ChatHeader
             chat={chat}
-            agent={agent}
             onBranchSwitched={isElectron() ? onBranchTick : undefined}
             onInspectTask={ctx.inspectTask}
             tasks={tasks}

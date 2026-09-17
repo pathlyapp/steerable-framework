@@ -25,6 +25,7 @@ describe('LocalStore / 内置智能体种子', () => {
     const local = store.getChatAgent('local-assistant');
     expect(local).toMatchObject({
       name: '电脑操作员',
+      rolePrompt: '你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。',
       isBuiltin: true,
       isArchived: false,
       loadAllSkills: false,

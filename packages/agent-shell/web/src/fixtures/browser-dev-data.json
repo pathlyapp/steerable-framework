@@ -10,7 +10,7 @@
       "icon": "Cpu",
       "color": "#4f46e5",
       "description": "默认本地助手，可调用 shell、文件与 MCP 工具。",
-      "rolePrompt": "你是本地离线助手，回答时清晰、可执行。",
+      "rolePrompt": "你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。",
       "forbiddenPrompt": null,
       "skillIds": [],
       "toolPolicy": {

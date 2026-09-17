@@ -9,7 +9,8 @@
  * 扫描面：ts/src 与 web/src 的 .ts/.tsx/.json（含浏览器预览夹具
  * browser-dev-data.json——它会被打进官网 demo，同样面向公众），外加
  * ts/src/local-backend/skills 下的 .md（技能正文是模型可见文案，
- * 同样必须中立——身份技能用 {agentName} 占位符由产品品牌渲染）。
+ * 同样必须中立——身份技能用 {agentName} 占位符，有绑定智能体时渲染
+ * 智能体显示名，否则回落产品品牌）。
  *
  * 豁免规则（刻意从简，能 reword 就不要豁免）：
  *  - 行内注释 `shell-neutral:allow`：线协议常量等真正无法中性化的点
