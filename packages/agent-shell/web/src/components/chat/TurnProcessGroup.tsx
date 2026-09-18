@@ -94,7 +94,8 @@ function ThinkingPeek({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const reasoning = blocks.filter(
-    (block) => block.type === 'reasoning' && block.content.trim().length > 0,
+    (block): block is Extract<TurnBlock, { type: 'reasoning' }> =>
+      block.type === 'reasoning' && block.content.trim().length > 0,
   );
   const sig = reasoning.map((block) => block.content.length).join(',');
   useLayoutEffect(() => {
