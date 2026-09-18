@@ -30,14 +30,19 @@ import { LocalBackendRouter, userFacingCoreLoopFailure } from '../../src/local-b
 import { SidecarSupervisor } from '../../src/sidecar/index.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import type { TaskService } from '../../src/local-backend/task-service.js';
+import { registerAuthProvider, type Principal } from '../../src/auth/index.js';
+import type { ScopedStore } from '../../src/storage/scoped-store.js';
 
 function makeRouter(options: {
   toolRouter?: Record<string, unknown>;
   broadcast?: ReturnType<typeof makeBroadcast>['broadcast'];
   taskService?: Partial<TaskService>;
+  resolveStore?: (principal: Principal | undefined) => ScopedStore;
 } = {}): LocalBackendRouter {
   const toolRouter = (options.toolRouter ?? makeToolRouter()) as unknown as ToolRouter;
   return new LocalBackendRouter(toolRouter, {
+    store: h.store,
+    resolveStore: options.resolveStore,
     broadcast: options.broadcast,
     taskService: options.taskService as TaskService | undefined,
   });
@@ -86,6 +91,61 @@ describe('本地身份与虚拟 Agent', () => {
     expect(user.isAdmin).toBe(true);
     expect(user.membership.isPro).toBe(true);
     expect(user.settings.timezone).toBe('Asia/Shanghai');
+  });
+
+  it('GET /api/v2/auth/me 由已注册 provider 描述请求 principal', async () => {
+    const describeSelf = vi.fn().mockResolvedValue({ id: 'team-user', source: 'provider' });
+    const dispose = registerAuthProvider({
+      id: 'test-provider',
+      authenticate: vi.fn(),
+      describeSelf,
+    });
+    const principal = {
+      id: 'user-1',
+      tenantId: 'tenant-1',
+      displayName: 'Team User',
+      email: 'user@example.test',
+      roles: ['member'],
+      isAdmin: false,
+    };
+    try {
+      const router = makeRouter();
+      const res = await router.handle({
+        method: 'GET',
+        path: '/api/v2/auth/me',
+        principal,
+      });
+      expect(res).toEqual({
+        status: 200,
+        data: { id: 'team-user', source: 'provider' },
+      });
+      expect(describeSelf).toHaveBeenCalledWith(principal);
+      expect(
+        await router.handle({ method: 'GET', path: '/api/v2/auth/me' }),
+      ).toEqual({ status: 401, data: { detail: 'unauthorized' } });
+    } finally {
+      dispose();
+    }
+  });
+
+  it('请求 principal 选择对应的 scoped store', async () => {
+    const resolveStore = vi.fn(() => h.store);
+    const principal = {
+      id: 'user-1',
+      tenantId: 'tenant-1',
+      displayName: 'Team User',
+      email: null,
+      roles: ['member'],
+      isAdmin: false,
+    };
+
+    await makeRouter({ resolveStore }).handle({
+      method: 'GET',
+      path: '/api/v2/chats',
+      principal,
+    });
+
+    expect(resolveStore).toHaveBeenCalledWith(principal);
   });
 
   it('GET /api/v2/agents 返回永远在线的本地 Agent', async () => {
@@ -156,8 +216,8 @@ describe('本地身份与虚拟 Agent', () => {
 
 describe('会话路由', () => {
   it('GET /api/v2/chats 返回分页形状；非法 page/limit 回落默认值', async () => {
-    h.store.createChat('对话A', 'agent-a', null);
-    h.store.createChat('对话B', 'agent-a', null);
+    await h.store.createChat('对话A', 'agent-a', null);
+    await h.store.createChat('对话B', 'agent-a', null);
     const res = await makeRouter().handle({
       method: 'GET',
       path: '/api/v2/chats?page=abc&limit=',
@@ -176,7 +236,7 @@ describe('会话路由', () => {
   });
 
   it('GET /api/v2/chats 分页：totalPages 与 hasMore 按 limit 计算', async () => {
-    for (let i = 0; i < 3; i += 1) h.store.createChat(`对话${i}`, 'agent-a', null);
+    for (let i = 0; i < 3; i += 1) await h.store.createChat(`对话${i}`, 'agent-a', null);
     const res = await makeRouter().handle({ method: 'GET', path: '/api/v2/chats?page=1&limit=2' });
     const data = res.data as Record<string, any>;
     expect(data.chats).toHaveLength(2);
@@ -190,7 +250,7 @@ describe('会话路由', () => {
     expect(data.success).toBe(true);
     expect(data.projectId).toBeNull();
     expect(data.isTemporary).toBe(false);
-    expect(h.store.getChat(data.chatId)).not.toBeNull();
+    expect(await h.store.getChat(data.chatId)).not.toBeNull();
   });
 
   it('POST /api/v2/chats/new 带存在的 projectId 绑定项目；不存在则 400', async () => {
@@ -218,10 +278,10 @@ describe('会话路由', () => {
   });
 
   it('POST /api/v2/chats/prune-empty 清掉空会话并跳过 exceptChatId', async () => {
-    const emptyA = h.store.createChat('空A', 'agent-a', null);
-    const emptyB = h.store.createChat('空B', 'agent-a', null);
-    const withMsg = h.store.createChat('有消息', 'agent-a', null);
-    h.store.addMessage(withMsg.id, 'user', 'hi');
+    const emptyA = await h.store.createChat('空A', 'agent-a', null);
+    const emptyB = await h.store.createChat('空B', 'agent-a', null);
+    const withMsg = await h.store.createChat('有消息', 'agent-a', null);
+    await h.store.addMessage(withMsg.id, 'user', 'hi');
 
     const res = await makeRouter().handle({
       method: 'POST',
@@ -231,12 +291,12 @@ describe('会话路由', () => {
     expect(res.status).toBe(200);
     const data = res.data as { deletedChatIds: string[] };
     expect(data.deletedChatIds).toEqual([emptyA.id]);
-    expect(h.store.getChat(emptyB.id)).not.toBeNull();
-    expect(h.store.getChat(withMsg.id)).not.toBeNull();
+    expect(await h.store.getChat(emptyB.id)).not.toBeNull();
+    expect(await h.store.getChat(withMsg.id)).not.toBeNull();
   });
 
   it('GET /api/v2/chats/:id 返回会话；不存在返回 404 detail', async () => {
-    const chat = h.store.createChat('标题', 'agent-a', null);
+    const chat = await h.store.createChat('标题', 'agent-a', null);
     const router = makeRouter();
     const ok = await router.handle({ method: 'GET', path: `/api/v2/chats/${chat.id}` });
     expect(ok.status).toBe(200);
@@ -249,26 +309,26 @@ describe('会话路由', () => {
 
   it('DELETE /api/v2/chats/:id 删除会话；onlyIfEmpty=1 时有消息不删', async () => {
     const router = makeRouter();
-    const chat = h.store.createChat('待删', 'agent-a', null);
-    h.store.addMessage(chat.id, 'user', 'hi');
+    const chat = await h.store.createChat('待删', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', 'hi');
 
     const kept = await router.handle({
       method: 'DELETE',
       path: `/api/v2/chats/${chat.id}?onlyIfEmpty=1`,
     });
     expect((kept.data as Record<string, any>).deleted).toBe(false);
-    expect(h.store.getChat(chat.id)).not.toBeNull();
+    expect(await h.store.getChat(chat.id)).not.toBeNull();
 
     const removed = await router.handle({ method: 'DELETE', path: `/api/v2/chats/${chat.id}` });
     expect(removed.status).toBe(200);
-    expect(h.store.getChat(chat.id)).toBeNull();
+    expect(await h.store.getChat(chat.id)).toBeNull();
 
     const missing = await router.handle({ method: 'DELETE', path: `/api/v2/chats/${chat.id}` });
     expect(missing.status).toBe(404);
   });
 
   it('PUT /api/v2/chats/:id/pin 置顶/取消置顶；不存在 404', async () => {
-    const chat = h.store.createChat('置顶', 'agent-a', null);
+    const chat = await h.store.createChat('置顶', 'agent-a', null);
     const router = makeRouter();
     const pinned = await router.handle({
       method: 'PUT',
@@ -277,7 +337,7 @@ describe('会话路由', () => {
     });
     expect(pinned.status).toBe(200);
     expect((pinned.data as Record<string, any>).message).toBe('已置顶');
-    expect(h.store.getChat(chat.id)?.isPinned).toBe(true);
+    expect((await h.store.getChat(chat.id))?.isPinned).toBe(true);
 
     const missing = await router.handle({
       method: 'PUT',
@@ -292,7 +352,7 @@ describe('会话路由', () => {
       { id: 'proj-1', name: '项目一', folderPath: '/tmp/proj-1', trusted: false },
     ]);
     const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
-    const chat = h.store.createChat('设置', 'agent-a', 'proj-1');
+    const chat = await h.store.createChat('设置', 'agent-a', 'proj-1');
 
     // 缺省：不动 projectId
     const untouched = await router.handle({
@@ -301,7 +361,7 @@ describe('会话路由', () => {
       body: { title: '新标题' },
     });
     expect((untouched.data as Record<string, any>).projectId).toBe('proj-1');
-    expect(h.store.getChat(chat.id)?.title).toBe('新标题');
+    expect((await h.store.getChat(chat.id))?.title).toBe('新标题');
 
     // null：移出项目
     const detached = await router.handle({
@@ -331,10 +391,10 @@ describe('会话路由', () => {
   });
 
   it('GET /api/v2/chats/:id/messages：tool 角色映射为 assistant，附分页形状', async () => {
-    const chat = h.store.createChat('消息', 'agent-a', null);
-    h.store.addMessage(chat.id, 'user', '问');
-    h.store.addMessage(chat.id, 'tool', '{"toolCallId":"t1"}');
-    h.store.addMessage(chat.id, 'assistant', '答');
+    const chat = await h.store.createChat('消息', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', '问');
+    await h.store.addMessage(chat.id, 'tool', '{"toolCallId":"t1"}');
+    await h.store.addMessage(chat.id, 'assistant', '答');
 
     const res = await makeRouter().handle({
       method: 'GET',
@@ -353,9 +413,9 @@ describe('会话路由', () => {
   });
 
   it('GET /api/v2/chats/:id/messages：残留 turn_active 且末尾非 assistant 报 interrupted', async () => {
-    const chat = h.store.createChat('中断', 'agent-a', null);
-    h.store.addMessage(chat.id, 'user', '问到一半');
-    h.store.setTurnActive(chat.id);
+    const chat = await h.store.createChat('中断', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', '问到一半');
+    await h.store.setTurnActive(chat.id);
 
     const res = await makeRouter().handle({
       method: 'GET',
@@ -416,7 +476,7 @@ describe('分支族路由', () => {
     const missing = await router.handle({ method: 'GET', path: '/api/v2/chats/nope/branches' });
     expect(missing.status).toBe(404);
 
-    const chat = h.store.createChat('分支', 'agent-a', null);
+    const chat = await h.store.createChat('分支', 'agent-a', null);
     const res = await router.handle({ method: 'GET', path: `/api/v2/chats/${chat.id}/branches` });
     expect(res.status).toBe(200);
     expect(res.data).toEqual({ activeRecordId: chat.id, lineage: [], children: [] });
@@ -424,7 +484,7 @@ describe('分支族路由', () => {
 
   it('GET /branches：sidecar 开启时返回 lineage/children', async () => {
     h.supervisor = makeSupervisor();
-    const chat = h.store.createChat('分支', 'agent-a', null);
+    const chat = await h.store.createChat('分支', 'agent-a', null);
     const res = await makeRouter().handle({
       method: 'GET',
       path: `/api/v2/chats/${chat.id}/branches`,
@@ -435,7 +495,7 @@ describe('分支族路由', () => {
   });
 
   it('GET /branches/tree：sidecar 关闭时 tree 为 null', async () => {
-    const chat = h.store.createChat('树', 'agent-a', null);
+    const chat = await h.store.createChat('树', 'agent-a', null);
     const res = await makeRouter().handle({
       method: 'GET',
       path: `/api/v2/chats/${chat.id}/branches/tree`,
@@ -444,7 +504,7 @@ describe('分支族路由', () => {
   });
 
   it('POST /branches/activate：缺 recordId 400；sidecar 未运行 503', async () => {
-    const chat = h.store.createChat('激活', 'agent-a', null);
+    const chat = await h.store.createChat('激活', 'agent-a', null);
     const router = makeRouter();
 
     const noId = await router.handle({
@@ -467,8 +527,8 @@ describe('分支族路由', () => {
   it('POST /branches/activate：族外记录 403（fail-closed）；族内记录切换并重投影消息', async () => {
     const supervisor = makeSupervisor();
     h.supervisor = supervisor;
-    const chat = h.store.createChat('激活', 'agent-a', null);
-    h.store.addMessage(chat.id, 'user', '旧投影');
+    const chat = await h.store.createChat('激活', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', '旧投影');
     const router = makeRouter();
 
     const outsider = await router.handle({
@@ -487,16 +547,16 @@ describe('分支族路由', () => {
     expect(ok.status).toBe(200);
     // messageCount 是投影全量（含被过滤的 tool 消息）
     expect(ok.data).toEqual({ activeRecordId: 'rec-2', messageCount: 3 });
-    expect(h.store.getChatRecordId(chat.id)).toBe('rec-2');
+    expect(await h.store.getChatRecordId(chat.id)).toBe('rec-2');
     // UI 存储被重投影：只剩 user/assistant，tool 消息被过滤
-    const messages = h.store.listMessages(chat.id, 10);
+    const messages = await h.store.listMessages(chat.id, 10);
     expect(messages.map((m) => m.role).sort()).toEqual(['assistant', 'user']);
   });
 
   it('POST /branches/activate：投影缺失时 404', async () => {
     const supervisor = makeSupervisor({ sessionMessages: vi.fn(async () => null) });
     h.supervisor = supervisor;
-    const chat = h.store.createChat('激活', 'agent-a', null);
+    const chat = await h.store.createChat('激活', 'agent-a', null);
     const res = await makeRouter().handle({
       method: 'POST',
       path: `/api/v2/chats/${chat.id}/branches/activate`,
@@ -569,13 +629,13 @@ describe('项目路由', () => {
       { id: 'proj-1', name: '项目', folderPath: '/tmp/p1', trusted: false },
     ]);
     const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
-    const chat = h.store.createChat('项目对话', 'agent-a', 'proj-1');
+    const chat = await h.store.createChat('项目对话', 'agent-a', 'proj-1');
 
     const res = await router.handle({ method: 'DELETE', path: '/api/v2/projects/proj-1' });
     expect(res.status).toBe(200);
     expect((res.data as Record<string, any>).detachedChats).toBe(1);
     // 会话降级为无项目对话，而不是被删
-    expect(h.store.getChat(chat.id)?.projectId).toBeNull();
+    expect((await h.store.getChat(chat.id))?.projectId).toBeNull();
 
     const missing = await router.handle({ method: 'DELETE', path: '/api/v2/projects/proj-1' });
     expect(missing.status).toBe(404);
@@ -610,11 +670,11 @@ describe('项目路由', () => {
     h.loadProjectRuleFiles.mockReturnValue({ files: ['AGENTS.md'], content: '规则内容' });
     const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
 
-    const unbound = h.store.createChat('无项目', 'agent-a', null);
+    const unbound = await h.store.createChat('无项目', 'agent-a', null);
     const res1 = await router.handle({ method: 'GET', path: `/api/v2/chats/${unbound.id}/project-context` });
     expect(res1.data).toEqual({ project: null });
 
-    const bound = h.store.createChat('有项目', 'agent-a', 'proj-1');
+    const bound = await h.store.createChat('有项目', 'agent-a', 'proj-1');
     const res2 = await router.handle({ method: 'GET', path: `/api/v2/chats/${bound.id}/project-context` });
     const data = res2.data as Record<string, any>;
     expect(data.project).toMatchObject({ id: 'proj-1', trusted: true });
@@ -632,7 +692,7 @@ describe('项目路由', () => {
 
 describe('任务路由', () => {
   it('未注入 taskService 时任务路由 503', async () => {
-    const chat = h.store.createChat('任务', 'agent-a', null);
+    const chat = await h.store.createChat('任务', 'agent-a', null);
     const router = makeRouter();
     const list = await router.handle({ method: 'GET', path: `/api/v2/chats/${chat.id}/tasks` });
     expect(list.status).toBe(503);
@@ -651,7 +711,7 @@ describe('任务路由', () => {
     const missing = await router.handle({ method: 'GET', path: '/api/v2/chats/nope/tasks' });
     expect(missing.status).toBe(404);
 
-    const chat = h.store.createChat('任务', 'agent-a', null);
+    const chat = await h.store.createChat('任务', 'agent-a', null);
     h.store.state.tasks.push({ id: 't1', chatId: chat.id, task: '跑一下' } as never);
     const res = await router.handle({ method: 'GET', path: `/api/v2/chats/${chat.id}/tasks` });
     expect((res.data as Record<string, any>).tasks).toHaveLength(1);
@@ -708,9 +768,9 @@ describe('任务路由', () => {
 
 describe('智能体路由', () => {
   it('GET /api/v2/chat-agents：默认不含已归档；include_archived=true 含', async () => {
-    const active = h.store.createChatAgent({ name: '活跃' });
-    const archived = h.store.createChatAgent({ name: '归档' });
-    h.store.archiveChatAgent(archived.id);
+    const active = await h.store.createChatAgent({ name: '活跃' });
+    const archived = await h.store.createChatAgent({ name: '归档' });
+    await h.store.archiveChatAgent(archived.id);
 
     const router = makeRouter();
     const res = await router.handle({ method: 'GET', path: '/api/v2/chat-agents' });
@@ -739,7 +799,7 @@ describe('智能体路由', () => {
   });
 
   it('GET/PATCH/DELETE /api/v2/chat-agents/:id', async () => {
-    const agent = h.store.createChatAgent({ name: '小助手', rolePrompt: '你是小助手' });
+    const agent = await h.store.createChatAgent({ name: '小助手', rolePrompt: '你是小助手' });
     const router = makeRouter();
 
     const got = await router.handle({ method: 'GET', path: `/api/v2/chat-agents/${agent.id}` });
@@ -751,7 +811,7 @@ describe('智能体路由', () => {
       body: { name: '改名', toolPolicy: { mode: 'denylist', tools: ['local_exec_shell'] } },
     });
     expect((patched.data as Record<string, any>).agent.name).toBe('改名');
-    expect(h.store.getChatAgent(agent.id)?.toolPolicy).toEqual({
+    expect((await h.store.getChatAgent(agent.id))?.toolPolicy).toEqual({
       mode: 'denylist',
       tools: ['local_exec_shell'],
     });
@@ -761,7 +821,7 @@ describe('智能体路由', () => {
       path: `/api/v2/chat-agents/${agent.id}`,
     });
     expect(deleted.data).toEqual({ id: agent.id, status: 'archived' });
-    expect(h.store.getChatAgent(agent.id)?.isArchived).toBe(true);
+    expect((await h.store.getChatAgent(agent.id))?.isArchived).toBe(true);
 
     const missing = await router.handle({ method: 'GET', path: '/api/v2/chat-agents/nope' });
     expect(missing.status).toBe(404);
@@ -1337,6 +1397,7 @@ describe('LLM 设置与 sidecar 服务化路由', () => {
     expect(saved.status).toBe(200);
     expect(h.setSettings).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'gpt-x', maxTotalTokens: 8192, execTimeoutSeconds: 30 }),
+      h.store,
     );
     expect(h.setDefaultExecTimeoutMs).toHaveBeenCalledWith(30_000);
     expect(h.allowEgressForBaseUrl).toHaveBeenCalledWith('http://new-gateway/v1');
@@ -1401,7 +1462,7 @@ describe('Insights 与用量路由', () => {
       body: { eventName: 'skill_used', properties: { skill: 'csv' } },
     });
     expect(ok.status).toBe(200);
-    expect(h.recordInsightEvent).toHaveBeenCalledWith('skill_used', { skill: 'csv' });
+    expect(h.recordInsightEvent).toHaveBeenCalledWith(h.store, 'skill_used', { skill: 'csv' });
   });
 
   it('GET/POST /api/v2/local-settings/insights：profile 合并且触发 recordInsightProfile', async () => {
@@ -1424,9 +1485,10 @@ describe('Insights 与用量路由', () => {
     expect(data.profile.displayName).toBe('王');
     expect(data.promptedAt).toEqual(expect.any(String));
     expect(h.recordInsightProfile).toHaveBeenCalledWith(
+      h.store,
       expect.objectContaining({ displayName: '王' }),
     );
-    expect(h.flushInsightsOutbox).toHaveBeenCalled();
+    expect(h.flushInsightsOutbox).toHaveBeenCalledWith(h.store);
   });
 
   it('POST /api/v2/local-settings/insights：无 profile 字段时不记录 profile', async () => {
@@ -1468,7 +1530,7 @@ describe('Insights 与用量路由', () => {
     const noChat = await router.handle({ method: 'GET', path: '/api/v2/local/traces' });
     expect(noChat.status).toBe(400);
 
-    h.store.saveTrace({
+    await h.store.saveTrace({
       id: 'trace-1',
       chatId: 'c1',
       messageId: 'm1',
@@ -1628,7 +1690,7 @@ describe('resolve-paths 路由', () => {
         { id: 'proj-1', name: '演示项目', folderPath: dir, trusted: true },
       ]);
       const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
-      const chat = h.store.createChat('新对话', 'agent-a', 'proj-1');
+      const chat = await h.store.createChat('新对话', 'agent-a', 'proj-1');
 
       const res = await router.handle({
         method: 'POST',
@@ -1656,7 +1718,7 @@ describe('resolve-paths 路由', () => {
     fs.writeFileSync(target, 'x');
     try {
       const router = makeRouter();
-      const chat = h.store.createChat('新对话', 'agent-a');
+      const chat = await h.store.createChat('新对话', 'agent-a');
       const res = await router.handle({
         method: 'POST',
         path: '/api/v2/local/resolve-paths',

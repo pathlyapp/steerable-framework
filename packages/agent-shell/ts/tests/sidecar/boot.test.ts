@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   setSidecarSupervisor: vi.fn(),
   setSidecarSupervisorPending: vi.fn(),
   llmGetSettings: vi.fn(() => ({ baseUrl: 'https://llm.example/v1', apiKey: 'k' })),
-  storeGetWebSearchSettings: vi.fn(() => undefined as unknown),
+  storeGetWebSearchSettings: vi.fn(async () => undefined as unknown),
   resolveSidecarStoragePath: vi.fn(() => '/tmp/steerable-test/sessions.db'),
   deriveEgressAllowListFromBaseUrl: vi.fn(() => ['llm.example']),
   probeExecSandboxCapability: vi.fn(async () => {}),
@@ -43,9 +43,6 @@ vi.mock('../../src/llm/index.js', () => ({
   setSidecarSupervisor: mocks.setSidecarSupervisor,
   setSidecarSupervisorPending: mocks.setSidecarSupervisorPending,
   llmService: { getSettings: mocks.llmGetSettings },
-}));
-vi.mock('../../src/storage/index.js', () => ({
-  localStore: { getWebSearchSettings: mocks.storeGetWebSearchSettings, addMessage: vi.fn() },
 }));
 vi.mock('../../src/sidecar/storage-path.js', () => ({
   resolveSidecarStoragePath: mocks.resolveSidecarStoragePath,
@@ -105,8 +102,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     setPluginRpc: vi.fn(),
   };
   const deps = {
+    store: { getWebSearchSettings: mocks.storeGetWebSearchSettings },
     toolRouter,
-    resolveProjectRoot: () => null,
+    resolveProjectRoot: async () => null,
     approvalHandler: 'approval-handler',
     askUserHandler: 'ask-user-handler',
     readStateSeedHandler: 'seed-handler',

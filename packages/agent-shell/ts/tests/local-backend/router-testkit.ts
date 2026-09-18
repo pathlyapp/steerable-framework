@@ -83,7 +83,7 @@ class FakeLocalStore {
   state = initialStoreState();
   private seq = 0;
 
-  reset(): void {
+  async reset(): Promise<void> {
     this.state = initialStoreState();
     this.seq = 0;
   }
@@ -93,7 +93,7 @@ class FakeLocalStore {
   }
 
   // ── chats ──
-  listChats(page = 1, limit = 50): { chats: ChatSessionRecord[]; total: number } {
+  async listChats(page = 1, limit = 50): Promise<{ chats: ChatSessionRecord[]; total: number }> {
     // SQL 实现：ORDER BY is_pinned DESC, datetime(updated_at) DESC。
     const all = [...this.state.chats.values()].sort(
       (a, b) =>
@@ -103,20 +103,20 @@ class FakeLocalStore {
     return { chats: all.slice(start, start + limit), total: all.length };
   }
 
-  getChat(chatId: string): ChatSessionRecord | null {
+  async getChat(chatId: string): Promise<ChatSessionRecord | null> {
     return this.state.chats.get(chatId) ?? null;
   }
 
-  createChat(title: string, agentId: string, projectId: string | null): ChatSessionRecord {
-    return this.createChatWithId(`chat-${++this.seq}`, title, agentId, projectId);
+  async createChat(title: string, agentId: string, projectId: string | null): Promise<ChatSessionRecord> {
+    return await this.createChatWithId(`chat-${++this.seq}`, title, agentId, projectId);
   }
 
-  createChatWithId(
+  async createChatWithId(
     id: string,
     title: string,
     agentId: string,
     projectId: string | null = null,
-  ): ChatSessionRecord {
+  ): Promise<ChatSessionRecord> {
     const now = this.now();
     const chat: ChatSessionRecord = {
       id,
@@ -134,7 +134,7 @@ class FakeLocalStore {
     return chat;
   }
 
-  updateChat(
+  async updateChat(
     chatId: string,
     updates: Partial<{
       title: string;
@@ -143,7 +143,7 @@ class FakeLocalStore {
       pinnedRefs: unknown[] | null;
       projectId: string | null;
     }>,
-  ): ChatSessionRecord | null {
+  ): Promise<ChatSessionRecord | null> {
     const chat = this.state.chats.get(chatId);
     if (!chat) return null;
     const next = { ...chat };
@@ -155,20 +155,20 @@ class FakeLocalStore {
     return next;
   }
 
-  deleteChat(chatId: string): boolean {
+  async deleteChat(chatId: string): Promise<boolean> {
     const existed = this.state.chats.delete(chatId);
     this.state.messages = this.state.messages.filter((m) => m.chatId !== chatId);
     return existed;
   }
 
-  deleteChatIfEmpty(chatId: string): boolean {
+  async deleteChatIfEmpty(chatId: string): Promise<boolean> {
     const chat = this.state.chats.get(chatId);
     if (!chat) return false;
     if (this.state.messages.some((m) => m.chatId === chatId)) return false;
-    return this.deleteChat(chatId);
+    return await this.deleteChat(chatId);
   }
 
-  deleteEmptyChats(exceptChatId?: string | null): string[] {
+  async deleteEmptyChats(exceptChatId?: string | null): Promise<string[]> {
     const deleted: string[] = [];
     for (const chat of [...this.state.chats.values()]) {
       if (exceptChatId && chat.id === exceptChatId) continue;
@@ -179,7 +179,7 @@ class FakeLocalStore {
     return deleted;
   }
 
-  clearProjectAssignment(projectId: string): number {
+  async clearProjectAssignment(projectId: string): Promise<number> {
     let count = 0;
     for (const chat of this.state.chats.values()) {
       if (chat.projectId === projectId) {
@@ -190,29 +190,29 @@ class FakeLocalStore {
     return count;
   }
 
-  getChatRecordId(chatId: string): string | null {
+  async getChatRecordId(chatId: string): Promise<string | null> {
     return this.state.recordIds.get(chatId) ?? null;
   }
 
-  setChatRecordId(chatId: string, recordId: string): void {
+  async setChatRecordId(chatId: string, recordId: string): Promise<void> {
     this.state.recordIds.set(chatId, recordId);
   }
 
   // ── turn_active 标记（W7-1 中断签名）──
-  setTurnActive(chatId: string): void {
+  async setTurnActive(chatId: string): Promise<void> {
     this.state.turnActive.set(chatId, { startedAt: this.now() });
   }
 
-  clearTurnActive(chatId: string): void {
+  async clearTurnActive(chatId: string): Promise<void> {
     this.state.turnActive.delete(chatId);
   }
 
-  getTurnActive(chatId: string): { startedAt: string } | null {
+  async getTurnActive(chatId: string): Promise<{ startedAt: string } | null> {
     return this.state.turnActive.get(chatId) ?? null;
   }
 
   // ── messages（listMessages 返回 DESC，与 SQL ORDER BY created_at DESC 对齐）──
-  listMessages(chatId: string, limit = 200): ChatMessageRecord[] {
+  async listMessages(chatId: string, limit = 200): Promise<ChatMessageRecord[]> {
     return this.state.messages
       .filter((m) => m.chatId === chatId)
       .slice()
@@ -220,12 +220,12 @@ class FakeLocalStore {
       .slice(0, limit);
   }
 
-  addMessage(
+  async addMessage(
     chatId: string,
     role: ChatMessageRecord['role'],
     content: string,
     messageMetadata: string | null = null,
-  ): ChatMessageRecord {
+  ): Promise<ChatMessageRecord> {
     const record: ChatMessageRecord = {
       // seq 前缀保证字典序即插入序（零填充），listMessages 的 DESC 排序稳定。
       id: `msg-${String(++this.seq).padStart(6, '0')}`,
@@ -239,16 +239,16 @@ class FakeLocalStore {
     return record;
   }
 
-  getMessage(chatId: string, messageId: string): ChatMessageRecord | null {
+  async getMessage(chatId: string, messageId: string): Promise<ChatMessageRecord | null> {
     return this.state.messages.find((m) => m.chatId === chatId && m.id === messageId) ?? null;
   }
 
-  patchMessageMetadata(
+  async patchMessageMetadata(
     chatId: string,
     messageId: string,
     patch: Record<string, unknown>,
-  ): ChatMessageRecord | null {
-    const msg = this.getMessage(chatId, messageId);
+  ): Promise<ChatMessageRecord | null> {
+    const msg = await this.getMessage(chatId, messageId);
     if (!msg) return null;
     let current: Record<string, unknown> = {};
     if (msg.messageMetadata) {
@@ -265,7 +265,7 @@ class FakeLocalStore {
     return msg;
   }
 
-  deleteMessagesFrom(chatId: string, messageId: string): number {
+  async deleteMessagesFrom(chatId: string, messageId: string): Promise<number> {
     const target = this.state.messages.find((m) => m.chatId === chatId && m.id === messageId);
     if (!target) return 0;
     const keep = this.state.messages.filter(
@@ -276,26 +276,26 @@ class FakeLocalStore {
     return deleted;
   }
 
-  replaceChatMessages(
+  async replaceChatMessages(
     chatId: string,
     messages: Array<{ role: ChatMessageRecord['role']; content: string }>,
-  ): void {
+  ): Promise<void> {
     this.state.messages = this.state.messages.filter((m) => m.chatId !== chatId);
-    for (const m of messages) this.addMessage(chatId, m.role, m.content);
+    for (const m of messages) await this.addMessage(chatId, m.role, m.content);
   }
 
   // ── chat agents ──
-  listChatAgents(includeArchived = false): ChatAgentRecord[] {
+  async listChatAgents(includeArchived = false): Promise<ChatAgentRecord[]> {
     return [...this.state.agents.values()].filter((a) => includeArchived || !a.isArchived);
   }
 
-  getChatAgent(agentId: string): ChatAgentRecord | null {
+  async getChatAgent(agentId: string): Promise<ChatAgentRecord | null> {
     return this.state.agents.get(agentId) ?? null;
   }
 
-  createChatAgent(
+  async createChatAgent(
     input: Partial<ChatAgentRecord> & { name: string },
-  ): ChatAgentRecord {
+  ): Promise<ChatAgentRecord> {
     const now = this.now();
     const agent: ChatAgentRecord = {
       id: `agent-${++this.seq}`,
@@ -320,10 +320,10 @@ class FakeLocalStore {
     return agent;
   }
 
-  updateChatAgent(
+  async updateChatAgent(
     agentId: string,
     updates: Partial<ChatAgentRecord>,
-  ): ChatAgentRecord | null {
+  ): Promise<ChatAgentRecord | null> {
     const agent = this.state.agents.get(agentId);
     if (!agent) return null;
     const next = { ...agent };
@@ -335,7 +335,7 @@ class FakeLocalStore {
     return next;
   }
 
-  archiveChatAgent(agentId: string): boolean {
+  async archiveChatAgent(agentId: string): Promise<boolean> {
     const agent = this.state.agents.get(agentId);
     if (!agent) return false;
     agent.isArchived = true;
@@ -343,11 +343,11 @@ class FakeLocalStore {
   }
 
   // ── tasks / traces / usage ──
-  listTasks(chatId?: string): TaskRecord[] {
+  async listTasks(chatId?: string): Promise<TaskRecord[]> {
     return this.state.tasks.filter((t) => !chatId || t.chatId === chatId);
   }
 
-  saveTrace(input: {
+  async saveTrace(input: {
     id: string;
     chatId: string;
     messageId: string | null;
@@ -355,7 +355,7 @@ class FakeLocalStore {
     durationMs: number | null;
     status: string;
     payload: unknown;
-  }): void {
+  }): Promise<void> {
     this.state.traces.set(input.id, {
       ...input,
       // SQL 实现里 payload 是 JSON 文本列——路由读取时经 safeJson 解析。
@@ -364,32 +364,32 @@ class FakeLocalStore {
     } as HarnessTraceRecord);
   }
 
-  listTracesByChat(chatId: string, limit = 50): HarnessTraceRecord[] {
+  async listTracesByChat(chatId: string, limit = 50): Promise<HarnessTraceRecord[]> {
     return [...this.state.traces.values()].filter((t) => t.chatId === chatId).slice(0, limit);
   }
 
-  getTrace(traceId: string): HarnessTraceRecord | null {
+  async getTrace(traceId: string): Promise<HarnessTraceRecord | null> {
     return this.state.traces.get(traceId) ?? null;
   }
 
-  recordUsageEvent(input: Record<string, unknown>): void {
+  async recordUsageEvent(input: Record<string, unknown>): Promise<void> {
     this.state.usageEvents.push(input);
   }
 
-  getUsageSummary(sinceDays = 30): Record<string, unknown> {
+  async getUsageSummary(sinceDays = 30): Promise<Record<string, unknown>> {
     return { days: sinceDays, events: this.state.usageEvents.length };
   }
 
   // ── settings ──
-  getLlmSettings(): Record<string, unknown> | null {
+  async getLlmSettings(): Promise<Record<string, unknown> | null> {
     return this.state.llmSettings;
   }
 
-  getTelemetrySettings(): FakeStoreState['telemetry'] {
+  async getTelemetrySettings(): Promise<FakeStoreState['telemetry']> {
     return this.state.telemetry;
   }
 
-  setTelemetrySettings(patch: Record<string, unknown>): NonNullable<FakeStoreState['telemetry']> {
+  async setTelemetrySettings(patch: Record<string, unknown>): Promise<NonNullable<FakeStoreState['telemetry']>> {
     const next = {
       endpoint: null as string | null,
       privacyMode: 'metadata',
@@ -403,11 +403,11 @@ class FakeLocalStore {
     return next;
   }
 
-  getWebSearchSettings(): FakeStoreState['webSearch'] {
+  async getWebSearchSettings(): Promise<FakeStoreState['webSearch']> {
     return this.state.webSearch;
   }
 
-  setWebSearchSettings(patch: Record<string, unknown>): NonNullable<FakeStoreState['webSearch']> {
+  async setWebSearchSettings(patch: Record<string, unknown>): Promise<NonNullable<FakeStoreState['webSearch']>> {
     const next = { provider: 'tavily', apiKey: null as string | null, ...this.state.webSearch };
     for (const [key, value] of Object.entries(patch)) {
       if (value !== undefined) (next as Record<string, unknown>)[key] = value;
@@ -416,18 +416,18 @@ class FakeLocalStore {
     return next;
   }
 
-  ensureInsightsSettings(): FakeStoreState['insights'] {
+  async ensureInsightsSettings(): Promise<FakeStoreState['insights']> {
     return this.state.insights;
   }
 
-  setInsightsSettings(patch: {
+  async setInsightsSettings(patch: {
     shareBehavior?: boolean;
     shareConversation?: boolean;
     shareProfile?: boolean;
     promptedAt?: string;
     apiBase?: string;
     profile?: Partial<FakeStoreState['insights']['profile']>;
-  }): FakeStoreState['insights'] {
+  }): Promise<FakeStoreState['insights']> {
     const current = this.state.insights;
     this.state.insights = {
       ...current,
@@ -443,7 +443,7 @@ class FakeLocalStore {
     return this.state.insights;
   }
 
-  insightStats(): { events: number; turns: number; profile: number; pending: number } {
+  async insightStats(): Promise<{ events: number; turns: number; profile: number; pending: number }> {
     return { events: 0, turns: 0, profile: 0, pending: 0 };
   }
 }

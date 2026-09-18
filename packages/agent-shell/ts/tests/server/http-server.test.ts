@@ -21,8 +21,13 @@ vi.mock('../../src/storage/index.js', () => ({
   localStore: { addMessage: vi.fn() },
 }));
 
-import { createBsServer, type BsServerDeps } from '../../src/server/http-server.js';
+import {
+  createBsServer,
+  type BsMiddleware,
+  type BsServerDeps,
+} from '../../src/server/http-server.js';
 import { registerPackHttpRoutes, resetPackHttpRoutes } from '../../src/host/http-routes.js';
+import { registerAuthProvider } from '../../src/auth/index.js';
 
 const mocks = vi.hoisted(() => ({
   routerHandle: vi.fn(),
@@ -55,6 +60,7 @@ const mocks = vi.hoisted(() => ({
 
 function makeDeps(webDistDir: string): BsServerDeps {
   return {
+    store: { addMessage: vi.fn(async () => ({})) } as unknown as BsServerDeps['store'],
     localBackendRouter: {
       handle: mocks.routerHandle,
       handleStream: mocks.routerHandleStream,
@@ -129,6 +135,15 @@ describe('BS HTTP server', () => {
     });
 
   const get = (p: string) => fetch(`${base}${p}`, { headers: AUTH });
+
+  const restartWithMiddleware = async (middleware: readonly BsMiddleware[]) => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createBsServer({ ...makeDeps(webDistDir), middleware });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  };
 
   describe('/api/v2/* 代理到 LocalBackendRouter', () => {
     it('非流式请求：method/path/body 透传，响应状态与 data 来自 router', async () => {
@@ -413,6 +428,67 @@ describe('BS HTTP server', () => {
       const res = await fetch(`${base}/`);
       expect(res.status).toBe(200);
     });
+
+    it('已注册 provider 认证受保护请求并向 router 传播 principal', async () => {
+      const principal = {
+        id: 'user-1',
+        tenantId: 'tenant-1',
+        displayName: 'Team User',
+        email: null,
+        roles: ['member'],
+        isAdmin: false,
+      };
+      const authenticate = vi.fn().mockResolvedValue({ ok: true, principal });
+      const dispose = registerAuthProvider({
+        id: 'test-provider',
+        authenticate,
+        describeSelf: vi.fn(),
+      });
+      mocks.routerHandle.mockResolvedValue({ status: 200, data: { ok: true } });
+      try {
+        const res = await fetch(`${base}/api/v2/auth/me`, {
+          headers: {
+            Cookie: 'session=valid',
+            'X-Forwarded-User': 'untrusted-identity',
+          },
+        });
+        expect(res.status).toBe(200);
+        expect(authenticate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cookie: 'session=valid',
+            'x-forwarded-user': 'untrusted-identity',
+          }),
+        );
+        expect(mocks.routerHandle).toHaveBeenCalledWith({
+          method: 'GET',
+          path: '/api/v2/auth/me',
+          body: undefined,
+          principal,
+        });
+      } finally {
+        dispose();
+      }
+    });
+
+    it('已注册 provider 的拒绝状态与响应体直接返回', async () => {
+      const dispose = registerAuthProvider({
+        id: 'test-provider',
+        authenticate: vi.fn().mockResolvedValue({
+          ok: false,
+          status: 403,
+          body: { code: 'seat_required' },
+        }),
+        describeSelf: vi.fn(),
+      });
+      try {
+        const res = await fetch(`${base}/host/info`);
+        expect(res.status).toBe(403);
+        expect(await res.json()).toEqual({ code: 'seat_required' });
+        expect(mocks.routerHandle).not.toHaveBeenCalled();
+      } finally {
+        dispose();
+      }
+    });
   });
 
   describe('静态托管', () => {
@@ -464,6 +540,91 @@ describe('BS HTTP server', () => {
     it('POST 到非 api/host 路径 → 404', async () => {
       const res = await post('/whatever', {});
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('middleware', () => {
+    it('可在身份认证前处理公开登录路由', async () => {
+      const authenticate = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+      });
+      const dispose = registerAuthProvider({
+        id: 'test-provider',
+        authenticate,
+        describeSelf: vi.fn(),
+      });
+      await restartWithMiddleware([
+        async (req, res) => {
+          if (req.url !== '/api/v2/team/auth/login') return 'pass';
+          res.writeHead(204);
+          res.end();
+          return 'handled';
+        },
+      ]);
+
+      try {
+        const res = await fetch(`${base}/api/v2/team/auth/login`, {
+          method: 'POST',
+        });
+        expect(res.status).toBe(204);
+        expect(authenticate).not.toHaveBeenCalled();
+        expect(mocks.routerHandle).not.toHaveBeenCalled();
+      } finally {
+        dispose();
+      }
+    });
+
+    it('按注册顺序运行 pass middleware 后继续内建路由', async () => {
+      const order: string[] = [];
+      await restartWithMiddleware([
+        async () => {
+          order.push('first');
+          return 'pass';
+        },
+        async () => {
+          order.push('second');
+          return 'pass';
+        },
+      ]);
+      mocks.routerHandle.mockImplementation(async () => {
+        order.push('router');
+        return { status: 200, data: { ok: true } };
+      });
+
+      expect((await get('/api/v2/chats')).status).toBe(200);
+      expect(order).toEqual(['first', 'second', 'router']);
+    });
+
+    it('handled middleware short-circuits later middleware and routing', async () => {
+      const later = vi.fn();
+      await restartWithMiddleware([
+        async (_req, res) => {
+          res.writeHead(202, { 'Content-Type': 'text/plain' });
+          res.end('handled by middleware');
+          return 'handled';
+        },
+        later,
+      ]);
+
+      const res = await get('/api/v2/chats');
+      expect(res.status).toBe(202);
+      expect(await res.text()).toBe('handled by middleware');
+      expect(later).not.toHaveBeenCalled();
+      expect(mocks.routerHandle).not.toHaveBeenCalled();
+    });
+
+    it('middleware errors fail closed without reaching built-in routes', async () => {
+      await restartWithMiddleware([
+        async () => {
+          throw new Error('middleware failed');
+        },
+      ]);
+
+      const res = await get('/api/v2/chats');
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ detail: 'internal error' });
+      expect(mocks.routerHandle).not.toHaveBeenCalled();
     });
   });
 });

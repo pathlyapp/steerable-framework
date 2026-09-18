@@ -10,7 +10,7 @@ import path from 'node:path';
 import log from 'electron-log';
 import { SidecarSupervisor, resolveSidecarPython, type SidecarBootFailure } from './supervisor.js';
 import { setSidecarSupervisor, setSidecarSupervisorPending, llmService } from '../llm/index.js';
-import { localStore } from '../storage/index.js';
+import type { ScopedStore } from '../storage/scoped-store.js';
 import { resolveSidecarStoragePath } from './storage-path.js';
 import {
   deriveEgressAllowListFromBaseUrl,
@@ -35,9 +35,10 @@ import type { createApprovalBridge } from './reverse-approval.js';
 import type { SidecarReverseHandler } from './types.js';
 
 export interface HostSidecarDeps {
+  store: ScopedStore;
   toolRouter: ToolRouter;
   /** W4-2 项目模式围栏：chatId → 项目根（无项目对话返回 null）。 */
-  resolveProjectRoot: (chatId: string) => string | null;
+  resolveProjectRoot: (chatId: string) => Promise<string | null>;
   /**
    * 项目模式之外额外放行的只读根（会话附件目录等）。文件写入仍只受
    * projectRoot 围栏约束；这些根只放宽 local_read_file 的读取范围。
@@ -98,7 +99,7 @@ async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
  *   ambient 端点并进允许列表，见 W4-8）。
  * - 启动失败 / 派生不出任何代理条目。
  */
-async function startEgressProxyIfEnabled(): Promise<{
+async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
   sandboxAllowedHosts?: string[];
   env?: NodeJS.ProcessEnv;
 } | null> {
@@ -118,7 +119,7 @@ async function startEgressProxyIfEnabled(): Promise<{
       return null;
     }
     const settings = llmService.getSettings();
-    const searchSettings = localStore.getWebSearchSettings();
+    const searchSettings = await store.getWebSearchSettings();
     const searchEnv = sidecarWebSearchEnv({
       processEnv: process.env,
       storedApiKey: searchSettings?.apiKey,
@@ -281,7 +282,7 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
           }),
         webNames,
       );
-      const searchSettings = localStore.getWebSearchSettings();
+      const searchSettings = await deps.store.getWebSearchSettings();
       const searchEnv = sidecarWebSearchEnv({
         processEnv: process.env,
         storedApiKey: searchSettings?.apiKey,
@@ -323,7 +324,7 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
   };
   const boot = (async (): Promise<SidecarSupervisor | null> => {
     try {
-      const egressProxy = await startEgressProxyIfEnabled();
+      const egressProxy = await startEgressProxyIfEnabled(deps.store);
       // W2.6.1: durable sessions/traces/history in a zero-dependency
       // sqlite database under ~/.steerable — the one root the Seatbelt
       // profile already allows writes to; userData would be denied.
@@ -356,8 +357,8 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
           ...egressProxy?.env,
           ...sidecarWebSearchEnv({
             processEnv: process.env,
-            storedApiKey: localStore.getWebSearchSettings()?.apiKey,
-            storedProvider: localStore.getWebSearchSettings()?.provider,
+            storedApiKey: (await deps.store.getWebSearchSettings())?.apiKey,
+            storedProvider: (await deps.store.getWebSearchSettings())?.provider,
             llmBaseUrl: llmService.getSettings().baseUrl,
           }),
           // P1: offer the sidecar's run_code (programmatic tool calls) to the

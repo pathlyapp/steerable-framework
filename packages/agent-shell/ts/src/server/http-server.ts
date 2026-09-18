@@ -32,7 +32,7 @@ import log from 'electron-log';
 import type { LocalBackendRouter } from '../local-backend/router.js';
 import { getActiveCoreLoopStreamId } from '../local-backend/coreloop-stream.js';
 import { getSidecarSupervisor } from '../llm/index.js';
-import { localStore } from '../storage/index.js';
+import type { ScopedStore } from '../storage/scoped-store.js';
 import type { LocalExecutor, LocalExecRequest, LocalExecResult, LocalFileReadRequest, LocalFileWriteRequest, LocalOpenRequest, CommandSafetyConfigPayload } from '../local-executor.js';
 import type { LocalScriptRegistry, CreateLocalScriptInput } from '../local-script-registry.js';
 import type { TerminalManager, TerminalSpawnOptions } from '../terminal-manager.js';
@@ -42,6 +42,7 @@ import type { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { getBrand } from '../brand.js';
 import { saveAttachmentFiles } from '../attachments.js';
 import type { SseBus } from './sse-bus.js';
+import { getAuthProvider, type Principal } from '../auth/index.js';
 
 /** 与 router.handleStream 内部的路由正则保持一致——只有这些路径是流式。 */
 const STREAM_PATH_PATTERNS = [
@@ -71,7 +72,13 @@ const MIME: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/** Runs before built-in routing; `handled` short-circuits the request. */
+export interface BsMiddleware {
+  (req: IncomingMessage, res: ServerResponse): Promise<'handled' | 'pass'>;
+}
+
 export interface BsServerDeps {
+  store: ScopedStore;
   localBackendRouter: LocalBackendRouter;
   localExecutor: LocalExecutor;
   localScriptRegistry: LocalScriptRegistry;
@@ -84,6 +91,12 @@ export interface BsServerDeps {
   webDistDir: string;
   /** Bearer token；缺省每次启动随机生成。测试注入固定值。 */
   authToken?: string;
+  /**
+   * Trusted product middleware, invoked in order after Host validation and
+   * before authentication. This position lets a product own public sign-in
+   * and identity-provider callback routes without weakening built-in routes.
+   */
+  middleware?: readonly BsMiddleware[];
 }
 
 /** Host 白名单：仅回环（可带端口）。浏览器禁止伪造 Host，rebinding 到此为止。 */
@@ -128,6 +141,7 @@ export function createBsServer(deps: BsServerDeps): Server {
     bus,
     webDistDir,
   } = deps;
+  const middleware = deps.middleware ?? [];
   const authToken = deps.authToken ?? randomBytes(24).toString('base64url');
 
   /** `/api/v2/*` 与 `/host/*` 的 Bearer 门；EventSource 不能设头，收 query token。 */
@@ -136,13 +150,23 @@ export function createBsServer(deps: BsServerDeps): Server {
     return url.searchParams.get('token') === authToken;
   }
 
-  async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+  async function handleApi(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+    principal: Principal | undefined,
+  ): Promise<void> {
     const isStream = req.method === 'POST' && STREAM_PATH_PATTERNS.some((p) => p.test(pathname));
     const body = req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT'
       ? await readJsonBody(req)
       : undefined;
     const search = new URL(req.url ?? '/', 'http://bs.local').search;
-    const request = { method: req.method ?? 'GET', path: `${pathname}${search}`, body };
+    const request = {
+      method: req.method ?? 'GET',
+      path: `${pathname}${search}`,
+      body,
+      ...(principal ? { principal } : {}),
+    };
 
     if (isStream) {
       const controller = new AbortController();
@@ -262,7 +286,7 @@ export function createBsServer(deps: BsServerDeps): Server {
       }
       const ok = await supervisor.steerChat(streamId, content);
       // 与 main.ts 同理：接受即落库，重开对话能看到这条注入的用户消息。
-      if (ok) localStore.addMessage(chatId, 'user', content);
+      if (ok) await deps.store.addMessage(chatId, 'user', content);
       sendJson(res, 200, { ok, ...(ok ? {} : { reason: 'stream_not_active' }) });
       return;
     }
@@ -415,19 +439,44 @@ export function createBsServer(deps: BsServerDeps): Server {
       }
       const url = new URL(req.url ?? '/', 'http://bs.local');
       const pathname = url.pathname;
+      for (const handle of middleware) {
+        const result = await handle(req, res);
+        if (result !== 'handled' && result !== 'pass') {
+          throw new Error(`BS middleware returned invalid result: ${String(result)}`);
+        }
+        if (result === 'handled' || res.writableEnded) return;
+        if (res.headersSent) {
+          throw new Error('BS middleware returned pass after starting a response');
+        }
+      }
       // 门 2：API 与宿主能力要 Bearer token；静态资源不验（浏览器靠它
       // 拿 token），静态面不暴露任何能力。
       const needsAuth = pathname.startsWith('/api/v2/') || pathname.startsWith('/host/');
-      if (needsAuth && !isAuthorized(req, url)) {
-        sendJson(res, 401, { detail: 'unauthorized' });
-        return;
+      let principal: Principal | undefined;
+      if (needsAuth) {
+        const authProvider = getAuthProvider();
+        if (authProvider) {
+          const decision = await authProvider.authenticate(req.headers);
+          if (!decision.ok) {
+            sendJson(
+              res,
+              decision.status,
+              decision.body ?? { detail: decision.status === 403 ? 'forbidden' : 'unauthorized' },
+            );
+            return;
+          }
+          principal = decision.principal;
+        } else if (!isAuthorized(req, url)) {
+          sendJson(res, 401, { detail: 'unauthorized' });
+          return;
+        }
       }
       if (pathname === '/api/v2/events' && req.method === 'GET') {
         bus.attach(res);
         return;
       }
       if (pathname.startsWith('/api/v2/')) {
-        await handleApi(req, res, pathname);
+        await handleApi(req, res, pathname, principal);
         return;
       }
       if (pathname.startsWith('/host/')) {

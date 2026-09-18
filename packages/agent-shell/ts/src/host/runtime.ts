@@ -28,7 +28,17 @@ import { ProjectRegistry, type ProjectRecord } from '../project-registry.js';
 import { LocalBackendRouter } from '../local-backend/router.js';
 import { WorktreeService } from '../local-backend/worktree-service.js';
 import { TaskService } from '../local-backend/task-service.js';
-import { localStore } from '../storage/index.js';
+import {
+  LOCAL_SCOPE,
+  closeStorage,
+  getPackDbAccess,
+  getScopedStore,
+  initializeStorage,
+  type PackDbAccess,
+  type PackDbParams,
+  type PackDbRunResult,
+  type TenantScope,
+} from '../storage/driver.js';
 import { createApprovalBridge } from '../sidecar/reverse-approval.js';
 import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
@@ -37,6 +47,7 @@ import { createJsonStore } from '../json-store.js';
 import { bindWorkspaceSkillRoots } from '../local-backend/skill-loader.js';
 import { getChatAttachmentsDir } from '../attachments.js';
 import { recordInsightTurn } from '../insights/record.js';
+import { llmService } from '../llm/index.js';
 import {
   getPackAssemblies,
   type PackAssemblyDeps,
@@ -44,6 +55,8 @@ import {
 } from './pack-assembly.js';
 
 export interface HostRuntimeOptions {
+  /** Storage ownership for this host process. Defaults to local personal use. */
+  scope?: TenantScope;
   /** 面向全部用户面的事件广播（CS=所有窗口 IPC，BS=SSE 总线）。 */
   broadcast: (channel: string, payload: unknown) => void;
   /**
@@ -63,6 +76,7 @@ export interface HostRuntimeOptions {
 }
 
 export interface HostRuntime {
+  store: import('../storage/scoped-store.js').ScopedStore;
   localExecutor: LocalExecutor;
   localScriptRegistry: LocalScriptRegistry;
   terminalManager: TerminalManager;
@@ -83,24 +97,60 @@ export interface HostRuntime {
    * 不阻塞调用方的就绪路径（sidecar python import 慢，竞速的回合由
    * router 回退处理）。
    */
-  start(): void;
+  start(): Promise<void>;
   /** 关停：杀终端、停 mock、关 sidecar。 */
   shutdown(): Promise<void>;
 }
 
-export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
+export async function createHostRuntime(options: HostRuntimeOptions): Promise<HostRuntime> {
   const { broadcast, hasWindow, onLog } = options;
   const broadcastMain = options.broadcastMain ?? broadcast;
+  await initializeStorage();
+  const scope = options.scope ?? LOCAL_SCOPE;
+  const defaultStore = getScopedStore(scope);
+  let localBackendRouter: LocalBackendRouter | undefined;
+  const activeScope = () => localBackendRouter?.activeStore.scope ?? scope;
+  const packDb: PackDbAccess = {
+    get scope() {
+      return activeScope();
+    },
+    get<T extends Record<string, unknown>>(sql: string, params?: PackDbParams) {
+      return getPackDbAccess(activeScope()).get<T>(sql, params);
+    },
+    all<T extends Record<string, unknown>>(sql: string, params?: PackDbParams) {
+      return getPackDbAccess(activeScope()).all<T>(sql, params);
+    },
+    run(sql: string, params?: PackDbParams): Promise<PackDbRunResult> {
+      return getPackDbAccess(activeScope()).run(sql, params);
+    },
+    exec(sql: string): Promise<void> {
+      return getPackDbAccess(activeScope()).exec(sql);
+    },
+    transaction<T>(operation: (db: PackDbAccess) => Promise<T>): Promise<T> {
+      return getPackDbAccess(activeScope()).transaction(() => operation(packDb));
+    },
+  };
 
   const localExecutor = new LocalExecutor();
   // 恢复设置界面里配置的"命令默认超时"（保存时由 local-backend router 即时
   // 生效，这里负责进程重启后的恢复）。
   {
-    const persistedLlmSettings = localStore.getLlmSettings();
+    const persistedLlmSettings = await defaultStore.getLlmSettings();
     setDefaultExecTimeoutMs(
       persistedLlmSettings?.execTimeoutSeconds
         ? persistedLlmSettings.execTimeoutSeconds * 1000
         : null,
+    );
+    llmService.initialize(
+      persistedLlmSettings ?? {
+        provider: 'ollama',
+        model: 'llama3.1:8b',
+        baseUrl: 'http://127.0.0.1:11434',
+        temperature: 0.3,
+      },
+      {
+        setLlmSettings: (settings) => defaultStore.setLlmSettings(settings),
+      },
     );
   }
   const localScriptRegistry = new LocalScriptRegistry();
@@ -150,8 +200,8 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
   // 4.6a/4.6b：跨 turn 后台任务 + git worktree 隔离。任务流由宿主独立驱动
   // （不绑父 turn 生命周期，见 task-service.ts 模块头）；终态经广播推到
   // 用户面任务面板。
-  const resolveChatProjectRoot = (chatId: string): { name: string; folderPath: string } | null => {
-    const projectId = localStore.getChat(chatId)?.projectId;
+  const resolveChatProjectRoot = async (chatId: string): Promise<{ name: string; folderPath: string } | null> => {
+    const projectId = (await defaultStore.getChat(chatId))?.projectId;
     if (!projectId) return null;
     const project = projectRegistry.get(projectId);
     return project ? { name: project.name, folderPath: project.folderPath } : null;
@@ -162,20 +212,21 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
   const packHandles = new Map<string, PackAssemblyHandle>();
   {
     const packDeps = {
-      db: localStore.getPackDb(),
+      packDb,
       listTools: () => toolRouter.listModelSchemas(),
       resolveChatProject: resolveChatProjectRoot,
       broadcast,
       registerTools: (tools) => toolRouter.registerToolContributions(tools),
-      recordUsage: (input) => localStore.recordUsageEvent(input),
-      recordInsight: (input) => recordInsightTurn(input),
+      recordUsage: (input) =>
+        (localBackendRouter?.activeStore ?? defaultStore).recordUsageEvent(input),
+      recordInsight: (input) =>
+        recordInsightTurn(localBackendRouter?.activeStore ?? defaultStore, input),
       onLog,
     } satisfies PackAssemblyDeps;
     // 包迁移容错应用（3.2）：包的 import 链可能经 llm/index 等模块提前
     // 触发 storage 单例构造（ESM 深度优先，active.ts 的注册体后于链上
     // 单例求值）——构造时注册表尚空，此处（装配前）补上已注册包迁移。
     // 幂等（按包 id 去重），注册表为空时零开销。
-    localStore.applyPackMigrations();
     for (const [packId, assemble] of getPackAssemblies()) {
       const handle = assemble(packDeps);
       if (handle) packHandles.set(packId, handle);
@@ -183,14 +234,19 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
   }
   const worktreeService = new WorktreeService({ resolveProject: resolveChatProjectRoot });
   const taskService = new TaskService({
-    store: localStore,
+    store: () => localBackendRouter?.activeStore ?? defaultStore,
     toolRouter,
     worktreeService,
     resolveChatProject: resolveChatProjectRoot,
     broadcast,
   });
   toolRouter.setTaskServices({ taskService, worktreeService });
-  const localBackendRouter = new LocalBackendRouter(toolRouter, {
+  localBackendRouter = new LocalBackendRouter(toolRouter, {
+    store: defaultStore,
+    resolveStore: (principal) =>
+      principal
+        ? getScopedStore({ tenantId: principal.tenantId, userId: principal.id })
+        : defaultStore,
     taskService,
     broadcast: broadcastMain,
   });
@@ -210,6 +266,7 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
   let started = false;
 
   return {
+    store: defaultStore,
     localExecutor,
     localScriptRegistry,
     terminalManager,
@@ -224,13 +281,13 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
     askUserBridge,
     maybeExecInTerminal,
 
-    start(): void {
+    async start(): Promise<void> {
       if (started) return;
       started = true;
 
       // 4.6a：上次进程崩溃/强杀留下的 running 任务不是真相——任务流随进程
       // 一起死了，启动时落成 failed，任务面板据此显示"重启中断"。
-      const sweptTasks = localStore.failRunningTasks(options.taskSweepReason);
+      const sweptTasks = await defaultStore.failRunningTasks(options.taskSweepReason);
       if (sweptTasks > 0) {
         onLog(`[task] swept ${sweptTasks} stale running task(s)`);
       }
@@ -238,9 +295,10 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
       // Not awaited: sidecar boot (python import) must not delay readiness.
       // A turn that races the boot falls back for that turn only.
       void startHostSidecar({
+        store: defaultStore,
         toolRouter,
-        resolveProjectRoot: (chatId) =>
-          localBackendRouter.resolveChatProject(chatId)?.folderPath ?? null,
+        resolveProjectRoot: async (chatId) =>
+          (await localBackendRouter.resolveChatProject(chatId))?.folderPath ?? null,
         // 项目模式下文件读写被围栏在项目目录内；会话附件目录是额外放行的
         // 只读根，保证用户上传的文件即使在项目会话里也能被 agent 读回。
         resolveAdditionalReadRoots: (chatId) => [getChatAttachmentsDir(chatId)],
@@ -278,6 +336,7 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
         await handle.dispose?.();
       }
       await shutdownHostSidecar();
+      await closeStorage();
     },
   };
 }

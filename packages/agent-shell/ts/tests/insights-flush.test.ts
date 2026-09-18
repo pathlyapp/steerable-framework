@@ -21,15 +21,6 @@ const mocks = vi.hoisted(() => ({
   resolveInsightsApiBase: vi.fn(),
 }));
 
-vi.mock('../src/storage/index.js', () => ({
-  localStore: {
-    ensureInsightsSettings: mocks.ensureInsightsSettings,
-    listInsightOutbox: mocks.listInsightOutbox,
-    exportInsightsBundle: mocks.exportInsightsBundle,
-    markInsightUploaded: mocks.markInsightUploaded,
-    markInsightUploadError: mocks.markInsightUploadError,
-  },
-}));
 vi.mock('../src/storage/insights-settings.js', () => ({
   rowsEligibleForAutoUpload: mocks.rowsEligibleForAutoUpload,
   resolveInsightsApiBase: mocks.resolveInsightsApiBase,
@@ -46,6 +37,13 @@ import {
 const ENV_KEYS = ['VITEST', 'DEEPPATH_INSIGHTS_DISABLE_UPLOAD', 'DEEPPATH_INSIGHTS_API_BASE', 'DEEPPATH_INSIGHTS_INGEST_TOKEN'];
 let savedEnv: Record<string, string | undefined> = {};
 const fetchMock = vi.fn();
+const store = {
+  ensureInsightsSettings: mocks.ensureInsightsSettings,
+  listInsightOutbox: mocks.listInsightOutbox,
+  exportInsightsBundle: mocks.exportInsightsBundle,
+  markInsightUploaded: mocks.markInsightUploaded,
+  markInsightUploadError: mocks.markInsightUploadError,
+} as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -82,7 +80,7 @@ describe('insightsNetworkDisabled', () => {
 describe('flushInsightsOutbox', () => {
   it('禁网时全零返回，store 不被触碰', async () => {
     process.env.VITEST = '1';
-    expect(await flushInsightsOutbox()).toEqual({ uploaded: 0, skipped: 0, failed: 0 });
+    expect(await flushInsightsOutbox(store)).toEqual({ uploaded: 0, skipped: 0, failed: 0 });
     expect(mocks.listInsightOutbox).not.toHaveBeenCalled();
   });
 
@@ -90,7 +88,7 @@ describe('flushInsightsOutbox', () => {
     mocks.resolveInsightsApiBase.mockReturnValue(undefined);
     mocks.listInsightOutbox.mockReturnValue([{ id: 'r1', kind: 'event', payload: {} }]);
     mocks.rowsEligibleForAutoUpload.mockReturnValue({ upload: [{ id: 'r1', kind: 'event', payload: {} }], skipped: 0 });
-    expect(await flushInsightsOutbox()).toEqual({ uploaded: 0, skipped: 0, failed: 0 });
+    expect(await flushInsightsOutbox(store)).toEqual({ uploaded: 0, skipped: 0, failed: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mocks.markInsightUploaded).not.toHaveBeenCalled();
   });
@@ -105,7 +103,7 @@ describe('flushInsightsOutbox', () => {
     mocks.rowsEligibleForAutoUpload.mockReturnValue({ upload: rows, skipped: 2 });
     fetchMock.mockResolvedValue({ ok: true });
 
-    const result = await flushInsightsOutbox();
+    const result = await flushInsightsOutbox(store);
     expect(result).toEqual({ uploaded: 3, skipped: 2, failed: 0 });
 
     const urls = fetchMock.mock.calls.map((c) => c[0]);
@@ -136,7 +134,7 @@ describe('flushInsightsOutbox', () => {
     mocks.rowsEligibleForAutoUpload.mockReturnValue({ upload: rows, skipped: 0 });
     fetchMock.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, status: 500 });
 
-    expect(await flushInsightsOutbox()).toEqual({ uploaded: 1, skipped: 0, failed: 1 });
+    expect(await flushInsightsOutbox(store)).toEqual({ uploaded: 1, skipped: 0, failed: 1 });
     expect(mocks.markInsightUploaded).toHaveBeenCalledWith('ok1');
     expect(mocks.markInsightUploadError).toHaveBeenCalledWith('bad1', 'upload_failed');
   });
@@ -146,7 +144,7 @@ describe('flushInsightsOutbox', () => {
     mocks.listInsightOutbox.mockReturnValue(rows);
     mocks.rowsEligibleForAutoUpload.mockReturnValue({ upload: rows, skipped: 0 });
     fetchMock.mockRejectedValue(new Error('socket hang up'));
-    expect(await flushInsightsOutbox()).toEqual({ uploaded: 0, skipped: 0, failed: 1 });
+    expect(await flushInsightsOutbox(store)).toEqual({ uploaded: 0, skipped: 0, failed: 1 });
   });
 });
 
@@ -175,9 +173,9 @@ describe('postInsightsJson', () => {
 });
 
 describe('uploadInsightsBundle / buildInsightsExportPayload', () => {
-  it('payload = 导出 bundle + client meta', () => {
+  it('payload = 导出 bundle + client meta', async () => {
     mocks.exportInsightsBundle.mockReturnValue({ schema: 'test/v1', records: [] });
-    const payload = buildInsightsExportPayload();
+    const payload = await buildInsightsExportPayload(store);
     expect(payload).toMatchObject({ schema: 'test/v1', records: [], installId: 'inst-1' });
     expect(typeof payload.flavor).toBe('string');
     expect(typeof payload.appVersion).toBe('string');
@@ -188,24 +186,24 @@ describe('uploadInsightsBundle / buildInsightsExportPayload', () => {
       records: [{ id: 'r1' }, { id: 'r2' }],
     });
     fetchMock.mockResolvedValueOnce({ ok: true });
-    expect(await uploadInsightsBundle()).toBe(true);
+    expect(await uploadInsightsBundle(store)).toBe(true);
     expect(fetchMock.mock.calls[0][0]).toBe('https://insights.example/api/v2/agent-insights/bundle');
     expect(mocks.markInsightUploaded).toHaveBeenCalledWith('r1');
     expect(mocks.markInsightUploaded).toHaveBeenCalledWith('r2');
 
     vi.clearAllMocks();
     fetchMock.mockResolvedValueOnce({ ok: false });
-    expect(await uploadInsightsBundle()).toBe(false);
+    expect(await uploadInsightsBundle(store)).toBe(false);
     expect(mocks.markInsightUploaded).not.toHaveBeenCalled();
   });
 
   it('禁网/无端点 → false 且不发请求', async () => {
     process.env.VITEST = '1';
-    expect(await uploadInsightsBundle()).toBe(false);
+    expect(await uploadInsightsBundle(store)).toBe(false);
     delete process.env.VITEST;
     mocks.resolveInsightsApiBase.mockReturnValue(undefined);
     mocks.exportInsightsBundle.mockReturnValue({ records: [] });
-    expect(await uploadInsightsBundle()).toBe(false);
+    expect(await uploadInsightsBundle(store)).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

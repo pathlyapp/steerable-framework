@@ -1,9 +1,8 @@
 /**
  * Sidecar 持久化库（sessions/traces/history）路径解析。
  *
- * 单独成模块而不是留在 boot.ts：boot.ts 会拉起 localStore 单例（进程内
- * 独占写锁），只想读 history 的调用方（如后台任务过程投影）不该为一个
- * 路径付这个代价。
+ * Kept outside boot.ts so history readers can resolve this separate database
+ * without initializing host storage.
  */
 import path from 'node:path';
 import { homedir } from 'node:os';

@@ -67,8 +67,8 @@ import { type CreateLocalScriptInput } from './local-script-registry.js';
 import { type TerminalSpawnOptions } from './terminal-manager.js';
 import { getActiveCoreLoopStreamId } from './local-backend/coreloop-stream.js';
 import { getSidecarSupervisor } from './llm/index.js';
-import { localStore } from './storage/index.js';
-import { createHostRuntime } from './host/runtime.js';
+import type { ScopedStore } from './storage/scoped-store.js';
+import { createHostRuntime, type HostRuntime } from './host/runtime.js';
 import { registerPackIpc } from './host/ipc.js';
 
 interface WindowState {
@@ -107,29 +107,16 @@ const RETRY_DELAYS = [2000, 5000, 10000, 30000];
 // 全部宿主服务由共享 HostRuntime 装配（与 BS server 同一份，见
 // src/host/runtime.ts 模块头——历史上两处逐行重复，BS 曾漏接 TaskService
 // 导致模型退化成"假后台"）。CS 的差异只剩广播（IPC）与生命周期。
-const runtime = createHostRuntime({
-  broadcast: (channel, payload) => broadcastTerminalEvent(channel, payload),
-  // LocalBackendRouter 的后台事件（chat-title-updated / suggested-replies）只推主窗口。
-  // 没拿到 mainWindow 时静默丢——title 是 nice-to-have，不该让启动顺序影响功能。
-  broadcastMain: (eventName, payload) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.webContents.send(eventName, payload);
-  },
-  hasWindow: () =>
-    BrowserWindow.getAllWindows().some((win) => !win.isDestroyed()),
-  onLog: (line) => log.info('[sidecar]', line),
-  taskSweepReason: '应用重启，任务流已中断',
-});
-const {
-  localExecutor,
-  localScriptRegistry,
-  terminalManager,
-  packHandles,
-  localBackendRouter,
-  approvalBridge,
-  askUserBridge,
-  maybeExecInTerminal,
-} = runtime;
+let runtime!: HostRuntime;
+let hostStore!: ScopedStore;
+let localExecutor!: HostRuntime['localExecutor'];
+let localScriptRegistry!: HostRuntime['localScriptRegistry'];
+let terminalManager!: HostRuntime['terminalManager'];
+let packHandles!: HostRuntime['packHandles'];
+let localBackendRouter!: HostRuntime['localBackendRouter'];
+let approvalBridge!: HostRuntime['approvalBridge'];
+let askUserBridge!: HostRuntime['askUserBridge'];
+let maybeExecInTerminal!: HostRuntime['maybeExecInTerminal'];
 
 let routeWindow: BrowserWindow | null = null;
 // 进行中的 agent 流（streamId → AbortController）。cancelStream IPC、
@@ -145,17 +132,6 @@ function broadcastTerminalEvent(channel: string, payload: unknown): void {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   }
 }
-
-terminalManager.on('data', (sessionId: string, chunk: string) => {
-  broadcastTerminalEvent('terminal:data', { sessionId, chunk });
-});
-terminalManager.on('exit', (sessionId: string, code: number, signal: string | null) => {
-  broadcastTerminalEvent('terminal:exit', { sessionId, code, signal });
-});
-terminalManager.on('spawned', session => {
-  broadcastTerminalEvent('terminal:spawned', session);
-});
-
 
 function getStartPath(): string {
   if (!START_PATH) return '/agent';
@@ -842,7 +818,7 @@ function setupIpcHandlers(): void {
         // between the turn's user message and the assistant reply persisted at
         // turn end. Only on acceptance: a soft failure degrades into the
         // follow-up queue, which persists through the normal send path.
-        localStore.addMessage(chatId, 'user', content);
+        await hostStore.addMessage(chatId, 'user', content);
       }
       return { ok, ...(ok ? {} : { reason: 'stream_not_active' }) };
     }
@@ -907,10 +883,41 @@ function setupIpcHandlers(): void {
 
 app.whenReady().then(async () => {
   applyStrictCsp();
+  runtime = await createHostRuntime({
+    broadcast: (channel, payload) => broadcastTerminalEvent(channel, payload),
+    broadcastMain: (eventName, payload) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.webContents.send(eventName, payload);
+    },
+    hasWindow: () =>
+      BrowserWindow.getAllWindows().some((win) => !win.isDestroyed()),
+    onLog: (line) => log.info('[sidecar]', line),
+    taskSweepReason: '应用重启，任务流已中断',
+  });
+  ({
+    store: hostStore,
+    localExecutor,
+    localScriptRegistry,
+    terminalManager,
+    packHandles,
+    localBackendRouter,
+    approvalBridge,
+    askUserBridge,
+    maybeExecInTerminal,
+  } = runtime);
+  terminalManager.on('data', (sessionId: string, chunk: string) => {
+    broadcastTerminalEvent('terminal:data', { sessionId, chunk });
+  });
+  terminalManager.on('exit', (sessionId: string, code: number, signal: string | null) => {
+    broadcastTerminalEvent('terminal:exit', { sessionId, code, signal });
+  });
+  terminalManager.on('spawned', session => {
+    broadcastTerminalEvent('terminal:spawned', session);
+  });
   setupIpcHandlers();
   // 任务清扫 / mock 广播 / sidecar 启动 / MCP 刷新 / 终端预热都在
   // runtime.start() 里（与 BS 同一份）。
-  runtime.start();
+  await runtime.start();
   createWindow();
   setSecondInstanceHandler(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {

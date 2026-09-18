@@ -91,6 +91,10 @@ export interface ServiceCreateContext {
  * ppt_*），跨包不许共享表。
  */
 export interface MigrationContribution {
+  /** Monotonic migration generation persisted by the selected driver. */
+  readonly version?: number;
+  /** Table creation required before incremental column checks. */
+  readonly beforeDdl?: readonly string[];
   /** DDL 语句（CREATE TABLE/INDEX IF NOT EXISTS …），合并为一次 exec 执行。 */
   readonly ddl?: readonly string[];
   /** 增量列迁移（已有库的 ALTER TABLE ADD COLUMN，列已存在则跳过）。 */

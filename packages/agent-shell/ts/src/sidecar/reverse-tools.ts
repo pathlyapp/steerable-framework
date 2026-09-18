@@ -21,7 +21,7 @@ export interface ReverseToolDeps {
    * main.ts 注入 LocalBackendRouter.resolveChatProject 的适配；未注入时
    * 项目围栏不生效（CLI/test 场景）。
    */
-  resolveProjectRoot?: (chatId: string) => string | null;
+  resolveProjectRoot?: (chatId: string) => Promise<string | null>;
   /**
    * 额外放行的只读根（会话附件目录等）。写入仍只受 projectRoot 围栏约束，
    * 这里只放宽 local_read_file 的读取范围。
@@ -83,7 +83,7 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
       typeof p.context?.workspaceRoot === 'string' && p.context.workspaceRoot
         ? p.context.workspaceRoot
         : p.context?.chatId
-          ? (deps.resolveProjectRoot?.(p.context.chatId) ?? null)
+          ? (await deps.resolveProjectRoot?.(p.context.chatId) ?? null)
           : null;
     const additionalReadRoots = p.context?.chatId
       ? (deps.resolveAdditionalReadRoots?.(p.context.chatId) ?? [])

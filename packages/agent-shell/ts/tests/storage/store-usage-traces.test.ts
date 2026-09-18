@@ -13,16 +13,16 @@ import {
   loadStorageModule,
 } from './local-store-testkit.js';
 
-const { LocalStore } = await loadStorageModule();
+await loadStorageModule();
 
 afterEach(() => {
   cleanupTestStores();
 });
 
 describe('LocalStore / 用量事件聚合', () => {
-  it('空表返回全零总计与空分桶', () => {
-    const { store } = createTestStore(LocalStore);
-    expect(store.getUsageSummary()).toEqual({
+  it('空表返回全零总计与空分桶', async () => {
+    const { store, db } = await createTestStore();
+    expect(await store.getUsageSummary()).toEqual({
       sinceDays: 30,
       byModel: [],
       totals: {
@@ -36,10 +36,10 @@ describe('LocalStore / 用量事件聚合', () => {
     });
   });
 
-  it('同 model+provider 聚合成一桶，按 totalTokens 降序排列', () => {
-    const { store } = createTestStore(LocalStore);
-    const chat = store.createChat('x');
-    store.recordUsageEvent({
+  it('同 model+provider 聚合成一桶，按 totalTokens 降序排列', async () => {
+    const { store, db } = await createTestStore();
+    const chat = await store.createChat('x');
+    await store.recordUsageEvent({
       chatId: chat.id,
       kind: 'chat',
       provider: 'deepseek',
@@ -49,7 +49,7 @@ describe('LocalStore / 用量事件聚合', () => {
       totalTokens: 30,
       costUsd: 0.001,
     });
-    store.recordUsageEvent({
+    await store.recordUsageEvent({
       chatId: chat.id,
       kind: 'chat',
       provider: 'deepseek',
@@ -60,7 +60,7 @@ describe('LocalStore / 用量事件聚合', () => {
       cachedPromptTokens: 5,
       costUsd: 0.002,
     });
-    store.recordUsageEvent({
+    await store.recordUsageEvent({
       kind: 'title',
       provider: 'ollama',
       model: 'local-model',
@@ -69,7 +69,7 @@ describe('LocalStore / 用量事件聚合', () => {
       totalTokens: 100,
     });
 
-    const summary = store.getUsageSummary(7);
+    const summary = await store.getUsageSummary(7);
     expect(summary.sinceDays).toBe(7);
     // total_tokens 100 的 local-model 桶排前。
     expect(summary.byModel.map((b) => b.model)).toEqual(['local-model', 'deepseek-chat']);
@@ -96,15 +96,15 @@ describe('LocalStore / 用量事件聚合', () => {
     expect(summary.totals.costUsd).toBeCloseTo(0.003);
   });
 
-  it('model 缺省归到 (unknown) 桶；负 token 夹 0、小数取整', () => {
-    const { store } = createTestStore(LocalStore);
-    store.recordUsageEvent({
+  it('model 缺省归到 (unknown) 桶；负 token 夹 0、小数取整', async () => {
+    const { store, db } = await createTestStore();
+    await store.recordUsageEvent({
       kind: 'chat',
       promptTokens: -5,
       completionTokens: 2.9,
       totalTokens: 3.5,
     });
-    const summary = store.getUsageSummary();
+    const summary = await store.getUsageSummary();
     expect(summary.byModel).toHaveLength(1);
     expect(summary.byModel[0]).toMatchObject({
       model: '(unknown)',
@@ -117,9 +117,9 @@ describe('LocalStore / 用量事件聚合', () => {
     });
   });
 
-  it('sinceDays 窗口之外的事件不计入', () => {
-    const { store } = createTestStore(LocalStore);
-    store.recordUsageEvent({
+  it('sinceDays 窗口之外的事件不计入', async () => {
+    const { store, db } = await createTestStore();
+    await store.recordUsageEvent({
       kind: 'chat',
       model: 'm',
       promptTokens: 1,
@@ -128,21 +128,20 @@ describe('LocalStore / 用量事件聚合', () => {
     });
     // 把这条记录直接改到 40 天前（recordUsageEvent 总是写当前时间，
     // 窗口行为只能经底层列控制）。
-    store
-      .getPackDb()
+    db
       .prepare(`UPDATE usage_events SET created_at = ?`)
       .run(new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString());
 
-    expect(store.getUsageSummary(30).byModel).toEqual([]);
-    expect(store.getUsageSummary(60).byModel).toHaveLength(1);
+    expect((await store.getUsageSummary(30)).byModel).toEqual([]);
+    expect((await store.getUsageSummary(60)).byModel).toHaveLength(1);
   });
 });
 
 describe('LocalStore / harness traces', () => {
-  it('saveTrace 往返：可空字段缺省 null，payload 以 JSON 字符串读回', () => {
-    const { store } = createTestStore(LocalStore);
-    const chat = store.createChat('x');
-    const trace = store.saveTrace({
+  it('saveTrace 往返：可空字段缺省 null，payload 以 JSON 字符串读回', async () => {
+    const { store, db } = await createTestStore();
+    const chat = await store.createChat('x');
+    const trace = await store.saveTrace({
       id: 'trace-1',
       chatId: chat.id,
       startedAtMs: 1000,
@@ -159,15 +158,15 @@ describe('LocalStore / harness traces', () => {
     });
     // HarnessTraceRecord.payload 是存储态的 JSON 字符串，不是解析后的对象。
     expect(JSON.parse(trace.payload)).toEqual({ turns: 2, tools: ['local_exec_shell'] });
-    expect(store.getTrace('trace-1')).toEqual(trace);
+    expect(await store.getTrace('trace-1')).toEqual(trace);
   });
 
-  it('listTracesByChat 按 started_at_ms 新→旧，按 chat 隔离，limit clamp', () => {
-    const { store } = createTestStore(LocalStore);
-    const a = store.createChat('a');
-    const b = store.createChat('b');
+  it('listTracesByChat 按 started_at_ms 新→旧，按 chat 隔离，limit clamp', async () => {
+    const { store, db } = await createTestStore();
+    const a = await store.createChat('a');
+    const b = await store.createChat('b');
     for (let i = 1; i <= 3; i += 1) {
-      store.saveTrace({
+      await store.saveTrace({
         id: `t${i}`,
         chatId: a.id,
         messageId: `m${i}`,
@@ -177,16 +176,16 @@ describe('LocalStore / harness traces', () => {
         payload: {},
       });
     }
-    store.saveTrace({ id: 'tb', chatId: b.id, startedAtMs: 999, status: 'failed', payload: {} });
+    await store.saveTrace({ id: 'tb', chatId: b.id, startedAtMs: 999, status: 'failed', payload: {} });
 
-    const listed = store.listTracesByChat(a.id);
+    const listed = await store.listTracesByChat(a.id);
     expect(listed.map((t) => t.id)).toEqual(['t3', 't2', 't1']);
     expect(listed[0].messageId).toBe('m3');
     expect(listed[0].durationMs).toBe(10);
-    expect(store.listTracesByChat(a.id, 2).map((t) => t.id)).toEqual(['t3', 't2']);
-    expect(store.listTracesByChat(a.id, Number.NaN)).toHaveLength(3);
-    expect(store.listTracesByChat(b.id).map((t) => t.id)).toEqual(['tb']);
-    expect(store.listTracesByChat('ghost')).toEqual([]);
-    expect(store.getTrace('ghost')).toBeNull();
+    expect((await store.listTracesByChat(a.id, 2)).map((t) => t.id)).toEqual(['t3', 't2']);
+    expect(await store.listTracesByChat(a.id, Number.NaN)).toHaveLength(3);
+    expect((await store.listTracesByChat(b.id)).map((t) => t.id)).toEqual(['tb']);
+    expect(await store.listTracesByChat('ghost')).toEqual([]);
+    expect(await store.getTrace('ghost')).toBeNull();
   });
 });

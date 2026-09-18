@@ -15,12 +15,10 @@ const mocks = vi.hoisted(() => ({
   setDefaultExecTimeoutMs: vi.fn(),
   executorInit: vi.fn(async () => {}),
   seedReadState: vi.fn(() => 0),
-  getLlmSettings: vi.fn((): unknown => undefined),
-  failRunningTasks: vi.fn(() => 0),
-  getChat: vi.fn((): unknown => undefined),
-  getPackDb: vi.fn(() => ({})),
-  recordUsageEvent: vi.fn(),
-  applyPackMigrations: vi.fn(),
+  getLlmSettings: vi.fn(async (): Promise<unknown> => undefined),
+  failRunningTasks: vi.fn(async () => 0),
+  getChat: vi.fn(async (): Promise<unknown> => undefined),
+  recordUsageEvent: vi.fn(async () => {}),
   terminalOn: vi.fn(),
   terminalKillAll: vi.fn(),
   terminalEnsurePrimary: vi.fn(() => ({ id: 'main' })),
@@ -81,16 +79,21 @@ vi.mock('../src/local-backend/router.js', () => ({
 }));
 vi.mock('../src/local-backend/worktree-service.js', () => ({ WorktreeService: class {} }));
 vi.mock('../src/local-backend/task-service.js', () => ({ TaskService: class {} }));
-vi.mock('../src/storage/index.js', () => ({
-  localStore: {
+vi.mock('../src/storage/driver.js', () => {
+  const store = {
     getLlmSettings: mocks.getLlmSettings,
     failRunningTasks: mocks.failRunningTasks,
     getChat: mocks.getChat,
-    getPackDb: mocks.getPackDb,
     recordUsageEvent: mocks.recordUsageEvent,
-    applyPackMigrations: mocks.applyPackMigrations,
-  },
-}));
+  };
+  return {
+    LOCAL_SCOPE: { tenantId: 'local', userId: 'local' },
+    initializeStorage: vi.fn(async () => {}),
+    closeStorage: vi.fn(async () => {}),
+    getScopedStore: () => store,
+    getPackDbAccess: () => ({ scope: { tenantId: 'local', userId: 'local' } }),
+  };
+});
 vi.mock('../src/sidecar/reverse-approval.js', () => ({
   createApprovalBridge: () => ({ handler: 'approval-handler', decide: vi.fn() }),
 }));
@@ -139,8 +142,8 @@ afterEach(() => {
 });
 
 describe('createHostRuntime · 装配', () => {
-  it('所有服务就位，任务/工作台服务挂到 toolRouter', () => {
-    const rt = createHostRuntime(makeOptions());
+  it('所有服务就位，任务/工作台服务挂到 toolRouter', async () => {
+    const rt = await createHostRuntime(makeOptions());
     expect(rt.localExecutor).toBeDefined();
     expect(rt.toolRouter).toBeDefined();
     expect(rt.taskService).toBeDefined();
@@ -149,9 +152,9 @@ describe('createHostRuntime · 装配', () => {
     expect(mocks.bindWorkspaceSkillRoots).toHaveBeenCalledOnce();
   });
 
-  it('终端事件转发到广播（data / exit / spawned）', () => {
+  it('终端事件转发到广播（data / exit / spawned）', async () => {
     const options = makeOptions();
-    createHostRuntime(options);
+    await createHostRuntime(options);
     const handlers = Object.fromEntries(mocks.terminalOn.mock.calls.map((c) => [c[0], c[1]]));
     const broadcast = (options as never as { broadcast: ReturnType<typeof vi.fn> }).broadcast;
 
@@ -163,59 +166,58 @@ describe('createHostRuntime · 装配', () => {
     expect(broadcast).toHaveBeenCalledWith('terminal:spawned', { id: 's2' });
   });
 
-  it('持久化的 execTimeoutSeconds 恢复为毫秒；未配置时传 null', () => {
+  it('持久化的 execTimeoutSeconds 恢复为毫秒；未配置时传 null', async () => {
     mocks.getLlmSettings.mockReturnValue({ execTimeoutSeconds: 45 });
-    createHostRuntime(makeOptions());
+    await createHostRuntime(makeOptions());
     expect(mocks.setDefaultExecTimeoutMs).toHaveBeenCalledWith(45_000);
 
     vi.clearAllMocks();
     mocks.getLlmSettings.mockReturnValue(undefined);
-    createHostRuntime(makeOptions());
+    await createHostRuntime(makeOptions());
     expect(mocks.setDefaultExecTimeoutMs).toHaveBeenCalledWith(null);
   });
 
-  it('包装配：注册表里的包逐个装配，deps 带 db/广播/记录缝；迁移先应用且幂等', () => {
+  it('包装配：注册表里的包逐个装配，deps 带 packDb/广播/记录缝', async () => {
     const assemble = vi.fn((deps: { registerTools: unknown }) => ({ dispose: vi.fn() }));
     mocks.packAssemblies.set('demo-pack', assemble);
-    const rt = createHostRuntime(makeOptions());
-    expect(mocks.applyPackMigrations).toHaveBeenCalledOnce();
+    const rt = await createHostRuntime(makeOptions());
     expect(assemble).toHaveBeenCalledOnce();
     expect(rt.packHandles.has('demo-pack')).toBe(true);
     const deps = assemble.mock.calls[0][0] as Record<string, unknown>;
-    for (const key of ['db', 'listTools', 'resolveChatProject', 'broadcast', 'registerTools', 'recordUsage', 'recordInsight', 'onLog']) {
+    for (const key of ['packDb', 'listTools', 'resolveChatProject', 'broadcast', 'registerTools', 'recordUsage', 'recordInsight', 'onLog']) {
       expect(deps[key], `pack deps 缺 ${key}`).toBeDefined();
     }
   });
 
-  it('包装配返回 null（包自行退出）不占 handle', () => {
+  it('包装配返回 null（包自行退出）不占 handle', async () => {
     mocks.packAssemblies.set('noop-pack', () => null);
-    const rt = createHostRuntime(makeOptions());
+    const rt = await createHostRuntime(makeOptions());
     expect(rt.packHandles.size).toBe(0);
   });
 });
 
 describe('start · 生命周期', () => {
-  it('幂等：第二次调用不再清扫/重启 sidecar', () => {
-    const rt = createHostRuntime(makeOptions());
-    rt.start();
-    rt.start();
+  it('幂等：第二次调用不再清扫/重启 sidecar', async () => {
+    const rt = await createHostRuntime(makeOptions());
+    await rt.start();
+    await rt.start();
     expect(mocks.failRunningTasks).toHaveBeenCalledOnce();
     expect(mocks.startHostSidecar).toHaveBeenCalledOnce();
   });
 
-  it('启动清扫 running 任务并记录原因；有清扫结果时打日志', () => {
+  it('启动清扫 running 任务并记录原因；有清扫结果时打日志', async () => {
     mocks.failRunningTasks.mockReturnValue(3);
     const options = makeOptions();
-    const rt = createHostRuntime(options);
-    rt.start();
+    const rt = await createHostRuntime(options);
+    await rt.start();
     expect(mocks.failRunningTasks).toHaveBeenCalledWith('宿主重启，任务中断');
     const onLog = (options as never as { onLog: ReturnType<typeof vi.fn> }).onLog;
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('3'));
   });
 
-  it('sidecar 启动接线：反向通道处理器与附件目录只读根', () => {
-    const rt = createHostRuntime(makeOptions());
-    rt.start();
+  it('sidecar 启动接线：反向通道处理器与附件目录只读根', async () => {
+    const rt = await createHostRuntime(makeOptions());
+    await rt.start();
     const bootDeps = mocks.startHostSidecar.mock.calls[0][0];
     expect(bootDeps.approvalHandler).toBe('approval-handler');
     expect(bootDeps.askUserHandler).toBe('ask-user-handler');
@@ -224,8 +226,8 @@ describe('start · 生命周期', () => {
 
   it('read_state.seed 处理器：合法 state 透传并回 seeded；畸形入参按空表处理', async () => {
     mocks.seedReadState.mockReturnValue(5);
-    const rt = createHostRuntime(makeOptions());
-    rt.start();
+    const rt = await createHostRuntime(makeOptions());
+    await rt.start();
     const handler = mocks.startHostSidecar.mock.calls[0][0].readStateSeedHandler;
 
     expect(await handler({ state: { '/a': 'v1' } })).toEqual({ seeded: 5 });
@@ -238,14 +240,14 @@ describe('start · 生命周期', () => {
     expect(await handler(undefined)).toEqual({ seeded: 0 });
   });
 
-  it('MCP 工具列表后台刷新；终端预热在 2s 后且失败只打日志', () => {
+  it('MCP 工具列表后台刷新；终端预热在 2s 后且失败只打日志', async () => {
     vi.useFakeTimers();
     mocks.terminalEnsurePrimary.mockImplementation(() => {
       throw new Error('pty unavailable');
     });
     const options = makeOptions();
-    const rt = createHostRuntime(options);
-    rt.start();
+    const rt = await createHostRuntime(options);
+    await rt.start();
     expect(mocks.refreshAllEnabled).toHaveBeenCalledOnce();
     expect(mocks.terminalEnsurePrimary).not.toHaveBeenCalled();
     vi.advanceTimersByTime(2_100);
@@ -260,7 +262,7 @@ describe('shutdown', () => {
     const order: string[] = [];
     mocks.packAssemblies.set('pack-a', () => ({ dispose: () => void order.push('a') }));
     mocks.packAssemblies.set('pack-b', () => ({ dispose: () => void order.push('b') }));
-    const rt = createHostRuntime(makeOptions());
+    const rt = await createHostRuntime(makeOptions());
     await rt.shutdown();
     expect(mocks.terminalKillAll).toHaveBeenCalledOnce();
     expect(order).toEqual(['b', 'a']);

@@ -1,25 +1,17 @@
 /**
- * LocalStore 集成测试脚手架：真实 SQLite（临时目录库文件）+ 依赖隔离。
- *
- * storage/index.js 在模块求值时就构造 localStore 单例（打开真实库文件并
- * 持有写租约），所以测试文件必须在动态 import 它之前把
- * DEEPPATH_USER_DATA_DIR 指到临时目录——否则单例会落到真实用户目录
- * （~/.agent-shell）：既污染本机数据，又可能撞上正在运行的应用持有的
- * 写租约而被 createLocalStore 的兜底逻辑直接 process.exit。本模块在
- * 求值时（早于测试文件主体里的 await loadStorageModule()）完成这次指向。
- *
- * 每个用例经 createTestStore() 拿一个独占临时目录的 LocalStore；
- * afterEach(cleanupTestStores) 关库删目录。写租约是 LocalStore 的私有
- * 字段、无 release API，随进程退出由内核释放；临时目录在 POSIX 上可带
- * 打开句柄删除，清理不受影响。
+ * SqliteScopedStore 集成测试脚手架：真实 SQLite 临时库与目录隔离。
+ * 每个用例经 createTestStore() 获得独占连接并由 cleanupTestStores()
+ * 关闭连接、删除目录。
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll } from 'vitest';
-import type { LocalStore } from '../../src/storage/index.js';
+import Database from 'better-sqlite3';
+import type { SqliteScopedStore } from '../../src/storage/index.js';
+import { LOCAL_SCOPE } from '../../src/storage/driver.js';
 
-/** localStore 单例的落脚目录（本测试文件进程内全局一份）。 */
+/** Driver lifecycle tests restore this safe temporary data directory. */
 const singletonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-store-singleton-'));
 process.env.DEEPPATH_USER_DATA_DIR = singletonDir;
 
@@ -29,13 +21,14 @@ afterAll(() => {
   fs.rmSync(singletonDir, { recursive: true, force: true });
 });
 
-/** 动态加载 storage/index.js；此刻单例构造在上方准备好的临时目录里。 */
+/** Loads the SQLite store implementation after the test data directory is set. */
 export function loadStorageModule(): Promise<typeof import('../../src/storage/index.js')> {
   return import('../../src/storage/index.js');
 }
 
 export interface TestStoreHandle {
-  store: LocalStore;
+  store: SqliteScopedStore;
+  db: Database.Database;
   /** 本用例独占的临时数据目录。 */
   dir: string;
   /** 主库文件路径（<dir>/agent-shell.db）。 */
@@ -55,13 +48,17 @@ export function withDataDir<T>(dir: string, fn: () => T): T {
 }
 
 /**
- * 在独立临时目录里构造一个 LocalStore。getUserDataDir 在构造时读
- * DEEPPATH_USER_DATA_DIR，构造完立即归位，不影响后续用例。
+ * 在独立临时目录里构造一个 SqliteScopedStore。
  */
-export function createTestStore(Store: new () => LocalStore): TestStoreHandle {
+export async function createTestStore(): Promise<TestStoreHandle> {
+  const { SqliteScopedStore } = await loadStorageModule();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-store-'));
-  const store = withDataDir(dir, () => new Store());
-  const handle: TestStoreHandle = { store, dir, dbPath: path.join(dir, 'agent-shell.db') };
+  const dbPath = path.join(dir, 'agent-shell.db');
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = ON');
+  const store = new SqliteScopedStore(db, LOCAL_SCOPE);
+  await store.initialize();
+  const handle: TestStoreHandle = { store, db, dir, dbPath };
   openHandles.push(handle);
   return handle;
 }
@@ -71,7 +68,7 @@ export function cleanupTestStores(): void {
   while (openHandles.length) {
     const handle = openHandles.pop()!;
     try {
-      handle.store.getPackDb().close();
+      handle.db.close();
     } catch {
       // 已关闭的库重复 close 会抛，清理路径不放大。
     }

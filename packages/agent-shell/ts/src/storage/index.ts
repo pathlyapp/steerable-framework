@@ -1,8 +1,5 @@
 import { randomUUID } from 'crypto';
-import path from 'path';
-import Database from 'better-sqlite3';
-import { getUserDataDir } from '../runtime.js';
-import { getProductConfig } from '../product-config.js';
+import type Database from 'better-sqlite3';
 import {
   ALL_ROUND_ASSISTANT_AGENT_ID,
   LOCAL_ASSISTANT_AGENT_ID,
@@ -15,11 +12,7 @@ import {
   mergeLlmSettings,
   type LlmSettings,
 } from './llm-settings.js';
-import {
-  MESSAGE_CUT_FROM_ID,
-  MESSAGE_ORDER_DESC,
-} from './message-order.js';
-import { LIST_EMPTY_CHAT_IDS_SQL } from './empty-chats.js';
+import { MESSAGE_ORDER_DESC } from './message-order.js';
 import {
   mergeTelemetrySettings,
   type TelemetrySettings,
@@ -36,8 +29,6 @@ import {
   type InsightsSettings,
   type InsightsSettingsPatch,
 } from './insights-settings.js';
-import { acquireWriteLease, lockPathForDb, type HeldWriteLease } from './write-lease.js';
-import { createLocalStore } from './local-store-singleton.js';
 import { getPackMigrations } from './pack-migrations.js';
 import {
   getPackAgentSeeds,
@@ -51,6 +42,8 @@ import {
   type UsageSummary,
   type UsageSummaryRow,
 } from './usage-summary.js';
+import type { TenantScope } from './driver.js';
+import type { ScopedStore } from './scoped-store.js';
 
 export type { UsageModelBucket, UsageSummary } from './usage-summary.js';
 
@@ -209,33 +202,94 @@ const DEFAULT_LOCAL_USER_ID = 'local';
 // insightsApiBase 对端）定义，改名会破坏对端解析。
 const INSIGHTS_EXPORT_SCHEMA = 'deeppath-agent-insights/v1'; // shell-neutral:allow（线协议常量，见上行）
 
-export class LocalStore {
-  private readonly db: Database.Database;
-  private readonly writeLease: HeldWriteLease;
+export class SqliteScopedStore implements ScopedStore {
+  constructor(
+    private readonly db: Database.Database,
+    readonly scope: TenantScope,
+  ) {}
 
-  constructor() {
-    // 主库文件名是产品注入配置（3.1，product.json dbFileName）——产品
-    // 借此保住存量数据文件；中性 shell 缺省 agent-shell.db。
-    const dbPath = path.join(getUserDataDir(), getProductConfig().dbFileName ?? 'agent-shell.db');
-    this.writeLease = acquireWriteLease(lockPathForDb(dbPath));
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    // The schema declares `ON DELETE CASCADE` foreign keys (chat_messages,
-    // harness_traces -> chat_sessions), but SQLite ignores FK constraints
-    // unless explicitly enabled per-connection. Without this, deleteChat()
-    // only removed the session row and left orphaned messages/traces behind.
-    this.db.pragma('foreign_keys = ON');
-    this.migrate();
+  /** Initializes schema, cleanup, migrations, and seeds for this scope. */
+  async initialize(): Promise<void> {
+    this.migrateScopedSchema();
     this.cleanupOrphanedRows();
-    this.seedDefaults();
+    await this.seedDefaults();
   }
 
-  /**
-   * 场景包存储扩展点：把同一个 SQLite 连接借给包内存储类（各包的
-   * <Pack>Store）。包只读写自己 migrations 声明的包前缀表；shell 表结构对包不透明。
-   */
-  getPackDb(): Database.Database {
-    return this.db;
+  private migrateScopedSchema(): void {
+    const tables = [
+      'chat_sessions',
+      'chat_messages',
+      'chat_agents',
+      'settings_kv',
+      'harness_traces',
+      'usage_events',
+      'insights_outbox',
+      'tasks',
+    ];
+    const existing = tables.filter((table) => this.tableColumns(table).length > 0);
+    const requiresRebuild = existing.some((table) => {
+      const columns = this.tableColumns(table);
+      const primaryKey = columns
+        .filter((column) => column.pk > 0)
+        .sort((a, b) => a.pk - b.pk)
+        .map((column) => column.name);
+      return !columns.some((column) => column.name === 'tenant_id')
+        || !columns.some((column) => column.name === 'user_id')
+        || primaryKey[0] !== 'tenant_id'
+        || primaryKey[1] !== 'user_id';
+    });
+    if (!requiresRebuild) {
+      this.migrate();
+      return;
+    }
+
+    this.db.pragma('foreign_keys = OFF');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const table of existing) {
+        this.db.exec(`ALTER TABLE ${table} RENAME TO ${table}__scope_legacy`);
+      }
+      this.migrate();
+      for (const table of existing) this.copyLegacyScopeRows(table);
+      for (const table of [...existing].reverse()) {
+        this.db.exec(`DROP TABLE ${table}__scope_legacy`);
+      }
+      // Legacy index names disappear with their tables; recreate them.
+      this.migrate();
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    } finally {
+      this.db.pragma('foreign_keys = ON');
+    }
+  }
+
+  private copyLegacyScopeRows(table: string): void {
+    const legacy = `${table}__scope_legacy`;
+    const oldColumns = this.tableColumns(legacy);
+    const newNames = new Set(this.tableColumns(table).map((column) => column.name));
+    const oldNames = new Set(oldColumns.map((column) => column.name));
+    const copied = oldColumns
+      .map((column) => column.name)
+      .filter((name) => name !== 'tenant_id' && name !== 'user_id' && newNames.has(name));
+    const target = ['tenant_id', 'user_id', ...copied];
+    const select = [
+      oldNames.has('tenant_id') ? `COALESCE(tenant_id, 'local')` : `'local'`,
+      oldNames.has('user_id') ? `COALESCE(user_id, 'local')` : `'local'`,
+      ...copied,
+    ];
+    this.db.exec(
+      `INSERT OR IGNORE INTO ${table} (${target.join(', ')})
+       SELECT ${select.join(', ')} FROM ${legacy}`,
+    );
+  }
+
+  private tableColumns(table: string): Array<{ name: string; pk: number }> {
+    return this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string;
+      pk: number;
+    }>;
   }
 
   /**
@@ -244,42 +298,98 @@ export class LocalStore {
    * chat_messages/harness_traces behind for deleted chat_sessions).
    */
   private cleanupOrphanedRows(): void {
+    for (const table of [
+      'chat_sessions',
+      'chat_messages',
+      'chat_agents',
+      'settings_kv',
+      'harness_traces',
+      'usage_events',
+      'insights_outbox',
+      'tasks',
+    ]) {
+      this.ensureColumn(table, 'tenant_id', `TEXT NOT NULL DEFAULT 'local'`);
+      this.ensureColumn(table, 'user_id', `TEXT NOT NULL DEFAULT 'local'`);
+    }
+
     this.db.exec(`
       DELETE FROM chat_messages
-      WHERE chat_id NOT IN (SELECT id FROM chat_sessions);
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chat_sessions
+        WHERE chat_sessions.tenant_id = chat_messages.tenant_id
+          AND chat_sessions.user_id = chat_messages.user_id
+          AND chat_sessions.id = chat_messages.chat_id
+      );
       DELETE FROM harness_traces
-      WHERE chat_id NOT IN (SELECT id FROM chat_sessions);
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chat_sessions
+        WHERE chat_sessions.tenant_id = harness_traces.tenant_id
+          AND chat_sessions.user_id = harness_traces.user_id
+          AND chat_sessions.id = harness_traces.chat_id
+      );
       DELETE FROM tasks
-      WHERE chat_id NOT IN (SELECT id FROM chat_sessions);
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chat_sessions
+        WHERE chat_sessions.tenant_id = tasks.tenant_id
+          AND chat_sessions.user_id = tasks.user_id
+          AND chat_sessions.id = tasks.chat_id
+      );
+    `);
+
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_chat_sessions_scope
+        ON chat_sessions(tenant_id, user_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_scope
+        ON chat_messages(tenant_id, user_id, chat_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_chat_agents_scope
+        ON chat_agents(tenant_id, user_id, sort_order);
+      CREATE INDEX IF NOT EXISTS idx_settings_scope
+        ON settings_kv(tenant_id, user_id, key);
+      CREATE INDEX IF NOT EXISTS idx_traces_scope
+        ON harness_traces(tenant_id, user_id, id);
+      CREATE INDEX IF NOT EXISTS idx_usage_scope
+        ON usage_events(tenant_id, user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_insights_scope
+        ON insights_outbox(tenant_id, user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_tasks_scope
+        ON tasks(tenant_id, user_id, updated_at DESC);
     `);
   }
 
   private migrate(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chat_sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        title TEXT NOT NULL,
         agent_id TEXT,
         is_pinned INTEGER NOT NULL DEFAULT 0,
         system_prompt TEXT,
         pinned_refs TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
       );
 
       CREATE TABLE IF NOT EXISTS chat_messages (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         message_metadata TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(chat_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        PRIMARY KEY (tenant_id, user_id, id),
+        FOREIGN KEY(tenant_id, user_id, chat_id)
+          REFERENCES chat_sessions(tenant_id, user_id, id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS chat_agents (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         slug TEXT,
         name TEXT NOT NULL,
         icon TEXT,
@@ -294,16 +404,22 @@ export class LocalStore {
         is_archived INTEGER NOT NULL DEFAULT 0,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
       );
 
       CREATE TABLE IF NOT EXISTS settings_kv (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, key)
       );
 
       CREATE TABLE IF NOT EXISTS harness_traces (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
         message_id TEXT,
         started_at_ms INTEGER NOT NULL,
@@ -311,13 +427,17 @@ export class LocalStore {
         status TEXT NOT NULL,
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(chat_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        PRIMARY KEY (tenant_id, user_id, id),
+        FOREIGN KEY(tenant_id, user_id, chat_id)
+          REFERENCES chat_sessions(tenant_id, user_id, id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_harness_traces_chat ON harness_traces(chat_id, started_at_ms DESC);
 
       CREATE TABLE IF NOT EXISTS usage_events (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         chat_id TEXT,
         kind TEXT NOT NULL,
         provider TEXT,
@@ -327,24 +447,30 @@ export class LocalStore {
         total_tokens INTEGER NOT NULL DEFAULT 0,
         cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
         cost_usd REAL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_usage_events_created ON usage_events(created_at DESC);
 
       CREATE TABLE IF NOT EXISTS insights_outbox (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         kind TEXT NOT NULL,
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
         uploaded_at TEXT,
-        upload_error TEXT
+        upload_error TEXT,
+        PRIMARY KEY (tenant_id, user_id, id)
       );
 
       CREATE INDEX IF NOT EXISTS idx_insights_outbox_pending ON insights_outbox(kind, uploaded_at, created_at);
 
       CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
         task TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -357,7 +483,9 @@ export class LocalStore {
         trace_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        FOREIGN KEY(chat_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        PRIMARY KEY (tenant_id, user_id, id),
+        FOREIGN KEY(tenant_id, user_id, chat_id)
+          REFERENCES chat_sessions(tenant_id, user_id, id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_chat ON tasks(chat_id, datetime(updated_at) DESC);
@@ -386,31 +514,49 @@ export class LocalStore {
     // 由用户在智能体管理页自由开关（不会每次启动被重置）。
     if (this.ensureColumn('chat_agents', 'load_all_skills', 'INTEGER NOT NULL DEFAULT 0')) {
       this.db
-        .prepare(`UPDATE chat_agents SET load_all_skills = 1 WHERE id = ?`)
-        .run(ALL_ROUND_ASSISTANT_AGENT_ID);
+        .prepare(`UPDATE chat_agents SET load_all_skills = 1
+                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .run(this.scope.tenantId, this.scope.userId, ALL_ROUND_ASSISTANT_AGENT_ID);
     }
 
-    // 场景包迁移（0.3b）：构造时应用一次已注册的包迁移（兼容注册先于
-    // 构造的路径）；注册晚于构造的容错路径见 applyRegisteredPackMigrations
-    // 模块级函数（host/runtime 在包装配前调用）。
-    this.applyPackMigrations();
   }
 
-  private readonly appliedPackMigrations = new Set<string>();
-
   /**
-   * 应用尚未应用的已注册包迁移（幂等，按包 id 去重）。
+   * Applies registered migrations once per driver-persisted pack generation.
    */
   applyPackMigrations(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS storage_pack_migrations (
+        pack_id TEXT PRIMARY KEY,
+        version INTEGER NOT NULL
+      )
+    `);
     for (const { packId, migration } of getPackMigrations()) {
-      if (this.appliedPackMigrations.has(packId)) continue;
-      if (migration.ddl && migration.ddl.length > 0) {
-        this.db.exec(migration.ddl.join(';\n'));
+      const version = migration.version ?? 1;
+      const applied = this.db.prepare(
+        `SELECT version FROM storage_pack_migrations WHERE pack_id = ?`,
+      ).get(packId) as { version: number } | undefined;
+      if (applied && applied.version > version) {
+        throw new Error(
+          `[storage] pack ${packId} schema ${applied.version} is newer than supported ${version}`,
+        );
       }
-      for (const col of migration.ensureColumns ?? []) {
-        this.ensureColumn(col.table, col.column, col.type);
-      }
-      this.appliedPackMigrations.add(packId);
+      if (applied?.version === version) continue;
+      this.db.transaction(() => {
+        if (migration.beforeDdl && migration.beforeDdl.length > 0) {
+          this.db.exec(migration.beforeDdl.join(';\n'));
+        }
+        for (const col of migration.ensureColumns ?? []) {
+          this.ensureColumn(col.table, col.column, col.type);
+        }
+        if (migration.ddl && migration.ddl.length > 0) {
+          this.db.exec(migration.ddl.join(';\n'));
+        }
+        this.db.prepare(`
+          INSERT INTO storage_pack_migrations (pack_id, version) VALUES (?, ?)
+          ON CONFLICT(pack_id) DO UPDATE SET version = excluded.version
+        `).run(packId, version);
+      })();
     }
   }
 
@@ -427,21 +573,25 @@ export class LocalStore {
   ): void {
     const row = this.db
       .prepare(
-        `SELECT id, name, description, role_prompt, is_archived FROM chat_agents WHERE id = ?`,
+        `SELECT id, name, description, role_prompt, is_archived FROM chat_agents
+         WHERE tenant_id = ? AND user_id = ? AND id = ?`,
       )
-      .get(seed.id) as AgentSeedRow | undefined;
+      .get(this.scope.tenantId, this.scope.userId, seed.id) as AgentSeedRow | undefined;
 
     if (!active) {
       if (row && row.is_archived === 0 && isUntouchedSeed(seed, row)) {
         this.db
-          .prepare(`UPDATE chat_agents SET is_archived = 1, updated_at = ? WHERE id = ?`)
-          .run(now, seed.id);
+          .prepare(`UPDATE chat_agents SET is_archived = 1, updated_at = ?
+                    WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .run(now, this.scope.tenantId, this.scope.userId, seed.id);
       }
       return;
     }
 
     if (!row) {
       insertAgent.run({
+        tenantId: this.scope.tenantId,
+        userId: this.scope.userId,
         id: seed.id,
         slug: seed.slug,
         name: seed.name,
@@ -472,21 +622,24 @@ export class LocalStore {
                description = @description,
                role_prompt = @rolePrompt,
                updated_at = @updatedAt
-           WHERE id = @id`,
+           WHERE tenant_id = @tenantId AND user_id = @userId AND id = @id`,
         )
         .run({
           name: seed.name,
           description: seed.description ?? null,
           rolePrompt: seed.rolePrompt,
           updatedAt: now,
+          tenantId: this.scope.tenantId,
+          userId: this.scope.userId,
           id: seed.id,
         });
     }
     // 从未定制过、却被归档的行：包装回该产品后重新露出。
     if (row.is_archived === 1 && isUntouchedSeed(seed, row)) {
       this.db
-        .prepare(`UPDATE chat_agents SET is_archived = 0, updated_at = ? WHERE id = ?`)
-        .run(now, seed.id);
+        .prepare(`UPDATE chat_agents SET is_archived = 0, updated_at = ?
+                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .run(now, this.scope.tenantId, this.scope.userId, seed.id);
     }
   }
 
@@ -502,11 +655,11 @@ export class LocalStore {
     return true;
   }
 
-  private seedDefaults(): void {
+  private async seedDefaults(): Promise<void> {
     const now = new Date().toISOString();
     const hasBuiltin = this.db
-      .prepare(`SELECT id FROM chat_agents WHERE id = ?`)
-      .get(LOCAL_ASSISTANT_AGENT_ID) as { id: string } | undefined;
+      .prepare(`SELECT id FROM chat_agents WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+      .get(this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID) as { id: string } | undefined;
     // 激活包中 sortOrder 0 的主打种子占据列表首位时，shell 默认智能体
     // 让位到 1（0.3d 起由包种子驱动，不再按 flavor 硬编码）。
     const hasHeroSeed = getPackAgentSeeds().some(
@@ -515,10 +668,12 @@ export class LocalStore {
 
     const insertAgent = this.db.prepare(`
       INSERT INTO chat_agents (
+        tenant_id, user_id,
         id, slug, name, icon, color, description, role_prompt, forbidden_prompt,
         skill_ids, tool_policy, allow_external_skills, load_all_skills, is_builtin, is_archived,
         sort_order, created_at, updated_at
       ) VALUES (
+        @tenantId, @userId,
         @id, @slug, @name, @icon, @color, @description, @rolePrompt, @forbiddenPrompt,
         @skillIds, @toolPolicy, @allowExternalSkills, @loadAllSkills, @isBuiltin, @isArchived,
         @sortOrder, @createdAt, @updatedAt
@@ -527,6 +682,8 @@ export class LocalStore {
 
     if (!hasBuiltin) {
       insertAgent.run({
+        tenantId: this.scope.tenantId,
+        userId: this.scope.userId,
         id: LOCAL_ASSISTANT_AGENT_ID,
         slug: LOCAL_ASSISTANT_AGENT_ID,
         name: '电脑操作员',
@@ -547,23 +704,29 @@ export class LocalStore {
         updatedAt: now,
       });
     } else {
-      this.db.prepare(`UPDATE chat_agents SET name = ? WHERE id = ?`).run('电脑操作员', LOCAL_ASSISTANT_AGENT_ID);
+      this.db.prepare(`UPDATE chat_agents SET name = ?
+                       WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .run('电脑操作员', this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID);
       const local = this.db
-        .prepare(`SELECT role_prompt FROM chat_agents WHERE id = ?`)
-        .get(LOCAL_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
+        .prepare(`SELECT role_prompt FROM chat_agents
+                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .get(this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
       if (local?.role_prompt === '你是本地离线助手，回答时清晰、可执行。') {
         this.db
-          .prepare(`UPDATE chat_agents SET role_prompt = ? WHERE id = ?`)
-          .run('你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。', LOCAL_ASSISTANT_AGENT_ID);
+          .prepare(`UPDATE chat_agents SET role_prompt = ?
+                    WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .run('你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。', this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID);
       }
     }
 
     const hasAllRound = this.db
-      .prepare(`SELECT id FROM chat_agents WHERE id = ?`)
-      .get(ALL_ROUND_ASSISTANT_AGENT_ID) as { id: string } | undefined;
+      .prepare(`SELECT id FROM chat_agents WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+      .get(this.scope.tenantId, this.scope.userId, ALL_ROUND_ASSISTANT_AGENT_ID) as { id: string } | undefined;
 
     if (!hasAllRound) {
       insertAgent.run({
+        tenantId: this.scope.tenantId,
+        userId: this.scope.userId,
         id: ALL_ROUND_ASSISTANT_AGENT_ID,
         slug: ALL_ROUND_ASSISTANT_AGENT_ID,
         name: '智能助手',
@@ -589,12 +752,19 @@ export class LocalStore {
         updatedAt: now,
       });
     } else {
-      const agent = this.db.prepare(`SELECT role_prompt FROM chat_agents WHERE id = ?`).get(ALL_ROUND_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
+      const agent = this.db.prepare(
+        `SELECT role_prompt FROM chat_agents
+         WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+      ).get(this.scope.tenantId, this.scope.userId, ALL_ROUND_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
       if (agent) {
         const updatedPrompt = agent.role_prompt.replace(/全能专家助手/g, '智能助手');
-        this.db.prepare(`UPDATE chat_agents SET name = ?, role_prompt = ? WHERE id = ?`).run('智能助手', updatedPrompt, ALL_ROUND_ASSISTANT_AGENT_ID);
+        this.db.prepare(`UPDATE chat_agents SET name = ?, role_prompt = ?
+                         WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .run('智能助手', updatedPrompt, this.scope.tenantId, this.scope.userId, ALL_ROUND_ASSISTANT_AGENT_ID);
       } else {
-        this.db.prepare(`UPDATE chat_agents SET name = ? WHERE id = ?`).run('智能助手', ALL_ROUND_ASSISTANT_AGENT_ID);
+        this.db.prepare(`UPDATE chat_agents SET name = ?
+                         WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .run('智能助手', this.scope.tenantId, this.scope.userId, ALL_ROUND_ASSISTANT_AGENT_ID);
       }
     }
 
@@ -615,11 +785,13 @@ export class LocalStore {
       for (const seed of seeds) {
         if (seed.sortOrder !== 0) continue;
         const localSort = this.db
-          .prepare(`SELECT sort_order FROM chat_agents WHERE id = ?`)
-          .get(LOCAL_ASSISTANT_AGENT_ID) as { sort_order: number } | undefined;
+          .prepare(`SELECT sort_order FROM chat_agents
+                    WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .get(this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID) as { sort_order: number } | undefined;
         const seedSort = this.db
-          .prepare(`SELECT sort_order FROM chat_agents WHERE id = ?`)
-          .get(seed.id) as { sort_order: number } | undefined;
+          .prepare(`SELECT sort_order FROM chat_agents
+                    WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+          .get(this.scope.tenantId, this.scope.userId, seed.id) as { sort_order: number } | undefined;
         if (
           localSort &&
           seedSort &&
@@ -627,27 +799,29 @@ export class LocalStore {
           (seedSort.sort_order === 0 || seedSort.sort_order === 1)
         ) {
           this.db
-            .prepare(`UPDATE chat_agents SET sort_order = 1, updated_at = ? WHERE id = ?`)
-            .run(now, LOCAL_ASSISTANT_AGENT_ID);
+            .prepare(`UPDATE chat_agents SET sort_order = 1, updated_at = ?
+                      WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+            .run(now, this.scope.tenantId, this.scope.userId, LOCAL_ASSISTANT_AGENT_ID);
           this.db
-            .prepare(`UPDATE chat_agents SET sort_order = 0, updated_at = ? WHERE id = ?`)
-            .run(now, seed.id);
+            .prepare(`UPDATE chat_agents SET sort_order = 0, updated_at = ?
+                      WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+            .run(now, this.scope.tenantId, this.scope.userId, seed.id);
         }
       }
     }
 
-    const hasSettings = this.getLlmSettings();
+    const hasSettings = await this.getLlmSettings();
     if (!hasSettings) {
       // 全新安装：直接写出厂默认 (DEFAULT_LLM_SETTINGS = OpenAI 兼容 / DeepSeek)。
-      this.setLlmSettings(DEFAULT_LLM_SETTINGS);
+      await this.setLlmSettings(DEFAULT_LLM_SETTINGS);
     } else if (llmSettingsMatchOllamaDefaults(hasSettings)) {
       // 老安装但用户从未改过 LLM 设置（依然停留在出厂 Ollama 预设）：静默迁移
       // 到 DeepSeek 默认，避免 Windows 用户卡在"本机没装 ollama → 上来就不能聊"。
-      this.setLlmSettings(DEFAULT_LLM_SETTINGS);
+      await this.setLlmSettings(DEFAULT_LLM_SETTINGS);
     } else if (llmSettingsCarryExpiredBakedKey(hasSettings)) {
       // 老安装保存过已作废的出厂内置 key（≤0.0.35）：静默清掉（保留其它自定义
       // 字段），设置页会引导用户填自己的 key。不清则用户永远拿着死 key 撞 401。
-      this.setLlmSettings({ ...hasSettings, apiKey: undefined });
+      await this.setLlmSettings({ ...hasSettings, apiKey: undefined });
     }
     // 其它情况（用户改过 provider/model/baseUrl/apiKey 任一项）：尊重自定义，不动。
   }
@@ -664,29 +838,32 @@ export class LocalStore {
     return Math.max(min, Math.min(Math.trunc(value), max));
   }
 
-  listChats(page = 1, limit = 50): { chats: ChatSessionRecord[]; total: number } {
-    const safePage = LocalStore.clampInt(page, 1, 1, Number.MAX_SAFE_INTEGER);
-    const safeLimit = LocalStore.clampInt(limit, 50, 1, 200);
+  async listChats(page = 1, limit = 50): Promise<{ chats: ChatSessionRecord[]; total: number }> {
+    const safePage = SqliteScopedStore.clampInt(page, 1, 1, Number.MAX_SAFE_INTEGER);
+    const safeLimit = SqliteScopedStore.clampInt(limit, 50, 1, 200);
     const offset = (safePage - 1) * safeLimit;
-    const totalRow = this.db.prepare(`SELECT COUNT(*) as count FROM chat_sessions`).get() as { count: number };
+    const totalRow = this.db.prepare(
+      `SELECT COUNT(*) as count FROM chat_sessions WHERE tenant_id = ? AND user_id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId) as { count: number };
     const rows = this.db.prepare(`
       SELECT *
       FROM chat_sessions
+      WHERE tenant_id = ? AND user_id = ?
       ORDER BY is_pinned DESC, datetime(updated_at) DESC
       LIMIT ? OFFSET ?
-    `).all(safeLimit, offset) as Array<Record<string, unknown>>;
+    `).all(this.scope.tenantId, this.scope.userId, safeLimit, offset) as Array<Record<string, unknown>>;
     return {
       chats: rows.map(row => this.mapChatSession(row)),
       total: totalRow.count,
     };
   }
 
-  createChat(
+  async createChat(
     title = '新对话',
     agentId: string | null = getBrand().defaultAgentId,
     projectId: string | null = null,
-  ): ChatSessionRecord {
-    return this.createChatWithId(randomUUID(), title, agentId, projectId);
+  ): Promise<ChatSessionRecord> {
+    return await this.createChatWithId(randomUUID(), title, agentId, projectId);
   }
 
   /**
@@ -698,44 +875,50 @@ export class LocalStore {
    * 按 URL 里的 id 现场补建，才不会把一次本来能跑的任务打断在
    * `chat not found`。
    */
-  createChatWithId(
+  async createChatWithId(
     chatId: string,
     title = '新对话',
     agentId: string | null = 'local-assistant',
     projectId: string | null = null,
-  ): ChatSessionRecord {
-    const existing = this.getChat(chatId);
+  ): Promise<ChatSessionRecord> {
+    const existing = await this.getChat(chatId);
     if (existing) return existing;
     const now = new Date().toISOString();
     // INSERT OR IGNORE：两个请求同时补建同一个 id（并发首发送）时，后到的
     // 那条不会因主键冲突被打成 500——两边拿到的都是同一条会话。
     this.db.prepare(`
-      INSERT OR IGNORE INTO chat_sessions (id, title, user_id, agent_id, project_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(chatId, title, DEFAULT_LOCAL_USER_ID, agentId, projectId, now, now);
-    const row = this.db.prepare(`SELECT * FROM chat_sessions WHERE id = ?`).get(chatId) as Record<string, unknown>;
+      INSERT OR IGNORE INTO chat_sessions
+        (tenant_id, user_id, id, title, agent_id, project_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(this.scope.tenantId, this.scope.userId, chatId, title, agentId, projectId, now, now);
+    const row = this.db.prepare(
+      `SELECT * FROM chat_sessions WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, chatId) as Record<string, unknown>;
     return this.mapChatSession(row);
   }
 
   /** 删除项目时调用：把该项目下所有会话降级为无项目对话（不删会话）。 */
-  clearProjectAssignment(projectId: string): number {
+  async clearProjectAssignment(projectId: string): Promise<number> {
     const info = this.db
-      .prepare(`UPDATE chat_sessions SET project_id = NULL WHERE project_id = ?`)
-      .run(projectId);
+      .prepare(`UPDATE chat_sessions SET project_id = NULL
+                WHERE tenant_id = ? AND user_id = ? AND project_id = ?`)
+      .run(this.scope.tenantId, this.scope.userId, projectId);
     return info.changes;
   }
 
-  getChat(chatId: string): ChatSessionRecord | null {
-    const row = this.db.prepare(`SELECT * FROM chat_sessions WHERE id = ?`).get(chatId) as Record<string, unknown> | undefined;
+  async getChat(chatId: string): Promise<ChatSessionRecord | null> {
+    const row = this.db.prepare(
+      `SELECT * FROM chat_sessions WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, chatId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.mapChatSession(row);
   }
 
-  updateChat(
+  async updateChat(
     chatId: string,
     updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId'>>
-  ): ChatSessionRecord | null {
-    const existing = this.getChat(chatId);
+  ): Promise<ChatSessionRecord | null> {
+    const existing = await this.getChat(chatId);
     if (!existing) return null;
     // 过滤 undefined：调用方对"未提供的字段"传 undefined，直接展开会把
     // 现有值抹成 undefined（JSON body 里没有 undefined，缺字段≠置空）。
@@ -751,7 +934,7 @@ export class LocalStore {
     this.db.prepare(`
       UPDATE chat_sessions
       SET title = ?, system_prompt = ?, pinned_refs = ?, is_pinned = ?, project_id = ?, updated_at = ?
-      WHERE id = ?
+      WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
       next.title,
       next.systemPrompt,
@@ -759,22 +942,31 @@ export class LocalStore {
       next.isPinned ? 1 : 0,
       next.projectId ?? null,
       next.updatedAt,
+      this.scope.tenantId,
+      this.scope.userId,
       chatId
     );
-    return this.getChat(chatId);
+    return await this.getChat(chatId);
   }
 
-  deleteChat(chatId: string): boolean {
-    const info = this.db.prepare(`DELETE FROM chat_sessions WHERE id = ?`).run(chatId);
-    this.db.prepare(`DELETE FROM settings_kv WHERE key = ?`).run(`chat_record:${chatId}`);
-    this.db.prepare(`DELETE FROM settings_kv WHERE key = ?`).run(`turn_active:${chatId}`);
+  async deleteChat(chatId: string): Promise<boolean> {
+    const info = this.db.prepare(
+      `DELETE FROM chat_sessions WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).run(this.scope.tenantId, this.scope.userId, chatId);
+    this.db.prepare(
+      `DELETE FROM settings_kv WHERE tenant_id = ? AND user_id = ? AND key = ?`,
+    ).run(this.scope.tenantId, this.scope.userId, `chat_record:${chatId}`);
+    this.db.prepare(
+      `DELETE FROM settings_kv WHERE tenant_id = ? AND user_id = ? AND key = ?`,
+    ).run(this.scope.tenantId, this.scope.userId, `turn_active:${chatId}`);
     return info.changes > 0;
   }
 
-  chatHasMessages(chatId: string): boolean {
+  async chatHasMessages(chatId: string): Promise<boolean> {
     const row = this.db
-      .prepare(`SELECT 1 FROM chat_messages WHERE chat_id = ? LIMIT 1`)
-      .get(chatId);
+      .prepare(`SELECT 1 FROM chat_messages
+                WHERE tenant_id = ? AND user_id = ? AND chat_id = ? LIMIT 1`)
+      .get(this.scope.tenantId, this.scope.userId, chatId);
     return Boolean(row);
   }
 
@@ -783,22 +975,38 @@ export class LocalStore {
    * "新对话" composer without sending — empty sessions must not stay in the
    * sidebar. Missing or already-populated chats are a no-op (`false`).
    */
-  deleteChatIfEmpty(chatId: string): boolean {
-    if (!this.getChat(chatId) || this.chatHasMessages(chatId)) return false;
-    return this.deleteChat(chatId);
+  async deleteChatIfEmpty(chatId: string): Promise<boolean> {
+    if (!(await this.getChat(chatId)) || (await this.chatHasMessages(chatId))) return false;
+    return await this.deleteChat(chatId);
   }
 
   /**
    * Delete every session with zero messages, optionally keeping `exceptChatId`
    * (the open composer). Returns the removed ids.
    */
-  deleteEmptyChats(exceptChatId?: string | null): string[] {
+  async deleteEmptyChats(exceptChatId?: string | null): Promise<string[]> {
     const except = exceptChatId ?? null;
-    const rows = this.db.prepare(LIST_EMPTY_CHAT_IDS_SQL).all(except, except) as Array<{
+    const rows = this.db.prepare(`
+      SELECT id FROM chat_sessions
+      WHERE tenant_id = ? AND user_id = ?
+        AND (? IS NULL OR id != ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM chat_messages
+          WHERE tenant_id = ? AND user_id = ?
+            AND chat_id = chat_sessions.id
+        )
+    `).all(
+      this.scope.tenantId,
+      this.scope.userId,
+      except,
+      except,
+      this.scope.tenantId,
+      this.scope.userId,
+    ) as Array<{
       id: string;
     }>;
     const ids = rows.map((row) => row.id);
-    for (const id of ids) this.deleteChat(id);
+    for (const id of ids) await this.deleteChat(id);
     return ids;
   }
 
@@ -808,18 +1016,12 @@ export class LocalStore {
    * a branch), so a chat's live record moves from `chatId` to its branch;
    * null means the chatId itself.
    */
-  getChatRecordId(chatId: string): string | null {
-    const row = this.db
-      .prepare(`SELECT value FROM settings_kv WHERE key = ?`)
-      .get(`chat_record:${chatId}`) as { value: string } | undefined;
-    return row?.value ?? null;
+  async getChatRecordId(chatId: string): Promise<string | null> {
+    return this.getSetting(`chat_record:${chatId}`);
   }
 
-  setChatRecordId(chatId: string, recordId: string): void {
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES (?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(`chat_record:${chatId}`, recordId);
+  async setChatRecordId(chatId: string, recordId: string): Promise<void> {
+    this.setSetting(`chat_record:${chatId}`, recordId);
   }
 
   /**
@@ -834,24 +1036,24 @@ export class LocalStore {
    * stale marker the detector dismisses once it sees the trailing
    * assistant message.
    */
-  setTurnActive(chatId: string): void {
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES (?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(`turn_active:${chatId}`, JSON.stringify({ startedAt: new Date().toISOString() }));
+  async setTurnActive(chatId: string): Promise<void> {
+    this.setSetting(
+      `turn_active:${chatId}`,
+      JSON.stringify({ startedAt: new Date().toISOString() }),
+    );
   }
 
-  clearTurnActive(chatId: string): void {
-    this.db.prepare(`DELETE FROM settings_kv WHERE key = ?`).run(`turn_active:${chatId}`);
+  async clearTurnActive(chatId: string): Promise<void> {
+    this.db.prepare(
+      `DELETE FROM settings_kv WHERE tenant_id = ? AND user_id = ? AND key = ?`,
+    ).run(this.scope.tenantId, this.scope.userId, `turn_active:${chatId}`);
   }
 
-  getTurnActive(chatId: string): { startedAt: string } | null {
-    const row = this.db
-      .prepare(`SELECT value FROM settings_kv WHERE key = ?`)
-      .get(`turn_active:${chatId}`) as { value: string } | undefined;
-    if (!row) return null;
+  async getTurnActive(chatId: string): Promise<{ startedAt: string } | null> {
+    const value = this.getSetting(`turn_active:${chatId}`);
+    if (!value) return null;
     try {
-      const parsed = JSON.parse(row.value) as { startedAt?: unknown };
+      const parsed = JSON.parse(value) as { startedAt?: unknown };
       return typeof parsed.startedAt === 'string' ? { startedAt: parsed.startedAt } : null;
     } catch {
       return null;
@@ -862,21 +1064,27 @@ export class LocalStore {
    * Newest first under {@link MESSAGE_ORDER_DESC}, capped at `limit`; callers
    * that want transcript order reverse it.
    */
-  listMessages(chatId: string, limit = 200): ChatMessageRecord[] {
+  async listMessages(chatId: string, limit = 200): Promise<ChatMessageRecord[]> {
     const rows = this.db.prepare(`
       SELECT *
       FROM chat_messages
-      WHERE chat_id = ?
+      WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
       ORDER BY ${MESSAGE_ORDER_DESC}
       LIMIT ?
-    `).all(chatId, LocalStore.clampInt(limit, 200, 1, 1000)) as Array<Record<string, unknown>>;
+    `).all(
+      this.scope.tenantId,
+      this.scope.userId,
+      chatId,
+      SqliteScopedStore.clampInt(limit, 200, 1, 1000),
+    ) as Array<Record<string, unknown>>;
     return rows.map(row => this.mapChatMessage(row));
   }
 
-  getMessage(chatId: string, messageId: string): ChatMessageRecord | null {
+  async getMessage(chatId: string, messageId: string): Promise<ChatMessageRecord | null> {
     const row = this.db
-      .prepare(`SELECT * FROM chat_messages WHERE id = ? AND chat_id = ?`)
-      .get(messageId, chatId) as Record<string, unknown> | undefined;
+      .prepare(`SELECT * FROM chat_messages
+                WHERE tenant_id = ? AND user_id = ? AND id = ? AND chat_id = ?`)
+      .get(this.scope.tenantId, this.scope.userId, messageId, chatId) as Record<string, unknown> | undefined;
     return row ? this.mapChatMessage(row) : null;
   }
 
@@ -890,26 +1098,43 @@ export class LocalStore {
    * "After" is {@link MESSAGE_CUT_FROM_ID}, the same key `listMessages` orders
    * by, so the cut matches what the user sees below the regenerated reply.
    */
-  deleteMessagesFrom(chatId: string, messageId: string): number {
+  async deleteMessagesFrom(chatId: string, messageId: string): Promise<number> {
     const info = this.db
       .prepare(`
         DELETE FROM chat_messages
-        WHERE chat_id = ?
-          AND ${MESSAGE_CUT_FROM_ID}
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+          AND (created_at, rowid) >= (
+            SELECT created_at, rowid FROM chat_messages
+            WHERE tenant_id = ? AND user_id = ? AND id = ? AND chat_id = ?
+          )
       `)
-      .run(chatId, messageId, chatId);
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        chatId,
+        this.scope.tenantId,
+        this.scope.userId,
+        messageId,
+        chatId,
+      );
     return info.changes;
   }
 
-  addMessage(chatId: string, role: ChatMessageRecord['role'], content: string, messageMetadata: string | null = null): ChatMessageRecord {
+  async addMessage(chatId: string, role: ChatMessageRecord['role'], content: string, messageMetadata: string | null = null): Promise<ChatMessageRecord> {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO chat_messages (id, chat_id, role, content, message_metadata, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(id, chatId, role, content, messageMetadata, now);
-    this.db.prepare(`UPDATE chat_sessions SET updated_at = ? WHERE id = ?`).run(now, chatId);
-    const row = this.db.prepare(`SELECT * FROM chat_messages WHERE id = ?`).get(id) as Record<string, unknown>;
+      INSERT INTO chat_messages
+        (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(this.scope.tenantId, this.scope.userId, id, chatId, role, content, messageMetadata, now);
+    this.db.prepare(
+      `UPDATE chat_sessions SET updated_at = ?
+       WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).run(now, this.scope.tenantId, this.scope.userId, chatId);
+    const row = this.db.prepare(
+      `SELECT * FROM chat_messages WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, id) as Record<string, unknown>;
     return this.mapChatMessage(row);
   }
 
@@ -918,12 +1143,12 @@ export class LocalStore {
    * 不碰 updated_at：这类补丁不是用户可见的会话活动。
    * metadata 损坏或非对象时从空对象开始合。
    */
-  patchMessageMetadata(
+  async patchMessageMetadata(
     chatId: string,
     messageId: string,
     patch: Record<string, unknown>,
-  ): ChatMessageRecord | null {
-    const msg = this.getMessage(chatId, messageId);
+  ): Promise<ChatMessageRecord | null> {
+    const msg = await this.getMessage(chatId, messageId);
     if (!msg) return null;
     let current: Record<string, unknown> = {};
     if (msg.messageMetadata) {
@@ -938,9 +1163,10 @@ export class LocalStore {
     }
     const next = JSON.stringify({ ...current, ...patch });
     this.db
-      .prepare(`UPDATE chat_messages SET message_metadata = ? WHERE id = ? AND chat_id = ?`)
-      .run(next, messageId, chatId);
-    return this.getMessage(chatId, messageId);
+      .prepare(`UPDATE chat_messages SET message_metadata = ?
+                WHERE tenant_id = ? AND user_id = ? AND id = ? AND chat_id = ?`)
+      .run(next, this.scope.tenantId, this.scope.userId, messageId, chatId);
+    return await this.getMessage(chatId, messageId);
   }
 
   /**
@@ -951,52 +1177,75 @@ export class LocalStore {
    * Timestamps are synthesized (base + index ms) to preserve projection
    * order under the created_at ordering.
    */
-  replaceChatMessages(
+  async replaceChatMessages(
     chatId: string,
     messages: Array<{ role: ChatMessageRecord['role']; content: string }>,
-  ): void {
+  ): Promise<void> {
     const base = Date.now();
     const insert = this.db.prepare(`
-      INSERT INTO chat_messages (id, chat_id, role, content, message_metadata, created_at)
-      VALUES (?, ?, ?, ?, NULL, ?)
+      INSERT INTO chat_messages
+        (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
     `);
     this.db.transaction(() => {
-      this.db.prepare(`DELETE FROM chat_messages WHERE chat_id = ?`).run(chatId);
+      this.db.prepare(
+        `DELETE FROM chat_messages WHERE tenant_id = ? AND user_id = ? AND chat_id = ?`,
+      ).run(this.scope.tenantId, this.scope.userId, chatId);
       messages.forEach((m, i) => {
-        insert.run(randomUUID(), chatId, m.role, m.content, new Date(base + i).toISOString());
+        insert.run(
+          this.scope.tenantId,
+          this.scope.userId,
+          randomUUID(),
+          chatId,
+          m.role,
+          m.content,
+          new Date(base + i).toISOString(),
+        );
       });
       this.db
-        .prepare(`UPDATE chat_sessions SET updated_at = ? WHERE id = ?`)
-        .run(new Date(base + messages.length).toISOString(), chatId);
+        .prepare(`UPDATE chat_sessions SET updated_at = ?
+                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .run(
+          new Date(base + messages.length).toISOString(),
+          this.scope.tenantId,
+          this.scope.userId,
+          chatId,
+        );
     })();
   }
 
-  listChatAgents(includeArchived = false): ChatAgentRecord[] {
+  async listChatAgents(includeArchived = false): Promise<ChatAgentRecord[]> {
     const rows = this.db.prepare(`
       SELECT *
       FROM chat_agents
-      ${includeArchived ? '' : 'WHERE is_archived = 0'}
+      WHERE tenant_id = ? AND user_id = ?
+        ${includeArchived ? '' : 'AND is_archived = 0'}
       ORDER BY sort_order ASC, created_at ASC, rowid ASC
-    `).all() as Array<Record<string, unknown>>;
+    `).all(this.scope.tenantId, this.scope.userId) as Array<Record<string, unknown>>;
     return rows.map(row => this.mapChatAgent(row));
   }
 
-  getChatAgent(agentId: string): ChatAgentRecord | null {
-    const row = this.db.prepare(`SELECT * FROM chat_agents WHERE id = ?`).get(agentId) as Record<string, unknown> | undefined;
+  async getChatAgent(agentId: string): Promise<ChatAgentRecord | null> {
+    const row = this.db.prepare(
+      `SELECT * FROM chat_agents WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, agentId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.mapChatAgent(row);
   }
 
-  createChatAgent(input: Partial<ChatAgentRecord> & { name: string }): ChatAgentRecord {
+  async createChatAgent(input: Partial<ChatAgentRecord> & { name: string }): Promise<ChatAgentRecord> {
     const id = input.id || randomUUID();
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO chat_agents (
+        tenant_id, user_id,
         id, slug, name, icon, color, description, role_prompt, forbidden_prompt,
         skill_ids, tool_policy, allow_external_skills, load_all_skills,
         is_builtin, is_archived, sort_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      this.scope.tenantId,
+      this.scope.userId,
       id,
       input.slug ?? null,
       input.name,
@@ -1015,13 +1264,13 @@ export class LocalStore {
       now,
       now
     );
-    const created = this.getChatAgent(id);
+    const created = await this.getChatAgent(id);
     if (!created) throw new Error('Failed to create chat agent');
     return created;
   }
 
-  updateChatAgent(agentId: string, updates: Partial<ChatAgentRecord>): ChatAgentRecord | null {
-    const existing = this.getChatAgent(agentId);
+  async updateChatAgent(agentId: string, updates: Partial<ChatAgentRecord>): Promise<ChatAgentRecord | null> {
+    const existing = await this.getChatAgent(agentId);
     if (!existing) return null;
     // 过滤 undefined（同 updateChat）：PATCH 路由对"未提供的字段"传 undefined，
     // 直接展开会把现有值抹成 undefined——sort_order 等 NOT NULL 列写入直接抛，
@@ -1039,7 +1288,7 @@ export class LocalStore {
       SET slug = ?, name = ?, icon = ?, color = ?, description = ?, role_prompt = ?, forbidden_prompt = ?,
           skill_ids = ?, tool_policy = ?, allow_external_skills = ?, load_all_skills = ?,
           is_builtin = ?, is_archived = ?, sort_order = ?, updated_at = ?
-      WHERE id = ?
+      WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
       merged.slug,
       merged.name,
@@ -1056,17 +1305,19 @@ export class LocalStore {
       merged.isArchived ? 1 : 0,
       merged.sortOrder,
       merged.updatedAt,
+      this.scope.tenantId,
+      this.scope.userId,
       agentId
     );
-    return this.getChatAgent(agentId);
+    return await this.getChatAgent(agentId);
   }
 
-  archiveChatAgent(agentId: string): boolean {
-    const updated = this.updateChatAgent(agentId, { isArchived: true });
+  async archiveChatAgent(agentId: string): Promise<boolean> {
+    const updated = await this.updateChatAgent(agentId, { isArchived: true });
     return Boolean(updated);
   }
 
-  saveTrace(input: {
+  async saveTrace(input: {
     id: string;
     chatId: string;
     messageId?: string | null;
@@ -1074,12 +1325,15 @@ export class LocalStore {
     durationMs?: number | null;
     status: string;
     payload: Record<string, unknown>;
-  }): HarnessTraceRecord {
+  }): Promise<HarnessTraceRecord> {
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO harness_traces (id, chat_id, message_id, started_at_ms, duration_ms, status, payload, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO harness_traces
+        (tenant_id, user_id, id, chat_id, message_id, started_at_ms, duration_ms, status, payload, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      this.scope.tenantId,
+      this.scope.userId,
       input.id,
       input.chatId,
       input.messageId ?? null,
@@ -1090,30 +1344,39 @@ export class LocalStore {
       now
     );
 
-    const row = this.db.prepare(`SELECT * FROM harness_traces WHERE id = ?`).get(input.id) as Record<string, unknown>;
+    const row = this.db.prepare(
+      `SELECT * FROM harness_traces WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, input.id) as Record<string, unknown>;
     return this.mapHarnessTrace(row);
   }
 
-  listTracesByChat(chatId: string, limit = 50): HarnessTraceRecord[] {
+  async listTracesByChat(chatId: string, limit = 50): Promise<HarnessTraceRecord[]> {
     const rows = this.db.prepare(`
       SELECT *
       FROM harness_traces
-      WHERE chat_id = ?
+      WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
       ORDER BY started_at_ms DESC
       LIMIT ?
-    `).all(chatId, LocalStore.clampInt(limit, 50, 1, 500)) as Array<Record<string, unknown>>;
+    `).all(
+      this.scope.tenantId,
+      this.scope.userId,
+      chatId,
+      SqliteScopedStore.clampInt(limit, 50, 1, 500),
+    ) as Array<Record<string, unknown>>;
     return rows.map(row => this.mapHarnessTrace(row));
   }
 
-  getTrace(traceId: string): HarnessTraceRecord | null {
-    const row = this.db.prepare(`SELECT * FROM harness_traces WHERE id = ?`).get(traceId) as Record<string, unknown> | undefined;
+  async getTrace(traceId: string): Promise<HarnessTraceRecord | null> {
+    const row = this.db.prepare(
+      `SELECT * FROM harness_traces WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, traceId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return this.mapHarnessTrace(row);
   }
 
   // ─── 4.6a 跨 turn 后台任务 ───────────────────────────────────────────
 
-  createTask(input: {
+  async createTask(input: {
     chatId: string;
     task: string;
     worktreePath?: string | null;
@@ -1123,16 +1386,19 @@ export class LocalStore {
     dependsOn?: string[] | null;
     /** 初始状态（缺省 running；有未就绪依赖时调用方传 blocked）。 */
     initialStatus?: 'blocked' | 'running';
-  }): TaskRecord {
+  }): Promise<TaskRecord> {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO tasks (
+        tenant_id, user_id,
         id, chat_id, task, status, answer, error,
         worktree_path, worktree_branch, worktree_state, record_id, trace_id,
         depends_on, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)
     `).run(
+      this.scope.tenantId,
+      this.scope.userId,
       id,
       input.chatId,
       input.task,
@@ -1147,21 +1413,31 @@ export class LocalStore {
       now,
       now,
     );
-    const row = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id) as Record<string, unknown>;
+    const row = this.db.prepare(
+      `SELECT * FROM tasks WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, id) as Record<string, unknown>;
     return this.mapTask(row);
   }
 
-  getTask(taskId: string): TaskRecord | null {
-    const row = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(taskId) as Record<string, unknown> | undefined;
+  async getTask(taskId: string): Promise<TaskRecord | null> {
+    const row = this.db.prepare(
+      `SELECT * FROM tasks WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, taskId) as Record<string, unknown> | undefined;
     return row ? this.mapTask(row) : null;
   }
 
   /** 按 chat 列任务（updated_at 新→旧）；chatId 缺省时列全部（任务面板的全局视图）。 */
-  listTasks(chatId?: string, limit = 100): TaskRecord[] {
-    const safeLimit = LocalStore.clampInt(limit, 100, 1, 500);
+  async listTasks(chatId?: string, limit = 100): Promise<TaskRecord[]> {
+    const safeLimit = SqliteScopedStore.clampInt(limit, 100, 1, 500);
     const rows = (chatId
-      ? this.db.prepare(`SELECT * FROM tasks WHERE chat_id = ? ORDER BY datetime(updated_at) DESC LIMIT ?`).all(chatId, safeLimit)
-      : this.db.prepare(`SELECT * FROM tasks ORDER BY datetime(updated_at) DESC LIMIT ?`).all(safeLimit)
+      ? this.db.prepare(`SELECT * FROM tasks
+                         WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+                         ORDER BY datetime(updated_at) DESC LIMIT ?`)
+          .all(this.scope.tenantId, this.scope.userId, chatId, safeLimit)
+      : this.db.prepare(`SELECT * FROM tasks
+                         WHERE tenant_id = ? AND user_id = ?
+                         ORDER BY datetime(updated_at) DESC LIMIT ?`)
+          .all(this.scope.tenantId, this.scope.userId, safeLimit)
     ) as Array<Record<string, unknown>>;
     return rows.map(row => this.mapTask(row));
   }
@@ -1170,11 +1446,11 @@ export class LocalStore {
    * 终态/进度回写。只写传入的字段（undefined 过滤），updated_at 总是刷新。
    * 与 updateChat 同约定：显式传 null 才是置空。
    */
-  updateTask(
+  async updateTask(
     taskId: string,
     updates: Partial<Pick<TaskRecord, 'status' | 'answer' | 'error' | 'worktreeState' | 'traceId' | 'recordId'>>,
-  ): TaskRecord | null {
-    const existing = this.getTask(taskId);
+  ): Promise<TaskRecord | null> {
+    const existing = await this.getTask(taskId);
     if (!existing) return null;
     const clean = Object.fromEntries(
       Object.entries(updates).filter(([, value]) => value !== undefined),
@@ -1187,7 +1463,7 @@ export class LocalStore {
     this.db.prepare(`
       UPDATE tasks
       SET status = ?, answer = ?, error = ?, worktree_state = ?, trace_id = ?, record_id = ?, updated_at = ?
-      WHERE id = ?
+      WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
       next.status,
       next.answer,
@@ -1196,17 +1472,21 @@ export class LocalStore {
       next.traceId,
       next.recordId,
       next.updatedAt,
+      this.scope.tenantId,
+      this.scope.userId,
       taskId,
     );
-    return this.getTask(taskId);
+    return await this.getTask(taskId);
   }
 
   /**
    * 回写推理时间线。故意不碰 updated_at——流过程中的增量不应把任务
    * 面板按「最近活动」反复顶到最上。
    */
-  saveTaskProcess(taskId: string, processJson: string): void {
-    this.db.prepare(`UPDATE tasks SET process_json = ? WHERE id = ?`).run(processJson, taskId);
+  async saveTaskProcess(taskId: string, processJson: string): Promise<void> {
+    this.db.prepare(`UPDATE tasks SET process_json = ?
+                     WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+      .run(processJson, this.scope.tenantId, this.scope.userId, taskId);
   }
 
   /**
@@ -1214,20 +1494,23 @@ export class LocalStore {
    * 存活），全部落成 failed/interrupted——与 W7-1 turn_active 检测器同
    * 理，残留 running 是崩溃签名，不是真相。
    */
-  failRunningTasks(reason: string): number {
+  async failRunningTasks(reason: string): Promise<number> {
     const info = this.db
-      .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ? WHERE status = 'running'`)
-      .run(reason, new Date().toISOString());
+      .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
+                WHERE tenant_id = ? AND user_id = ? AND status = 'running'`)
+      .run(reason, new Date().toISOString(), this.scope.tenantId, this.scope.userId);
     // 级联：blocked 任务的点火能力在 TaskService（进程内），不跨进程存活；
     // 重启后统一标 failed，模型经 task_status 看到原因后可重跑。
     const blocked = this.db
-      .prepare(`SELECT id FROM tasks WHERE status = 'blocked'`)
-      .all() as Array<{ id: string }>;
+      .prepare(`SELECT id FROM tasks
+                WHERE tenant_id = ? AND user_id = ? AND status = 'blocked'`)
+      .all(this.scope.tenantId, this.scope.userId) as Array<{ id: string }>;
     const now = new Date().toISOString();
     for (const row of blocked) {
       this.db
-        .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ? WHERE id = ?`)
-        .run(`进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。`, now, row.id);
+        .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
+                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+        .run(`进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。`, now, this.scope.tenantId, this.scope.userId, row.id);
     }
     return info.changes + blocked.length;
   }
@@ -1238,7 +1521,7 @@ export class LocalStore {
    * 记录一条用量事件(一轮 chat / 一次标题生成 / 一次摘要压缩等)。
    * `costUsd` 为 null 表示该模型无单价(本地/未知)——存 NULL,面板渲染为 "—"。
    */
-  recordUsageEvent(input: {
+  async recordUsageEvent(input: {
     chatId?: string | null;
     kind: string;
     provider?: string | null;
@@ -1248,12 +1531,14 @@ export class LocalStore {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number | null;
-  }): void {
+  }): Promise<void> {
     this.db.prepare(`
       INSERT INTO usage_events
-        (id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
+      this.scope.tenantId,
+      this.scope.userId,
       randomUUID(),
       input.chatId ?? null,
       input.kind,
@@ -1273,7 +1558,7 @@ export class LocalStore {
    * 外加总计。成本只统计有单价的模型(cost_usd 非 NULL);无单价模型的
    * token 照常计入,但成本列不计。返回按 totalTokens 降序。
    */
-  getUsageSummary(sinceDays = 30): UsageSummary {
+  async getUsageSummary(sinceDays = 30): Promise<UsageSummary> {
     const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
     const rows = this.db.prepare(`
       SELECT
@@ -1286,109 +1571,95 @@ export class LocalStore {
         SUM(cached_prompt_tokens) AS cached_prompt_tokens,
         SUM(cost_usd) AS cost_usd
       FROM usage_events
-      WHERE created_at >= ?
+      WHERE tenant_id = ? AND user_id = ? AND created_at >= ?
       GROUP BY model, provider
       ORDER BY total_tokens DESC
-    `).all(since) as UsageSummaryRow[];
+    `).all(this.scope.tenantId, this.scope.userId, since) as UsageSummaryRow[];
     return buildUsageSummary(rows, sinceDays);
   }
 
-  getLlmSettings(): LlmSettings | null {
-    const row = this.db.prepare(`SELECT value FROM settings_kv WHERE key = 'llm_settings'`).get() as { value: string } | undefined;
-    if (!row) return null;
+  async getLlmSettings(): Promise<LlmSettings | null> {
+    const value = this.getSetting('llm_settings');
+    if (!value) return null;
     try {
-      return JSON.parse(row.value) as LlmSettings;
+      return JSON.parse(value) as LlmSettings;
     } catch {
       return null;
     }
   }
 
-  setLlmSettings(settings: LlmSettings): LlmSettings {
+  async setLlmSettings(settings: LlmSettings): Promise<LlmSettings> {
     const merged = mergeLlmSettings(settings);
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES ('llm_settings', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(JSON.stringify(merged));
+    this.setSetting('llm_settings', JSON.stringify(merged));
     return merged;
   }
 
   // ─── W6-6 遥测(OTLP collector + 隐私模式)────────────────────────────
 
   /** 读取遥测设置;从未配置过时返回 null(调用方按"关"处理)。 */
-  getTelemetrySettings(): TelemetrySettings | null {
-    const row = this.db.prepare(`SELECT value FROM settings_kv WHERE key = 'telemetry_settings'`).get() as { value: string } | undefined;
-    if (!row) return null;
+  async getTelemetrySettings(): Promise<TelemetrySettings | null> {
+    const value = this.getSetting('telemetry_settings');
+    if (!value) return null;
     try {
-      return mergeTelemetrySettings(JSON.parse(row.value) as Partial<TelemetrySettings>);
+      return mergeTelemetrySettings(JSON.parse(value) as Partial<TelemetrySettings>);
     } catch {
       return null;
     }
   }
 
-  setTelemetrySettings(settings: Partial<TelemetrySettings>): TelemetrySettings {
+  async setTelemetrySettings(settings: Partial<TelemetrySettings>): Promise<TelemetrySettings> {
     const merged = mergeTelemetrySettings(settings);
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES ('telemetry_settings', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(JSON.stringify(merged));
+    this.setSetting('telemetry_settings', JSON.stringify(merged));
     return merged;
   }
 
-  getWebSearchSettings(): WebSearchSettings | null {
-    const row = this.db.prepare(`SELECT value FROM settings_kv WHERE key = 'web_search_settings'`).get() as { value: string } | undefined;
-    if (!row) return null;
+  async getWebSearchSettings(): Promise<WebSearchSettings | null> {
+    const value = this.getSetting('web_search_settings');
+    if (!value) return null;
     try {
-      return mergeWebSearchSettings(JSON.parse(row.value) as Partial<WebSearchSettings>);
+      return mergeWebSearchSettings(JSON.parse(value) as Partial<WebSearchSettings>);
     } catch {
       return null;
     }
   }
 
-  setWebSearchSettings(settings: Partial<WebSearchSettings>): WebSearchSettings {
+  async setWebSearchSettings(settings: Partial<WebSearchSettings>): Promise<WebSearchSettings> {
     const merged = mergeWebSearchSettings(settings);
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES ('web_search_settings', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(JSON.stringify(merged));
+    this.setSetting('web_search_settings', JSON.stringify(merged));
     return merged;
   }
 
   // ─── 帮助改进产品（行为 / 对话 / 资料 分项同意 + 本地队列）──────────
 
-  getInsightsSettings(): InsightsSettings | null {
-    const row = this.db.prepare(`SELECT value FROM settings_kv WHERE key = 'insights_settings'`).get() as
-      | { value: string }
-      | undefined;
-    if (!row) return null;
+  async getInsightsSettings(): Promise<InsightsSettings | null> {
+    const value = this.getSetting('insights_settings');
+    if (!value) return null;
     try {
-      return mergeInsightsSettings(JSON.parse(row.value) as Partial<InsightsSettings>);
+      return mergeInsightsSettings(JSON.parse(value) as Partial<InsightsSettings>);
     } catch {
       return null;
     }
   }
 
-  ensureInsightsSettings(): InsightsSettings {
-    const existing = this.getInsightsSettings();
+  async ensureInsightsSettings(): Promise<InsightsSettings> {
+    const existing = await this.getInsightsSettings();
     if (existing) return existing;
-    return this.setInsightsSettings({});
+    return await this.setInsightsSettings({});
   }
 
-  setInsightsSettings(settings: InsightsSettingsPatch): InsightsSettings {
-    const current = this.getInsightsSettings();
+  async setInsightsSettings(settings: InsightsSettingsPatch): Promise<InsightsSettings> {
+    const current = await this.getInsightsSettings();
     const merged = mergeInsightsSettings({
       ...current,
       ...settings,
       installId: current?.installId ?? settings.installId,
       profile: mergeInsightsProfile({ ...current?.profile, ...settings.profile }),
     });
-    this.db.prepare(`
-      INSERT INTO settings_kv (key, value) VALUES ('insights_settings', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `).run(JSON.stringify(merged));
+    this.setSetting('insights_settings', JSON.stringify(merged));
     return merged;
   }
 
-  enqueueInsight(kind: InsightKind, payload: Record<string, unknown>): InsightOutboxRow {
+  async enqueueInsight(kind: InsightKind, payload: Record<string, unknown>): Promise<InsightOutboxRow> {
     const row: InsightOutboxRow = {
       id: randomUUID(),
       kind,
@@ -1398,17 +1669,18 @@ export class LocalStore {
       uploadError: null,
     };
     this.db.prepare(`
-      INSERT INTO insights_outbox (id, kind, payload, created_at, uploaded_at, upload_error)
-      VALUES (?, ?, ?, ?, NULL, NULL)
-    `).run(row.id, row.kind, JSON.stringify(row.payload), row.createdAt);
+      INSERT INTO insights_outbox
+        (tenant_id, user_id, id, kind, payload, created_at, uploaded_at, upload_error)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+    `).run(this.scope.tenantId, this.scope.userId, row.id, row.kind, JSON.stringify(row.payload), row.createdAt);
     return row;
   }
 
-  listInsightOutbox(opts: { uploaded?: boolean; kind?: InsightKind; limit?: number } = {}): InsightOutboxRow[] {
+  async listInsightOutbox(opts: { uploaded?: boolean; kind?: InsightKind; limit?: number } = {}): Promise<InsightOutboxRow[]> {
     const limit = Math.max(1, Math.min(opts.limit ?? 200, 500));
     let sql = `SELECT * FROM insights_outbox`;
-    const where: string[] = [];
-    const params: unknown[] = [];
+    const where = ['tenant_id = ?', 'user_id = ?'];
+    const params: unknown[] = [this.scope.tenantId, this.scope.userId];
     if (opts.kind) {
       where.push('kind = ?');
       params.push(opts.kind);
@@ -1418,24 +1690,27 @@ export class LocalStore {
     } else if (opts.uploaded === false) {
       where.push('uploaded_at IS NULL');
     }
-    if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
+    sql += ` WHERE ${where.join(' AND ')}`;
     sql += ` ORDER BY created_at DESC LIMIT ?`;
     params.push(limit);
     const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapInsightOutbox(row));
   }
 
-  markInsightUploaded(id: string): void {
+  async markInsightUploaded(id: string): Promise<void> {
     this.db.prepare(
-      `UPDATE insights_outbox SET uploaded_at = ?, upload_error = NULL WHERE id = ?`,
-    ).run(new Date().toISOString(), id);
+      `UPDATE insights_outbox SET uploaded_at = ?, upload_error = NULL
+       WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+    ).run(new Date().toISOString(), this.scope.tenantId, this.scope.userId, id);
   }
 
-  markInsightUploadError(id: string, error: string): void {
-    this.db.prepare(`UPDATE insights_outbox SET upload_error = ? WHERE id = ?`).run(error.slice(0, 200), id);
+  async markInsightUploadError(id: string, error: string): Promise<void> {
+    this.db.prepare(`UPDATE insights_outbox SET upload_error = ?
+                     WHERE tenant_id = ? AND user_id = ? AND id = ?`)
+      .run(error.slice(0, 200), this.scope.tenantId, this.scope.userId, id);
   }
 
-  insightStats(): { events: number; turns: number; profile: number; pending: number } {
+  async insightStats(): Promise<{ events: number; turns: number; profile: number; pending: number }> {
     const row = this.db.prepare(`
       SELECT
         SUM(CASE WHEN kind = 'event' THEN 1 ELSE 0 END) AS events,
@@ -1443,7 +1718,8 @@ export class LocalStore {
         SUM(CASE WHEN kind = 'profile' THEN 1 ELSE 0 END) AS profile,
         SUM(CASE WHEN uploaded_at IS NULL THEN 1 ELSE 0 END) AS pending
       FROM insights_outbox
-    `).get() as { events: number; turns: number; profile: number; pending: number };
+      WHERE tenant_id = ? AND user_id = ?
+    `).get(this.scope.tenantId, this.scope.userId) as { events: number; turns: number; profile: number; pending: number };
     return {
       events: Number(row?.events ?? 0),
       turns: Number(row?.turns ?? 0),
@@ -1452,7 +1728,7 @@ export class LocalStore {
     };
   }
 
-  exportInsightsBundle(): {
+  async exportInsightsBundle(): Promise<{
     schema: typeof INSIGHTS_EXPORT_SCHEMA;
     exportedAt: string;
     installId: string;
@@ -1464,8 +1740,8 @@ export class LocalStore {
     profile: InsightsProfile;
     stats: { events: number; turns: number; profile: number; pending: number };
     records: InsightOutboxRow[];
-  } {
-    const settings = this.ensureInsightsSettings();
+  }> {
+    const settings = await this.ensureInsightsSettings();
     return {
       schema: INSIGHTS_EXPORT_SCHEMA,
       exportedAt: new Date().toISOString(),
@@ -1476,8 +1752,8 @@ export class LocalStore {
         shareProfile: settings.shareProfile,
       },
       profile: settings.profile,
-      stats: this.insightStats(),
-      records: this.listInsightOutbox({ limit: 500 }),
+      stats: await this.insightStats(),
+      records: await this.listInsightOutbox({ limit: 500 }),
     };
   }
 
@@ -1494,7 +1770,7 @@ export class LocalStore {
 
   // ─── 场景包存储 ─────────────────────────────────────────────────
   // 包数据访问收敛进包内存储（0.4，如 packages/pack-*/src/store.ts）。
-  // 宿主只通过 getPackDb() 把同一个 SQLite 句柄借给包存储。
+  // Scenario packs receive driver-neutral SQL access; raw handles stay here.
 
   private mapChatSession(row: Record<string, unknown>): ChatSessionRecord {
     return {
@@ -1577,6 +1853,23 @@ export class LocalStore {
     };
   }
 
+  private getSetting(key: string): string | null {
+    const row = this.db.prepare(
+      `SELECT value FROM settings_kv
+       WHERE tenant_id = ? AND user_id = ? AND key = ?`,
+    ).get(this.scope.tenantId, this.scope.userId, key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  private setSetting(key: string, value: string): void {
+    this.db.prepare(`
+      INSERT INTO settings_kv (tenant_id, user_id, key, value)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(tenant_id, user_id, key)
+      DO UPDATE SET value = excluded.value
+    `).run(this.scope.tenantId, this.scope.userId, key, value);
+  }
+
   private safeJson<T>(value: unknown, fallback: T | null = null): T {
     if (typeof value !== 'string') return fallback as T;
     try {
@@ -1587,4 +1880,20 @@ export class LocalStore {
   }
 }
 
-export const localStore = createLocalStore(() => new LocalStore());
+export type {
+  PackDbAccess,
+  StorageDriver,
+  StorageDriverFactory,
+  TenantScope,
+} from './driver.js';
+export type { ScopedStore } from './scoped-store.js';
+export {
+  LOCAL_SCOPE,
+  closeStorage,
+  getPackDbAccess,
+  getScopedStore,
+  initializeStorage,
+  selectStorageDriver,
+} from './driver.js';
+export { registerStorageDriver } from './driver.js';
+export { SqliteStorageDriver } from './sqlite-driver.js';

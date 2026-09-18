@@ -43,7 +43,7 @@ import { TaskService, type TaskStore } from '../../src/local-backend/task-servic
 class FakeTaskStore implements TaskStore {
   readonly rows = new Map<string, TaskRecord>();
 
-  createTask(input: {
+  async createTask(input: {
     chatId: string;
     task: string;
     worktreePath?: string | null;
@@ -51,7 +51,7 @@ class FakeTaskStore implements TaskStore {
     recordId?: string | null;
     dependsOn?: string[] | null;
     initialStatus?: 'blocked' | 'running';
-  }): TaskRecord {
+  }): Promise<TaskRecord> {
     const now = new Date().toISOString();
     const record: TaskRecord = {
       id: randomUUID(),
@@ -74,22 +74,22 @@ class FakeTaskStore implements TaskStore {
     return record;
   }
 
-  getTask(taskId: string): TaskRecord | null {
+  async getTask(taskId: string): Promise<TaskRecord | null> {
     return this.rows.get(taskId) ?? null;
   }
 
-  listTasks(chatId?: string): TaskRecord[] {
+  async listTasks(chatId?: string): Promise<TaskRecord[]> {
     return [...this.rows.values()]
       .filter((t) => !chatId || t.chatId === chatId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  updateTask(
+  async updateTask(
     taskId: string,
     updates: Partial<
       Pick<TaskRecord, 'status' | 'answer' | 'error' | 'worktreeState' | 'traceId' | 'recordId'>
     >,
-  ): TaskRecord | null {
+  ): Promise<TaskRecord | null> {
     const existing = this.rows.get(taskId);
     if (!existing) return null;
     const clean = Object.fromEntries(
@@ -100,7 +100,7 @@ class FakeTaskStore implements TaskStore {
     return next;
   }
 
-  saveTaskProcess(taskId: string, processJson: string): void {
+  async saveTaskProcess(taskId: string, processJson: string): Promise<void> {
     const existing = this.rows.get(taskId);
     if (!existing) return;
     this.rows.set(taskId, { ...existing, processJson });
@@ -156,7 +156,7 @@ function makeService(): Harness {
     store,
     worktreeService: worktree,
     toolRouter: toolRouter as never,
-    resolveChatProject: (chatId) =>
+    resolveChatProject: async (chatId) =>
       chatId === 'chat-1' ? { name: 'proj', folderPath: '/repo' } : null,
     broadcast: (eventName, payload) => broadcasts.push({ eventName, payload }),
     getSupervisor: () => ({ fake: true }) as never,
@@ -183,7 +183,7 @@ function makeService(): Harness {
 async function waitTaskTerminal(store: FakeTaskStore, taskId: string): Promise<TaskRecord> {
   const deadline = Date.now() + 5_000;
   for (;;) {
-    const task = store.getTask(taskId);
+    const task = await store.getTask(taskId);
     if (task && task.status !== 'running') return task;
     if (Date.now() > deadline) throw new Error('task did not reach terminal state');
     await new Promise((r) => setTimeout(r, 5));
@@ -209,14 +209,14 @@ describe('task-service / runTask', () => {
           { name: 'local_exec_shell', description: '', inputSchema: {} },
         ],
       } as never,
-      resolveChatProject: (chatId) =>
+      resolveChatProject: async (chatId) =>
         chatId === 'chat-1' ? { name: 'proj', folderPath: '/repo' } : null,
       broadcast: (eventName, payload) => h.broadcasts.push({ eventName, payload }),
       getSupervisor: () => ({}) as never,
       runStream: async (options) => {
         h.streamCalls.push(options);
         const taskId = String((options.toolContext as { taskId?: unknown })?.taskId);
-        statusAtStreamStart = h.store.getTask(taskId)?.status ?? null;
+        statusAtStreamStart = (await h.store.getTask(taskId))?.status ?? null;
         options.onText?.('任务答案');
         return { status: 'completed', traceId: 'trace-1' };
       },
@@ -225,9 +225,9 @@ describe('task-service / runTask', () => {
     const result = await sampling.runTask({ chatId: 'chat-1', task: '统计行数' });
     expect(result.status).toBe('running');
     expect(result.worktreePath).toBeUndefined();
-    expect(statusAtStreamStart).toBe('running');
+    await vi.waitFor(() => expect(statusAtStreamStart).toBe('running'));
 
-    const row = h.store.getTask(result.taskId);
+    const row = await h.store.getTask(result.taskId);
     expect(row).toMatchObject({
       chatId: 'chat-1',
       task: '统计行数',
@@ -263,7 +263,7 @@ describe('task-service / runTask', () => {
       toolRouter: {
         listModelSchemas: () => [{ name: 'local_exec_shell', description: '', inputSchema: {} }],
       } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       broadcast: (eventName, payload) => h.broadcasts.push({ eventName, payload }),
       getSupervisor: () => ({}) as never,
       runStream: async (options) => {
@@ -287,11 +287,11 @@ describe('task-service / runTask', () => {
     const result = await sampling.runTask({ chatId: 'chat-1', task: '问好' });
     const terminal = await waitTaskTerminal(h.store, result.taskId);
     expect(terminal.status).toBe('completed');
-    const snapshot = sampling.getProcess(result.taskId);
+    const snapshot = await sampling.getProcess(result.taskId);
     expect(snapshot?.live).toBe(false);
     expect(snapshot?.stale).toBe(false);
     expect(snapshot?.timeline.map((b) => b.type)).toEqual(['reasoning', 'tools', 'text']);
-    expect(h.store.getTask(result.taskId)?.processJson).toContain('先跑命令');
+    expect((await h.store.getTask(result.taskId))?.processJson).toContain('先跑命令');
   });
 
   it('depth-1：任务回合的工具列表没有 task_run', async () => {
@@ -309,7 +309,7 @@ describe('task-service / runTask', () => {
       store: new FakeTaskStore(),
       worktreeService: makeWorktreeService(),
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       getSupervisor: () => null,
     });
     await expect(noSidecar.runTask({ chatId: 'c', task: 'x' })).rejects.toThrow('sidecar 未运行');
@@ -330,7 +330,7 @@ describe('task-service / runTask', () => {
       store: h.store,
       worktreeService: h.worktree,
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       getSupervisor: () => ({}) as never,
       runStream: async () => {
         throw new Error('sidecar 连接断开');
@@ -359,7 +359,7 @@ describe('task-service / Task×Worktree', () => {
     expect(result.worktreePath).toBe('/repo/.steerable/worktrees/demo');
     expect(h.worktree.createWorktree).toHaveBeenCalledWith('chat-1', 'demo');
 
-    const row = h.store.getTask(result.taskId);
+    const row = await h.store.getTask(result.taskId);
     expect(row).toMatchObject({
       worktreePath: '/repo/.steerable/worktrees/demo',
       worktreeBranch: 'steerable/demo',
@@ -383,7 +383,7 @@ describe('task-service / Task×Worktree', () => {
     await expect(
       h.service.runTask({ chatId: 'chat-1', task: 'x', worktree: true }),
     ).rejects.toThrow('不是 git 仓库');
-    expect(h.store.listTasks()).toEqual([]);
+    expect(await h.store.listTasks()).toEqual([]);
   });
 
   it('mergeTaskWorktree：终态 pending → merged，worktree 被清理', async () => {
@@ -416,7 +416,7 @@ describe('task-service / Task×Worktree', () => {
       store: h.store,
       worktreeService: h.worktree,
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       getSupervisor: () => ({}) as never,
       runStream: () => new Promise(() => {}),
     });
@@ -447,15 +447,15 @@ describe('task-service / status & result（模型面）', () => {
     const a = await h.service.runTask({ chatId: 'chat-1', task: '任务甲' });
     await waitTaskTerminal(h.store, a.taskId);
 
-    const list = h.service.status('chat-1') as { success: boolean; total: number; tasks: unknown[] };
+    const list = await h.service.status('chat-1') as { success: boolean; total: number; tasks: unknown[] };
     expect(list.success).toBe(true);
     expect(list.total).toBe(1);
 
-    const single = h.service.status('chat-1', a.taskId) as { success: boolean; task: { taskId: string } };
+    const single = await h.service.status('chat-1', a.taskId) as { success: boolean; task: { taskId: string } };
     expect(single.task.taskId).toBe(a.taskId);
 
     // 别的 chat 查这个 id → 不存在（任务表按 chat 归组）。
-    const alien = h.service.status('chat-2', a.taskId) as { success: boolean };
+    const alien = await h.service.status('chat-2', a.taskId) as { success: boolean };
     expect(alien.success).toBe(false);
   });
 
@@ -464,12 +464,12 @@ describe('task-service / status & result（模型面）', () => {
       store: h.store,
       worktreeService: h.worktree,
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       getSupervisor: () => ({}) as never,
       runStream: () => new Promise(() => {}),
     });
     const running = await hanging.runTask({ chatId: 'chat-1', task: '慢任务' });
-    const pending = hanging.result('chat-1', running.taskId) as {
+    const pending = await hanging.result('chat-1', running.taskId) as {
       success: boolean;
       needsFollowup?: boolean;
     };
@@ -478,7 +478,7 @@ describe('task-service / status & result（模型面）', () => {
 
     const done = await h.service.runTask({ chatId: 'chat-1', task: '快任务' });
     await waitTaskTerminal(h.store, done.taskId);
-    const result = h.service.result('chat-1', done.taskId) as {
+    const result = await h.service.result('chat-1', done.taskId) as {
       success: boolean;
       answer: string;
     };
@@ -497,7 +497,7 @@ describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () =>
   async function waitTaskNotBlocked(taskId: string): Promise<void> {
     const deadline = Date.now() + 5_000;
     for (;;) {
-      const task = h.store.getTask(taskId);
+      const task = await h.store.getTask(taskId);
       if (task && task.status !== 'blocked') return;
       if (Date.now() > deadline) throw new Error('task stayed blocked');
       await new Promise((r) => setTimeout(r, 5));
@@ -514,7 +514,7 @@ describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () =>
       store: h.store,
       worktreeService: h.worktree,
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       broadcast: (eventName, payload) => h.broadcasts.push({ eventName, payload }),
       getSupervisor: () => ({}) as never,
       runStream: (options) =>
@@ -539,7 +539,7 @@ describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () =>
     expect(b.status).toBe('blocked');
     // blocked 不点火——仍只有 A 的一条流。
     expect(g.gates).toHaveLength(1);
-    const blockedRow = h.store.getTask(b.taskId);
+    const blockedRow = await h.store.getTask(b.taskId);
     expect(blockedRow?.status).toBe('blocked');
     expect(blockedRow?.dependsOn).toEqual([a.taskId]);
 
@@ -566,7 +566,7 @@ describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () =>
 
     g.gates[0].release({ status: 'failed', reason: '炸了', traceId: 't-a' });
     await waitTaskNotBlocked(b.taskId);
-    const row = h.store.getTask(b.taskId);
+    const row = await h.store.getTask(b.taskId);
     expect(row?.status).toBe('failed');
     expect(row?.error).toContain(a.taskId.slice(0, 8));
     // 依赖挂了不点火。
@@ -592,7 +592,7 @@ describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () =>
       store: h.store,
       worktreeService: h.worktree,
       toolRouter: { listModelSchemas: () => [] } as never,
-      resolveChatProject: () => null,
+      resolveChatProject: async () => null,
       getSupervisor: () =>
         ({
           steerChat: async (streamId: string, content: string) => {
