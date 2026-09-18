@@ -19,6 +19,22 @@ describe('SuggestedReplies', () => {
     expect(screen.getByTestId('suggested-replies').querySelectorAll('[data-testid="suggested-reply"]')).toHaveLength(3);
   });
 
+  it('技能下一步多于 3 条时全部画出', () => {
+    render(
+      <SuggestedReplies
+        suggestions={[
+          '画接底层井密度交会图',
+          '再画一层井密度交会图',
+          '统计本区有效厚度',
+          '输出气层厚度分层表',
+          '绘制气层厚度等值线',
+        ]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('suggested-replies').querySelectorAll('[data-testid="suggested-reply"]')).toHaveLength(5);
+  });
+
   it('空列表不渲染', () => {
     const { container } = render(<SuggestedReplies suggestions={[]} onSelect={() => {}} />);
     expect(container.firstChild).toBeNull();
@@ -55,6 +71,37 @@ describe('extractLatestSuggestedReplies', () => {
     ).toEqual({
       messageId: 'a2',
       suggestions: ['调整封面配色', '把个人简介写得更具体', '再加一页项目案例'],
+    });
+  });
+
+  it('超过 3 条时不再截成 3 条', () => {
+    expect(
+      extractLatestSuggestedReplies([
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '新回复',
+          createdAt: '2026-09-17T08:02:00.000Z',
+          messageMetadata: JSON.stringify({
+            suggestedReplies: [
+              '画接底层井密度交会图',
+              '再画一层井密度交会图',
+              '统计本区有效厚度',
+              '输出气层厚度分层表',
+              '绘制气层厚度等值线',
+            ],
+          }),
+        },
+      ]),
+    ).toEqual({
+      messageId: 'a1',
+      suggestions: [
+        '画接底层井密度交会图',
+        '再画一层井密度交会图',
+        '统计本区有效厚度',
+        '输出气层厚度分层表',
+        '绘制气层厚度等值线',
+      ],
     });
   });
 

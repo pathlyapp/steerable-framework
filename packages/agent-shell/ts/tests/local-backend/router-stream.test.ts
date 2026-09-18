@@ -958,7 +958,7 @@ describe('后台标题生成', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 后台追问建议（WorkBuddy 式 3 条下一轮输入）
+// 后台追问建议（WorkBuddy 式下一轮输入，条数随技能/回复下一步）
 // ---------------------------------------------------------------------------
 
 describe('后台追问建议', () => {
@@ -983,6 +983,12 @@ describe('后台追问建议', () => {
 
     const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
     expect(h.fallbackSuggestedReplies).toHaveBeenCalledWith('制作自我介绍ppt', 'PPT 已生成');
+    await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
+    expect(h.generateSuggestedReplies).toHaveBeenCalledWith(
+      '制作自我介绍ppt',
+      'PPT 已生成',
+      expect.objectContaining({ skillContents: [] }),
+    );
     expect(calls).toContainEqual({
       event: 'suggested-replies',
       payload: {
@@ -1012,6 +1018,32 @@ describe('后台追问建议', () => {
     expect(JSON.parse((await h.store.getMessage(chat.id, assistant.id))!.messageMetadata!)).toMatchObject({
       suggestedReplies: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
     });
+  });
+
+  it('把用户技能正文交给建议生成器', async () => {
+    h.loadSkills.mockResolvedValue([
+      {
+        name: 'plot-crossplot',
+        displayName: '井密度交会图',
+        dirName: 'plot-crossplot',
+        skillsDir: '/tmp/user/skills',
+        content: '## 下一步\n1. 画接底层交会图\n2. 再画一层',
+      },
+    ]);
+    const chat = await seedChat();
+    installStream((opts) => opts.onText('检查完成'));
+    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '继续分析' } },
+      makeEmitCapture().emit,
+    );
+    await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
+    expect(h.generateSuggestedReplies).toHaveBeenCalledWith(
+      '继续分析',
+      '检查完成',
+      expect.objectContaining({
+        skillContents: [expect.stringContaining('## 下一步')],
+      }),
+    );
   });
 
   it('LLM 走兜底时不发第二次广播', async () => {

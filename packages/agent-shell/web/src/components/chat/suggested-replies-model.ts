@@ -17,7 +17,7 @@ function readSuggestedReplies(metadata: unknown): string[] | null {
       parsed.suggestedReplies.length > 0 &&
       parsed.suggestedReplies.every((item) => typeof item === 'string' && item.trim())
     ) {
-      return parsed.suggestedReplies.map((item) => item.trim()).slice(0, 3);
+      return parsed.suggestedReplies.map((item) => item.trim()).slice(0, 8);
     }
   } catch {
     return null;

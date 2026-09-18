@@ -1,6 +1,7 @@
 /**
- * WorkBuddy-style follow-up chips: three next-turn user inputs rendered
- * under the latest assistant reply. Clicking one sends that text immediately.
+ * WorkBuddy-style follow-up chips: next-turn user inputs rendered under the
+ * latest assistant reply. Count follows the turn (skill next steps), not a
+ * fixed three. Clicking one sends that text immediately.
  */
 export function SuggestedReplies({
   suggestions,

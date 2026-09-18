@@ -3574,9 +3574,9 @@ export class LocalBackendRouter {
   }
 
   /**
-   * 回合结束后生成 3 条下一轮用户输入建议。先同步推启发式兜底（芯片立刻出现），
-   * 再 fire-and-forget 跑 LLM，成功则替换。走 broadcast 而不是 SSE：`[DONE]`
-   * 之后渲染端已经不再监听这条流。
+   * 回合结束后生成下一轮用户输入建议。先同步推启发式兜底（芯片立刻出现），
+   * 再读用户/工作区技能正文，fire-and-forget 跑 LLM，成功则替换。
+   * 走 broadcast 而不是 SSE：`[DONE]` 之后渲染端已经不再监听这条流。
    */
   private runSuggestedRepliesInBackground(args: {
     chatId: string;
@@ -3594,19 +3594,48 @@ export class LocalBackendRouter {
 
     void (async () => {
       try {
+        const skillContents = await this.loadUserSkillSuggestionTexts();
+        const enriched = fallbackSuggestedReplies(userText, assistantText, { skillContents });
+        if (
+          enriched.length !== fallback.length ||
+          enriched.some((item, i) => item !== fallback[i])
+        ) {
+          this.publishSuggestedReplies(chatId, messageId, enriched);
+        }
         const result = await generateSuggestedReplies(userText, assistantText, {
           perAttemptTimeoutMs: 60_000,
+          skillContents,
         });
         if (result.usedFallback) return;
+        const baseline = enriched.length > 0 ? enriched : fallback;
         const same =
-          result.suggestions.length === fallback.length &&
-          result.suggestions.every((item, i) => item === fallback[i]);
+          result.suggestions.length === baseline.length &&
+          result.suggestions.every((item, i) => item === baseline[i]);
         if (same) return;
         this.publishSuggestedReplies(chatId, messageId, result.suggestions);
       } catch (err) {
         console.warn('[local-backend] suggested-replies failed', { chatId, err });
       }
     })();
+  }
+
+  /** 用户/工作区技能正文，供追问建议抽出「下一步」。内置技能不参与。 */
+  private async loadUserSkillSuggestionTexts(): Promise<string[]> {
+    try {
+      const modules = await loadSkills({ ignoreConditions: true });
+      return modules
+        .filter((module) => classifySkillOrigin(module.skillsDir) !== 'builtin')
+        .map((module) => {
+          const title = (module.displayName || module.name || module.dirName || '').trim();
+          const body = (module.content ?? '').trim();
+          if (!body) return '';
+          return title ? `# ${title}\n${body}` : body;
+        })
+        .filter(Boolean);
+    } catch (err) {
+      console.warn('[local-backend] suggested-replies skill load failed', err);
+      return [];
+    }
   }
 
   private async publishSuggestedReplies(
