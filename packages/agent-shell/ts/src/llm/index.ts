@@ -1,4 +1,4 @@
-import { localStore, type LlmSettings } from '../storage/index.js';
+import type { LlmSettings, ScopedStore } from '../storage/index.js';
 import { sidecarWireProvider } from '../storage/llm-settings.js';
 import { OllamaProvider } from './ollama.js';
 import { OpenAICompatProvider } from './openai-compat.js';
@@ -19,6 +19,19 @@ import type {
 export class LlmService {
   private provider: LlmProvider | null = null;
   private cachedConfigSignature = '';
+  private settings: LlmSettings | null = null;
+  private store: Pick<ScopedStore, 'setLlmSettings'> | null = null;
+
+  /** Initializes the synchronous runtime cache after storage has loaded. */
+  initialize(
+    settings: LlmSettings,
+    store: Pick<ScopedStore, 'setLlmSettings'>,
+  ): void {
+    this.settings = settings;
+    this.store = store;
+    this.provider = null;
+    this.cachedConfigSignature = '';
+  }
 
   async listModels(): Promise<string[]> {
     const provider = this.getProvider();
@@ -65,16 +78,21 @@ export class LlmService {
   }
 
   getSettings(): LlmSettings {
-    return localStore.getLlmSettings() || {
-      provider: 'ollama',
-      model: 'llama3.1:8b',
-      baseUrl: 'http://127.0.0.1:11434',
-      temperature: 0.3,
-    };
+    if (!this.settings) {
+      throw new Error('LlmService must be initialized after storage');
+    }
+    return this.settings;
   }
 
-  setSettings(next: LlmSettings): LlmSettings {
-    const saved = localStore.setLlmSettings(next);
+  async setSettings(
+    next: LlmSettings,
+    store = this.store,
+  ): Promise<LlmSettings> {
+    if (!store) {
+      throw new Error('LlmService must be initialized after storage');
+    }
+    const saved = await store.setLlmSettings(next);
+    this.settings = saved;
     this.provider = null;
     this.cachedConfigSignature = '';
     return saved;

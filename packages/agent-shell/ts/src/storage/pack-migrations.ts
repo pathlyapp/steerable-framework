@@ -1,10 +1,8 @@
 /**
  * 包迁移注册表 —— ScenarioPack 的存储槽位（0.3b）。
  *
- * `storage/index.ts` 的 `LocalStore` 单例在模块求值时即构造并跑 `migrate()`，
- * 所以包迁移必须在任何 `storage/index.js` import 之前注册。入口
- * （main.ts / server/index.ts）把 `packs/active.ts` 作为第一个 import
- * 来保证这个顺序。
+ * The host initializes the selected driver only after product composition,
+ * so every active pack can register migrations before any database opens.
  *
  * 本模块刻意不 import `storage/index.js`，避免反向依赖。
  */

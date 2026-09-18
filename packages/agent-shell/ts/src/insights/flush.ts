@@ -8,7 +8,8 @@ import {
   type InsightKind,
   type InsightsSettings,
 } from '../storage/insights-settings.js';
-import { localStore, type InsightOutboxRow } from '../storage/index.js';
+import type { InsightOutboxRow } from '../storage/index.js';
+import type { ScopedStore } from '../storage/scoped-store.js';
 
 const FLUSH_TIMEOUT_MS = 8_000;
 const MAX_BATCH = 20;
@@ -54,10 +55,10 @@ function clientMeta(settings: InsightsSettings): {
   };
 }
 
-export function buildInsightsExportPayload(): Record<string, unknown> {
-  const settings = localStore.ensureInsightsSettings();
+export async function buildInsightsExportPayload(store: ScopedStore): Promise<Record<string, unknown>> {
+  const settings = await store.ensureInsightsSettings();
   return {
-    ...localStore.exportInsightsBundle(),
+    ...await store.exportInsightsBundle(),
     ...clientMeta(settings),
   };
 }
@@ -96,7 +97,7 @@ function pathForKind(kind: InsightKind): string {
   return '/api/v2/agent-insights/profile';
 }
 
-export async function flushInsightsOutbox(): Promise<{
+export async function flushInsightsOutbox(store: ScopedStore): Promise<{
   uploaded: number;
   skipped: number;
   failed: number;
@@ -104,8 +105,8 @@ export async function flushInsightsOutbox(): Promise<{
   if (insightsNetworkDisabled()) {
     return { uploaded: 0, skipped: 0, failed: 0 };
   }
-  const settings = localStore.ensureInsightsSettings();
-  const pending = localStore.listInsightOutbox({ uploaded: false, limit: MAX_BATCH });
+  const settings = await store.ensureInsightsSettings();
+  const pending = await store.listInsightOutbox({ uploaded: false, limit: MAX_BATCH });
   const { upload, skipped } = rowsEligibleForAutoUpload(settings, pending);
   let uploaded = 0;
   let failed = 0;
@@ -121,34 +122,34 @@ export async function flushInsightsOutbox(): Promise<{
       clientEventId: row.id,
     });
     if (ok) {
-      localStore.markInsightUploaded(row.id);
+      await store.markInsightUploaded(row.id);
       uploaded += 1;
     } else {
-      localStore.markInsightUploadError(row.id, 'upload_failed');
+      await store.markInsightUploadError(row.id, 'upload_failed');
       failed += 1;
     }
   }
   return { uploaded, skipped, failed };
 }
 
-export async function uploadInsightsBundle(): Promise<boolean> {
+export async function uploadInsightsBundle(store: ScopedStore): Promise<boolean> {
   if (insightsNetworkDisabled()) {
     return false;
   }
-  const settings = localStore.ensureInsightsSettings();
-  const bundle = buildInsightsExportPayload();
+  const settings = await store.ensureInsightsSettings();
+  const bundle = await buildInsightsExportPayload(store);
   const base = resolveInsightsApiBase(settings, process.env.DEEPPATH_INSIGHTS_API_BASE);
   if (!base) return false;
   const ok = await postInsightsJson(`${base}/api/v2/agent-insights/bundle`, bundle);
   if (ok) {
     const records = Array.isArray(bundle.records) ? (bundle.records as InsightOutboxRow[]) : [];
-    for (const row of records) localStore.markInsightUploaded(row.id);
+    for (const row of records) await store.markInsightUploaded(row.id);
   }
   return ok;
 }
 
-export function scheduleInsightsFlush(): void {
-  void flushInsightsOutbox().catch((err) => {
+export function scheduleInsightsFlush(store: ScopedStore): void {
+  void flushInsightsOutbox(store).catch((err) => {
     console.warn('[insights] flush crashed', err);
   });
 }

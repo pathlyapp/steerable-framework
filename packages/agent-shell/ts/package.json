@@ -15,6 +15,14 @@
   "type": "module",
   "main": "dist/runtime.js",
   "exports": {
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "default": "./dist/auth/index.js"
+    },
+    "./server/start": {
+      "types": "./dist/server/start.d.ts",
+      "default": "./dist/server/start.js"
+    },
     "./*": {
       "types": "./dist/*.d.ts",
       "default": "./dist/*.js"
@@ -36,9 +44,10 @@
     "gen": "echo agent-shell-ts",
     "build": "tsc -p tsconfig.json && node copy-skills.mjs && node scripts/build-preload.mjs",
     "test": "vitest run",
-    "lint": "tsc -p tsconfig.json --noEmit && node scripts/check-shell-neutral.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit && node scripts/check-shell-neutral.mjs && node scripts/check-storage-boundaries.mjs",
     "check:drift": "echo ok",
     "shell:neutral": "node scripts/check-shell-neutral.mjs",
+    "storage:boundaries": "node scripts/check-storage-boundaries.mjs",
     "web": "ELECTRON_RUN_AS_NODE=1 DEEPPATH_WEB_DIST=${DEEPPATH_WEB_DIST:-../web/app/dist} node node_modules/electron/cli.js dist/server/index.js",
     "client": "DEEPPATH_FORCE_BUNDLED_WEB=1 DEEPPATH_WEB_DIST=${DEEPPATH_WEB_DIST:-../web/app/dist} node node_modules/electron/cli.js dist/main.js"
   },

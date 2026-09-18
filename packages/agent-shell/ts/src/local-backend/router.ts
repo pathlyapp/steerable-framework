@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { getAppRootDir, shellOpenPath } from '../runtime.js';
 import { llmService, getSidecarSupervisor, whenSidecarSupervisor } from '../llm/index.js';
@@ -26,7 +27,8 @@ import {
   type PersistedTurnBlock,
 } from './turn-timeline.js';
 import { turnDurationMs } from './turn-duration.js';
-import { localStore, DEFAULT_SYSTEM_PROMPT, telemetryEnabled, type ChatAgentRecord, type ChatMessageRecord, type InsightsSettingsPatch } from '../storage/index.js';
+import { DEFAULT_SYSTEM_PROMPT, telemetryEnabled, type ChatAgentRecord, type ChatMessageRecord, type InsightsSettingsPatch } from '../storage/index.js';
+import type { ScopedStore } from '../storage/scoped-store.js';
 import {
   isSkillPinned,
   isToolAllowed,
@@ -88,11 +90,14 @@ import {
 import { matchPackBackendRoute } from './pack-backend-routes.js';
 import { collectTurnFiles } from './turn-files.js';
 import { resolveMentionedPaths } from './mentioned-paths.js';
+import { getAuthProvider, type Principal } from '../auth/index.js';
 
 export interface LocalBackendRequest {
   method: string;
   path: string;
   body?: unknown;
+  /** Authenticated identity supplied by the BS HTTP layer. */
+  principal?: Principal;
 }
 
 export interface LocalBackendResponse<T = unknown> {
@@ -145,7 +150,7 @@ export interface StreamOptions {
 /**
  * Parses a pagination-style query param (`?page=`, `?limit=`) into a finite
  * positive integer, falling back to `fallback` for missing/non-numeric input
- * (e.g. `?page=abc`) instead of letting `NaN` leak into `localStore` queries
+ * (e.g. `?page=abc`) instead of letting `NaN` leak into storage queries
  * and the echoed-back `pagination` block of the response.
  */
 function parsePositiveIntParam(raw: string | null, fallback: number): number {
@@ -261,24 +266,60 @@ interface TurnAgents {
 }
 
 export class LocalBackendRouter {
+  private readonly defaultStore: ScopedStore;
+  private readonly storeContext = new AsyncLocalStorage<ScopedStore>();
+  private readonly resolveStore: (principal?: Principal) => ScopedStore;
   private readonly broadcast: LocalBackendBroadcast | null;
   /** 4.6a/4.6c：任务面板的路由入口（列表 + 合并/丢弃）。未注入时任务路由 503。 */
   private readonly taskService: TaskService | null;
 
   constructor(
     private readonly toolRouter: ToolRouter,
-    options: { broadcast?: LocalBackendBroadcast; taskService?: TaskService } = {},
+    options: {
+      store: ScopedStore;
+      resolveStore?: (principal?: Principal) => ScopedStore;
+      broadcast?: LocalBackendBroadcast;
+      taskService?: TaskService;
+    },
   ) {
+    this.defaultStore = options.store;
+    this.resolveStore = options.resolveStore ?? (() => options.store);
     this.broadcast = options.broadcast ?? null;
     this.taskService = options.taskService ?? null;
   }
 
-  async handle(request: LocalBackendRequest): Promise<LocalBackendResponse> {
+  private get store(): ScopedStore {
+    return this.storeContext.getStore() ?? this.defaultStore;
+  }
+
+  /** Store selected for the active request, or the host default outside one. */
+  get activeStore(): ScopedStore {
+    return this.store;
+  }
+
+  handle(request: LocalBackendRequest): Promise<LocalBackendResponse> {
+    return this.storeContext.run(
+      this.resolveStore(request.principal),
+      () => this.handleScoped(request),
+    );
+  }
+
+  private async handleScoped(request: LocalBackendRequest): Promise<LocalBackendResponse> {
     const { method } = request;
     const url = new URL(request.path, 'http://local.backend');
     const pathname = url.pathname;
 
     if (method === 'GET' && pathname === '/api/v2/auth/me') {
+      const authProvider = getAuthProvider();
+      if (authProvider) {
+        if (!request.principal) {
+          return { status: 401, data: { detail: 'unauthorized' } };
+        }
+        return {
+          status: 200,
+          data: await authProvider.describeSelf(request.principal),
+        };
+      }
       return { status: 200, data: buildLocalApiUser() };
     }
 
@@ -339,7 +380,7 @@ export class LocalBackendRouter {
     if (method === 'GET' && pathname === '/api/v2/chats') {
       const page = parsePositiveIntParam(url.searchParams.get('page'), 1);
       const limit = parsePositiveIntParam(url.searchParams.get('limit'), 50);
-      const { chats, total } = localStore.listChats(page, limit);
+      const { chats, total } = await this.store.listChats(page, limit);
       return {
         status: 200,
         data: {
@@ -372,9 +413,9 @@ export class LocalBackendRouter {
     const branchesMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/branches$/);
     if (method === 'GET' && branchesMatch) {
       const chatId = branchesMatch[1];
-      const chat = localStore.getChat(chatId);
+      const chat = await this.store.getChat(chatId);
       if (!chat) return { status: 404, data: { detail: 'chat not found' } };
-      const activeRecordId = localStore.getChatRecordId(chatId) ?? chatId;
+      const activeRecordId = await this.store.getChatRecordId(chatId) ?? chatId;
       const supervisor = getSidecarSupervisor();
       const branches = supervisor ? await supervisor.sessionBranches(activeRecordId) : null;
       return {
@@ -393,9 +434,9 @@ export class LocalBackendRouter {
     const branchTreeMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/branches\/tree$/);
     if (method === 'GET' && branchTreeMatch) {
       const chatId = branchTreeMatch[1];
-      const chat = localStore.getChat(chatId);
+      const chat = await this.store.getChat(chatId);
       if (!chat) return { status: 404, data: { detail: 'chat not found' } };
-      const activeRecordId = localStore.getChatRecordId(chatId) ?? chatId;
+      const activeRecordId = await this.store.getChatRecordId(chatId) ?? chatId;
       const supervisor = getSidecarSupervisor();
       const family = supervisor ? await supervisor.sessionTree(activeRecordId) : null;
       return {
@@ -417,7 +458,7 @@ export class LocalBackendRouter {
     const activateMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/branches\/activate$/);
     if (method === 'POST' && activateMatch) {
       const chatId = activateMatch[1];
-      const chat = localStore.getChat(chatId);
+      const chat = await this.store.getChat(chatId);
       if (!chat) return { status: 404, data: { detail: 'chat not found' } };
       const payload = this.toRecord(request.body);
       const targetRecordId = typeof payload.recordId === 'string' ? payload.recordId : '';
@@ -428,7 +469,7 @@ export class LocalBackendRouter {
       if (!supervisor) {
         return { status: 503, data: { detail: 'sidecar unavailable' } };
       }
-      const activeRecordId = localStore.getChatRecordId(chatId) ?? chatId;
+      const activeRecordId = await this.store.getChatRecordId(chatId) ?? chatId;
       const family = await supervisor.sessionTree(activeRecordId);
       const activation = resolveBranchActivation(
         activeRecordId,
@@ -442,8 +483,8 @@ export class LocalBackendRouter {
       if (!projection) {
         return { status: 404, data: { detail: `record not found: ${targetRecordId}` } };
       }
-      localStore.setChatRecordId(chatId, targetRecordId);
-      localStore.replaceChatMessages(
+      await this.store.setChatRecordId(chatId, targetRecordId);
+      await this.store.replaceChatMessages(
         chatId,
         projection.messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -472,7 +513,7 @@ export class LocalBackendRouter {
           };
         }
       }
-      const created = localStore.createChat(
+      const created = await this.store.createChat(
         '新对话',
         typeof payload.agentId === 'string' ? payload.agentId : getBrand().defaultAgentId,
         projectId,
@@ -498,7 +539,7 @@ export class LocalBackendRouter {
         typeof payload.exceptChatId === 'string' && payload.exceptChatId.trim()
           ? payload.exceptChatId.trim()
           : null;
-      const deletedChatIds = localStore.deleteEmptyChats(exceptChatId);
+      const deletedChatIds = await this.store.deleteEmptyChats(exceptChatId);
       return { status: 200, data: { deletedChatIds } };
     }
 
@@ -558,7 +599,7 @@ export class LocalBackendRouter {
         const ok = registry.delete(projectId);
         if (!ok) return this.notFound('项目不存在');
         // 会话不删，只解绑——它们变成"无项目对话"。
-        const detached = localStore.clearProjectAssignment(projectId);
+        const detached = await this.store.clearProjectAssignment(projectId);
         return { status: 200, data: { success: true, detachedChats: detached } };
       }
     }
@@ -595,9 +636,9 @@ export class LocalBackendRouter {
         return { status: 503, data: { detail: 'task service unavailable' } };
       }
       const chatId = chatTasksMatch[1];
-      const chat = localStore.getChat(chatId);
+      const chat = await this.store.getChat(chatId);
       if (!chat) return { status: 404, data: { detail: 'chat not found' } };
-      return { status: 200, data: { tasks: localStore.listTasks(chatId) } };
+      return { status: 200, data: { tasks: await this.store.listTasks(chatId) } };
     }
 
     const taskProcessMatch = pathname.match(/^\/api\/v2\/tasks\/([^/]+)\/process$/);
@@ -605,7 +646,7 @@ export class LocalBackendRouter {
       if (!this.taskService) {
         return { status: 503, data: { detail: 'task service unavailable' } };
       }
-      const snapshot = this.taskService.getProcess(taskProcessMatch[1]);
+      const snapshot = await this.taskService.getProcess(taskProcessMatch[1]);
       if (!snapshot) return { status: 404, data: { detail: '任务不存在' } };
       return {
         status: 200,
@@ -644,7 +685,7 @@ export class LocalBackendRouter {
     const projectContextMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/project-context$/);
     if (projectContextMatch && method === 'GET') {
       const chatId = projectContextMatch[1];
-      const chat = localStore.getChat(chatId);
+      const chat = await this.store.getChat(chatId);
       if (!chat) return this.notFound('Chat not found');
       const registry = this.toolRouter.projectRegistry;
       const project = chat.projectId && registry ? registry.get(chat.projectId) : null;
@@ -669,7 +710,7 @@ export class LocalBackendRouter {
     if (chatMatch) {
       const chatId = chatMatch[1];
       if (method === 'GET') {
-        const chat = localStore.getChat(chatId);
+        const chat = await this.store.getChat(chatId);
         if (!chat) return this.notFound('Chat not found');
         return {
           status: 200,
@@ -689,13 +730,13 @@ export class LocalBackendRouter {
       }
       if (method === 'DELETE') {
         if (url.searchParams.get('onlyIfEmpty') === '1') {
-          const deleted = localStore.deleteChatIfEmpty(chatId);
+          const deleted = await this.store.deleteChatIfEmpty(chatId);
           return {
             status: 200,
             data: { success: true, deleted, chatId },
           };
         }
-        const ok = localStore.deleteChat(chatId);
+        const ok = await this.store.deleteChat(chatId);
         if (!ok) return this.notFound('Chat not found');
         return {
           status: 200,
@@ -712,7 +753,7 @@ export class LocalBackendRouter {
     if (chatPinMatch && method === 'PUT') {
       const chatId = chatPinMatch[1];
       const payload = this.toRecord(request.body);
-      const updated = localStore.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
+      const updated = await this.store.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
       if (!updated) return this.notFound('Chat not found');
       return {
         status: 200,
@@ -745,7 +786,7 @@ export class LocalBackendRouter {
           return this.badRequest('projectId 必须是项目 id 字符串或 null');
         }
       }
-      const updated = localStore.updateChat(chatId, {
+      const updated = await this.store.updateChat(chatId, {
         title: typeof payload.title === 'string' ? payload.title : undefined,
         systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
         pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
@@ -773,7 +814,7 @@ export class LocalBackendRouter {
     if (messageListMatch && method === 'GET') {
       const chatId = messageListMatch[1];
       const limit = parsePositiveIntParam(url.searchParams.get('limit'), 200);
-      const records = localStore.listMessages(chatId, limit);
+      const records = await this.store.listMessages(chatId, limit);
       const messages = records.map(item => ({
         id: item.id,
         chatId: item.chatId,
@@ -790,7 +831,7 @@ export class LocalBackendRouter {
       // 同一 record 上开出第二个写者）。listMessages 是 DESC，records[0]
       // 即最后一条。
       const interrupted = detectInterruptedTurn({
-        turnActive: localStore.getTurnActive(chatId) !== null,
+        turnActive: await this.store.getTurnActive(chatId) !== null,
         streamActive: getActiveCoreLoopStreamId(chatId) !== undefined,
         lastMessageRole: records[0]?.role ?? null,
       });
@@ -849,7 +890,7 @@ export class LocalBackendRouter {
 
     if (method === 'GET' && pathname === '/api/v2/chat-agents') {
       const includeArchived = url.searchParams.get('include_archived') === 'true';
-      const agents = localStore.listChatAgents(includeArchived);
+      const agents = await this.store.listChatAgents(includeArchived);
       return {
         status: 200,
         data: {
@@ -861,7 +902,7 @@ export class LocalBackendRouter {
 
     if (method === 'POST' && pathname === '/api/v2/chat-agents') {
       const payload = this.toRecord(request.body);
-      const agent = localStore.createChatAgent({
+      const agent = await this.store.createChatAgent({
         name: String(payload.name || '新助手'),
         icon: typeof payload.icon === 'string' ? payload.icon : null,
         color: typeof payload.color === 'string' ? payload.color : null,
@@ -1305,13 +1346,13 @@ export class LocalBackendRouter {
     if (chatAgentMatch) {
       const agentId = chatAgentMatch[1];
       if (method === 'GET') {
-        const agent = localStore.getChatAgent(agentId);
+        const agent = await this.store.getChatAgent(agentId);
         if (!agent) return this.notFound('Agent not found');
         return { status: 200, data: agent };
       }
       if (method === 'PATCH') {
         const payload = this.toRecord(request.body);
-        const agent = localStore.updateChatAgent(agentId, {
+        const agent = await this.store.updateChatAgent(agentId, {
           name: typeof payload.name === 'string' ? payload.name : undefined,
           icon: typeof payload.icon === 'string' ? payload.icon : undefined,
           color: typeof payload.color === 'string' ? payload.color : undefined,
@@ -1331,7 +1372,7 @@ export class LocalBackendRouter {
         return { status: 200, data: { agent } };
       }
       if (method === 'DELETE') {
-        const ok = localStore.archiveChatAgent(agentId);
+        const ok = await this.store.archiveChatAgent(agentId);
         if (!ok) return this.notFound('Agent not found');
         return {
           status: 200,
@@ -1541,12 +1582,12 @@ export class LocalBackendRouter {
       if (method === 'GET') {
         return {
           status: 200,
-          data: localStore.getLlmSettings(),
+          data: await this.store.getLlmSettings(),
         };
       }
       if (method === 'POST') {
         const payload = this.toRecord(request.body);
-        const saved = llmService.setSettings({
+        const saved = await llmService.setSettings({
           provider: sanitizeLlmProvider(payload.provider),
           vendorId: sanitizeVendorId(payload.vendorId),
           model: String(payload.model || 'llama3.1:8b'),
@@ -1566,7 +1607,7 @@ export class LocalBackendRouter {
             : undefined,
           compat: sanitizeCompatOverrides(payload.compat),
           presets: sanitizePresetsChoice(payload.presets),
-        });
+        }, this.store);
         // 立即让新默认超时对后续 local_exec_shell 生效（重启后由 main.ts 启动时恢复）。
         setDefaultExecTimeoutMs(
           saved.execTimeoutSeconds ? saved.execTimeoutSeconds * 1000 : null
@@ -1589,12 +1630,12 @@ export class LocalBackendRouter {
       if (method === 'GET') {
         return {
           status: 200,
-          data: localStore.getTelemetrySettings(),
+          data: await this.store.getTelemetrySettings(),
         };
       }
       if (method === 'POST') {
         const payload = this.toRecord(request.body);
-        const saved = localStore.setTelemetrySettings({
+        const saved = await this.store.setTelemetrySettings({
           endpoint: typeof payload.endpoint === 'string' ? payload.endpoint : undefined,
           privacyMode: payload.privacyMode === 'full' ? 'full' : 'metadata',
           serviceName: typeof payload.serviceName === 'string' ? payload.serviceName : undefined,
@@ -1610,12 +1651,12 @@ export class LocalBackendRouter {
       if (method === 'GET') {
         return {
           status: 200,
-          data: localStore.getWebSearchSettings(),
+          data: await this.store.getWebSearchSettings(),
         };
       }
       if (method === 'POST') {
         const payload = this.toRecord(request.body);
-        const saved = localStore.setWebSearchSettings({
+        const saved = await this.store.setWebSearchSettings({
           provider: payload.provider === 'ddg' ? 'ddg' : 'tavily',
           apiKey: typeof payload.apiKey === 'string' ? payload.apiKey : undefined,
         });
@@ -1628,10 +1669,10 @@ export class LocalBackendRouter {
 
     if (pathname === '/api/v2/local-settings/insights') {
       if (method === 'GET') {
-        const settings = localStore.ensureInsightsSettings();
+        const settings = await this.store.ensureInsightsSettings();
         return {
           status: 200,
-          data: { ...settings, stats: localStore.insightStats() },
+          data: { ...settings, stats: await this.store.insightStats() },
         };
       }
       if (method === 'POST') {
@@ -1654,7 +1695,7 @@ export class LocalBackendRouter {
         else if (payload.markPrompted === true) patch.promptedAt = new Date().toISOString();
         if (typeof payload.apiBase === 'string') patch.apiBase = payload.apiBase;
         if (Object.keys(profilePatch).length) patch.profile = profilePatch;
-        const saved = localStore.setInsightsSettings(patch);
+        const saved = await this.store.setInsightsSettings(patch);
         const hasProfileFields = Boolean(
           saved.profile.displayName ||
             saved.profile.email ||
@@ -1662,14 +1703,14 @@ export class LocalBackendRouter {
             saved.profile.note,
         );
         if (hasProfileFields) {
-          recordInsightProfile(saved.profile);
+          await recordInsightProfile(this.store, saved.profile);
         }
-        void flushInsightsOutbox().catch((err) => {
+        void flushInsightsOutbox(this.store).catch((err) => {
           console.warn('[insights] flush after settings save failed', err);
         });
         return {
           status: 200,
-          data: { ...saved, stats: localStore.insightStats() },
+          data: { ...saved, stats: await this.store.insightStats() },
         };
       }
     }
@@ -1684,21 +1725,21 @@ export class LocalBackendRouter {
         payload.properties && typeof payload.properties === 'object'
           ? (payload.properties as Record<string, unknown>)
           : {};
-      recordInsightEvent(eventName, properties);
+      await recordInsightEvent(this.store, eventName, properties);
       return { status: 200, data: { status: 'ok' } };
     }
 
     if (method === 'GET' && pathname === '/api/v2/insights/export') {
-      return { status: 200, data: buildInsightsExportPayload() };
+      return { status: 200, data: await buildInsightsExportPayload(this.store) };
     }
 
     if (method === 'POST' && pathname === '/api/v2/insights/upload-local') {
-      const ok = await uploadInsightsBundle();
+      const ok = await uploadInsightsBundle(this.store);
       return {
         status: ok ? 200 : 502,
         data: {
           ok,
-          stats: localStore.insightStats(),
+          stats: await this.store.insightStats(),
           detail: ok ? 'uploaded' : 'upload_failed_kept_local',
         },
       };
@@ -1707,7 +1748,7 @@ export class LocalBackendRouter {
       const days = parsePositiveIntParam(url.searchParams.get('days'), 30);
       return {
         status: 200,
-        data: localStore.getUsageSummary(days),
+        data: await this.store.getUsageSummary(days),
       };
     }
 
@@ -1800,7 +1841,7 @@ export class LocalBackendRouter {
       if (!chatId) {
         return { status: 400, data: { detail: 'chatId is required' } };
       }
-      const traces = localStore.listTracesByChat(chatId, limit).map(item => ({
+      const traces = (await this.store.listTracesByChat(chatId, limit)).map(item => ({
         ...item,
         payload: this.safeJson(item.payload, {}),
       }));
@@ -1812,7 +1853,7 @@ export class LocalBackendRouter {
 
     const traceMatch = pathname.match(/^\/api\/v2\/local\/traces\/([^/]+)$/);
     if (traceMatch && method === 'GET') {
-      const trace = localStore.getTrace(traceMatch[1]);
+      const trace = await this.store.getTrace(traceMatch[1]);
       if (!trace) return this.notFound('Trace not found');
       return {
         status: 200,
@@ -1851,7 +1892,7 @@ export class LocalBackendRouter {
         return { status: 200, data: { resolved: [] } };
       }
       const chatId = typeof payload.chatId === 'string' ? payload.chatId : '';
-      const baseDir = (chatId ? this.resolveChatProject(chatId)?.folderPath : null) ?? os.homedir();
+      const baseDir = (chatId ? (await this.resolveChatProject(chatId))?.folderPath : null) ?? os.homedir();
       const resolved = await resolveMentionedPaths({ candidates, baseDir });
       return { status: 200, data: { resolved } };
     }
@@ -1919,7 +1960,18 @@ export class LocalBackendRouter {
    * - 错误：保留 `event:error` + `data: {"message":"..."}`（前端会忽略，但日志/未来 UI 用）
    * - 结束：标准 SSE `[DONE]` 串。
    */
-  async handleStream(
+  handleStream(
+    request: LocalBackendRequest,
+    emit: StreamEmit,
+    options: StreamOptions = {},
+  ): Promise<StreamResult> {
+    return this.storeContext.run(
+      this.resolveStore(request.principal),
+      () => this.handleStreamScoped(request, emit, options),
+    );
+  }
+
+  private async handleStreamScoped(
     request: LocalBackendRequest,
     emit: StreamEmit,
     options: StreamOptions = {},
@@ -1941,7 +1993,7 @@ export class LocalBackendRouter {
     const chatId = sendMatch ? sendMatch[1] : regenerateMatch![1];
     const payload = this.toRecord(request.body);
 
-    let chat = localStore.getChat(chatId);
+    let chat = await this.store.getChat(chatId);
     if (!chat) {
       // 会话 URL 即会话身份：外部平台（自动化/eval）把一个 chatId 当成一次
       // 会话任务反复打开运行，本地会话却可能已经被用户清理、被空会话 prune、
@@ -1959,7 +2011,7 @@ export class LocalBackendRouter {
           typeof payload.agentId === 'string' && payload.agentId.trim()
             ? payload.agentId.trim()
             : 'local-assistant';
-        chat = localStore.createChatWithId(chatId, '新对话', agentId);
+        chat = await this.store.createChatWithId(chatId, '新对话', agentId);
         console.warn('[local-backend] stream: chat missing, auto-provisioned', {
           chatId,
           agentId,
@@ -1999,7 +2051,7 @@ export class LocalBackendRouter {
       // the *real* request instead of a generic placeholder (matters for
       // deferred-exec detection, mode preamble, etc., which all key off the
       // actual ask).
-      const priorMessages = localStore.listMessages(chatId, 200).reverse();
+      const priorMessages = (await this.store.listMessages(chatId, 200)).reverse();
       const resolution = resolveRegenerateContext(priorMessages, targetMessageId);
       if (!resolution.ok) {
         emit(this.sse('error', { message: 'regenerate target message not found or not an assistant message' }));
@@ -2018,13 +2070,13 @@ export class LocalBackendRouter {
       const supervisor = getSidecarSupervisor();
       const outcome = supervisor
         ? await supervisor.forkSession({
-            recordId: localStore.getChatRecordId(chatId) ?? chatId,
+            recordId: await this.store.getChatRecordId(chatId) ?? chatId,
             beforeUserIndex: resolveRegenerateForkOrdinal(priorMessages, targetMessageId),
             newRecordId: `${chatId}:r${Date.now().toString(36)}`,
           })
         : null;
       if (outcome?.ok) {
-        localStore.setChatRecordId(chatId, outcome.fork.recordId);
+        await this.store.setChatRecordId(chatId, outcome.fork.recordId);
         console.log('[local-backend] regenerate: record forked (old tail preserved)', {
           chatId,
           branchRecordId: outcome.fork.recordId,
@@ -2042,7 +2094,7 @@ export class LocalBackendRouter {
         emit(this.sse('error', { message: plan.message }));
         return { status: 409 };
       }
-      const deleted = localStore.deleteMessagesFrom(chatId, targetMessageId);
+      const deleted = await this.store.deleteMessagesFrom(chatId, targetMessageId);
       console.log('[local-backend] regenerate: truncated history', {
         chatId,
         targetMessageId,
@@ -2053,9 +2105,9 @@ export class LocalBackendRouter {
       // sidecar 回放 durable record 的投影作为循环种子。只在检测确为
       // interrupted 时接受：对一个已正常完结的 turn 续跑只会给完整对话
       // 凭空多接一段回复。
-      const prior = localStore.listMessages(chatId, 200);
+      const prior = await this.store.listMessages(chatId, 200);
       const interrupted = detectInterruptedTurn({
-        turnActive: localStore.getTurnActive(chatId) !== null,
+        turnActive: await this.store.getTurnActive(chatId) !== null,
         streamActive: getActiveCoreLoopStreamId(chatId) !== undefined,
         lastMessageRole: prior[0]?.role ?? null,
       });
@@ -2087,8 +2139,8 @@ export class LocalBackendRouter {
     //   3. 历史里目前没有任何 assistant 消息——也就是说，本轮即将产生的是第一条助手回复
     // 这避免在已经聊到一半的对话里突然把标题换掉。listMessages 是 DESC，limit 拉
     // 大一点确保看到完整历史（200 已经覆盖绝大多数本地会话）。
-    const existingAssistant = localStore
-      .listMessages(chatId, 200)
+    const existingAssistant = (await this.store
+      .listMessages(chatId, 200))
       .some((m) => m.role === 'assistant');
     const shouldGenerateTitle =
       !regenerateMatch &&
@@ -2111,7 +2163,7 @@ export class LocalBackendRouter {
     // persisted (and already in the durable record).
     let currentUserMessageId: string | undefined;
     if (!regenerateMatch && !isResume) {
-      const userMessage = localStore.addMessage(chatId, 'user', userMessageText);
+      const userMessage = await this.store.addMessage(chatId, 'user', userMessageText);
       currentUserMessageId = userMessage.id;
       emit(this.sseData({ type: 'user_message', message: userMessage }));
     }
@@ -2122,7 +2174,7 @@ export class LocalBackendRouter {
 
     // 本轮生效的智能体：人设、技能勾选、工具策略同源。必须先解析——工具
     // 策略决定工具列表，工具列表又决定技能的触发条件。
-    const turnAgents = this.resolveTurnAgents(chatId, payload);
+    const turnAgents = await this.resolveTurnAgents(chatId, payload);
 
     // Wave 2 工具分层：模型可见列表只出 direct 层（内置工具 + tool_search
     // 发现缝）；MCP 动态工具全在 deferred 层，经 tool_search 命中即调。
@@ -2256,7 +2308,7 @@ export class LocalBackendRouter {
           });
           return;
         }
-        const fresh = localStore.getChat(chatId);
+        const fresh = await this.store.getChat(chatId);
         if (!fresh) {
           console.log('[local-backend] title-gen skip', {
             chatId,
@@ -2272,7 +2324,7 @@ export class LocalBackendRouter {
           });
           return;
         }
-        const updated = localStore.updateChat(chatId, { title: result.title });
+        const updated = await this.store.updateChat(chatId, { title: result.title });
         if (!updated) {
           console.warn('[local-backend] title-gen write failed', { chatId });
           return;
@@ -2301,8 +2353,8 @@ export class LocalBackendRouter {
    * Public: main.ts 的反向通道（reverse-tools.ts）经它给 CoreLoop 路径的
    * 工具调用补上 projectRoot 围栏。
    */
-  resolveChatProject(chatId: string): { name: string; folderPath: string } | null {
-    const projectId = localStore.getChat(chatId)?.projectId;
+  async resolveChatProject(chatId: string): Promise<{ name: string; folderPath: string } | null> {
+    const projectId = (await this.store.getChat(chatId))?.projectId;
     if (!projectId) return null;
     const project = this.toolRouter.projectRegistry?.get(projectId);
     if (!project) return null;
@@ -2324,10 +2376,10 @@ export class LocalBackendRouter {
    * @param payload 前端提交的流请求体。
    * @returns 本轮的智能体顺序、人设智能体、自称，以及合并后的能力面。
    */
-  private resolveTurnAgents(
+  private async resolveTurnAgents(
     chatId: string,
     payload: Record<string, unknown>,
-  ): TurnAgents {
+  ): Promise<TurnAgents> {
     const mentionedAgentIds = Array.isArray(payload.mentionedAgentIds)
       ? (payload.mentionedAgentIds as unknown[]).filter((s) => typeof s === 'string') as string[]
       : [];
@@ -2340,12 +2392,13 @@ export class LocalBackendRouter {
     if (orderedAgentIds.length === 0) {
       const fallbackId =
         (typeof payload.agentId === 'string' && payload.agentId) ||
-        localStore.getChat(chatId)?.agentId ||
+        (await this.store.getChat(chatId))?.agentId ||
         null;
       if (fallbackId) orderedAgentIds.push(fallbackId);
     }
-    const agents = orderedAgentIds
-      .map((id) => localStore.getChatAgent(id))
+    const agents = (await Promise.all(
+      orderedAgentIds.map((id) => this.store.getChatAgent(id)),
+    ))
       .filter((agent): agent is ChatAgentRecord => Boolean(agent));
     return {
       orderedAgentIds,
@@ -2379,7 +2432,7 @@ export class LocalBackendRouter {
     // 摘要，也不再按 40 条窗口截断——让框架 record 累积完整对话并按需压缩。
     // 上限即存储层 listMessages 的 1000 条硬上限；超出时最旧历史随
     // host_revision 优雅退化。
-    let rawHistory = localStore.listMessages(chatId, HISTORY_SEED_LIMIT).reverse();
+    let rawHistory = (await this.store.listMessages(chatId, HISTORY_SEED_LIMIT)).reverse();
 
     // 剔除刚刚写入数据库的当前轮用户消息，避免在上下文历史中与我们显式添加的
     // latestUserMessage 发生重复。send 路径按 id 精确剔除——上一条 assistant
@@ -2540,7 +2593,7 @@ export class LocalBackendRouter {
     // 项目模式：绑定项目的对话在系统提示末尾追加沙箱约定（两条拼装路径
     // 都追加）。硬围栏在 ToolRouter/LocalExecutor，这里让模型事先知道边界，
     // 减少越界尝试。
-    const chatProject = this.resolveChatProject(chatId);
+    const chatProject = await this.resolveChatProject(chatId);
     if (chatProject) {
       systemPrompt +=
         `\n\n【项目模式】当前对话绑定项目「${chatProject.name}」，根目录：${chatProject.folderPath}\n` +
@@ -2557,7 +2610,7 @@ export class LocalBackendRouter {
       // 仅在用户显式信任该项目后才注入模型上下文——未信任一律不读取、不注入
       // （打开恶意仓库时，一段构造的规则文件不能劫持 agent）。信任状态持久化、
       // 可在设置里撤销；每回合重新读盘，规则保存即生效。
-      const projectId = localStore.getChat(chatId)?.projectId;
+      const projectId = (await this.store.getChat(chatId))?.projectId;
       const registry = this.toolRouter.projectRegistry;
       if (projectId && registry?.isTrusted(projectId)) {
         const rules = loadProjectRuleFiles(chatProject.folderPath);
@@ -2655,7 +2708,7 @@ export class LocalBackendRouter {
 
     const out: LlmMessage[] = [];
     for (const refChatId of ids) {
-      const refChat = localStore.getChat(refChatId);
+      const refChat = await this.store.getChat(refChatId);
       if (!refChat) {
         console.warn('[local-backend] referenced chat not found, skipping', { refChatId });
         continue;
@@ -2664,8 +2717,8 @@ export class LocalBackendRouter {
       const sections: string[] = [];
 
       const recent = (await Promise.all(
-        localStore
-          .listMessages(refChatId, RECENT_MESSAGES_PER_CHAT)
+        (await this.store
+          .listMessages(refChatId, RECENT_MESSAGES_PER_CHAT))
           .reverse()
           .map(async (item) => {
             if (item.role !== 'user' && item.role !== 'assistant') return null;
@@ -3087,7 +3140,7 @@ export class LocalBackendRouter {
     // empty list, so writes confine to system scratch dirs only.
     // `execPolicy: 'full'`（输入框「完整权限」）关闭这一层，让 mkdir
     // Downloads 这类项目外写入不再被 Seatbelt 拦成 Operation not permitted。
-    const chatProject = this.resolveChatProject(chatId);
+    const chatProject = await this.resolveChatProject(chatId);
     const execSandbox = buildExecSandbox(
       [
         // 场景包声明的每会话可写根（如文档包在项目根之外落盘产物的
@@ -3129,7 +3182,7 @@ export class LocalBackendRouter {
     // 下方的清除点，残留的标记就是「上次回复被中断」的签名（与活进程写下的
     // cancelled/failed 终态区分）。标记只覆盖「已交给 sidecar」的阶段：503
     // （sidecar 未运行）在上方已 return，record 里没有这一轮，无可续跑。
-    localStore.setTurnActive(chatId);
+    await this.store.setTurnActive(chatId);
     // 实时快照：executedActions / timeline / children 传引用（原地 mutate），
     // content 由 onText 逐段更新。切走再切回的 renderer 靠 GET /live-stream 读它。
     const live = registerLiveStream(chatId, { executedActions, timeline, children });
@@ -3150,7 +3203,7 @@ export class LocalBackendRouter {
         chatId,
         // W5-2: after a regenerate-fork the chat's live record is the
         // branch; undefined falls back to chatId on the sidecar.
-        recordId: localStore.getChatRecordId(chatId) ?? undefined,
+        recordId: await this.store.getChatRecordId(chatId) ?? undefined,
         systemPrompt,
         messages,
         resume,
@@ -3340,13 +3393,13 @@ export class LocalBackendRouter {
                   // 静默分叉（sidecar 对此 fail loud）。
                   { ...coreLoopOptions, resume: true, messages: [] },
             ),
-          afterPass: (outcome) => {
+          afterPass: async (outcome) => {
             if (outcome.traceId) passTraceIds.push(outcome.traceId);
             // W6-9 用量归因:落一条 chat 用量事件(含成本估算,无单价模型 costUsd=null)。
             // 每趟各落一条——续跑的花费是真实发生的，不该被合并掉。
             if (outcome.usage) {
               try {
-                localStore.recordUsageEvent({
+                await this.store.recordUsageEvent({
                   chatId,
                   kind: 'chat',
                   provider: settings.provider,
@@ -3399,7 +3452,7 @@ export class LocalBackendRouter {
     }
 
     const durationMs = turnDurationMs(
-      localStore.getTurnActive(chatId)?.startedAt,
+      (await this.store.getTurnActive(chatId))?.startedAt,
       Date.now(),
     );
     // 回合产物文件列表（成功/失败/取消都收集——半截回合写出的文件同样是
@@ -3415,7 +3468,7 @@ export class LocalBackendRouter {
     } catch (turnFilesErr) {
       console.warn('[local-backend] collect turn files failed', turnFilesErr);
     }
-    const assistant = localStore.addMessage(
+    const assistant = await this.store.addMessage(
       chatId,
       'assistant',
       assistantText,
@@ -3433,7 +3486,7 @@ export class LocalBackendRouter {
       })
     );
     try {
-      recordInsightTurn({
+      await recordInsightTurn(this.store, {
         chatId,
         mode: chatMode,
         modelId: overrideModel || settings.model,
@@ -3449,7 +3502,7 @@ export class LocalBackendRouter {
     // W7-1: 回复落库后才清标记（顺序不能反——先清后写的话，两者之间崩溃
     // 会丢回复且无任何续跑入口；这个顺序的最坏情况是残留标记被检测器的
     // 「末尾已是 assistant」规则判定为已完结）。
-    localStore.clearTurnActive(chatId);
+    await this.store.clearTurnActive(chatId);
     // 回合落库即结束——移除实时快照，后续 GET /live-stream 返回 active=false。
     removeLiveStream(chatId);
     // Persist the sidecar-recorded traces into harness_traces so the CoreLoop
@@ -3458,7 +3511,7 @@ export class LocalBackendRouter {
     // 一趟一条:自动续跑的每一趟都是一次独立的 sidecar 运行,全部挂到本轮
     // 那条 assistant 消息上(message_id 无唯一约束),否则中间趟的 trace 就
     // 从消息侧不可达了。
-    const telemetry = localStore.getTelemetrySettings();
+    const telemetry = await this.store.getTelemetrySettings();
     for (const [index, traceId] of passTraceIds.entries()) {
       // 只有最后一趟携带本轮终态;之前每一趟都是撞墙截停才有下一趟。
       const passStatus =
@@ -3473,7 +3526,7 @@ export class LocalBackendRouter {
         const durationMs = typeof sidecarTrace.durationMs === 'number'
           ? sidecarTrace.durationMs
           : null;
-        localStore.saveTrace({
+        await this.store.saveTrace({
           id: traceId,
           chatId,
           messageId: assistant.id,
@@ -3561,14 +3614,14 @@ export class LocalBackendRouter {
     })();
   }
 
-  private publishSuggestedReplies(
+  private async publishSuggestedReplies(
     chatId: string,
     messageId: string,
     suggestions: string[],
-  ): void {
+  ): Promise<void> {
     if (suggestions.length === 0) return;
     try {
-      localStore.patchMessageMetadata(chatId, messageId, { suggestedReplies: suggestions });
+      await this.store.patchMessageMetadata(chatId, messageId, { suggestedReplies: suggestions });
     } catch (err) {
       console.warn('[local-backend] suggested-replies persist failed', { chatId, messageId, err });
     }

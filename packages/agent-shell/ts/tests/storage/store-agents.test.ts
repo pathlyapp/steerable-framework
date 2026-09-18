@@ -13,16 +13,16 @@ import {
   loadStorageModule,
 } from './local-store-testkit.js';
 
-const { LocalStore } = await loadStorageModule();
+await loadStorageModule();
 
 afterEach(() => {
   cleanupTestStores();
 });
 
 describe('LocalStore / 内置智能体种子', () => {
-  it('新库构造后种子出电脑操作员与智能助手', () => {
-    const { store } = createTestStore(LocalStore);
-    const local = store.getChatAgent('local-assistant');
+  it('新库构造后种子出电脑操作员与智能助手', async () => {
+    const { store } = await createTestStore();
+    const local = await store.getChatAgent('local-assistant');
     expect(local).toMatchObject({
       name: '电脑操作员',
       rolePrompt: '你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。',
@@ -31,7 +31,7 @@ describe('LocalStore / 内置智能体种子', () => {
       loadAllSkills: false,
       sortOrder: 0,
     });
-    const allRound = store.getChatAgent('all-round-assistant');
+    const allRound = await store.getChatAgent('all-round-assistant');
     expect(allRound).toMatchObject({
       name: '智能助手',
       isBuiltin: true,
@@ -41,7 +41,7 @@ describe('LocalStore / 内置智能体种子', () => {
       sortOrder: 2,
     });
     // 无场景包种子的中性 shell：列表就是这两个内置，按 sort_order 升序。
-    expect(store.listChatAgents().map((a) => a.id)).toEqual([
+    expect((await store.listChatAgents()).map((a) => a.id)).toEqual([
       'local-assistant',
       'all-round-assistant',
     ]);
@@ -49,9 +49,9 @@ describe('LocalStore / 内置智能体种子', () => {
 });
 
 describe('LocalStore / createChatAgent', () => {
-  it('最小输入（仅 name）落库为全套默认值', () => {
-    const { store } = createTestStore(LocalStore);
-    const agent = store.createChatAgent({ name: '最小智能体' });
+  it('最小输入（仅 name）落库为全套默认值', async () => {
+    const { store } = await createTestStore();
+    const agent = await store.createChatAgent({ name: '最小智能体' });
     expect(agent).toMatchObject({
       name: '最小智能体',
       slug: null,
@@ -72,9 +72,9 @@ describe('LocalStore / createChatAgent', () => {
     expect(agent.createdAt).toBe(agent.updatedAt);
   });
 
-  it('全字段往返：skillIds / toolPolicy / 提示词等 JSON 列读回一致', () => {
-    const { store } = createTestStore(LocalStore);
-    const agent = store.createChatAgent({
+  it('全字段往返：skillIds / toolPolicy / 提示词等 JSON 列读回一致', async () => {
+    const { store } = await createTestStore();
+    const agent = await store.createChatAgent({
       id: 'custom-agent',
       slug: 'custom',
       name: '全字段',
@@ -89,7 +89,7 @@ describe('LocalStore / createChatAgent', () => {
       loadAllSkills: true,
       sortOrder: 5,
     });
-    expect(store.getChatAgent('custom-agent')).toEqual(agent);
+    expect(await store.getChatAgent('custom-agent')).toEqual(agent);
     expect(agent).toMatchObject({
       slug: 'custom',
       skillIds: ['skill-a', 'skill-b'],
@@ -102,51 +102,51 @@ describe('LocalStore / createChatAgent', () => {
 });
 
 describe('LocalStore / updateChatAgent 与归档', () => {
-  it('部分更新只动传入字段；undefined 不抹掉现有值', () => {
-    const { store } = createTestStore(LocalStore);
-    const agent = store.createChatAgent({
+  it('部分更新只动传入字段；undefined 不抹掉现有值', async () => {
+    const { store } = await createTestStore();
+    const agent = await store.createChatAgent({
       name: '旧名',
       icon: 'Star',
       skillIds: ['s1'],
       sortOrder: 3,
     });
-    const updated = store.updateChatAgent(agent.id, { name: '新名', icon: undefined });
+    const updated = await store.updateChatAgent(agent.id, { name: '新名', icon: undefined });
     expect(updated?.name).toBe('新名');
     expect(updated?.icon).toBe('Star');
     expect(updated?.skillIds).toEqual(['s1']);
     expect(updated?.sortOrder).toBe(3);
   });
 
-  it('可空列显式传 null 被清空（与 undefined 的「不动」语义相对）', () => {
-    const { store } = createTestStore(LocalStore);
-    const agent = store.createChatAgent({ name: 'x', icon: 'Star', rolePrompt: '提示' });
-    const updated = store.updateChatAgent(agent.id, { icon: null, rolePrompt: null });
+  it('可空列显式传 null 被清空（与 undefined 的「不动」语义相对）', async () => {
+    const { store } = await createTestStore();
+    const agent = await store.createChatAgent({ name: 'x', icon: 'Star', rolePrompt: '提示' });
+    const updated = await store.updateChatAgent(agent.id, { icon: null, rolePrompt: null });
     expect(updated?.icon).toBeNull();
     expect(updated?.rolePrompt).toBeNull();
   });
 
-  it('更新 / 归档不存在的智能体返回 null / false', () => {
-    const { store } = createTestStore(LocalStore);
-    expect(store.updateChatAgent('ghost', { name: 'y' })).toBeNull();
-    expect(store.archiveChatAgent('ghost')).toBe(false);
+  it('更新 / 归档不存在的智能体返回 null / false', async () => {
+    const { store } = await createTestStore();
+    expect(await store.updateChatAgent('ghost', { name: 'y' })).toBeNull();
+    expect(await store.archiveChatAgent('ghost')).toBe(false);
   });
 
-  it('archiveChatAgent 后默认列表隐藏，includeArchived 可见', () => {
-    const { store } = createTestStore(LocalStore);
-    const agent = store.createChatAgent({ name: '待归档' });
-    expect(store.archiveChatAgent(agent.id)).toBe(true);
-    expect(store.getChatAgent(agent.id)?.isArchived).toBe(true);
-    expect(store.listChatAgents().map((a) => a.id)).not.toContain(agent.id);
-    expect(store.listChatAgents(true).map((a) => a.id)).toContain(agent.id);
+  it('archiveChatAgent 后默认列表隐藏，includeArchived 可见', async () => {
+    const { store } = await createTestStore();
+    const agent = await store.createChatAgent({ name: '待归档' });
+    expect(await store.archiveChatAgent(agent.id)).toBe(true);
+    expect((await store.getChatAgent(agent.id))?.isArchived).toBe(true);
+    expect((await store.listChatAgents()).map((a) => a.id)).not.toContain(agent.id);
+    expect((await store.listChatAgents(true)).map((a) => a.id)).toContain(agent.id);
   });
 });
 
 describe('LocalStore / listChatAgents 排序', () => {
-  it('按 sort_order 升序，内置种子被自定义小序号挤到后面', () => {
-    const { store } = createTestStore(LocalStore);
-    const first = store.createChatAgent({ name: '排最前', sortOrder: -1 });
-    const last = store.createChatAgent({ name: '排最后', sortOrder: 99 });
-    const ids = store.listChatAgents().map((a) => a.id);
+  it('按 sort_order 升序，内置种子被自定义小序号挤到后面', async () => {
+    const { store } = await createTestStore();
+    const first = await store.createChatAgent({ name: '排最前', sortOrder: -1 });
+    const last = await store.createChatAgent({ name: '排最后', sortOrder: 99 });
+    const ids = (await store.listChatAgents()).map((a) => a.id);
     expect(ids[0]).toBe(first.id);
     expect(ids.at(-1)).toBe(last.id);
     // 内置两个仍在中间且相对顺序不变。

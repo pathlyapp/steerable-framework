@@ -15,22 +15,21 @@
  * 不出现任何包名。
  */
 
-import type Database from 'better-sqlite3';
-
 import type {
   HttpRouteContribution,
   IpcContribution,
   ToolContribution,
 } from '../scenario/pack.js';
+import type { PackDbAccess } from '../storage/driver.js';
 
 /** 宿主注入包的装配能力面。包不 import 宿主装配模块，全部经回调注入。 */
 export interface PackAssemblyDeps {
-  /** 宿主借出的同一个 SQLite 连接（包只读写自己声明的包前缀表）。 */
-  readonly db: Database.Database;
+  /** Scope-bound database access; the underlying driver connection is hidden. */
+  readonly packDb: PackDbAccess;
   /** 模型可见工具面（与普通回合同源）。 */
   readonly listTools: () => { name: string; description: string; inputSchema: unknown }[];
   /** chatId → 绑定项目（无项目对话返回 null）。与 router.resolveChatProject 同源。 */
-  readonly resolveChatProject: (chatId: string) => { name: string; folderPath: string } | null;
+  readonly resolveChatProject: (chatId: string) => Promise<{ name: string; folderPath: string } | null>;
   /** 面向全部用户面的事件广播（CS=所有窗口 IPC，BS=SSE 总线）。 */
   readonly broadcast: (channel: string, payload: unknown) => void;
   /** 工具贡献注册口（toolRouter.registerToolContributions 的收窄面）。 */
@@ -46,7 +45,7 @@ export interface PackAssemblyDeps {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number | null;
-  }) => void;
+  }) => Promise<void>;
   /** 行为洞察（与主对话同款 turn 事件）。 */
   readonly recordInsight: (input: {
     chatId: string;
@@ -57,7 +56,7 @@ export interface PackAssemblyDeps {
     toolNames?: unknown;
     userText?: string;
     assistantText?: string;
-  }) => void;
+  }) => Promise<void>;
   /** 装配期日志行（进宿主日志）。 */
   readonly onLog: (line: string) => void;
 }

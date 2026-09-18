@@ -33,7 +33,7 @@ function makeRouter(options: {
   broadcast?: ReturnType<typeof makeBroadcast>['broadcast'];
 } = {}): LocalBackendRouter {
   const toolRouter = (options.toolRouter ?? makeToolRouter()) as unknown as ToolRouter;
-  return new LocalBackendRouter(toolRouter, { broadcast: options.broadcast });
+  return new LocalBackendRouter(toolRouter, { store: h.store, broadcast: options.broadcast });
 }
 
 /** 挂上一个 sidecar，并让流桩按 script 回放后返回给定终态。 */
@@ -53,8 +53,8 @@ function installStream(
 }
 
 /** 建一个带标题「新对话」的空会话（触发标题生成的默认条件）。 */
-function seedChat(title = '新对话') {
-  return h.store.createChat(title, 'agent-a', null);
+async function seedChat(title = '新对话') {
+  return await h.store.createChat(title, 'agent-a', null);
 }
 
 beforeEach(() => {
@@ -101,7 +101,7 @@ describe('流式路由前置校验', () => {
     );
     expect(res.status).toBe(404);
     expect((cap.events()[0].data as { message: string }).message).toBe('chat not found');
-    expect(h.store.getChat('ghost')).toBeNull();
+    expect(await h.store.getChat('ghost')).toBeNull();
   });
 
   it('chat 不存在但带了用户消息 → 按 URL id 现场补建并广播 chat-created', async () => {
@@ -113,7 +113,7 @@ describe('流式路由前置校验', () => {
       cap.emit,
     );
     expect(res.status).toBe(200);
-    expect(h.store.getChat('revived')).not.toBeNull();
+    expect(await h.store.getChat('revived')).not.toBeNull();
     expect(calls).toContainEqual({
       event: 'chat-created',
       payload: { chatId: 'revived', agentId: 'local-assistant' },
@@ -131,12 +131,12 @@ describe('流式路由前置校验', () => {
       cap.emit,
     );
     expect(res.status).toBe(404);
-    expect(h.store.getChat('ghost')).toBeNull();
+    expect(await h.store.getChat('ghost')).toBeNull();
   });
 
   it('message 为空白 → 400 message is required', async () => {
-    seedChat();
-    const chat = h.store.listChats().chats[0];
+    await seedChat();
+    const chat = (await h.store.listChats()).chats[0];
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '   ' } },
@@ -147,7 +147,7 @@ describe('流式路由前置校验', () => {
   });
 
   it('sidecar 未运行 → 503 + error 事件；turn_active 不残留', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '你好' } },
@@ -158,7 +158,7 @@ describe('流式路由前置校验', () => {
     expect(errors).toHaveLength(1);
     expect((errors[0].data as { message: string }).message).toContain('sidecar is not running');
     // 503 在 setTurnActive 之前 return，record 里没有这一轮，无可续跑标记
-    expect(h.store.getTurnActive(chat.id)).toBeNull();
+    expect(await h.store.getTurnActive(chat.id)).toBeNull();
   });
 });
 
@@ -168,7 +168,7 @@ describe('流式路由前置校验', () => {
 
 describe('流式回合 SSE 序列', () => {
   it('文本流：user_message → content 片段 → message_id → [DONE]，双消息落库', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream((opts) => {
       opts.onText('你好');
       opts.onText('，世界');
@@ -189,7 +189,7 @@ describe('流式回合 SSE 序列', () => {
     expect(events.at(-1)?.data).toBe('[DONE]');
 
     // 落库：user + assistant 各一条；assistant metadata 带 completionStatus
-    const messages = h.store.listMessages(chat.id, 10);
+    const messages = await h.store.listMessages(chat.id, 10);
     expect(messages.map((m) => m.role)).toEqual(['assistant', 'user']);
     expect(messages[0].content).toBe('你好，世界');
     const metadata = JSON.parse(messages[0].messageMetadata!);
@@ -201,7 +201,7 @@ describe('流式回合 SSE 序列', () => {
   });
 
   it('工具事件：onToolStart 先登记、onToolAction 回填结果，executed_actions 逐帧广播', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => {
       opts.onToolStart({ id: 'call-1', tool: 'local_read_file', arguments: { path: '/a' } });
       opts.onToolAction({
@@ -232,14 +232,14 @@ describe('流式回合 SSE 序列', () => {
     expect(second[0]).toMatchObject({ success: true, durationMs: 7 });
 
     // 落库 metadata 携带完整 executedActions 与 timeline
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     const metadata = JSON.parse(assistant.messageMetadata!);
     expect(metadata.executedActions[0]).toMatchObject({ tool: 'local_read_file', success: true });
     expect(metadata.timeline.some((b: { type: string }) => b.type === 'tools')).toBe(true);
   });
 
   it('reasoning 片段以 type:reasoning 转发', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => {
       opts.onReasoning('思考一下');
       opts.onText('结论');
@@ -253,7 +253,7 @@ describe('流式回合 SSE 序列', () => {
   });
 
   it('budget_exhausted notice 与子代理事件分别转成 SSE', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => {
       opts.onNotice('budget_exhausted', { budget: 'tokens' });
       opts.onChildEvent({ childId: 'sub-1', status: 'spawned' });
@@ -276,8 +276,8 @@ describe('流式回合 SSE 序列', () => {
   });
 
   it('turn_active 标记：流式期间存在、回合落库后清除', async () => {
-    const chat = seedChat();
-    let markerDuringStream: unknown;
+    const chat = await seedChat();
+    let markerDuringStream: ReturnType<typeof h.store.getTurnActive> | null = null;
     installStream(() => {
       markerDuringStream = h.store.getTurnActive(chat.id);
     });
@@ -285,12 +285,12 @@ describe('流式回合 SSE 序列', () => {
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
     );
-    expect(markerDuringStream).not.toBeNull();
-    expect(h.store.getTurnActive(chat.id)).toBeNull();
+    expect(await markerDuringStream).not.toBeNull();
+    expect(await h.store.getTurnActive(chat.id)).toBeNull();
   });
 
   it('usage 与 trace：recordUsageEvent 落一条；trace.fetch 取回后 saveTrace', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { supervisor } = installStream(() => {}, {
       status: 'completed',
       traceId: 'trace-abc',
@@ -310,17 +310,17 @@ describe('流式回合 SSE 序列', () => {
     });
 
     expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-abc' }, { timeoutMs: 5000 });
-    const trace = h.store.getTrace('trace-abc');
+    const trace = await h.store.getTrace('trace-abc');
     expect(trace).not.toBeNull();
     expect(trace!.status).toBe('completed');
     expect(JSON.parse(trace!.payload)).toMatchObject({ coreloop: true, trace: { durationMs: 42 } });
     // trace 挂到本轮那条 assistant 消息上
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     expect(trace!.messageId).toBe(assistant.id);
   });
 
   it('配置 OTLP endpoint 后导出 trace（metadata 档位）', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     h.store.state.telemetry = {
       endpoint: 'http://otlp:4318',
       privacyMode: 'metadata',
@@ -347,7 +347,7 @@ describe('流式回合 SSE 序列', () => {
 
 describe('流式回合失败与取消', () => {
   it('status=failed 带 reason：补发 error 事件，metadata 记录失败', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream(() => {}, { status: 'failed', reason: 'HTTP 401 Unauthorized' });
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
@@ -359,7 +359,7 @@ describe('流式回合失败与取消', () => {
     expect(errors).toHaveLength(1);
     expect((errors[0].data as { message: string }).message).toContain('HTTP 401');
 
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
       completionStatus: 'failed',
       completionReason: 'HTTP 401 Unauthorized',
@@ -367,7 +367,7 @@ describe('流式回合失败与取消', () => {
   });
 
   it('streamCoreLoopTurn 抛 AbortError → cancelled，不发 error 事件', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream(() => {
       throw new DOMException('aborted', 'AbortError');
     });
@@ -377,7 +377,7 @@ describe('流式回合失败与取消', () => {
       cap.emit,
     );
     expect(cap.events().filter((c) => c.event === 'error')).toHaveLength(0);
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
       completionStatus: 'cancelled',
       completionReason: 'aborted_by_user',
@@ -385,7 +385,7 @@ describe('流式回合失败与取消', () => {
   });
 
   it('streamCoreLoopTurn 抛普通错误 → failed + error 事件；err.traceId 被收进 passTraceIds', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const boom = Object.assign(new Error('连接重置'), { traceId: 'trace-fail' });
     const { supervisor } = installStream(() => {
       throw boom;
@@ -398,16 +398,16 @@ describe('流式回合失败与取消', () => {
     const errors = cap.events().filter((c) => c.event === 'error');
     expect((errors[0].data as { message: string }).message).toBe('连接重置');
 
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     const metadata = JSON.parse(assistant.messageMetadata!);
     expect(metadata).toMatchObject({ completionStatus: 'failed', traceId: 'trace-fail' });
     // 失败趟的部分 trace 也被持久化（dogfood 信号）
     expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-fail' }, { timeoutMs: 5000 });
-    expect(h.store.getTrace('trace-fail')?.status).toBe('failed');
+    expect((await h.store.getTrace('trace-fail'))?.status).toBe('failed');
   });
 
   it('turn_active 标记在失败落库后同样清除', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream(() => {
       throw new Error('boom');
     });
@@ -415,7 +415,7 @@ describe('流式回合失败与取消', () => {
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
     );
-    expect(h.store.getTurnActive(chat.id)).toBeNull();
+    expect(await h.store.getTurnActive(chat.id)).toBeNull();
   });
 });
 
@@ -425,7 +425,7 @@ describe('流式回合失败与取消', () => {
 
 describe('自动续跑', () => {
   it('budget_exhausted 且有进展 → 第二趟走 resume:true + 空 messages', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const supervisor = makeSupervisor();
     h.supervisor = supervisor;
     const seen: Array<Record<string, any>> = [];
@@ -453,9 +453,9 @@ describe('自动续跑', () => {
     expect(seen[1].messages).toEqual([]);
 
     // 两趟的 trace 都挂到同一条 assistant 消息；中间趟标记 budget_exhausted
-    expect(h.store.getTrace('trace-p1')?.status).toBe('budget_exhausted');
-    expect(h.store.getTrace('trace-p2')?.status).toBe('completed');
-    const assistant = h.store.listMessages(chat.id, 10)[0];
+    expect((await h.store.getTrace('trace-p1'))?.status).toBe('budget_exhausted');
+    expect((await h.store.getTrace('trace-p2'))?.status).toBe('completed');
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
     const metadata = JSON.parse(assistant.messageMetadata!);
     expect(metadata.autoContinuations).toBe(1);
     expect(assistant.content).toBe('第一段第二段');
@@ -463,7 +463,7 @@ describe('自动续跑', () => {
 
   it('STEERABLE_AUTO_CONTINUE=0 时撞墙即停，不续跑', async () => {
     process.env.STEERABLE_AUTO_CONTINUE = '0';
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream(
       (opts) => opts.onText('半段'),
       { status: 'budget_exhausted' },
@@ -476,7 +476,7 @@ describe('自动续跑', () => {
   });
 
   it('整趟零进展（无文本无工具）→ 不续跑（打转护栏）', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream(() => {}, { status: 'budget_exhausted' });
     await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '长任务' } },
@@ -491,17 +491,17 @@ describe('自动续跑', () => {
 // ---------------------------------------------------------------------------
 
 describe('regenerate', () => {
-  function seedConversation() {
-    const chat = seedChat('已有标题');
-    h.store.addMessage(chat.id, 'user', '第一个问题');
-    const target = h.store.addMessage(chat.id, 'assistant', '第一个回答');
-    h.store.addMessage(chat.id, 'user', '第二个问题');
-    h.store.addMessage(chat.id, 'assistant', '第二个回答');
+  async function seedConversation() {
+    const chat = await seedChat('已有标题');
+    await h.store.addMessage(chat.id, 'user', '第一个问题');
+    const target = await h.store.addMessage(chat.id, 'assistant', '第一个回答');
+    await h.store.addMessage(chat.id, 'user', '第二个问题');
+    await h.store.addMessage(chat.id, 'assistant', '第二个回答');
     return { chat, target };
   }
 
   it('目标消息不存在或不是 assistant → 404', async () => {
-    const { chat } = seedConversation();
+    const { chat } = await seedConversation();
     installStream(() => {});
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
@@ -517,7 +517,7 @@ describe('regenerate', () => {
   });
 
   it('fork 失败（未保留旧回复）→ 409 拒绝截断', async () => {
-    const { chat, target } = seedConversation();
+    const { chat, target } = await seedConversation();
     const supervisor = makeSupervisor({
       forkSession: vi.fn(async () => ({ ok: false, reason: 'record 损坏' })),
     });
@@ -536,13 +536,13 @@ describe('regenerate', () => {
     expect(res.status).toBe(409);
     expect((cap.events()[0].data as { message: string }).message).toContain('未能保留为分支');
     // 历史未被截断
-    expect(h.store.listMessages(chat.id, 10)).toHaveLength(4);
+    expect(await h.store.listMessages(chat.id, 10)).toHaveLength(4);
   });
 
   it('fork 成功 → 截断目标及其后消息、切换 recordId、不重复插入用户消息', async () => {
-    const { chat, target } = seedConversation();
+    const { chat, target } = await seedConversation();
     const { supervisor, seen } = installStream((opts) => opts.onText('重新生成的回答'));
-    h.store.setChatRecordId(chat.id, 'rec-old');
+    await h.store.setChatRecordId(chat.id, 'rec-old');
 
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
@@ -559,10 +559,10 @@ describe('regenerate', () => {
     expect(supervisor.forkSession).toHaveBeenCalledWith(
       expect.objectContaining({ recordId: 'rec-old', beforeUserIndex: 0 }),
     );
-    expect(h.store.getChatRecordId(chat.id)).toBe('fork-rec-1');
+    expect(await h.store.getChatRecordId(chat.id)).toBe('fork-rec-1');
 
     // 目标 assistant + 其后两条被截断，只剩触发它的用户消息
-    const remaining = h.store.listMessages(chat.id, 10);
+    const remaining = await h.store.listMessages(chat.id, 10);
     expect(remaining.map((m) => m.content)).toContain('第一个问题');
     expect(remaining.map((m) => m.content)).not.toContain('第二个问题');
 
@@ -576,7 +576,7 @@ describe('regenerate', () => {
   });
 
   it('sidecar 关闭时直接 503，历史一字不动（截断不得先于回合可用性检查）', async () => {
-    const { chat, target } = seedConversation();
+    const { chat, target } = await seedConversation();
     installStream((opts) => opts.onText('新回答'));
     h.supervisor = null; // installStream 挂的 supervisor 摘掉
     const cap = makeEmitCapture();
@@ -591,7 +591,7 @@ describe('regenerate', () => {
     // rerun 回合只能跑在 sidecar 上；旧行为先截断再 503，旧回复被删且
     // 没有新回复、record 也不存在——非破坏性承诺破窗。现在门在前面。
     expect(res.status).toBe(503);
-    expect(h.store.listMessages(chat.id, 10)).toHaveLength(4);
+    expect(await h.store.listMessages(chat.id, 10)).toHaveLength(4);
   });
 });
 
@@ -601,9 +601,9 @@ describe('regenerate', () => {
 
 describe('resume', () => {
   it('无中断签名 → 409 没有可继续的中断回复', async () => {
-    const chat = seedChat();
-    h.store.addMessage(chat.id, 'user', '问题');
-    h.store.addMessage(chat.id, 'assistant', '完整回答'); // 已正常完结
+    const chat = await seedChat();
+    await h.store.addMessage(chat.id, 'user', '问题');
+    await h.store.addMessage(chat.id, 'assistant', '完整回答'); // 已正常完结
     installStream(() => {});
     const cap = makeEmitCapture();
     const res = await makeRouter().handleStream(
@@ -619,9 +619,9 @@ describe('resume', () => {
   });
 
   it('中断签名成立（turn_active 残留 + 末尾是 user）→ resume:true + 空 messages', async () => {
-    const chat = seedChat();
-    h.store.addMessage(chat.id, 'user', '崩溃前的问题');
-    h.store.setTurnActive(chat.id); // 模拟崩溃残留的标记
+    const chat = await seedChat();
+    await h.store.addMessage(chat.id, 'user', '崩溃前的问题');
+    await h.store.setTurnActive(chat.id); // 模拟崩溃残留的标记
     const { seen } = installStream((opts) => opts.onText('续跑回答'));
 
     const res = await makeRouter().handleStream(
@@ -637,7 +637,7 @@ describe('resume', () => {
     // record 是唯一权威：不喂历史
     expect(seen[0].messages).toEqual([]);
     // 不追加新用户消息
-    expect(h.store.listMessages(chat.id, 10).filter((m) => m.role === 'user')).toHaveLength(1);
+    expect((await h.store.listMessages(chat.id, 10)).filter((m) => m.role === 'user')).toHaveLength(1);
   });
 });
 
@@ -647,7 +647,7 @@ describe('resume', () => {
 
 describe('流式回合的提示词与工具面', () => {
   it('plan 模式：写工具被过滤，只暴露只读工具', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -665,11 +665,11 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('智能体工具策略（allowlist）真实收窄本轮工具面', async () => {
-    const agent = h.store.createChatAgent({
+    const agent = await h.store.createChatAgent({
       name: '只读助手',
       toolPolicy: { mode: 'allowlist', tools: ['local_read_file'] },
     });
-    const chat = h.store.createChat('策略', agent.id, null);
+    const chat = await h.store.createChat('策略', agent.id, null);
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -689,8 +689,8 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('@提及带 rolePrompt 的智能体 → 系统提示词含人设前言', async () => {
-    const agent = h.store.createChatAgent({ name: '审稿人', rolePrompt: '你是严格的审稿人' });
-    const chat = seedChat();
+    const agent = await h.store.createChatAgent({ name: '审稿人', rolePrompt: '你是严格的审稿人' });
+    const chat = await seedChat();
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -706,8 +706,8 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('绑定智能体即使没有 rolePrompt，系统提示词自称也用智能体显示名', async () => {
-    const agent = h.store.createChatAgent({ name: '电脑操作员' });
-    const chat = h.store.createChat('对话', agent.id, null);
+    const agent = await h.store.createChatAgent({ name: '电脑操作员' });
+    const chat = await h.store.createChat('对话', agent.id, null);
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -726,7 +726,7 @@ describe('流式回合的提示词与工具面', () => {
       { id: 'proj-1', name: '演示项目', folderPath: '/tmp/proj-1', trusted: true },
     ]);
     h.loadProjectRuleFiles.mockReturnValue({ files: ['AGENTS.md'], content: '项目规则正文' });
-    const chat = h.store.createChat('项目对话', 'agent-a', 'proj-1');
+    const chat = await h.store.createChat('项目对话', 'agent-a', 'proj-1');
     const { seen } = installStream(() => {});
     await makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) }).handleStream(
       {
@@ -747,7 +747,7 @@ describe('流式回合的提示词与工具面', () => {
       { id: 'proj-1', name: '演示项目', folderPath: '/tmp/proj-1', trusted: false },
     ]);
     h.loadProjectRuleFiles.mockReturnValue({ files: ['AGENTS.md'], content: '恶意规则' });
-    const chat = h.store.createChat('项目对话', 'agent-a', 'proj-1');
+    const chat = await h.store.createChat('项目对话', 'agent-a', 'proj-1');
     const { seen } = installStream(() => {});
     await makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) }).handleStream(
       {
@@ -762,7 +762,7 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('行首 "/技能名" 显式触发：技能正文并入本轮用户消息', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     h.loadSkills.mockResolvedValue([
       { name: 'myskill', dirName: '90-myskill', displayName: '', description: '', priority: 1, tags: [], layer: 'catalog', modelInvocable: true, skillsDir: '/x' },
     ]);
@@ -792,12 +792,12 @@ describe('流式回合的提示词与工具面', () => {
     expect(lastUser.content).toContain('技能正文：按步骤处理');
     expect(lastUser.content).toContain('帮我处理数据');
     // 落库的用户消息保留用户输入原文（含触发前缀），清理后的文本只进模型上下文
-    const persisted = h.store.listMessages(chat.id, 10).find((m) => m.role === 'user');
+    const persisted = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'user');
     expect(persisted?.content).toBe('/myskill 帮我处理数据');
   });
 
   it('图片附件：处理备注注入本轮用户消息', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     h.processImageAttachments.mockReturnValue({
       images: [{ data: 'QUJD', mediaType: 'image/png' }],
       notes: ['已附加 1 张图片'],
@@ -818,10 +818,10 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('referencedChatIds：被引用对话的摘录作为 user 消息注入到本对话历史之前', async () => {
-    const refChat = h.store.createChat('参考对话', 'agent-a', null);
-    h.store.addMessage(refChat.id, 'user', '参考里的问题');
-    h.store.addMessage(refChat.id, 'assistant', '参考里的回答');
-    const chat = seedChat();
+    const refChat = await h.store.createChat('参考对话', 'agent-a', null);
+    await h.store.addMessage(refChat.id, 'user', '参考里的问题');
+    await h.store.addMessage(refChat.id, 'assistant', '参考里的回答');
+    const chat = await seedChat();
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -840,7 +840,7 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('referencedChatIds：引用自身或不存在的对话被跳过', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -854,7 +854,7 @@ describe('流式回合的提示词与工具面', () => {
   });
 
   it('payload.model 占位值（default/auto）回落到设置模型；显式值覆盖', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     const { seen } = installStream(() => {});
     const router = makeRouter();
     await router.handleStream(
@@ -886,7 +886,7 @@ describe('流式回合的提示词与工具面', () => {
 
 describe('后台标题生成', () => {
   it('默认标题的首个真实回合结束后生成标题并广播 chat-title-updated', async () => {
-    const chat = seedChat('新对话');
+    const chat = await seedChat('新对话');
     installStream((opts) => opts.onText('回答'));
     const { broadcast, calls } = makeBroadcast();
     await makeRouter({ broadcast }).handleStream(
@@ -902,13 +902,13 @@ describe('后台标题生成', () => {
         payload: { chatId: chat.id, title: '生成的标题' },
       });
     });
-    expect(h.store.getChat(chat.id)?.title).toBe('生成的标题');
+    expect((await h.store.getChat(chat.id))?.title).toBe('生成的标题');
   });
 
   it('已有 assistant 历史的会话不改标题', async () => {
-    const chat = seedChat('新对话');
-    h.store.addMessage(chat.id, 'user', '旧问题');
-    h.store.addMessage(chat.id, 'assistant', '旧回答');
+    const chat = await seedChat('新对话');
+    await h.store.addMessage(chat.id, 'user', '旧问题');
+    await h.store.addMessage(chat.id, 'assistant', '旧回答');
     installStream(() => {});
     await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '新问题' } },
@@ -919,9 +919,9 @@ describe('后台标题生成', () => {
   });
 
   it('regenerate 不触发标题生成', async () => {
-    const chat = seedChat('新对话');
-    h.store.addMessage(chat.id, 'user', '问题');
-    const target = h.store.addMessage(chat.id, 'assistant', '回答');
+    const chat = await seedChat('新对话');
+    await h.store.addMessage(chat.id, 'user', '问题');
+    const target = await h.store.addMessage(chat.id, 'assistant', '回答');
     installStream(() => {});
     await makeRouter().handleStream(
       {
@@ -936,11 +936,11 @@ describe('后台标题生成', () => {
   });
 
   it('用户在生成期间手改了标题 → 不覆盖、不广播', async () => {
-    const chat = seedChat('新对话');
+    const chat = await seedChat('新对话');
     installStream(() => {});
     h.generateChatTitle.mockImplementation(async () => {
       // 模拟用户在标题生成期间手动改名
-      h.store.updateChat(chat.id, { title: '用户改的标题' });
+      await h.store.updateChat(chat.id, { title: '用户改的标题' });
       return { title: '生成的标题', usedFallback: false };
     });
     const { broadcast, calls } = makeBroadcast();
@@ -952,7 +952,7 @@ describe('后台标题生成', () => {
       expect(h.generateChatTitle).toHaveBeenCalled();
     });
     await new Promise((r) => setTimeout(r, 20));
-    expect(h.store.getChat(chat.id)?.title).toBe('用户改的标题');
+    expect((await h.store.getChat(chat.id))?.title).toBe('用户改的标题');
     expect(calls.filter((c) => c.event === 'chat-title-updated')).toHaveLength(0);
   });
 });
@@ -963,7 +963,7 @@ describe('后台标题生成', () => {
 
 describe('后台追问建议', () => {
   it('完成回合先广播启发式兜底，LLM 成功后再替换', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => opts.onText('PPT 已生成'));
     let finishLlm: (value: {
       suggestions: string[];
@@ -981,7 +981,7 @@ describe('后台追问建议', () => {
       makeEmitCapture().emit,
     );
 
-    const assistant = h.store.listMessages(chat.id, 10).find((m) => m.role === 'assistant')!;
+    const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
     expect(h.fallbackSuggestedReplies).toHaveBeenCalledWith('制作自我介绍ppt', 'PPT 已生成');
     expect(calls).toContainEqual({
       event: 'suggested-replies',
@@ -1009,7 +1009,7 @@ describe('后台追问建议', () => {
         },
       });
     });
-    expect(JSON.parse(h.store.getMessage(chat.id, assistant.id)!.messageMetadata!)).toMatchObject({
+    expect(JSON.parse((await h.store.getMessage(chat.id, assistant.id))!.messageMetadata!)).toMatchObject({
       suggestedReplies: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
     });
   });
@@ -1019,7 +1019,7 @@ describe('后台追问建议', () => {
       suggestions: ['兜底-1', '兜底-2', '兜底-3'],
       usedFallback: true,
     });
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => opts.onText('回答'));
     const { broadcast, calls } = makeBroadcast();
     await makeRouter({ broadcast }).handleStream(
@@ -1032,7 +1032,7 @@ describe('后台追问建议', () => {
   });
 
   it('取消 / 失败 / 空回复不生成建议', async () => {
-    const cancelled = seedChat();
+    const cancelled = await seedChat();
     installStream(() => {
       throw new DOMException('aborted', 'AbortError');
     });
@@ -1043,7 +1043,7 @@ describe('后台追问建议', () => {
     expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
 
     h.fallbackSuggestedReplies.mockClear();
-    const failed = seedChat();
+    const failed = await seedChat();
     installStream(() => {}, { status: 'failed', reason: 'HTTP 401' });
     await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
       { method: 'POST', path: `/api/v2/chats/${failed.id}/send`, body: { message: 'hi' } },
@@ -1052,7 +1052,7 @@ describe('后台追问建议', () => {
     expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
 
     h.fallbackSuggestedReplies.mockClear();
-    const empty = seedChat();
+    const empty = await seedChat();
     installStream(() => {});
     await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
       { method: 'POST', path: `/api/v2/chats/${empty.id}/send`, body: { message: 'hi' } },
@@ -1073,7 +1073,7 @@ describe('回合产物文件列表', () => {
     const projectRegistry = makeProjectRegistry([
       { id: 'proj-1', name: '演示项目', folderPath: dir, trusted: true },
     ]);
-    const chat = h.store.createChat('新对话', 'agent-a', 'proj-1');
+    const chat = await h.store.createChat('新对话', 'agent-a', 'proj-1');
     return { dir, chat, toolRouter: makeToolRouter({ projectRegistry }) };
   }
 
@@ -1114,7 +1114,7 @@ describe('回合产物文件列表', () => {
       expect(types.indexOf('turn_files')).toBeGreaterThanOrEqual(0);
       expect(types.indexOf('turn_files')).toBeLessThan(types.indexOf('message_id'));
 
-      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const assistant = (await h.store.listMessages(chat.id, 10))[0];
       const metadata = JSON.parse(assistant.messageMetadata!);
       expect(metadata.turnFiles).toHaveLength(1);
       expect(metadata.turnFiles[0].path).toBe(path.join(dir, '自我介绍.pptx'));
@@ -1177,7 +1177,7 @@ describe('回合产物文件列表', () => {
       );
 
       expect(cap.byType('turn_files')).toHaveLength(0);
-      const assistant = h.store.listMessages(chat.id, 10)[0];
+      const assistant = (await h.store.listMessages(chat.id, 10))[0];
       const metadata = JSON.parse(assistant.messageMetadata!);
       expect(metadata.turnFiles).toBeUndefined();
     } finally {
@@ -1186,7 +1186,7 @@ describe('回合产物文件列表', () => {
   });
 
   it('未绑定项目的会话没有扫描根，不产事件', async () => {
-    const chat = seedChat();
+    const chat = await seedChat();
     installStream((opts) => opts.onText('纯聊天'));
     const cap = makeEmitCapture();
     await makeRouter().handleStream(
@@ -1199,7 +1199,7 @@ describe('回合产物文件列表', () => {
   it('未绑定项目的会话：exec cwd 浅扫描 + 命令文本路径字面量捕获脚本产物', async () => {
     // 无项目对话里 exec 的 cwd 与脚本 save 路径都不在任何递归根里——
     // 工作区扫描覆盖不到，靠 exec 线索兜底（真实场景：脚本在 home 写 PPT）。
-    const chat = seedChat();
+    const chat = await seedChat();
     const work = await fs.mkdtemp(path.join(os.tmpdir(), 'turn-files-unbound-'));
     try {
       const ppt = path.join(work, '自我介绍_张三.pptx');

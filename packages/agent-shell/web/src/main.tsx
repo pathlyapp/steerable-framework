@@ -1,5 +1,5 @@
 import { StrictMode, lazy, Suspense, type ReactNode } from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { AppShell } from './AppShell';
 import { AgentLayout } from './layouts/AgentLayout';
@@ -7,6 +7,7 @@ import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { getPackRoutes } from './packs/registry';
 import { getBrandLogoUrl, BRAND_NAME } from './brand';
+import { getAppShellGate } from './auth/gate';
 import './styles/index.css';
 
 // 浏览器 dev mock 的安装在 bootstrap() 开头（动态 import + DEV 门）。
@@ -40,19 +41,7 @@ const ChatPanelPreviewPage = import.meta.env.DEV
  * （products/<id>/web/main.tsx）先静态调用包的 register*Renderer()，
  * 再调本函数——路由注册发生在路由表创建之前。
  */
-export async function bootstrap(): Promise<void> {
-  if (import.meta.env.DEV) {
-    // 动态 import：prod 构建里 Rollup 把 DEV 分支连同 mock（含其 fixtures）
-    // 整体树摇掉，浏览器 dev mock 数据不进产物。
-    const { installBrowserDevElectronMock } = await import('./lib/browser-dev-electron-mock');
-    installBrowserDevElectronMock();
-  }
-
-  // 标题与 favicon 在 bootstrap 时设置——此刻产品入口已完成包注册
-  // （品牌 logo 由包经 setBrandLogoUrl 注入，见 brand.ts）。
-  document.title = BRAND_NAME;
-  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
-
+function renderApplication(root: Root): void {
   const router = createHashRouter([
     {
       path: '/',
@@ -90,14 +79,47 @@ export async function bootstrap(): Promise<void> {
     },
   ]);
 
-  const rootEl = document.getElementById('root');
-  if (!rootEl) {
-    throw new Error('Missing #root element in index.html');
-  }
-
-  createRoot(rootEl).render(
+  root.render(
     <StrictMode>
       <RouterProvider router={router} />
     </StrictMode>,
   );
+}
+
+export async function bootstrap(): Promise<void> {
+  if (import.meta.env.DEV) {
+    // 动态 import：prod 构建里 Rollup 把 DEV 分支连同 mock（含其 fixtures）
+    // 整体树摇掉，浏览器 dev mock 数据不进产物。
+    const { installBrowserDevElectronMock } = await import('./lib/browser-dev-electron-mock');
+    installBrowserDevElectronMock();
+  }
+
+  // 标题与 favicon 在 bootstrap 时设置——此刻产品入口已完成包注册
+  // （品牌 logo 由包经 setBrandLogoUrl 注入，见 brand.ts）。
+  document.title = BRAND_NAME;
+  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
+
+  const rootEl = document.getElementById('root');
+  if (!rootEl) {
+    throw new Error('Missing #root element in index.html');
+  }
+  const root = createRoot(rootEl);
+  const gate = getAppShellGate();
+  if (gate?.enabled()) {
+    let authenticated = false;
+    const onAuthenticated = () => {
+      if (authenticated) return;
+      authenticated = true;
+      renderApplication(root);
+    };
+    const Gate = gate.Component;
+    root.render(
+      <StrictMode>
+        <Gate onAuthenticated={onAuthenticated} />
+      </StrictMode>,
+    );
+    return;
+  }
+
+  renderApplication(root);
 }

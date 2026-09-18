@@ -1,7 +1,7 @@
 /**
- * The localStore singleton's friendly handling of a held write lease.
+ * Friendly handling of a held write lease.
  *
- * `createLocalStore` takes an injectable constructor, electron loader, and
+ * `acquireWriteLeaseOrExit` takes injectable acquisition, electron loader, and
  * exit precisely so this path is testable in a plain-node vitest worker: the
  * real `new LocalStore()` loads better-sqlite3 (Electron ABI) and `electron`
  * does not resolve here. The behavior under test is the error mapping — a
@@ -10,20 +10,20 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { createLocalStore } from '../../src/storage/local-store-singleton.js';
+import { acquireWriteLeaseOrExit } from '../../src/storage/write-lease-error.js';
 import { StoreAlreadyOwnedError } from '../../src/storage/write-lease.js';
 
-describe('createLocalStore', () => {
+describe('acquireWriteLeaseOrExit', () => {
   it('returns the constructed store on success', () => {
     const sentinel = { marker: true };
-    const store = createLocalStore(() => sentinel);
+    const store = acquireWriteLeaseOrExit(() => sentinel);
     expect(store).toBe(sentinel);
   });
 
   it('rethrows a non-lease error unchanged', () => {
     const boom = new Error('corrupt schema');
     expect(() =>
-      createLocalStore(() => {
+      acquireWriteLeaseOrExit(() => {
         throw boom;
       }),
     ).toThrow(boom);
@@ -37,7 +37,7 @@ describe('createLocalStore', () => {
       dialog: { showErrorBox },
     });
     expect(() =>
-      createLocalStore(
+      acquireWriteLeaseOrExit(
         () => {
           throw new StoreAlreadyOwnedError('/tmp/x.lock');
         },
@@ -58,7 +58,7 @@ describe('createLocalStore', () => {
     const exitProcess = vi.fn();
     const loadElectron = vi.fn().mockRejectedValue(new Error('not electron'));
     expect(() =>
-      createLocalStore(
+      acquireWriteLeaseOrExit(
         () => {
           throw new StoreAlreadyOwnedError('/tmp/x.lock');
         },

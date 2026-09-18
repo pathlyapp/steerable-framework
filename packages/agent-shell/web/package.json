@@ -14,6 +14,7 @@
     "url": "https://github.com/pathlyapp/steerable-framework/issues"
   },
   "exports": {
+    "./auth/gate": "./src/auth/gate.ts",
     "./vite.base": {
       "types": "./vite.base.d.ts",
       "default": "./vite.base.js"

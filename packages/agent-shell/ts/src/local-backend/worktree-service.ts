@@ -72,7 +72,7 @@ export function slugifyWorktreeName(raw: string): string {
 export class WorktreeService {
   constructor(
     private readonly deps: {
-      resolveProject: (chatId: string) => WorktreeProject | null;
+      resolveProject: (chatId: string) => Promise<WorktreeProject | null>;
       runGit?: GitRunner;
     },
   ) {}
@@ -86,8 +86,8 @@ export class WorktreeService {
     return path.join(projectRoot, '.steerable', 'worktrees');
   }
 
-  private requireProject(chatId: string): WorktreeProject {
-    const project = this.deps.resolveProject(chatId);
+  private async requireProject(chatId: string): Promise<WorktreeProject> {
+    const project = await this.deps.resolveProject(chatId);
     if (!project) {
       throw new Error(
         'worktree 需要对话绑定项目（git 仓库）——请先把本对话关联到一个项目。',
@@ -135,7 +135,7 @@ export class WorktreeService {
     chatId: string,
     rawName?: string,
   ): Promise<WorktreeInfo> {
-    const project = this.requireProject(chatId);
+    const project = await this.requireProject(chatId);
     await this.requireGitRepo(project.folderPath);
     const name = slugifyWorktreeName(rawName ?? '');
     const suffix = name === 'wt' ? `-${Date.now().toString(36)}` : '';
@@ -163,7 +163,7 @@ export class WorktreeService {
 
   /** 列出本项目的托管 worktree（只认 .steerable/worktrees 下的）。 */
   async listWorktrees(chatId: string): Promise<WorktreeInfo[]> {
-    const project = this.requireProject(chatId);
+    const project = await this.requireProject(chatId);
     await this.requireGitRepo(project.folderPath);
     const { stdout } = await this.git(project.folderPath, [
       'worktree',
@@ -222,7 +222,7 @@ export class WorktreeService {
     name: string,
     options: { deleteBranch?: boolean } = {},
   ): Promise<{ removed: string; branchDeleted: string | null }> {
-    const project = this.requireProject(chatId);
+    const project = await this.requireProject(chatId);
     const worktrees = await this.listWorktrees(chatId);
     const target = worktrees.find((w) => w.name === name || w.path === name);
     if (!target) {
@@ -261,7 +261,7 @@ export class WorktreeService {
     name: string,
     commitMessage: string,
   ): Promise<{ merged: string; commit: string | null }> {
-    const project = this.requireProject(chatId);
+    const project = await this.requireProject(chatId);
     const worktrees = await this.listWorktrees(chatId);
     const target = worktrees.find((w) => w.name === name || w.path === name);
     if (!target) {

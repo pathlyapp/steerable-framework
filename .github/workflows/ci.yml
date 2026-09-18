@@ -25,10 +25,8 @@ jobs:
       # 技能正文不得含产品硬编码，产品身份由消费方组装根注入。
       - name: shell neutrality gate
         run: pnpm --filter @steerable/agent-shell shell:neutral
-      # agent-shell 产品中立门禁（3.2 随 shell 上提到本仓）：shell 源码与
-      # 技能正文不得含产品硬编码，产品身份由消费方组装根注入。
-      - name: shell neutrality gate
-        run: pnpm --filter @steerable/agent-shell shell:neutral
+      - name: storage boundary gate
+        run: pnpm --filter @steerable/agent-shell storage:boundaries
       # D1 (codegen idempotency): rerun the generator and assert the working
       # tree is still clean. Catches non-deterministic codegen (random hashes,
       # unstable map ordering, locale-dependent sort) the moment it sneaks in,
