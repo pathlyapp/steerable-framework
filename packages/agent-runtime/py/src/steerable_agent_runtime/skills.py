@@ -49,11 +49,11 @@ from .tokens import estimate_text_tokens
 logger = logging.getLogger(__name__)
 
 #: Priority at or above which a skill defaults to the eager layer (always
-#: injected into the system prompt). Chosen so deeppath-agent's existing
-#: built-ins keep their current behavior without frontmatter changes:
+#: injected into the system prompt). Chosen so the built-in skills keep
+#: their current behavior without frontmatter changes:
 #: identity 1000 / plan-mode 950 / tool-usage 900 / anti-deferred 880 /
 #: data-grounding 875 stay eager; proactive-coding 705 / local-exec 700 /
-#: cflog 600 and user imports (default 500) become catalog.
+#: pack skills (600) and user imports (default 500) become catalog.
 EAGER_PRIORITY_THRESHOLD = 850
 
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")

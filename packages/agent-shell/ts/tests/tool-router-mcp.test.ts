@@ -3,7 +3,7 @@ import { McpServerRegistry, type McpServerEntry } from '../src/mcp-server-regist
 import { ToolRouter, MCP_DYNAMIC_TOOL_PREFIX } from '../src/tool-router.js';
 
 // ToolRouter 的 LocalExecutor / LocalScriptRegistry 用桩代替（与
-// tests/cflog/tool-router.integration.test.ts 同款做法）。
+// 消费方产品的 tool-router 集成测试同款做法）。
 function makeToolRouter(registry?: McpServerRegistry): ToolRouter {
   return new ToolRouter(
     {

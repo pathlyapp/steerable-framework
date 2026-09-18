@@ -13,10 +13,12 @@ import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { InterruptedTurnCard } from './InterruptedTurnCard';
 import { TaskOutcomeCards } from './TaskOutcomeCards';
+import { SuggestedReplies } from './SuggestedReplies';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { ChatMode } from './ChatInput';
 import type { TurnBlock } from './turn-timeline';
+import type { TurnFile } from './turn-files';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
 
 /**
@@ -55,6 +57,11 @@ interface MessageListProps {
   emptyState?: ReactNode;
   agents: LocalChatAgent[];
   chats?: LocalChat[];
+  /**
+   * 当前对话。正文行内代码里的路径按其绑定项目根解析后，确认存在的变成
+   * 可点击（见 FilePathCode）。
+   */
+  chatId?: string | null;
   currentAgent: LocalChatAgent | null;
   /**
    * Tool calls keyed by the persisted message id (post-stream). Used for
@@ -73,6 +80,17 @@ interface MessageListProps {
   currentTurnStartedAtMs?: number;
   /** Frozen duration keyed by assistant message id (live freeze + history). */
   durationByMessageId?: Record<string, number>;
+  /**
+   * 回合产物文件列表，按落库消息 id 键控（live 回合在 message_id 事件时
+   * 归档；历史回合从 messageMetadata.turnFiles 水合）。
+   */
+  turnFilesByMessageId?: Record<string, TurnFile[]>;
+  /**
+   * 当轮产物文件：turn_files 事件在流尾声到达，此时尾部助手消息仍挂着
+   * 占位 id（框架不会在 message_id 后改写它），归档 map 按键查不到——
+   * 与 currentTurnActions 同款尾部回退。
+   */
+  currentTurnFiles?: TurnFile[];
   /**
    * Tool calls accumulated for the in-flight assistant message that the
    * backend hasn't assigned a DB id to yet. Rendered under the latest
@@ -116,6 +134,11 @@ interface MessageListProps {
   onDismissFinishedTask?: (taskId: string) => void;
   /** 分享当前对话（截图）。只画在最近一条助手消息的时间戳行上。 */
   onShare?: () => Promise<boolean>;
+  /**
+   * 最近一条助手回复下的下一轮输入建议（WorkBuddy 式）。只在非流式时渲染。
+   */
+  suggestedReplies?: string[];
+  onSelectSuggestion?: (text: string) => void;
 }
 
 export function MessageList({
@@ -124,6 +147,7 @@ export function MessageList({
   emptyState,
   agents,
   chats = [],
+  chatId = null,
   currentAgent,
   executedActionsByMessageId,
   currentTurnActions,
@@ -131,6 +155,8 @@ export function MessageList({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  turnFilesByMessageId,
+  currentTurnFiles,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -143,6 +169,8 @@ export function MessageList({
   onInspectTask,
   onDismissFinishedTask,
   onShare,
+  suggestedReplies,
+  onSelectSuggestion,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -196,10 +224,11 @@ export function MessageList({
   const lastTimelineSig = currentTurnTimeline
     ?.map((block) => (block.type === 'tools' ? `t${block.actions.length}` : `c${block.content.length}`))
     .join('|') ?? '';
+  const suggestedSig = suggestedReplies?.join('\0') ?? '';
   useEffect(() => {
     if (!isAtBottom) return;
     scrollToBottom('smooth');
-  }, [lastMessageId, lastContentLen, lastTimelineSig, isAtBottom, scrollToBottom]);
+  }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, isAtBottom, scrollToBottom]);
 
   return (
     <div className="relative flex-1 overflow-hidden">
@@ -253,6 +282,12 @@ export function MessageList({
               const turnTimeline = persistedTimeline
                 ?? (isStreamingTail || isCurrentTimelineTail ? currentTurnTimeline : undefined);
 
+              const persistedTurnFiles = turnFilesByMessageId?.[message.id];
+              const isTurnFilesTail =
+                isLast && currentTurnFiles !== undefined && currentTurnFiles.length > 0;
+              const turnFiles = persistedTurnFiles
+                ?? (isTurnFilesTail ? currentTurnFiles : undefined);
+
               const metadataJson =
                 typeof message.messageMetadata === 'string'
                   ? message.messageMetadata
@@ -271,23 +306,36 @@ export function MessageList({
                   ?? inferDurationMs(previousUserCreatedAt, message.createdAt);
 
               return (
-                <AssistantMessage
-                  key={message.id}
-                  message={message}
-                  isStreaming={isStreamingTail}
-                  agents={agents}
-                  chats={chats}
-                  currentAgent={currentAgent}
-                  executedActions={actions}
-                  timeline={turnTimeline}
-                  orchestrationChildren={childList}
-                  currentRound={isStreamingTail ? currentRound : undefined}
-                  isPlanMode={isPlanMode}
-                  onRegenerate={onRegenerate}
-                  startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
-                  durationMs={durationMs}
-                  onShare={message.id === lastAssistantId ? onShare : undefined}
-                />
+                <div key={message.id}>
+                  <AssistantMessage
+                    message={message}
+                    isStreaming={isStreamingTail}
+                    agents={agents}
+                    chats={chats}
+                    chatId={chatId}
+                    currentAgent={currentAgent}
+                    executedActions={actions}
+                    timeline={turnTimeline}
+                    orchestrationChildren={childList}
+                    currentRound={isStreamingTail ? currentRound : undefined}
+                    isPlanMode={isPlanMode}
+                    onRegenerate={onRegenerate}
+                    startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
+                    durationMs={durationMs}
+                    turnFiles={turnFiles}
+                    onShare={message.id === lastAssistantId ? onShare : undefined}
+                  />
+                  {!isStreaming &&
+                  message.id === lastAssistantId &&
+                  suggestedReplies &&
+                  suggestedReplies.length > 0 &&
+                  onSelectSuggestion ? (
+                    <SuggestedReplies
+                      suggestions={suggestedReplies}
+                      onSelect={onSelectSuggestion}
+                    />
+                  ) : null}
+                </div>
               );
             })}
             {/* W7-1: 中断提示卡在消息列尾部、与最后一条用户消息同列——

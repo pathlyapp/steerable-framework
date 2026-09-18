@@ -1,16 +1,16 @@
-# Architecture (Tier 1 → Tier 4)
+# Architecture (Tier 1 → Tier 5)
 
 Steerable is intentionally **layered**. Each tier has a single
 responsibility and a small surface, so consumers can swap or replace any
 layer without leaking concerns into the layers above and below.
 
-## Why four tiers, not "an SDK"
+## Why five tiers, not "an SDK"
 
 Most agent frameworks ship a monolithic SDK that bundles wire types,
 prompt construction, tool execution, storage, and React widgets into one
 package. That makes the smallest examples fit on a slide — but couples
 upgrades and forces you to take all-or-nothing dependencies. Steerable
-splits the four concerns that change at very different rates:
+splits the five concerns that change at very different rates:
 
 | Tier | Changes when…                                | Versioning impact          |
 | ---- | -------------------------------------------- | -------------------------- |
@@ -18,6 +18,7 @@ splits the four concerns that change at very different rates:
 | 2    | Harness rule changes (new policy mode, etc.) | PyPI bump (TS facade auto) |
 | 3    | Runtime adapter added (new LLM provider)     | Independent PyPI bump      |
 | 4    | UI components added / refactored             | Independent npm bump       |
+| 5    | Host shell gains a product surface           | Lock-step npm bump (public) |
 
 ## Tier 1 — Protocol
 
@@ -65,16 +66,19 @@ Adapter interfaces and reference implementations:
 
 | Interface           | Reference implementations            |
 | ------------------- | ------------------------------------ |
-| `LLMProvider`       | `OpenAICompatProvider`, `AnthropicProvider` |
+| `LLMProvider`       | `OpenAICompatProvider` (covers OpenAI, Ollama, vLLM, DeepSeek, Groq, …), `OpenAIResponsesProvider`, `AnthropicProvider`, `GoogleGenAIProvider` |
 | `ToolRouter`        | In-process registry with `@tool`     |
 | `StorageAdapter`    | `InMemoryStorage`, `SqlAlchemyStorage` |
 | `TransportAdapter`  | `FastAPISseTransport`, `StdioJsonRpcTransport` |
 
-Tier 3 deliberately **does not include** an "AgentLoop" class. Different
-products have radically different orchestration semantics
-(single-step vs. multi-step, with or without coordinator, plan vs. react,
-…). The framework provides the primitives; how you compose them is your
-business logic.
+Tier 3 also owns the production **`CoreLoop`** (`loop.py`) — the
+single-agent think → act → observe step loop with its structured
+`LoopEvent` taxonomy (15 kinds), pseudo tool-call recovery, compaction,
+approval/sandbox executor decorators, subagent pool, and MCP client.
+Multi-agent planning, DAGs, and groupchat stay **above** the loop: the
+framework provides the loop and the primitives; product-level
+orchestration semantics remain your business logic. See the
+[CoreLoop spec](core-loop.md).
 
 ## Tier 3 — Sidecar (executable)
 
@@ -100,6 +104,30 @@ React tree can mount either:
 - a transport that uses Electron IPC bridged to the sidecar (desktop)
 
 without any component-level changes.
+
+## Tier 5 — Host Shell
+
+**Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-web` ·
+`@steerable/pack-sdk` — versioned in lockstep and **published to npm** so
+product repos can pin semantic versions. `agent-shell` ships its compiled
+`dist/`; `agent-shell-web` ships its `src/` (products compile it via the
+`createProductViteConfig` factory and the `@/` alias); `pack-sdk` ships pure
+`types/` (zero runtime). Products may still use source/`link:` during local
+development.
+
+The assemble-a-product tier: an Electron desktop shell (main process, IPC,
+strict CSP, visible PTY) and a headless HTTP server (`/api/v2/*`, SSE) built
+from the same `HostRuntime`; a local backend (chat/project/agent CRUD,
+CoreLoop streaming, skill loader, subagent profiles, worktree service,
+background tasks, usage/insights storage); sidecar supervision (boot, health,
+egress proxy, exec sandbox, reverse approval/ask-user bridges); and a
+product-neutral renderer SPA. Brand, telemetry endpoints, help links, and
+data-directory names are injected by the consuming product's assembly root —
+the `shell:neutral` CI gate fails on any product hardcoding in shell sources.
+
+Tier 5 is how [DeepPath](https://deeppath.cc) ships its desktop app, and it
+runs standalone for evaluation: `pnpm agent-shell:web` (headless server +
+neutral web app) or `pnpm agent-shell:client` (Electron window).
 
 ## Data flow at runtime
 

@@ -12,11 +12,19 @@
  *                          （terminal / local / approval 为宿主自带；
  *                          场景包路由经 host/http-routes 注册表匹配）。
  *
- * 安全约定：默认绑定 127.0.0.1、无认证——本机自用定位（与 Electron 版相同
- * 的信任模型：能到端口 = 本机用户）。不要绑到非回环地址，那会把 shell /
- * 文件读写 / 场景包工具控制暴露给整个网络。
+ * 安全约定：默认绑定 127.0.0.1。仅绑回环挡不住 DNS rebinding（恶意网站
+ * 重绑定后受害者浏览器即同源驱动本服务），所以有两道门：
+ *   1. Host 白名单——所有请求（含静态）的 Host 必须是 127.0.0.1 /
+ *      localhost / [::1]，浏览器无法伪造 Host，rebinding 在此被拒；
+ *   2. Bearer token——每次启动随机生成，经 index.html 注入
+ *      `window.__DEEPPATH_BS__.token`；`/api/v2/*` 与 `/host/*` 全部要求
+ *      `Authorization: Bearer <token>`（EventSource 不能设头，SSE 走
+ *      `?token=` query）。静态资源不验 token（浏览器要靠它拿到 token）。
+ * 不要绑到非回环地址，那会把 shell / 文件读写 / 场景包工具控制暴露给整个
+ * 网络（token 只能挡没有 token 的人）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -89,7 +97,12 @@ export interface BsServerDeps {
   bus: SseBus;
   /** apps/web/dist 的绝对路径。 */
   webDistDir: string;
+  /** Bearer token；缺省每次启动随机生成。测试注入固定值。 */
+  authToken?: string;
 }
+
+/** Host 白名单：仅回环（可带端口）。浏览器禁止伪造 Host，rebinding 到此为止。 */
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data ?? null);
@@ -130,6 +143,13 @@ export function createBsServer(deps: BsServerDeps): Server {
     bus,
     webDistDir,
   } = deps;
+  const authToken = deps.authToken ?? randomBytes(24).toString('base64url');
+
+  /** `/api/v2/*` 与 `/host/*` 的 Bearer 门；EventSource 不能设头，收 query token。 */
+  function isAuthorized(req: IncomingMessage, url: URL): boolean {
+    if (req.headers.authorization === `Bearer ${authToken}`) return true;
+    return url.searchParams.get('token') === authToken;
+  }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     const isStream = req.method === 'POST' && STREAM_PATH_PATTERNS.some((p) => p.test(pathname));
@@ -267,10 +287,18 @@ export function createBsServer(deps: BsServerDeps): Server {
       sendJson(res, 200, await approvalBridge.decide(body));
       return;
     }
+    if (method === 'GET' && pathname === '/host/approval/pending') {
+      sendJson(res, 200, approvalBridge.pending());
+      return;
+    }
 
     // ─── ask_user（对齐 ask-user:answer IPC） ───
     if (method === 'POST' && pathname === '/host/ask-user/answer') {
       sendJson(res, 200, askUserBridge.answer(body));
+      return;
+    }
+    if (method === 'GET' && pathname === '/host/ask-user/pending') {
+      sendJson(res, 200, askUserBridge.pending());
       return;
     }
 
@@ -377,6 +405,7 @@ export function createBsServer(deps: BsServerDeps): Server {
           platform: process.platform,
           flavor: brand.flavor,
           brandName: brand.displayName,
+          token: authToken,
         })};</script>`;
         content = content.toString('utf8').replace('<head>', `<head>${bootstrap}`);
       }
@@ -393,8 +422,21 @@ export function createBsServer(deps: BsServerDeps): Server {
 
   return createServer((req, res) => {
     void (async () => {
+      // 门 1：Host 白名单（含静态——rebound 浏览器连 index.html 里的
+      // token 都不许拿到）。
+      if (!LOOPBACK_HOST.test(req.headers.host ?? '')) {
+        sendJson(res, 403, { detail: 'forbidden host' });
+        return;
+      }
       const url = new URL(req.url ?? '/', 'http://bs.local');
       const pathname = url.pathname;
+      // 门 2：API 与宿主能力要 Bearer token；静态资源不验（浏览器靠它
+      // 拿 token），静态面不暴露任何能力。
+      const needsAuth = pathname.startsWith('/api/v2/') || pathname.startsWith('/host/');
+      if (needsAuth && !isAuthorized(req, url)) {
+        sendJson(res, 401, { detail: 'unauthorized' });
+        return;
+      }
       if (pathname === '/api/v2/events' && req.method === 'GET') {
         bus.attach(res);
         return;

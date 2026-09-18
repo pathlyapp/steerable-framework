@@ -1,5 +1,13 @@
 """Steerable agent runtime — Tier 3 adapter package."""
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
+
+try:
+    __version__ = _dist_version("steerable-agent-runtime")
+except PackageNotFoundError:  # source tree without installed metadata
+    __version__ = "0.0.0"
+
 from .antihallucination import (
     AntiHallucinationConfig,
     AntiHallucinationHooks,
@@ -81,6 +89,11 @@ from .cache_control import (
     system_blocks_with_cache,
 )
 from .calibration import CalibratingProvider, ModelCalibration, UsageCalibration
+from .compaction_policy import (
+    CompactionPolicy,
+    is_large_window,
+    resolve_compaction_policy,
+)
 from .compaction import CompactionHooks
 from .errors import (
     ApprovalAborted,
@@ -96,6 +109,8 @@ from .errors import (
 from .history import (
     RECORD_FORMAT_VERSION,
     CompactionBoundary,
+    CompactionStart,
+    CompactionSummary,
     ContextFragment,
     ContextManager,
     HistoryItem,
@@ -310,6 +325,11 @@ __all__ = [
     "ChainHooks",
     "ChildOutcome",
     "CompactionBoundary",
+    "CompactionPolicy",
+    "CompactionStart",
+    "CompactionSummary",
+    "resolve_compaction_policy",
+    "is_large_window",
     "CompactionHooks",
     "CompletionAction",
     "CompletionDecision",
@@ -480,5 +500,3 @@ __all__ = [
     "tool_search_descriptor",
     "upgrade_entry_dict",
 ]
-
-__version__ = "0.1.0"

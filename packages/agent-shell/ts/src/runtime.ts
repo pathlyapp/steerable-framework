@@ -97,8 +97,8 @@ export function getAppRootDir(): string {
 /**
  * preload  bundle 路径（3.4 修复）：shell main.ts 创建窗口时需要
  * preload.cjs——shell 自带默认面（dist/preload.cjs，buildPreloadApi()
- * 无包贡献），但带 invoke 型包贡献的产品（如 ciflog）由产品构建把
- * 组合后的 preload.cjs 出在产品 main.js 旁，产品入口在动态 import
+ * 无包贡献），但带 invoke 型包贡献的产品由产品构建把组合后的
+ * preload.cjs 出在产品 main.js 旁，产品入口在动态 import
  * shell main 之前经本函数注入。未注入时回退 shell 自带默认。
  */
 let preloadPathOverride: string | null = null;
@@ -134,8 +134,12 @@ export function resolveProductWebDist(entryUrl: string): string | null {
   const here = path.dirname(fileURLToPath(entryUrl));
   const productId = path.basename(here);
   for (const candidate of [
+    // 源码平面：入口在 products/<id>/（web dist 在同级 web/dist）。
     path.join(here, 'web', 'dist'),
-    path.resolve(here, '..', '..', '..', '..', 'products', productId, 'web', 'dist'),
+    // 编译平面 A：入口在仓根 dist/products/<id>/（上溯 3 级到仓根）。
+    path.resolve(here, '..', '..', '..', 'products', productId, 'web', 'dist'),
+    // 编译平面 B：入口在产品内 products/<id>/dist/products/<id>/（上溯 5 级到仓根）。
+    path.resolve(here, '..', '..', '..', '..', '..', 'products', productId, 'web', 'dist'),
   ]) {
     if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
   }

@@ -109,7 +109,7 @@ const RETRY_DELAYS = [2000, 5000, 10000, 30000];
 // 导致模型退化成"假后台"）。CS 的差异只剩广播（IPC）与生命周期。
 const runtime = createHostRuntime({
   broadcast: (channel, payload) => broadcastTerminalEvent(channel, payload),
-  // LocalBackendRouter 的后台事件（目前只有 chat-title-updated）只推主窗口。
+  // LocalBackendRouter 的后台事件（chat-title-updated / suggested-replies）只推主窗口。
   // 没拿到 mainWindow 时静默丢——title 是 nice-to-have，不该让启动顺序影响功能。
   broadcastMain: (eventName, payload) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -611,12 +611,14 @@ function setupIpcHandlers(): void {
   ipcMain.handle('approval:decide', (_event, payload: unknown) =>
     approvalBridge.decide(payload),
   );
+  ipcMain.handle('approval:pending', () => approvalBridge.pending());
 
   // W8: the renderer's ask-user card answers here; routed to the pending
   // sidecar `ask_user.request` call (fail-open empty answers on mismatch).
   ipcMain.handle('ask-user:answer', (_event, payload: unknown) =>
     askUserBridge.answer(payload),
   );
+  ipcMain.handle('ask-user:pending', () => askUserBridge.pending());
 
   ipcMain.handle('local:update-safety-config', async (_event, config: CommandSafetyConfigPayload) => {
     localExecutor.updateSafetyConfig(config);

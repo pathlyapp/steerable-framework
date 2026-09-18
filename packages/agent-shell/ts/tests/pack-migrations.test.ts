@@ -3,7 +3,7 @@
  *
  * LocalStore 依赖 better-sqlite3 native module，vitest 里无法构造真实
  * 实例；这里只验证注册表本身的契约（按序列举、重复注册 fail fast）。
- * DDL 应用路径由 ciflog 产品的真实启动覆盖。
+ * DDL 应用路径由消费方产品的真实启动覆盖。
  */
 
 import { describe, expect, it } from 'vitest';

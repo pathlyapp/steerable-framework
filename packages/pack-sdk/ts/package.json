@@ -1,9 +1,8 @@
 {
   "name": "@steerable/pack-sdk",
-  "version": "0.6.4",
-  "private": true,
+  "version": "0.6.20",
   "type": "module",
-  "description": "Scenario pack contract for @steerable/agent-shell (pure types, zero runtime). A scenario pack declares every extension a vertical scenario needs — services, tools, tables, skills, agent seeds, IPC, HTTP routes, preload bridge, renderer slots, branding — and the host composes the selected packs at build time.",
+  "description": "Scenario pack contract for @steerable/agent-shell (pure types, zero runtime). A scenario pack declares every extension a vertical scenario needs \u2014 services, tools, tables, skills, agent seeds, IPC, HTTP routes, preload bridge, renderer slots, branding \u2014 and the host composes the selected packs at build time.",
   "license": "Apache-2.0",
   "homepage": "https://steerableframework.com/",
   "repository": {
@@ -21,6 +20,14 @@
     "./web": {
       "types": "./types/web.d.ts"
     }
+  },
+  "files": [
+    "types",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "gen": "echo pack-sdk-ts",

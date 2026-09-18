@@ -316,7 +316,7 @@ export async function streamCoreLoopTurn(
     streamRawChunks: options.streamRawChunks,
     // W8: advertise the sidecar-hosted ask_user tool; the desktop answers
     // `ask_user.request` reverse calls with the renderer question card
-    // (AskUserModalHost). Under toolsViaHost the sidecar intercepts
+    // (AskUserPromptProvider). Under toolsViaHost the sidecar intercepts
     // ask_user locally, so it never reaches the host's tool.invoke.
     // 4.6a: background task streams opt out (options.askUser === false).
     askUser: options.askUser ?? true,

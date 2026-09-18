@@ -82,7 +82,7 @@ disable-model-invocation: true
 ## 6. 反模式
 
 - ❌ 名字含糊：`helper`、`utils`、`tools`；✅ 具体：`review-pr`、`export-well-logs`
-- ❌ description 写成第一人称「我可以帮你…」；✅ 「解析测井 LAS 文件并输出统计报告。用户提到 LAS / 测井曲线导出时使用。」
+- ❌ description 写成第一人称「我可以帮你…」；✅ 「解析 CSV 销售文件并输出统计报告。用户提到 CSV / 销售报表导出时使用。」
 - ❌ 把大段通用编程知识抄进正文，挤占上下文
 - ❌ `priority` 随手写 900 让正文常驻系统提示词
 - ❌ 写死 `C:\Users\xxx\skills\...` 这类绝对路径，换台机器就失效

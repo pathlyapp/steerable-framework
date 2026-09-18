@@ -51,8 +51,8 @@ const destructiveCall: ToolCall = {
 
 const localCall: ToolCall = {
   id: 'call_local_1',
-  name: 'cflog_open_workspace',
-  arguments: { path: '/Users/me/projects/cflog/case-2024-001' },
+  name: 'open_workspace',
+  arguments: { path: '/Users/me/projects/demo/case-2024-001' },
 };
 
 const successResult: ToolResult = {

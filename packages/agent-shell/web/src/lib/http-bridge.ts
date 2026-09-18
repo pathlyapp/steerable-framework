@@ -28,6 +28,8 @@ interface BsBootstrap {
   platform: NodeJS.Platform;
   flavor: string;
   brandName: string;
+  /** 每次启动生成的 Bearer token；/api/v2/* 与 /host/* 全部要求携带。 */
+  token?: string;
 }
 
 function bootstrap(): BsBootstrap {
@@ -37,10 +39,18 @@ function bootstrap(): BsBootstrap {
     : { platform: 'linux', flavor: 'generic', brandName: '' };
 }
 
+function authHeaders(): Record<string, string> {
+  const token = bootstrap().token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function http<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeaders(),
+    },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = (await res.json().catch(() => null)) as T & { detail?: string };
@@ -63,7 +73,11 @@ let eventSource: EventSource | null = null;
 
 function ensureEventSource(): EventSource {
   if (eventSource) return eventSource;
-  eventSource = new EventSource('/api/v2/events');
+  // EventSource 不能设请求头，token 走 query（server 端两种都收）。
+  const token = bootstrap().token;
+  eventSource = new EventSource(
+    `/api/v2/events${token ? `?token=${encodeURIComponent(token)}` : ''}`,
+  );
   return eventSource;
 }
 
@@ -112,7 +126,7 @@ async function startStream(
   try {
     res = await fetch(input.path, {
       method: input.method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: input.body !== undefined ? JSON.stringify(input.body) : undefined,
       signal: controller.signal,
     });
@@ -227,11 +241,17 @@ export function createHttpBridge(): ElectronBridge {
     onChatTitleUpdated: (callback) =>
       subscribeChannel<{ chatId: string; title: string }>('chat-title-updated', callback),
 
+    onSuggestedReplies: (callback) =>
+      subscribeChannel<{ chatId: string; messageId: string; suggestions: string[] }>(
+        'suggested-replies',
+        callback,
+      ),
+
     onChatCreated: (callback) =>
       subscribeChannel<{ chatId: string; agentId?: string | null }>('chat-created', callback),
 
     onTaskUpdated: (callback) =>
-      subscribeChannel<{ chatId: string; taskId: string; status: string }>(
+      subscribeChannel<{ chatId: string; taskId: string }>(
         'task-updated',
         callback,
       ),
@@ -254,6 +274,7 @@ export function createHttpBridge(): ElectronBridge {
       decide: async (decision) => {
         await http('POST', '/host/approval/decide', decision);
       },
+      pending: () => http<ApprovalPromptRequest[]>('GET', '/host/approval/pending'),
     },
 
     askUser: {
@@ -262,6 +283,7 @@ export function createHttpBridge(): ElectronBridge {
       answer: async (reply) => {
         await http('POST', '/host/ask-user/answer', reply);
       },
+      pending: () => http<AskUserPromptRequest[]>('GET', '/host/ask-user/pending'),
     },
 
     terminal: {
@@ -275,8 +297,6 @@ export function createHttpBridge(): ElectronBridge {
           'terminal:exit',
           callback,
         ),
-      onReveal: (callback) =>
-        subscribeChannel<{ sessionId: string }>('terminal:reveal', callback),
     },
 
   };

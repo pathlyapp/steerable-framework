@@ -104,7 +104,9 @@ export function ModelPicker({
 
   return (
     <div ref={rootRef} className="flex min-w-0 items-center gap-1">
-      <div className="relative">
+      {/* flex + min-w-0 截断链：窄容器下模型 id 省略号收缩，而不是把
+          旁边的圆形图标按钮压扁。 */}
+      <div className="relative flex min-w-0">
         <button
           type="button"
           onClick={() => {
@@ -115,7 +117,7 @@ export function ModelPicker({
             if (next && status !== 'live' && !loading) void refresh();
           }}
           disabled={disabled}
-          className="inline-flex h-7 max-w-[160px] items-center gap-1.5 rounded-full border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70 @sm:max-w-[220px]"
+          className="inline-flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 rounded-full border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70 @sm:max-w-[220px]"
           title={
             status === 'offline'
               ? `模型目录不可用${catalog?.error ? `：${catalog.error}` : ''}（仍可手动指定模型）`
@@ -124,7 +126,7 @@ export function ModelPicker({
           aria-haspopup="menu"
           aria-expanded={modelMenuOpen}
         >
-          <span className="truncate">{effectiveModel || '选择模型'}</span>
+          <span className="min-w-0 truncate">{effectiveModel || '选择模型'}</span>
           {model != null && (
             <span className="inline-flex shrink-0 items-center rounded bg-agent-foreground/10 px-1 py-0.5 text-[9px] font-medium text-agent-foreground">
               本会话

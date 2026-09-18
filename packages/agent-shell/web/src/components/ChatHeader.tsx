@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LuCheck, LuGitBranch, LuListTodo, LuListTree, LuLoaderCircle } from 'react-icons/lu';
-import type { LocalChat, LocalChatAgent, LocalTask } from '@/lib/local-api';
+import type { LocalChat, LocalTask } from '@/lib/local-api';
 import {
   activateChatBranch,
   getChatBranches,
@@ -13,7 +13,6 @@ import { actionableTasks, summarizeTasks, type ChatTaskSummary } from './chat/us
 
 interface ChatHeaderProps {
   chat: LocalChat | null;
-  agent: LocalChatAgent | null;
   /**
    * W1.2.1: called after the active branch switches — the page re-hydrates
    * the message list from the re-projected store. When provided (and the
@@ -29,8 +28,6 @@ interface ChatHeaderProps {
 /**
  * ChatHeader — slim title bar above ChatPanel. Shows:
  *   - chat title (完整显示，长标题换行不截断)
- *   - bound agent name + icon (read-only here; switching is done from the
- *     sidebar's expert team list)
  *   - shortened chat id (for support / debugging)
  *
  * Terminal / 场景包调试窗 / 本地模型设置 USED to live here, but per the
@@ -40,7 +37,6 @@ interface ChatHeaderProps {
  */
 export function ChatHeader({
   chat,
-  agent,
   onBranchSwitched,
   onInspectTask,
   tasks = [],
@@ -185,18 +181,6 @@ export function ChatHeader({
           title={chat?.title}
         >
           {chat?.title ?? '未选择对话'}
-        </span>
-        <span className="shrink-0 text-xs text-agent-muted-foreground">
-          {agent ? (
-            <>
-              <span className="mr-0.5">{agent.icon || '🤖'}</span>
-              {agent.name}
-            </>
-          ) : chat?.agentId ? (
-            <span className="font-mono">{chat.agentId}</span>
-          ) : (
-            <span className="italic">no agent</span>
-          )}
         </span>
         {chat && (
           <span className="hidden shrink-0 font-mono text-[10px] text-agent-muted-foreground/70 md:inline">

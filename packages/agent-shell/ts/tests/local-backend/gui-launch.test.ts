@@ -9,9 +9,9 @@ import {
 } from '../../src/local-executor.js';
 
 describe('isGuiLaunchCommand', () => {
-  it('matches standalone "gui" tokens in CIFLog-style launch commands', () => {
-    expect(isGuiLaunchCommand('CIFLogNet.exe gui replay card.xml')).toBe(true);
-    expect(isGuiLaunchCommand('"C:\\Program Files\\CIFLog\\app.exe" gui')).toBe(true);
+  it('matches standalone "gui" tokens in app-style launch commands', () => {
+    expect(isGuiLaunchCommand('MyAppNet.exe gui replay card.xml')).toBe(true);
+    expect(isGuiLaunchCommand('"C:\\Program Files\\MyApp\\app.exe" gui')).toBe(true);
     expect(isGuiLaunchCommand('myapp --gui --port 7999')).toBe(true);
     expect(isGuiLaunchCommand('start_gui.bat')).toBe(true);
     expect(isGuiLaunchCommand('python run.py --mode=gui')).toBe(true);

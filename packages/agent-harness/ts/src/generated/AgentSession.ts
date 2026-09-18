@@ -31,7 +31,7 @@ export interface AgentSession {
    */
   nextStage?: string | null;
   /**
-   * Scenario tag used to select the FSM definition (e.g. 'agent-entry', 'cflog-operator').
+   * Scenario tag used to select the FSM definition (e.g. 'agent-entry', 'data-analyst').
    */
   scenario?: string;
   /**

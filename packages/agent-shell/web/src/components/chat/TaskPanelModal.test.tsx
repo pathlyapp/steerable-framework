@@ -46,12 +46,12 @@ function installBridge(tasks: LocalTask[]) {
     return Promise.reject(new Error(`unexpected request: ${input.method} ${input.path}`));
   });
   const taskUpdatedListeners: Array<
-    (payload: { chatId: string; taskId: string; status: string }) => void
+    (payload: { chatId: string; taskId: string }) => void
   > = [];
   (window as { electron?: unknown }).electron = {
     localBackend: { request },
     onTaskUpdated: (
-      cb: (payload: { chatId: string; taskId: string; status: string }) => void,
+      cb: (payload: { chatId: string; taskId: string }) => void,
     ) => {
       taskUpdatedListeners.push(cb);
       return () => {
@@ -62,7 +62,7 @@ function installBridge(tasks: LocalTask[]) {
   };
   return {
     request,
-    emitTaskUpdated: (payload: { chatId: string; taskId: string; status: string }) => {
+    emitTaskUpdated: (payload: { chatId: string; taskId: string }) => {
       for (const cb of taskUpdatedListeners) cb(payload);
     },
   };
@@ -165,8 +165,8 @@ describe('TaskPanelModal', () => {
       ([input]) => (input as { method: string }).method === 'GET',
     ).length;
 
-    emitTaskUpdated({ chatId: 'chat_2', taskId: 'x', status: 'completed' });
-    emitTaskUpdated({ chatId: 'chat_1', taskId: 'task-1', status: 'completed' });
+    emitTaskUpdated({ chatId: 'chat_2', taskId: 'x' });
+    emitTaskUpdated({ chatId: 'chat_1', taskId: 'task-1' });
 
     await waitFor(() => {
       const gets = request.mock.calls.filter(

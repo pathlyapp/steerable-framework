@@ -34,7 +34,7 @@ function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
 
 function installBridge(initial: LocalTask[]) {
   let current = initial;
-  const listeners: Array<(p: { chatId: string; taskId: string; status: string }) => void> = [];
+  const listeners: Array<(p: { chatId: string; taskId: string }) => void> = [];
   (window as { electron?: unknown }).electron = {
     localBackend: {
       request: vi.fn((input: { method: string; path: string }) => {
@@ -44,7 +44,7 @@ function installBridge(initial: LocalTask[]) {
         return Promise.reject(new Error(`unexpected request: ${input.path}`));
       }),
     },
-    onTaskUpdated: (cb: (p: { chatId: string; taskId: string; status: string }) => void) => {
+    onTaskUpdated: (cb: (p: { chatId: string; taskId: string }) => void) => {
       listeners.push(cb);
       return () => listeners.splice(listeners.indexOf(cb), 1);
     },
@@ -53,7 +53,7 @@ function installBridge(initial: LocalTask[]) {
     async push(next: LocalTask[]) {
       current = next;
       await act(async () => {
-        for (const cb of listeners) cb({ chatId: 'chat_1', taskId: 'task-1', status: 'x' });
+        for (const cb of listeners) cb({ chatId: 'chat_1', taskId: 'task-1' });
       });
     },
   };

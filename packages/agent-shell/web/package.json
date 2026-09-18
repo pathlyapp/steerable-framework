@@ -1,9 +1,8 @@
 {
   "name": "@steerable/agent-shell-web",
-  "version": "0.6.4",
-  "private": true,
+  "version": "0.6.20",
   "type": "module",
-  "description": "Steerable framework — product-neutral renderer SPA source for @steerable/agent-shell (React + Vite). Consumed by product web entry points via the `@/` alias (anchored at this package's src/) and the createProductViteConfig factory; never published to npm.",
+  "description": "Steerable framework \u2014 product-neutral renderer SPA source for @steerable/agent-shell (React + Vite). Consumed by product web entry points via the `@/` alias (anchored at this package's src/) and the createProductViteConfig factory. Published as a source package (src/), plus the compiled vite.base config factory (vite.base.js + .d.ts) for Node-side config loading.",
   "license": "Apache-2.0",
   "homepage": "https://steerableframework.com/",
   "repository": {
@@ -15,17 +14,36 @@
     "url": "https://github.com/pathlyapp/steerable-framework/issues"
   },
   "exports": {
-    "./vite.base": "./vite.base.ts",
+    "./vite.base": {
+      "types": "./vite.base.d.ts",
+      "default": "./vite.base.js"
+    },
     "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "public",
+    "vite.base.js",
+    "vite.base.d.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "gen": "echo agent-shell-web",
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && npm run build:vite-base",
+    "build:vite-base": "tsc vite.base.ts --module esnext --target es2022 --moduleResolution bundler --declaration --skipLibCheck --outDir .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "tsc --noEmit",
     "check:drift": "echo ok",
+    "prepublishOnly": "npm run build:vite-base",
     "app:build": "vite build --config vite.app.config.ts",
+    "app:build:demo": "vite build --config vite.demo.config.ts",
     "app:dev": "vite --config vite.app.config.ts"
   },
   "dependencies": {

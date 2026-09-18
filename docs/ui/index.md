@@ -10,7 +10,7 @@ title: UI Components
 
 What you'll find inside:
 
-* **Components** — `ChatPanel`, `MessageList`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView`, with one story per state (default, streaming, error, edge cases).
+* **Components** — `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView`, plus the 14-card rich-message family under `@steerable/agent-ui/cards` — with one story per state (default, streaming, error, edge cases).
 * **Hooks** — `useChatStream`, `useToolCallStatus`, `useAgentSession` with copy-paste TypeScript examples and design notes.
 * **a11y panel** — every story is auto-checked by axe-core; baseline-failures block PRs.
 * **Tailwind preset reference** — every `--agent-*` design token, what it controls, and how to override it in your own consumer app.

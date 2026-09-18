@@ -92,17 +92,17 @@ match: any
     )
     write_skill(
         root,
-        "90-cflog",
+        "90-csv-tools",
         """---
-name: cflog
-displayName: 智能测井处理链
-description: "CIFLog workflow guidance — connection, card scanning, replay."
+name: csv-tools
+displayName: CSV 处理链
+description: "CSV workflow guidance — loading, filtering, reporting."
 priority: 600
-conditions: [tool:cflog_list_cards]
+conditions: [tool:csv_list_rows]
 match: all
 ---
 
-# CIFLog
+# CSV Tools
 正文内容。
 """,
     )
@@ -164,15 +164,15 @@ async def collect(loop_run: AsyncIterator[LoopEvent]) -> list[LoopEvent]:
 def test_frontmatter_field_compat(skills_root: Path) -> None:
     provider = FilesystemSkillProvider([skills_root])
     by_name = {s.name: s for s in provider.list()}
-    assert set(by_name) == {"identity", "anti-deferred-execution", "local-exec", "cflog"}
+    assert set(by_name) == {"identity", "anti-deferred-execution", "local-exec", "csv-tools"}
 
-    cflog = by_name["cflog"]
-    assert cflog.display_name == "智能测井处理链"
-    assert cflog.description == "CIFLog workflow guidance — connection, card scanning, replay."
-    assert cflog.priority == 600
-    assert cflog.conditions == ("tool:cflog_list_cards",)
-    assert cflog.match == "all"
-    assert cflog.dir_name == "90-cflog"
+    csv_tools = by_name["csv-tools"]
+    assert csv_tools.display_name == "CSV 处理链"
+    assert csv_tools.description == "CSV workflow guidance — loading, filtering, reporting."
+    assert csv_tools.priority == 600
+    assert csv_tools.conditions == ("tool:csv_list_rows",)
+    assert csv_tools.match == "all"
+    assert csv_tools.dir_name == "90-csv-tools"
 
     anti = by_name["anti-deferred-execution"]
     assert anti.description == "零容忍规则——光说不做即违规。"
@@ -187,7 +187,7 @@ def test_layer_criterion(skills_root: Path) -> None:
     assert by_name["identity"].layer == "eager"
     assert by_name["anti-deferred-execution"].layer == "eager"
     assert by_name["local-exec"].layer == "catalog"
-    assert by_name["cflog"].layer == "catalog"
+    assert by_name["csv-tools"].layer == "catalog"
 
 
 def test_layer_explicit_overrides_priority(tmp_path: Path) -> None:
@@ -251,10 +251,10 @@ def test_user_root_overrides_builtin(tmp_path: Path) -> None:
 
 def test_get_resolves_aliases(skills_root: Path) -> None:
     provider = FilesystemSkillProvider([skills_root])
-    assert provider.get("cflog") is not None
-    assert provider.get("CFLOG") is not None  # case-insensitive
-    assert provider.get("90-cflog") is not None  # dir name
-    assert provider.get("智能测井处理链") is not None  # display name
+    assert provider.get("csv-tools") is not None
+    assert provider.get("CSV-TOOLS") is not None  # case-insensitive
+    assert provider.get("90-csv-tools") is not None  # dir name
+    assert provider.get("CSV 处理链") is not None  # display name
     assert provider.get("nonexistent") is None
 
 
@@ -300,27 +300,27 @@ def test_conditions_matching() -> None:
 def test_select_catalog_filters(skills_root: Path) -> None:
     provider = FilesystemSkillProvider([skills_root])
     # No conditions active: only unconditional catalog skills qualify — none
-    # here (local-exec and cflog both carry conditions).
+    # here (local-exec and csv-tools both carry conditions).
     assert select_catalog(provider.list()) == []
-    # cflog tool active: cflog (match=all, single condition) listed.
-    catalog = select_catalog(provider.list(), {"tool:cflog_list_cards"})
-    assert [s.name for s in catalog] == ["cflog"]
+    # csv-tools tool active: csv-tools (match=all, single condition) listed.
+    catalog = select_catalog(provider.list(), {"tool:csv_list_rows"})
+    assert [s.name for s in catalog] == ["csv-tools"]
     # local-exec via any-of conditions; eager skills never listed.
     catalog = select_catalog(provider.list(), {"tool:local_read_file", "has-tools"})
     assert [s.name for s in catalog] == ["local-exec"]
     # Exclusion drops by name / dir / displayName alike.
-    assert select_catalog(provider.list(), {"tool:cflog_list_cards"}, exclude=["CFLOG"]) == []
-    assert select_catalog(provider.list(), {"tool:cflog_list_cards"}, exclude=["90-cflog"]) == []
+    assert select_catalog(provider.list(), {"tool:csv_list_rows"}, exclude=["CSV-TOOLS"]) == []
+    assert select_catalog(provider.list(), {"tool:csv_list_rows"}, exclude=["90-csv-tools"]) == []
 
 
 def test_render_skill_catalog(skills_root: Path) -> None:
     provider = FilesystemSkillProvider([skills_root])
-    catalog = select_catalog(provider.list(), {"tool:cflog_list_cards", "tool:local_read_file"})
+    catalog = select_catalog(provider.list(), {"tool:csv_list_rows", "tool:local_read_file"})
     text = render_skill_catalog(catalog)
     assert "# Available skills" in text
     assert "`skill`" in text
     assert "- local-exec: Local shell / filesystem control" in text
-    assert "- cflog(智能测井处理链): CIFLog workflow guidance" in text
+    assert "- csv-tools(CSV 处理链): CSV workflow guidance" in text
     # Eager-layer skills are not part of the catalog.
     assert "identity" not in text
 
@@ -450,19 +450,19 @@ async def test_empty_catalog_leaves_transcript_untouched(skills_root: Path) -> N
 async def test_skill_tool_roundtrip(skills_root: Path) -> None:
     provider = make_provider(
         [
-            {"tool_calls": [tc("skill", {"name": "cflog"})]},
+            {"tool_calls": [tc("skill", {"name": "csv-tools"})]},
             {"content": "按技能执行完毕"},
         ]
     )
     executor = SkillExecutor(
         RouterToolExecutor(ToolRouter()),
         FilesystemSkillProvider([skills_root]),
-        conditions={"tool:cflog_list_cards"},
+        conditions={"tool:csv_list_rows"},
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
         loop.run(
-            [LLMMessage.text_of("user", "用 cflog 技能处理")],
+            [LLMMessage.text_of("user", "用 csv-tools 技能处理")],
             tools=[skill_tool_descriptor()],
         )
     )
@@ -475,9 +475,9 @@ async def test_skill_tool_roundtrip(skills_root: Path) -> None:
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
     assert len(tool_messages) == 1
     payload = json.loads(tool_messages[0].content_text)
-    assert payload["data"] == {"skill": "cflog"}
-    assert payload["message"].startswith('<skill_content name="cflog">\n')
-    assert "# CIFLog" in payload["message"]
+    assert payload["data"] == {"skill": "csv-tools"}
+    assert payload["message"].startswith('<skill_content name="csv-tools">\n')
+    assert "# CSV Tools" in payload["message"]
     assert payload["message"].endswith("</skill_content>")
     done = [e for e in events if e.kind == "completion" and e.data.get("status") == "completed"]
     assert len(done) == 1
@@ -493,7 +493,7 @@ async def test_skill_tool_unknown_name_lists_available(skills_root: Path) -> Non
     executor = SkillExecutor(
         RouterToolExecutor(ToolRouter()),
         FilesystemSkillProvider([skills_root]),
-        conditions={"tool:cflog_list_cards"},
+        conditions={"tool:csv_list_rows"},
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(
@@ -503,7 +503,7 @@ async def test_skill_tool_unknown_name_lists_available(skills_root: Path) -> Non
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
     assert "Unknown skill: nosuch" in tool_messages[0].content_text
-    assert "cflog" in tool_messages[0].content_text  # available list guides the retry
+    assert "csv-tools" in tool_messages[0].content_text  # available list guides the retry
 
 
 async def test_skill_tool_rejects_non_model_invocable(tmp_path: Path) -> None:
@@ -529,13 +529,13 @@ async def test_skill_tool_rejects_non_model_invocable(tmp_path: Path) -> None:
 
 async def test_skill_tool_rejects_excluded(skills_root: Path) -> None:
     provider = make_provider(
-        [{"tool_calls": [tc("skill", {"name": "cflog"})]}, {"content": "ok"}]
+        [{"tool_calls": [tc("skill", {"name": "csv-tools"})]}, {"content": "ok"}]
     )
     executor = SkillExecutor(
         RouterToolExecutor(ToolRouter()),
         FilesystemSkillProvider([skills_root]),
-        conditions={"tool:cflog_list_cards"},
-        exclude=["cflog"],
+        conditions={"tool:csv_list_rows"},
+        exclude=["csv-tools"],
     )
     loop = CoreLoop(provider, executor, LoopConfig())
     events = await collect(

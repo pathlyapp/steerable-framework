@@ -80,6 +80,7 @@ nav:
       - Safety: spec/safety.md
       - Runtime: spec/runtime.md
       - Sidecar: spec/sidecar.md
+      - Compaction: spec/compaction.md
   - UI Components: ui/index.md
   - Migration:
       - From DeepPath: migration/deeppath.md

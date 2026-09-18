@@ -189,11 +189,13 @@ def test_entry_from_dict_refuses_non_integer_version() -> None:
         entry_from_dict({"entry": "item", "v": "2", "seq": 0})
 
 
-def test_upgrade_entry_dict_v1_to_v2_is_stamp_only() -> None:
-    # W4-6 added the ``v`` key itself, not a shape change — the upgrade is
-    # the stamp and nothing else. Pinned against a literal ``2`` so a
-    # future v3 bump must revisit this step instead of silently
-    # mis-stamping or dropping v1 support.
+def test_upgrade_entry_dict_v1_to_current_is_stamp_only() -> None:
+    # Every step is the stamp and nothing else: v1→v2 added the ``v`` key
+    # (W4-6); v2→v3 added the region-transaction envelopes (P1) without
+    # touching existing shapes. A v1 payload therefore upgrades to the
+    # current version by stamping alone — pinned against
+    # RECORD_FORMAT_VERSION so a future bump must revisit this chain
+    # instead of silently mis-stamping or dropping v1 support.
     legacy = {
         "entry": "item",
         "seq": 3,
@@ -202,7 +204,10 @@ def test_upgrade_entry_dict_v1_to_v2_is_stamp_only() -> None:
         "token_estimate": 2,
         "message": {"role": "user", "content": [{"type": "text", "text": "old"}]},
     }
-    assert upgrade_entry_dict(legacy, from_version=1) == {**legacy, "v": 2}
+    assert upgrade_entry_dict(legacy, from_version=1) == {
+        **legacy,
+        "v": RECORD_FORMAT_VERSION,
+    }
     # The stored dict is never mutated in place.
     assert "v" not in legacy
     # Current-version dicts pass through untouched.
@@ -1148,3 +1153,44 @@ async def test_assert_requests_match_record_catches_undeclared_rewrite() -> None
     sink.requests[0].messages = tampered
     with pytest.raises(AssertionError, match="matches no record projection"):
         assert_requests_match_record(sink.requests, entries)
+
+
+def test_region_bracket_codec_roundtrips() -> None:
+    # P1: the region-transaction envelopes persist full fidelity.
+    from steerable_agent_runtime import CompactionStart, CompactionSummary
+
+    start = CompactionStart(
+        seq=7,
+        compaction_id="c-1",
+        reason="context pressure: summarized middle",
+        action="compact",
+        turn_id="t1",
+        span_start_index=1,
+        span_end_index=9,
+        pre_tokens=12_345,
+    )
+    summary = CompactionSummary(
+        seq=8, compaction_id="c-1", summary_text="the shadowed span…", turn_id="t1"
+    )
+    boundary = CompactionBoundary(
+        seq=9, reason="compact", action="compact", turn_id="t1", compaction_id="c-1"
+    )
+    for entry in (start, summary, boundary):
+        assert entry_from_dict(entry_to_dict(entry)) == entry
+    assert entry_to_dict(start)["entry"] == "compaction_start"
+    assert entry_to_dict(summary)["entry"] == "compaction_summary"
+    assert entry_to_dict(boundary)["compaction_id"] == "c-1"
+
+
+def test_region_bracket_omits_absent_optionals() -> None:
+    # Fold-only passes and pre-P1 records carry no bracket: the keys stay
+    # out of the JSON so the additive-optional stance holds both ways.
+    from steerable_agent_runtime import CompactionStart
+
+    start = CompactionStart(seq=3, compaction_id="c-2", reason="manual compact")
+    data = entry_to_dict(start)
+    assert "span_start_index" not in data
+    assert "pre_tokens" not in data
+    assert entry_from_dict(data) == start
+    boundary = CompactionBoundary(seq=4, reason="compact")
+    assert "compaction_id" not in entry_to_dict(boundary)

@@ -62,13 +62,13 @@ describe('skill-loader / loadSkills RPC 客户端', () => {
     mocks.listSkills.mockResolvedValue([]);
     await loadSkills({
       skillsDir: '/custom/skills',
-      conditions: ['tool:cflog_replay_card'],
+      conditions: ['tool:csv_replay_report'],
       excludeSkillNames: ['plan-mode'],
       ignoreConditions: true,
     });
     expect(mocks.listSkills).toHaveBeenCalledWith({
       roots: ['/custom/skills'],
-      conditions: ['tool:cflog_replay_card'],
+      conditions: ['tool:csv_replay_report'],
       exclude: ['plan-mode'],
       ignoreConditions: true,
     });
@@ -106,7 +106,7 @@ describe('skill-loader / loadSkills RPC 客户端', () => {
   });
 
   it('返回 supervisor 解析好的模块', async () => {
-    const skill = makeSkill({ name: 'cflog', dirName: '90-cflog' });
+    const skill = makeSkill({ name: 'csv-tools', dirName: '90-csv-tools' });
     mocks.listSkills.mockResolvedValue([skill]);
     const modules = await loadSkills({ skillsDir: '/x' });
     expect(modules).toEqual([skill]);
@@ -123,7 +123,7 @@ describe('skill-loader / loadSkills RPC 客户端', () => {
   it('启动竞态：handle 未就绪但 boot 在飞时，等待就绪后正常加载', async () => {
     mocks.sidecarEnabled = false; // getSidecarSupervisor() → null（启动窗口期）
     mocks.whenResolves = 'supervisor';
-    const skill = makeSkill({ name: 'cflog', dirName: '90-cflog' });
+    const skill = makeSkill({ name: 'csv-tools', dirName: '90-csv-tools' });
     mocks.listSkills.mockResolvedValue([skill]);
     const modules = await loadSkills({ skillsDir: '/x' });
     expect(modules).toEqual([skill]);

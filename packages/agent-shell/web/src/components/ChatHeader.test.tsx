@@ -70,7 +70,7 @@ function taskButton() {
 
 describe('ChatHeader 后台任务角标', () => {
   it('没有任务时不显示计数', () => {
-    render(<ChatHeader chat={CHAT} agent={null} tasks={[]} />);
+    render(<ChatHeader chat={CHAT} tasks={[]} />);
 
     expect(taskButton().getAttribute('data-task-state')).toBeNull();
     expect(taskButton().textContent).toBe('');
@@ -80,7 +80,6 @@ describe('ChatHeader 后台任务角标', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         tasks={[
           makeTask({ id: 'a', status: 'running' }),
           makeTask({ id: 'b', status: 'running' }),
@@ -96,7 +95,7 @@ describe('ChatHeader 后台任务角标', () => {
 
   it('等依赖的任务也算在推进中', () => {
     render(
-      <ChatHeader chat={CHAT} agent={null} tasks={[makeTask({ id: 'a', status: 'blocked' })]} />,
+      <ChatHeader chat={CHAT} tasks={[makeTask({ id: 'a', status: 'blocked' })]} />,
     );
 
     expect(taskButton().getAttribute('data-task-state')).toBe('running');
@@ -107,7 +106,6 @@ describe('ChatHeader 后台任务角标', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         tasks={[
           makeTask({ id: 'a', status: 'completed', worktreeState: 'pending' }),
           makeTask({ id: 'b', status: 'failed', error: '炸了' }),
@@ -124,7 +122,6 @@ describe('ChatHeader 后台任务角标', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         tasks={[makeTask({ id: 'a', status: 'failed', error: '炸了' })]}
       />,
     );
@@ -134,7 +131,7 @@ describe('ChatHeader 后台任务角标', () => {
 
   it('全部跑完时显示总数，不再抢注意力', () => {
     render(
-      <ChatHeader chat={CHAT} agent={null} tasks={[makeTask({ id: 'a' }), makeTask({ id: 'b' })]} />,
+      <ChatHeader chat={CHAT} tasks={[makeTask({ id: 'a' }), makeTask({ id: 'b' })]} />,
     );
 
     expect(taskButton().getAttribute('data-task-state')).toBe('idle');
@@ -148,7 +145,6 @@ describe('ChatHeader 角标直达', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         onInspectTask={onInspectTask}
         tasks={[makeTask({ id: 'a', status: 'failed', task: '跑测试', error: '炸了' })]}
       />,
@@ -176,7 +172,7 @@ describe('ChatHeader 角标直达', () => {
       worktreeBranch: 'steerable/a',
     });
     installBridge([task]);
-    render(<ChatHeader chat={CHAT} agent={null} onInspectTask={vi.fn()} tasks={[task]} />);
+    render(<ChatHeader chat={CHAT} onInspectTask={vi.fn()} tasks={[task]} />);
 
     expect(taskButton().getAttribute('data-task-shortcut')).toBe('expand');
     expect(taskButton().getAttribute('title')).toContain('点击处理 worktree');
@@ -192,7 +188,6 @@ describe('ChatHeader 角标直达', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         onInspectTask={onInspectTask}
         tasks={[
           makeTask({ id: 'a', status: 'failed', error: '炸了' }),
@@ -211,7 +206,6 @@ describe('ChatHeader 角标直达', () => {
     render(
       <ChatHeader
         chat={CHAT}
-        agent={null}
         onInspectTask={onInspectTask}
         tasks={[
           makeTask({ id: 'a', status: 'failed', error: '炸了' }),

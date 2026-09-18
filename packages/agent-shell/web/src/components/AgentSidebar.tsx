@@ -422,12 +422,15 @@ export function AgentSidebar({
         items: typeof normalizedChats;
       }
     >();
+    // 置顶会话独立成组排在所有日期分组之前：pin-first 排序若只带进日期
+    // 分组，「5 天前置顶的会话」会排在「今天」的普通会话之后，置顶语义
+    // 就只剩组内有效——与用户点图钉时的预期不符。
     noProjectChats.forEach((chat) => {
-      const label = getDateGroupLabel(chat.sortDate);
+      const label = chat.isPinned ? '置顶' : getDateGroupLabel(chat.sortDate);
       if (!map.has(label)) {
         map.set(label, {
           label,
-          priority: getDateGroupPriority(label),
+          priority: chat.isPinned ? 0 : getDateGroupPriority(label),
           items: [],
         });
       }

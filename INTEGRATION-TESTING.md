@@ -15,7 +15,7 @@ downstream consumer repos:
 
 | You're changing… | Then in each consumer repo, run… |
 |---|---|
-| **Only downstream code** (framework untouched) | Nothing special. `pnpm install` / `uv sync --frozen` pulls 0.2.x from public registries. |
+| **Only downstream code** (framework untouched) | Nothing special. `pnpm install` / `uv sync --frozen` pulls 0.6.x from public registries. |
 | **Framework + at least one downstream** (active integration) | `./scripts/use_framework_local.sh` (deeppath, deeppath-agent) or `./scripts/use_framework_source.sh` (deeppath-api) |
 | **Validating a release candidate** before publishing | `./scripts/use_framework_wheels.sh` (deeppath-api) — TS side: bump to `file:` tarball manually |
 | **Reverting back to public registry** | `./scripts/use_framework_npm.sh` (deeppath, deeppath-agent) or `./scripts/use_framework_pypi.sh` (deeppath-api) |

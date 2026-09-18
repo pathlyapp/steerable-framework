@@ -453,8 +453,11 @@ async def test_micro_compaction_folds_on_interval_via_spec(
     spec_path = tmp_path / "micro.harness.json"
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
+    # Six rounds: the fold horizon protects the tail (keep_last_messages=6),
+    # so the middle only holds 2+ foldable results from round 5 on. Three
+    # rounds would leave everything inside the tail and fold nothing.
     def responder(_body: dict[str, Any], index: int) -> list[dict[str, Any]]:
-        if index < 3:
+        if index < 6:
             return sse_tool_call("echo", {"text": f"round {index}"}, call_id=f"e{index}")
         return sse_text("MICRO_E2E_OK")
 
@@ -473,7 +476,7 @@ async def test_micro_compaction_folds_on_interval_via_spec(
                 "baseUrl": mock.base_url,
                 "apiKey": "e2e-not-a-real-key",
             },
-            "instruction": "echo three times",
+            "instruction": "echo six times",
         },
         timeout=60.0,
     )

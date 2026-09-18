@@ -98,6 +98,8 @@ from steerable_agent_runtime import (
     entry_from_dict,
     estimate_cost_usd,
     export_trace,
+    resolve_compaction_policy,
+    is_large_window,
     family_tree,
     fork_record,
     lineage,
@@ -128,6 +130,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
     encode_frame,
 )
 
+from ._version import __version__ as SIDECAR_VERSION
 from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
 from .loop_limits import resolve_loop_limits
@@ -137,7 +140,6 @@ from .stream_chunks import RawChunkBridgeHooks
 logger = logging.getLogger("steerable_sidecar")
 
 PROTOCOL_VERSION = "0.1.0"
-SIDECAR_VERSION = "0.1.0"
 
 # asyncio's default 64 KiB StreamReader limit kills the read loop with
 # LimitOverrunError the moment a single JSON-RPC frame exceeds it — a large
@@ -2785,9 +2787,13 @@ def _assemble_default_harness(
             ],
         )
     model = params.get("model")
-    # Desktop 60k–131k windows keep 2 tool results. GLM 1M Harbor traces
-    # otherwise fold compile/train tails after two bash calls.
-    large = max_ctx >= 200_000
+    # P3: the knob set is resolved explicitly per model/window — no hidden
+    # if/else at the assembly site. (Desktop 60k–131k keeps 2 tool results;
+    # GLM 1M Harbor traces need 16 or compile/train tails fold away.)
+    policy = resolve_compaction_policy(model=model, max_context_tokens=max_ctx)
+    # Spill budgets branch on the same window size class as the compaction
+    # policy; the threshold lives in compaction_policy, not here.
+    large = is_large_window(max_ctx)
     return assemble_harness(
         spec,
         provider=summarizer,
@@ -2795,9 +2801,7 @@ def _assemble_default_harness(
             "pressure_compaction": {
                 "max_context_tokens": max_ctx,
                 "model": model,
-                "keep_last_tool_results": 16 if large else 2,
-                "keep_last_messages": 16 if large else 6,
-                "fold_excerpt_chars": 4_000 if large else 160,
+                **policy.as_params(),
             },
             "informed_backtrack": {"max_context_tokens": max_ctx, "model": model},
             # Desktop 16k inline. GLM 1M Harbor keeps full 100k bash clips

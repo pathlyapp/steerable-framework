@@ -20,8 +20,7 @@
  *   - Standard content tokens:    `data: {"content":"..."}\n\n`
  *   - User message echo:          `data: {"type":"user_message", "message":{...}}\n\n`
  *   - Tool execution summary:     `data: {"type":"executed_actions", "actions":[...]}\n\n`
- *   - Per-round completion:       `data: {"type":"completion", "status":"...", "reason":"..."}\n\n`
- *   - Budget exhausted:           `data: {"type":"budget_exhausted", "budget":{...}}\n\n`
+ *   - Budget exhausted:           `data: {"type":"budget_exhausted", "budget":{"kind":"..."}, "message":"..."}\n\n`
  *   - Persisted message id:       `data: {"type":"message_id", "messageId":"..."}\n\n`
  *   - Named error event:          `event: error\ndata: {"message":"..."}\n\n`
  *   - Stream terminator:          `data: [DONE]\n\n`

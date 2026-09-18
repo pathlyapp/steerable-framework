@@ -102,14 +102,14 @@ describe('mergeAgentCapabilities', () => {
     expect(
       mergeAgentCapabilities([
         makeAgent({
-          skillIds: ['90-cflog'],
+          skillIds: ['90-csv-tools'],
           allowExternalSkills: false,
           loadAllSkills: true,
           toolPolicy: { mode: 'denylist', tools: ['local_exec_shell'] },
         }),
       ]),
     ).toEqual({
-      pinnedSkills: ['90-cflog'],
+      pinnedSkills: ['90-csv-tools'],
       allowExternalSkills: false,
       loadAllSkills: true,
       toolPolicy: { mode: 'denylist', tools: ['local_exec_shell'] },
@@ -119,11 +119,11 @@ describe('mergeAgentCapabilities', () => {
   it('@提及多个智能体时取最宽松——叠加专家不该反而丢能力', () => {
     expect(
       mergeAgentCapabilities([
-        makeAgent({ skillIds: ['90-cflog'], allowExternalSkills: false }),
-        makeAgent({ skillIds: ['aa-geo'], allowExternalSkills: true, loadAllSkills: true }),
+        makeAgent({ skillIds: ['90-csv-tools'], allowExternalSkills: false }),
+        makeAgent({ skillIds: ['aa-extra'], allowExternalSkills: true, loadAllSkills: true }),
       ]),
     ).toEqual({
-      pinnedSkills: ['90-cflog', 'aa-geo'],
+      pinnedSkills: ['90-csv-tools', 'aa-extra'],
       allowExternalSkills: true,
       loadAllSkills: true,
       toolPolicy: { mode: 'all', tools: [] },
@@ -192,22 +192,22 @@ describe('isSkillPinned', () => {
 describe('resolveSkillExcludes', () => {
   const all = [
     makeSkill('00-base', 'base'),
-    makeSkill('90-cflog', 'cflog'),
-    makeSkill('aa-geo', 'geo'),
+    makeSkill('90-csv-tools', 'csv-tools'),
+    makeSkill('aa-extra', 'extra'),
   ];
 
   it('允许其他技能时只有模式级排除生效', () => {
-    const capability = mergeAgentCapabilities([makeAgent({ skillIds: ['90-cflog'] })]);
+    const capability = mergeAgentCapabilities([makeAgent({ skillIds: ['90-csv-tools'] })]);
     expect(resolveSkillExcludes(capability, all, ['plan-mode'])).toEqual(['plan-mode']);
   });
 
   it('关掉「允许其他技能」后未勾选的技能全部进排除清单', () => {
     const capability = mergeAgentCapabilities([
-      makeAgent({ skillIds: ['90-cflog'], allowExternalSkills: false }),
+      makeAgent({ skillIds: ['90-csv-tools'], allowExternalSkills: false }),
     ]);
     expect(resolveSkillExcludes(capability, all, ['plan-mode']).sort()).toEqual([
       '00-base',
-      'aa-geo',
+      'aa-extra',
       'plan-mode',
     ]);
   });

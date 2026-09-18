@@ -4,8 +4,8 @@ import { LuPanelLeftOpen } from 'react-icons/lu';
 import { AgentSidebar } from '@/components/AgentSidebar';
 import { TerminalPanel } from '@/components/TerminalPanel';
 import { TaskProcessPanel, type InspectedTask } from '@/components/chat/TaskProcessPanel';
-import { ApprovalModalHost } from '@/components/chat/ApprovalModal';
-import { AskUserModalHost } from '@/components/chat/AskUserModalHost';
+import { AskUserPromptProvider } from '@/components/chat/AskUserPromptProvider';
+import { ApprovalPromptProvider } from '@/components/chat/ApprovalPromptProvider';
 import { InsightsConsentBanner } from '@/components/settings/InsightsSettingsPanel';
 import { trackBehavior } from '@/lib/insights';
 import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
@@ -32,9 +32,8 @@ import {
  *     view stays mounted while the user switches chats. Toggled from the
  *     sidebar 终端 button or Cmd+T (`menu:open-terminal`, subscribed in
  *     AgentSidebar). Open state + width persist to localStorage.
- *   - Auto-reveal: when the agent runs a shell command through the
- *     visible PTY, main broadcasts `terminal:reveal` and this layout
- *     opens the panel (idempotent) so the user watches the agent type.
+ *     Agent shell commands still run in the shared PTY; the panel is not
+ *     auto-opened when that happens.
  *   - Closing the panel only unmounts the xterm VIEW; the PTY session is
  *     a main-process singleton and keeps running. Reopening replays the
  *     output buffer via `terminal:ensure`.
@@ -89,7 +88,7 @@ export type AgentOutletContext = UseChatsAndAgentsResult & {
   inspectTask: (task: InspectedTask) => void;
 };
 
-export function AgentLayout() {
+function AgentLayoutContent() {
   const data = useChatsAndAgents();
   const { chatId } = useParams<{ chatId?: string }>();
 
@@ -370,26 +369,6 @@ export function AgentLayout() {
     persistRightPanel('terminal');
   }, [persistRightPanel]);
 
-  // Codex 式 auto-reveal：agent 的命令进入可见 PTY 时，main 广播
-  // `terminal:reveal`。自动展开必须尊重右栏互斥规则：
-  //   - 栏位空闲（null）→ 打开终端；
-  //   - 终端已打开 → 切回终端视图（可能当前在看后台任务过程）；
-  //   - 其它槽位（如 PPT 预览）已激活 → 保持现状，不抢前台。
-  // 用户手动关掉后，下一条命令会再次拉开（符合"看 agent 打字"的意图）。
-  useEffect(() => {
-    const bridge = getElectronBridge();
-    if (!bridge?.terminal?.onReveal) return;
-    return bridge.terminal.onReveal(() => {
-      if (rightPanelRef.current !== null && rightPanelRef.current !== 'terminal') {
-        return;
-      }
-      setInspectedTask(null);
-      rightPanelRef.current = 'terminal';
-      setRightPanelState('terminal');
-      persistRightPanel('terminal');
-    });
-  }, [persistRightPanel]);
-
   // 包槽位的自动展开（如文档包：后端在本轮产出新设计稿时广播包事件）。
   // 互斥规则：仅当栏位空闲（null）时 reveal 才生效；
   // 已打开任一面板时，自动展开请求被忽略。订阅逻辑由包自己实现。
@@ -569,12 +548,16 @@ export function AgentLayout() {
           )}
         </div>
       </div>
-      {/* W4-1 审批弹窗挂在 layout 层而非 chat 视图：审批请求属于正在跑的
-          回合，回合不因用户切走页面而暂停——挂在 AgentChatView 下时，用户
-          导航到首页/别的对话会让模态永不渲染，请求只能等超时 fail-closed。 */}
-      {isElectron() && <ApprovalModalHost />}
-      {/* W8 提问卡片同理：挂在 layout 层，页面切换不丢待答问题。 */}
-      {isElectron() && <AskUserModalHost />}
     </div>
+  );
+}
+
+export function AgentLayout() {
+  return (
+    <ApprovalPromptProvider>
+      <AskUserPromptProvider>
+        <AgentLayoutContent />
+      </AskUserPromptProvider>
+    </ApprovalPromptProvider>
   );
 }

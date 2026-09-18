@@ -533,7 +533,7 @@ export class LocalStore {
         icon: 'Cpu',
         color: '#4f46e5',
         description: '默认本地助手，可调用 shell、文件与 MCP 工具。',
-        rolePrompt: '你是本地离线助手，回答时清晰、可执行。',
+        rolePrompt: '你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。',
         forbiddenPrompt: null,
         skillIds: JSON.stringify([]),
         toolPolicy: JSON.stringify({ mode: 'all', tools: [] }),
@@ -548,6 +548,14 @@ export class LocalStore {
       });
     } else {
       this.db.prepare(`UPDATE chat_agents SET name = ? WHERE id = ?`).run('电脑操作员', LOCAL_ASSISTANT_AGENT_ID);
+      const local = this.db
+        .prepare(`SELECT role_prompt FROM chat_agents WHERE id = ?`)
+        .get(LOCAL_ASSISTANT_AGENT_ID) as { role_prompt: string } | undefined;
+      if (local?.role_prompt === '你是本地离线助手，回答时清晰、可执行。') {
+        this.db
+          .prepare(`UPDATE chat_agents SET role_prompt = ? WHERE id = ?`)
+          .run('你是 **电脑操作员**，本地离线助手，回答时清晰、可执行。', LOCAL_ASSISTANT_AGENT_ID);
+      }
     }
 
     const hasAllRound = this.db
@@ -903,6 +911,36 @@ export class LocalStore {
     this.db.prepare(`UPDATE chat_sessions SET updated_at = ? WHERE id = ?`).run(now, chatId);
     const row = this.db.prepare(`SELECT * FROM chat_messages WHERE id = ?`).get(id) as Record<string, unknown>;
     return this.mapChatMessage(row);
+  }
+
+  /**
+   * 浅合并助手消息的 JSON metadata（例如回合结束后写入 suggestedReplies）。
+   * 不碰 updated_at：这类补丁不是用户可见的会话活动。
+   * metadata 损坏或非对象时从空对象开始合。
+   */
+  patchMessageMetadata(
+    chatId: string,
+    messageId: string,
+    patch: Record<string, unknown>,
+  ): ChatMessageRecord | null {
+    const msg = this.getMessage(chatId, messageId);
+    if (!msg) return null;
+    let current: Record<string, unknown> = {};
+    if (msg.messageMetadata) {
+      try {
+        const parsed = JSON.parse(msg.messageMetadata) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        current = {};
+      }
+    }
+    const next = JSON.stringify({ ...current, ...patch });
+    this.db
+      .prepare(`UPDATE chat_messages SET message_metadata = ? WHERE id = ? AND chat_id = ?`)
+      .run(next, messageId, chatId);
+    return this.getMessage(chatId, messageId);
   }
 
   /**

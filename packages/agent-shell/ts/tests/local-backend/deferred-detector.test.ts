@@ -3,8 +3,8 @@ import { detectDeferredExecution } from '../../src/local-backend/deferred-detect
 
 describe('detectDeferredExecution', () => {
   describe('真实回归 case', () => {
-    it('cflog "现在轮询结果。" 必须被识别为 deferred（句号结尾也算）', () => {
-      // 这是 t_mp9vqnv7_1 那次抓到的真实文本——模型 emit 完 cflog_replay_card
+    it('"现在轮询结果。" 必须被识别为 deferred（句号结尾也算）', () => {
+      // 真实运行抓到的文本——模型 emit 完工具调用后
       // 拿到 pending 状态后，写了这一段陈述就停笔。
       const text =
         '任务已排队，任务 ID 为 t_mp9vqnv7_1。现在轮询结果。';
@@ -30,12 +30,12 @@ describe('detectDeferredExecution', () => {
 
   describe('意图词 + 开放收尾（rule ①/②）', () => {
     it('意图词 + 省略号 → deferred', () => {
-      expect(detectDeferredExecution('我马上调用 cflog_get_task_result...')).toBe(true);
+      expect(detectDeferredExecution('我马上调用 csv_get_task_result...')).toBe(true);
     });
 
     it('意图词 + 冒号收尾 → deferred', () => {
       expect(
-        detectDeferredExecution('好的，接下来调用 cflog_replay_card 工具：'),
+        detectDeferredExecution('好的，接下来调用 csv_replay_report 工具：'),
       ).toBe(true);
     });
 
@@ -67,7 +67,7 @@ describe('detectDeferredExecution', () => {
       // "先 X，然后 Y" 这种过渡句出现在中间是合法的；只要**最后一句**
       // 是完成态结论就放行。
       const text =
-        '先调用了 cflog_test_connection，然后调用了 cflog_list_cards，已找到 2 个相关卡片。';
+        '先调用了 csv_test_connection，然后调用了 csv_list_rows，已找到 2 个相关文件。';
       expect(detectDeferredExecution(text)).toBe(false);
     });
   });

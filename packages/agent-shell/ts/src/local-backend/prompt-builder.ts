@@ -16,16 +16,17 @@ import { loadSkills, getSkillsDir, type SkillModule } from './skill-loader.js';
 import { isSkillPinned } from './agent-capability.js';
 import { getBrand } from '../brand.js';
 
-const FALLBACK_PROMPT = (() => {
+function fallbackPrompt(identityName?: string | null): string {
   const brand = getBrand();
+  const name = identityName?.trim() || brand.agentName;
   return [
     '# 角色',
     '',
-    `你是 ${brand.agentName}，${brand.tagline}，运行在用户自己的 Windows / macOS / Linux 机器上。`,
+    `你是 ${name}，${brand.tagline}，运行在用户自己的 Windows / macOS / Linux 机器上。`,
     '通过工具直接操作用户的本地环境（shell、文件、当前产品安装的场景工具等）。用中文回复。',
     '不要凭空编造任何工具返回值。',
   ].join('\n');
-})();
+}
 
 const DEFAULT_CHAR_BUDGET = 60_000;
 
@@ -66,6 +67,11 @@ export interface BuildPromptOptions {
    * 仍然优先——模式级排除（plan 模式的执行类技能）不因勾选而失效。
    */
   pinnedSkillNames?: Iterable<string>;
+  /**
+   * 本轮自称。有绑定智能体时用智能体显示名，渲染技能正文 `{agentName}`；
+   * 未传则回落产品品牌 `brand.agentName`。
+   */
+  identityName?: string | null;
 }
 
 export interface BuiltPrompt {
@@ -166,7 +172,7 @@ export async function buildSystemPrompt(options: BuildPromptOptions = {}): Promi
       prompt: assembleFinal({
         personaPreamble: options.personaPreamble ?? '',
         chatSystemPrompt: options.chatSystemPrompt ?? '',
-        body: FALLBACK_PROMPT,
+        body: fallbackPrompt(options.identityName),
         realityCheckSuffix: options.realityCheckSuffix ?? '',
       }),
       modules,
@@ -186,9 +192,10 @@ export async function buildSystemPrompt(options: BuildPromptOptions = {}): Promi
     modules.push(buildForcedMcpToolModule(options.forcedMcpTool));
   }
 
-  // 品牌占位符（{agentName} 等）由产品注入的品牌渲染——shell 技能正文
-  // 保持产品中立（3.2 中性化，见 skills/00-identity）。
-  const body = modules.map((m) => renderSkillContent(m, brandSkillVars())).join('\n\n');
+  // `{agentName}` 优先用本轮智能体显示名，没有绑定智能体时才用产品品牌。
+  const body = modules
+    .map((m) => renderSkillContent(m, brandSkillVars({ identityName: options.identityName })))
+    .join('\n\n');
 
   return {
     prompt: assembleFinal({
@@ -242,14 +249,13 @@ function buildForcedMcpToolModule(t: ForcedMcpTool): SkillModule {
 }
 
 /**
- * 品牌占位符变量：技能正文里的 `{agentName}` / `{brandDisplayName}` /
- * `{brandTagline}` 渲染为当前产品注入的品牌（brand.ts；未注入 = shell
- * 中性默认）。eager 系统提示词路径统一注入；包技能同理可用。
+ * 品牌/身份占位符：`{brandDisplayName}` / `{brandTagline}` 始终是产品品牌；
+ * `{agentName}` 有本轮智能体时用智能体显示名，否则回落 `brand.agentName`。
  */
-export function brandSkillVars(): Record<string, string> {
+export function brandSkillVars(options: { identityName?: string | null } = {}): Record<string, string> {
   const brand = getBrand();
   return {
-    agentName: brand.agentName,
+    agentName: options.identityName?.trim() || brand.agentName,
     brandDisplayName: brand.displayName,
     brandTagline: brand.tagline,
   };

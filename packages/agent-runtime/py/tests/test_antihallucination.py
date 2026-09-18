@@ -201,10 +201,10 @@ class TestDeferredExecution:
         assert detect_deferred_execution("Task queued. I'll now poll for the result.")
 
     def test_intent_plus_ellipsis(self) -> None:
-        assert detect_deferred_execution("我马上调用 cflog_get_task_result...")
+        assert detect_deferred_execution("我马上调用 csv_get_task_result...")
 
     def test_intent_plus_trailing_colon(self) -> None:
-        assert detect_deferred_execution("好的，接下来调用 cflog_replay_card 工具：")
+        assert detect_deferred_execution("好的，接下来调用 csv_replay_report 工具：")
 
     def test_now_x_plus_cn_ellipsis(self) -> None:
         assert detect_deferred_execution("现在搜索相关卡片……")
@@ -219,7 +219,7 @@ class TestDeferredExecution:
         assert not detect_deferred_execution("找到 2 个卡片，结果如下：A、B。")
 
     def test_transition_mid_paragraph_passes(self) -> None:
-        text = "先调用了 cflog_test_connection，然后调用了 cflog_list_cards，已找到 2 个相关卡片。"
+        text = "先调用了 csv_test_connection，然后调用了 csv_list_rows，已找到 2 个相关文件。"
         assert not detect_deferred_execution(text)
 
     # 澄清 / 条件式承诺收尾（2026-07-05 预算烧爆回归）

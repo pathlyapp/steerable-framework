@@ -18,9 +18,6 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 | 6 | [34139665379](https://github.com/pathlyapp/steerable-framework/actions/runs/34139665379) | 0.7978 (71/89) |
 
 **Cost is a co-equal metric, not a footnote.** The score of record is two numbers, not one: pass rate **80.7%** and cost per solved task **~$0.146** (mean 271.7M input tokens/run, ~$10.50/run across the same six `8e260de` runs; per-trial `result.json` telemetry, not the ±15% OpenRouter analytics panel). Every future catalog run updates both numbers together — a pass-rate move that hides a token move is half the information. For calibration on the same model and protocol: Pi solves at **$0.061**/task (138.9M tokens, 73.4%), Claude Code at **$0.162**/task (299.2M tokens, 83.1%); we spend 2.3× Pi's tokens to buy 7.3 points.
-| 4 | [34122470060](https://github.com/pathlyapp/steerable-framework/actions/runs/34122470060) | 0.7978 (71/89) |
-| 5 | [34122485974](https://github.com/pathlyapp/steerable-framework/actions/runs/34122485974) | 0.7978 (71/89) |
-| 6 | [34139665379](https://github.com/pathlyapp/steerable-framework/actions/runs/34139665379) | 0.7978 (71/89) |
 
 Superseded: four runs at `27d521a` posted mean 0.8006 (73/70/73/69; GHA [33497477757](https://github.com/pathlyapp/steerable-framework/actions/runs/33497477757), [33530806570](https://github.com/pathlyapp/steerable-framework/actions/runs/33530806570), [33530856872](https://github.com/pathlyapp/steerable-framework/actions/runs/33530856872), [33547943349](https://github.com/pathlyapp/steerable-framework/actions/runs/33547943349)). A fifth run on the pre-`8e260de` tree ([34019591179](https://github.com/pathlyapp/steerable-framework/actions/runs/34019591179)) is excluded: OpenRouter credit exhaustion mid-run (HTTP 402) truncated 45 of 89 trials, and its 36/89 measures the wallet, not the harness.
 
@@ -69,7 +66,7 @@ The Pi result is our own Harbor run rather than a vendor-submitted leaderboard s
 
 **Not the score of record.** This is a separate single-run catalog-89 matrix at cheaper effort. Do not mix these Means with the 80.7% ±2.9 @max six-run.
 
-Protocol: Harbor catalog-89, n=1, timeout / error / missing = fail, Mean = pass/89. GLM-5.3-Flash and DeepSeek-V4-Flash **0731** (`deepseek/deepseek-v4-flash-0731`) at `high`; Qwen3.8-27B at `medium` (Pi CLI maps medium to `--thinking high`). Pins: GLM `z-ai`, DeepSeek and Qwen `alibaba`. No Terminus. Seven cells at SHA `6f70bf5`; fill cells (Claude Code × DeepSeek, Pi × Qwen, Codex × three models) at SHA `19213d7`; DSH at SHA `c576a88` on `evals/strat-cheap-12-probe`.
+Protocol: Harbor catalog-89, n=1, timeout / error / missing = fail, Mean = pass/89. GLM-5.3-Flash and DeepSeek-V4-Flash **0731** (`deepseek/deepseek-v4-flash-0731`) at `high`; **Qwen3.8-27B** at `medium` (Pi CLI maps medium to `--thinking high`). Pins: GLM `z-ai`, DeepSeek and Qwen `alibaba`. No Terminus. Seven cells at SHA `6f70bf5`; fill cells (Claude Code × DeepSeek, Pi × Qwen, Codex × three models) at SHA `19213d7`; DSH at SHA `c576a88` on `evals/strat-cheap-12-probe`. The Qwen row is 3.8, not 3.6 — Steerable × Qwen3.6-27B is a separate n=1 below.
 
 | Model | Steerable | Pi | Claude Code | Codex | DSH |
 | ----- | --------- | -- | ----------- | ----- | --- |
@@ -88,6 +85,16 @@ OpenRouter list $ per solved task (pinned-host list prices, not the published GL
 | Qwen @medium | $4.12 | $2.87 | $1.68 | $2.60 | $3.36 |
 
 Claude Code × DeepSeek is pulled down by `reasoning_content` / thinking-flag failures. Codex GLM includes a known JSON protocol error on `regex-chess` and a GitHub 360-minute unfinished snapshot. Codex Qwen and Pi × Qwen likewise count unfinished 360-minute snapshots as fail. DSH Qwen is missing `winning-avg-corewars` (shard still running at the 360-minute job cap); that id is fail. DSH GLM/Qwen also include `NetworkConnectionError` pin-proxy misses, counted as fail.
+
+## Qwen3.6-27B · n=1 @medium
+
+**Not the score of record. Not mixed with the Qwen3.8-27B Flash matrix above, and not on the homepage.** Same Harbor catalog-89 protocol (n=1, timeout / error / missing = fail, Mean = pass/89). Model `openai/qwen/qwen3.6-27b` at `reasoning_effort=medium`, OpenRouter pin `alibaba`. SHA `735aa7a` (`d7b2d4a` develop plus the hand-owned `qwen3.6-27b` reasoning knob so strict clamp honors `medium` — models.dev listed empty `reasoning_levels`).
+
+| Agent | Mean | Input tokens | List $ / run | List $ / solved | GHA |
+| ----- | ---- | ------------ | ------------ | --------------- | --- |
+| Steerable | **54/89 = 60.7%** | 256.6 M | $129.67 | $2.40 | [35081136413](https://github.com/pathlyapp/steerable-framework/actions/runs/35081136413) |
+
+Same protocol as Qwen3.8-27B Steerable **61/89 = 68.5%** / $4.12: **−7.8 points**, cheaper list dollars (Alibaba Qwen3.6-27B $0.45 / $2.70 per 1M vs Qwen3.8 $0.425 / $2.55). Cache tokens were 0, so list $ is `input × $0.45 + output × $2.70` per 1M (5.3 M output). The GHA run concluded `failure` because shard 4/49 (`qemu-alpine-ssh`) exited 143 (agent SIGTERM); that trial is one of the 35 fails and the denominator stays 89. Shard 8 retried `mailman` (pass); the token total includes both attempts. Pass/fail ids: [`evals/notes/qwen36-27b-catalog.md`](https://github.com/pathlyapp/steerable-framework/blob/develop/evals/notes/qwen36-27b-catalog.md).
 
 ## Task stratification at `8e260de`
 

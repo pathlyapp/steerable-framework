@@ -26,10 +26,10 @@ const tool = (name: string): TurnBlock => ({
 
 const blocks: TurnBlock[] = [
   { type: 'reasoning', content: '先读配置' },
-  tool('cflog_get_config'),
+  tool('csv_get_config'),
   { type: 'reasoning', content: '再查天气' },
   tool('web_fetch'),
-  { type: 'text', content: '本地 CIFLog 配置' },
+  { type: 'text', content: '本地 CSV 配置' },
 ];
 
 function renderGroup(overrides: {
@@ -61,7 +61,7 @@ describe('TurnProcessGroup', () => {
     expect(toggle.textContent).toContain('2 次工具调用 · 已思考');
     expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
-    expect(screen.getByTestId('answer').textContent).toBe('本地 CIFLog 配置');
+    expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
   it('keeps the process expanded while streaming, then auto-collapses when the summary lands', () => {
@@ -89,7 +89,7 @@ describe('TurnProcessGroup', () => {
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByRole('button').textContent).toContain('2 次工具调用 · 已思考');
     expect(screen.queryByText('先读配置')).toBeNull();
-    expect(screen.getByTestId('answer').textContent).toBe('本地 CIFLog 配置');
+    expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
   it('expands the process again when the disclosure is clicked', () => {
@@ -103,10 +103,10 @@ describe('TurnProcessGroup', () => {
   it('does not fold a tools-only turn that never produced a summary', () => {
     renderGroup({
       isStreaming: false,
-      blocks: [tool('cflog_get_config')],
+      blocks: [tool('csv_get_config')],
     });
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByTestId('tools-flow').textContent).toBe('cflog_get_config');
+    expect(screen.getByTestId('tools-flow').textContent).toBe('csv_get_config');
     expect(screen.queryByTestId('answer')).toBeNull();
   });
 

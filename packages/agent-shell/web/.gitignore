@@ -1,0 +1,4 @@
+# 构建产物：vite.base 由 build:vite-base / prepublishOnly 从 vite.base.ts 编译，
+# 发布时打进 tarball，但不提交进 git（单一真源是 vite.base.ts）。
+vite.base.js
+vite.base.d.ts

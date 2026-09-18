@@ -225,11 +225,25 @@ export class ToolRouter {
       },
       {
         name: 'local_read_file',
-        description: 'Read a local text file',
+        description:
+          'Read a local text file. Large files can be paged with offset/limit (1-based line numbers); ' +
+          'a paged or clipped result is marked `partial: true`, and a full-file overwrite of a path ' +
+          'only partially read in this session is rejected — use local_edit_file for targeted changes, ' +
+          'or finish reading all segments before rewriting.',
         mode: 'read',
         inputSchema: {
           type: 'object',
-          properties: { path: { type: 'string' } },
+          properties: {
+            path: { type: 'string' },
+            offset: {
+              type: 'number',
+              description: 'Optional 1-based line number to start reading from (for paging large files).',
+            },
+            limit: {
+              type: 'number',
+              description: 'Optional maximum number of lines to return (for paging large files).',
+            },
+          },
           required: ['path'],
         },
       },

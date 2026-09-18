@@ -4,7 +4,7 @@ import { LOCAL_ASSISTANT_AGENT_ID, pickDefaultAgentId } from './brand';
 describe('pickDefaultAgentId', () => {
   const catalog = [
     { id: LOCAL_ASSISTANT_AGENT_ID },
-    { id: 'cflog-operator' },
+    { id: 'data-analyst' },
     { id: 'all-round-assistant' },
   ];
 

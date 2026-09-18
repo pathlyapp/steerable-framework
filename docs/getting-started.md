@@ -93,38 +93,46 @@ The `@tool` decorator auto-classifies via `decide_tool_mode("read_file")` →
 
 ## 4 · Hello, Sidecar (Electron / shell embedder)
 
-Spawn the sidecar from any language that can fork a subprocess and speak
-[JSON-RPC over stdio](spec/sidecar.md):
+The official TypeScript entry is `@steerable/agent-runtime` — it owns the
+sidecar process lifecycle (spawn, `lifecycle.ready` handshake, health ping,
+bounded auto-restart, graceful drain) and exposes the CoreLoop-level API over
+[JSON-RPC over stdio](spec/sidecar.md). It is source-consumed for now (not yet
+on npm):
+
+```bash
+pnpm add link:../steerable-framework/packages/agent-runtime/ts
+```
 
 ```ts
-import { SidecarSupervisor } from '@steerable/sidecar-bridge';
-// ↑ Or implement the 4 lines yourself: spawn `python -m steerable_sidecar`,
-//   wait for `__SIDECAR_READY__:{json}` on stderr, frame JSON-RPC on stdin/stdout.
+import { AgentRuntime } from '@steerable/agent-runtime';
 
-const supervisor = await SidecarSupervisor.start({
-  pythonExecutable: '/path/to/portable-python',
-  bootTimeoutMs: 30_000,
+const runtime = new AgentRuntime({
+  // sidecarPath: '/path/to/bundled/sidecar-binary'
+  // omit it to spawn `python -m steerable_sidecar` from the environment.
+});
+await runtime.start();                   // spawn + lifecycle.ready handshake
+
+const health = await runtime.ping();     // { status: 'ok', version: '0.6.4', … }
+
+const stream = await runtime.chatStream({
+  provider: 'openai_compat',
+  model: 'gpt-4o-mini',
+  apiKey: process.env.OPENAI_API_KEY!,
+  messages: [{ role: 'user', content: 'Say hi' }],
 });
 
-const health = await supervisor.ping();          // { status: 'ok', version: '0.1.0', protocolVersion: '0.1.0', … }
-const tools  = await supervisor.listTools();     // []  (no tools registered yet)
+for await (const event of stream.events) {
+  if (event.type === 'content') process.stdout.write(event.content ?? '');
+}
+await stream.done;                       // { status: 'completed', cancelled: false }
 
-await supervisor.streamChat(
-  {
-    provider: 'openai_compat',
-    model: 'gpt-4o-mini',
-    apiKey: process.env.OPENAI_API_KEY!,
-    messages: [{ role: 'user', content: 'Say hi' }],
-  },
-  {
-    onChunk: c => process.stdout.write(c.delta ?? ''),
-    onDone: () => console.log('\n[done]'),
-    onError: e => console.error(e),
-  },
-);
-
-await supervisor.shutdown();
+await runtime.close();
 ```
+
+Any language that can fork a subprocess can also speak the protocol directly:
+spawn `python -m steerable_sidecar`, wait for `__SIDECAR_READY__:{json}` on
+stderr, frame JSON-RPC on stdin/stdout — see the
+[sidecar-roundtrip example](https://github.com/pathlyapp/steerable-framework/tree/main/examples/sidecar-roundtrip).
 
 The `agent.chat.stream` notification → `stream.chunk` flow is the canonical way
 to pull LLM output back through the sidecar without going through HTTP.
@@ -165,21 +173,22 @@ shell. The hook reduces protocol `SSEEvent`s onto a `ChatMessage[]` regardless.
 
 ## 6 · Run the local dev preview
 
-The DeepPath repo (one of the framework's reference consumers) ships a
-**dev-only preview page** at `/dev/framework-preview` that mounts the
-framework's `ChatPanel` + `useChatStream` + `SSEStreamView` against the real
-backend. It's the recommended way to validate framework upgrades before
-swapping more of your production UI:
+The framework ships its own product-neutral host shell, so you can boot the
+full stack — Electron main or headless HTTP server, sidecar, chat UI — without
+any consumer repo:
 
 ```bash
-cd deeppath/apps/web
-pnpm dev
-open http://localhost:3000/dev/framework-preview
+pnpm install
+pnpm agent-shell:web       # headless server + neutral web app → http://127.0.0.1:4787
+pnpm agent-shell:client    # same build, launched as an Electron window
 ```
+
+For a UI-only preview, `pnpm shell:dev` boots the example web shell with a mock
+transport that replays the 14 rich chat cards — zero external services.
 
 ## What next?
 
 - Read the [Spec Overview](spec/overview.md) to understand the cross-language contract pipeline
-- Read the [Architecture](spec/architecture.md) page to understand the Tier 1–4 boundary
+- Read the [Architecture](spec/architecture.md) page to understand the Tier 1–5 boundary
 - Browse [`examples/`](https://github.com/pathlyapp/steerable-framework/tree/main/examples) for runnable starter projects
 - Migrating an existing DeepPath-internal agent? See the [migration guide](migration/deeppath.md)

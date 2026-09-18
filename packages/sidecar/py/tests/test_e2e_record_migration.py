@@ -1,4 +1,4 @@
-"""E2E: durable record v1→v2 migration through a real sidecar process.
+"""E2E: durable record v1→current migration through a real sidecar process.
 
 Layer choice: the migration runs inside the sidecar's storage read path
 (``resume.load_history_items`` → ``history.entry_from_dict`` →
@@ -15,7 +15,8 @@ What is proven through the real process:
 - the upgraded record drives a real resumed turn: the mock LLM receives the
   v1 transcript verbatim and the reply lands in the record;
 - the on-disk v1 entries are never rewritten (append-only: the record
-  legitimately mixes v1 and v2 rows; only new appends carry ``v: 2``);
+  legitimately mixes v1 and current rows; only new appends carry the
+  current ``RECORD_FORMAT_VERSION``);
 - a record written by a newer build (``v`` ahead of this build) is refused
   whole with an error naming the remedy and the record id, and the record
   is left byte-identical.
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from steerable_agent_runtime.history import RECORD_FORMAT_VERSION
 from steerable_agent_runtime.storage import SqliteStorage
 
 from e2e_harness import SidecarRPCError, sse_text
@@ -135,14 +137,15 @@ async def test_v1_record_loads_and_resumes_through_real_sidecar(
     ]
 
     # Append-only across versions: the v1 rows keep their original bytes
-    # (no ``v`` key); only the resumed turn's appends are stamped v2.
+    # (no ``v`` key); only the resumed turn's appends carry the current
+    # format version.
     await client.aclose()
     rows = _raw_rows(db_path, record_id)
     assert [seq for seq, _ in rows][:3] == [0, 1, 2]
     assert all("v" not in data for seq, data in rows if seq <= 2)
     new_rows = [data for seq, data in rows if seq >= 3]
     assert new_rows, "the resumed turn must append to the record"
-    assert all(data.get("v") == 2 for data in new_rows)
+    assert all(data.get("v") == RECORD_FORMAT_VERSION for data in new_rows)
     assert any(
         data.get("entry") == "item"
         and data.get("message", {}).get("role") == "assistant"

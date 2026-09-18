@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { getAppRootDir } from '../runtime.js';
+import { getAppRootDir, shellOpenPath } from '../runtime.js';
 import { llmService, getSidecarSupervisor, whenSidecarSupervisor } from '../llm/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,6 +47,7 @@ import { buildExecSandbox, parseExecPolicy } from '../sidecar/exec-sandbox.js';
 import { SidecarSupervisor } from '../sidecar/index.js';
 import { diagnoseLlmConnection } from './llm-diagnose.js';
 import {
+  brandSkillVars,
   buildSystemPrompt,
   buildForcedSkillMessage,
   conditionsFromTools,
@@ -56,6 +57,10 @@ import { parseUserMessageTriggers } from './message-triggers.js';
 import { findSkill, getUserSkillsDir, loadSkills, classifySkillOrigin, listSkillRoots } from './skill-loader.js';
 import { installSkillFromDirectory } from './skill-install.js';
 import { generateChatTitle } from './ai-title.js';
+import {
+  fallbackSuggestedReplies,
+  generateSuggestedReplies,
+} from './ai-suggestions.js';
 import { detectDeferredExecution } from './deferred-detector.js';
 import {
   formatHistoryForSummary,
@@ -81,6 +86,8 @@ import {
   collectPackWorldState,
 } from './pack-turn-hooks.js';
 import { matchPackBackendRoute } from './pack-backend-routes.js';
+import { collectTurnFiles } from './turn-files.js';
+import { resolveMentionedPaths } from './mentioned-paths.js';
 
 export interface LocalBackendRequest {
   method: string;
@@ -244,6 +251,11 @@ interface TurnAgents {
   orderedAgentIds: string[];
   /** 配了 rolePrompt 的智能体，按顺序拼装人设前言。 */
   personaAgents: ChatAgentRecord[];
+  /**
+   * 本轮自称：第一个解析到的智能体显示名。没有绑定/提及智能体时为空，
+   * `{agentName}` 回落产品品牌。
+   */
+  identityName: string | null;
   /** 合并后的技能/工具能力面（多智能体取最宽松）。 */
   capability: AgentCapability;
 }
@@ -1035,7 +1047,20 @@ export class LocalBackendRouter {
     }
 
     if (method === 'DELETE' && pathname.startsWith('/api/v2/chat-agents/skills/delete/')) {
-      const skillName = pathname.slice('/api/v2/chat-agents/skills/delete/'.length).trim();
+      // URL.pathname 保留百分号编码——目录名/frontmatter 名含空格等字符时
+      // 客户端发来的是 fancy%20skill，不 decode 永远匹配不上 fancy skill
+      // （projects/mcp 路由段都 decode，这里对齐）。非法编码按 400 处理。
+      let skillName: string;
+      try {
+        skillName = decodeURIComponent(
+          pathname.slice('/api/v2/chat-agents/skills/delete/'.length),
+        ).trim();
+      } catch {
+        return {
+          status: 400,
+          data: { error: 'skillName is not valid percent-encoding' },
+        };
+      }
       if (!skillName) {
         return {
           status: 400,
@@ -1798,6 +1823,39 @@ export class LocalBackendRouter {
       };
     }
 
+    // 回合产物列表的「点击打开」：用系统默认应用打开本地路径（与 agent 的
+    // local_open_path 工具同一宿主能力，这里给渲染层一个 HTTP 入口，CS/BS
+    // 两种模式都经 localBackend.request 到达）。
+    if (method === 'POST' && pathname === '/api/v2/local/open-path') {
+      const payload = this.toRecord(request.body);
+      const target = typeof payload.path === 'string' ? payload.path.trim() : '';
+      if (!target || !path.isAbsolute(target)) {
+        return { status: 400, data: { detail: 'absolute path is required' } };
+      }
+      const openError = await shellOpenPath(target);
+      if (openError) {
+        return { status: 200, data: { success: false, error: openError } };
+      }
+      return { status: 200, data: { success: true } };
+    }
+
+    // 正文里提到的路径能否点击打开：渲染层把行内代码里「像路径」的字面量
+    // 批量送来，这里落地成绝对路径并 stat 验证，只有真实存在的才回。相对
+    // 路径按对话绑定的项目根解析，无项目时按 home（同 exec 缺省 cwd 的回落）。
+    if (method === 'POST' && pathname === '/api/v2/local/resolve-paths') {
+      const payload = this.toRecord(request.body);
+      const candidates = Array.isArray(payload.candidates)
+        ? payload.candidates.filter((item): item is string => typeof item === 'string')
+        : [];
+      if (candidates.length === 0) {
+        return { status: 200, data: { resolved: [] } };
+      }
+      const chatId = typeof payload.chatId === 'string' ? payload.chatId : '';
+      const baseDir = (chatId ? this.resolveChatProject(chatId)?.folderPath : null) ?? os.homedir();
+      const resolved = await resolveMentionedPaths({ candidates, baseDir });
+      return { status: 200, data: { resolved } };
+    }
+
     // ─── 场景包路由（1.2：/api/v2/<包前缀>/* 由包经 pack-backend-routes
     // 注册表贡献；在宿主自带路由之后、fallback 之前匹配，包不能遮蔽宿主
     // 路由）。 ───
@@ -1857,6 +1915,7 @@ export class LocalBackendRouter {
    *   `accumulatedContent += parsedData.content` 一行追加渲染。
    * - 同步真实 messageId：`data: {"type":"message_id","messageId":"..."}`
    * - 工具执行结果（无需用户确认）：`data: {"type":"executed_actions","actions":[...]}`
+   * - 回合产物文件列表（仅非空时发，在 message_id 之前）：`data: {"type":"turn_files","files":[...]}`
    * - 错误：保留 `event:error` + `data: {"message":"..."}`（前端会忽略，但日志/未来 UI 用）
    * - 结束：标准 SSE `[DONE]` 串。
    */
@@ -1926,6 +1985,14 @@ export class LocalBackendRouter {
       // user+assistant pair onto history while the original (possibly bad)
       // assistant reply stayed in place — the model saw both and had no real
       // reason to answer differently.
+      //
+      // sidecar 门必须先于任何写操作：rerun 回合只能跑在 sidecar 上
+      // （handleCoreLoopTurn 无 sidecar 直接 503）。若先截断再 503，旧回复
+      // 已删、新回复不会产生、record 也不存在——非破坏性承诺破窗。
+      if (!getSidecarSupervisor()) {
+        emit(this.sse('error', { message: 'coreloop enabled but sidecar is not running' }));
+        return { status: 503 };
+      }
       const targetMessageId = regenerateMatch[2];
       // The user turn that prompted the target reply is whatever immediately
       // precedes it — re-derive its text so buildConversationMessages gets
@@ -2255,7 +2322,7 @@ export class LocalBackendRouter {
    *
    * @param chatId 当前对话 id。
    * @param payload 前端提交的流请求体。
-   * @returns 本轮的智能体顺序、人设智能体，以及合并后的能力面。
+   * @returns 本轮的智能体顺序、人设智能体、自称，以及合并后的能力面。
    */
   private resolveTurnAgents(
     chatId: string,
@@ -2283,8 +2350,10 @@ export class LocalBackendRouter {
     return {
       orderedAgentIds,
       // 能力面来自全部解析到的智能体，人设前言只用配了 rolePrompt 的那些——
-      // 自建智能体可以只勾技能、不写人设。
+      // 自建智能体可以只勾技能、不写人设。自称始终跟第一个解析到的智能体，
+      // 不要求写了人设——否则没 rolePrompt 的角色会回落成产品品牌。
       personaAgents: agents.filter((agent) => Boolean(agent.rolePrompt)),
+      identityName: agents[0]?.name.trim() || null,
       capability: mergeAgentCapabilities(agents),
     };
   }
@@ -2358,7 +2427,7 @@ export class LocalBackendRouter {
 
     const settings = llmService.getSettings();
 
-    const { personaAgents, capability } = turnAgents;
+    const { personaAgents, capability, identityName } = turnAgents;
     let personaPreamble = '';
     if (personaAgents.length === 1) {
       personaPreamble = `【当前角色】${personaAgents[0].name}\n${personaAgents[0].rolePrompt}`;
@@ -2436,6 +2505,7 @@ export class LocalBackendRouter {
         excludeSkillNames,
         pinnedSkillNames: capability.pinnedSkills,
         personaPreamble: effectivePersonaPreamble,
+        identityName,
         realityCheckSuffix: realityCheck,
         forcedMcpTool,
         ignoreConditions: capability.loadAllSkills,
@@ -2518,7 +2588,10 @@ export class LocalBackendRouter {
       const forcedSkill = await findSkill(forcedSkillName, { exclude: forcedSkillExcludes });
       if (forcedSkill) {
         // 场景包的正文占位符变量（如包技能正文里的工作区路径占位符）。
-        finalUserContent = `${buildForcedSkillMessage(forcedSkill, collectPackForcedSkillVars(chatId))}\n\n---\n\n${latestUserMessage}`;
+        finalUserContent = `${buildForcedSkillMessage(forcedSkill, {
+          ...brandSkillVars({ identityName }),
+          ...collectPackForcedSkillVars(chatId),
+        })}\n\n---\n\n${latestUserMessage}`;
       }
     }
 
@@ -3062,6 +3135,14 @@ export class LocalBackendRouter {
     const live = registerLiveStream(chatId, { executedActions, timeline, children });
     // 场景包的回合观察器（如识别包技能调用并广播产物更新）。
     const packObservers = beginPackTurnObservers({ chatId, broadcast: this.broadcast ?? undefined });
+    // 回合产物文件列表（回合收尾时收集）：扫描根与 exec 沙箱可写根同源
+    // （项目根 + 包工作区），与沙箱是否启用无关——「完整权限」下根列表只是
+    // 不再被强制，产物仍大概率落在这里；根之外的显式写由工具参数并集补。
+    const turnStartedAtMs = Date.now();
+    const turnFileRoots = [
+      ...collectPackExecWritableRoots(chatId),
+      ...(chatProject ? [chatProject.folderPath] : []),
+    ];
 
     try {
       const coreLoopOptions: StreamCoreLoopTurnOptions = {
@@ -3220,10 +3301,15 @@ export class LocalBackendRouter {
         onNotice: (kind, notice) => {
           if (kind === 'budget_exhausted') {
             // 预算维度（rounds/tokens）在 notice.budget；notice.kind 是信封
-            // 类型（loop 事件 data 里的 budget 键经 sidecar 透传）。
+            // 类型（loop 事件 data 里的 budget 键经 sidecar 透传）。message
+            // 是客户端读取的人类可读原因（chat-transport 的 reason 字段）。
             const budgetKind =
               typeof notice?.budget === 'string' ? notice.budget : undefined;
-            emit(this.sseData({ type: 'budget_exhausted', budget: { kind: budgetKind } }));
+            emit(this.sseData({
+              type: 'budget_exhausted',
+              budget: { kind: budgetKind },
+              message: budgetKind ? `budget_exhausted: ${budgetKind}` : 'budget_exhausted',
+            }));
           }
         },
         onChildEvent: (event) => {
@@ -3316,6 +3402,19 @@ export class LocalBackendRouter {
       localStore.getTurnActive(chatId)?.startedAt,
       Date.now(),
     );
+    // 回合产物文件列表（成功/失败/取消都收集——半截回合写出的文件同样是
+    // 产物）。收集失败只记日志，永远不该拖垮回合收尾。
+    let turnFiles: Awaited<ReturnType<typeof collectTurnFiles>> = [];
+    try {
+      turnFiles = await collectTurnFiles({
+        roots: turnFileRoots,
+        sinceMs: turnStartedAtMs,
+        actions: executedActions,
+        projectRoot: chatProject?.folderPath ?? null,
+      });
+    } catch (turnFilesErr) {
+      console.warn('[local-backend] collect turn files failed', turnFilesErr);
+    }
     const assistant = localStore.addMessage(
       chatId,
       'assistant',
@@ -3330,6 +3429,7 @@ export class LocalBackendRouter {
         traceId: outcomeTraceId,
         ...(durationMs != null ? { durationMs } : {}),
         ...(autoContinuations > 0 ? { autoContinuations } : {}),
+        ...(turnFiles.length > 0 ? { turnFiles } : {}),
       })
     );
     try {
@@ -3407,10 +3507,72 @@ export class LocalBackendRouter {
           });
       }
     }
+    // 产物文件列表赶在 message_id 之前发：前端按 message_id 把本轮队列
+    // 归档到落库消息上，顺序保证产物列表随同一批次归档。
+    if (turnFiles.length > 0) {
+      emit(this.sseData({ type: 'turn_files', files: turnFiles }));
+    }
     emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
     emit('data: [DONE]\n\n');
     this.runTitleGenInBackground(chatId, shouldGenerateTitle, firstUserMessageForTitle);
+    this.runSuggestedRepliesInBackground({
+      chatId,
+      messageId: assistant.id,
+      userText: firstUserMessageForTitle,
+      assistantText,
+      completionStatus,
+    });
     return { status: 200 };
+  }
+
+  /**
+   * 回合结束后生成 3 条下一轮用户输入建议。先同步推启发式兜底（芯片立刻出现），
+   * 再 fire-and-forget 跑 LLM，成功则替换。走 broadcast 而不是 SSE：`[DONE]`
+   * 之后渲染端已经不再监听这条流。
+   */
+  private runSuggestedRepliesInBackground(args: {
+    chatId: string;
+    messageId: string;
+    userText: string;
+    assistantText: string;
+    completionStatus: string;
+  }): void {
+    const { chatId, messageId, userText, assistantText, completionStatus } = args;
+    if (completionStatus === 'cancelled' || completionStatus === 'failed') return;
+    if (!assistantText.trim()) return;
+
+    const fallback = fallbackSuggestedReplies(userText, assistantText);
+    this.publishSuggestedReplies(chatId, messageId, fallback);
+
+    void (async () => {
+      try {
+        const result = await generateSuggestedReplies(userText, assistantText, {
+          perAttemptTimeoutMs: 60_000,
+        });
+        if (result.usedFallback) return;
+        const same =
+          result.suggestions.length === fallback.length &&
+          result.suggestions.every((item, i) => item === fallback[i]);
+        if (same) return;
+        this.publishSuggestedReplies(chatId, messageId, result.suggestions);
+      } catch (err) {
+        console.warn('[local-backend] suggested-replies failed', { chatId, err });
+      }
+    })();
+  }
+
+  private publishSuggestedReplies(
+    chatId: string,
+    messageId: string,
+    suggestions: string[],
+  ): void {
+    if (suggestions.length === 0) return;
+    try {
+      localStore.patchMessageMetadata(chatId, messageId, { suggestedReplies: suggestions });
+    } catch (err) {
+      console.warn('[local-backend] suggested-replies persist failed', { chatId, messageId, err });
+    }
+    this.broadcast?.('suggested-replies', { chatId, messageId, suggestions });
   }
 
   /**

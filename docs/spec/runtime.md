@@ -121,8 +121,12 @@ class LLMProvider(Protocol):
     ) -> AsyncIterator[LLMStreamChunk]: ...
 ```
 
-Reference implementations: `OpenAICompatProvider`, `AnthropicProvider`.
-Ollama is just `OpenAICompatProvider` pointed at a local base URL.
+Reference implementations: `OpenAICompatProvider` (OpenAI, Ollama, vLLM,
+DeepSeek, Groq, and the rest of the chat/completions ecosystem),
+`OpenAIResponsesProvider` (the item-based Responses wire),
+`AnthropicProvider`, and `GoogleGenAIProvider` (Gemini-native
+`generateContent`). Ollama is just `OpenAICompatProvider` pointed at a local
+base URL.
 
 ### `ToolRouter`
 
@@ -222,7 +226,16 @@ while overflow recovery keeps its own per-round bound and stays live, so
 the turn still fails loud instead of spinning. A healthy round or a
 successful compaction resets the count; `circuit_open` is observable on the
 hooks instance alongside the `compactions` / `micro_compactions` /
-`overflow_recoveries` counters.
+`overflow_recoveries` counters. A second **rapid-refill breaker** guards
+the churn case: a compaction that lands under threshold but refills within
+`rapid_refill_window_rounds` rounds (default 3) of the previous one counts
+as a refill, and `max_rapid_refills` consecutive refills (default 3) open
+the same circuit — the transcript is churning faster than compaction can
+help, so further rewrites would only kill the prompt cache. The tripping
+round appends a `CompactionThrashingReminder` (model- and UI-visible) with
+an actionable converge notice, and `circuit_reason` records which breaker
+tripped (`consecutive_failures` vs `rapid_refill`). Manual `compact_now`
+resets both counts.
 
 ### Prompt-cache shaping
 

@@ -205,7 +205,7 @@ export function InsightsSettingsPanel() {
           帮助改进产品（行为 / 对话 / 用户信息 分开确认）
         </h4>
         <p className="text-[11px] text-agent-muted-foreground">
-          即使用户不同意上传，记录也会留在本机。可导出 JSON 发给 contact@deeppath.cloud，或点一次「现在上传」。
+          即使用户不同意上传，记录也会留在本机。可导出 JSON 发给产品团队，或点一次「现在上传」。
         </p>
         {!isElectron() ? (
           <p className="text-[11px] text-agent-muted-foreground">需要在桌面客户端中打开</p>

@@ -579,8 +579,8 @@ describe('ChatInput composer meta row', () => {
     expect(screen.queryByTestId('slash-option-skill-data-grounding')).toBeNull();
     expect(screen.queryByTestId('slash-option-skill-local-exec')).toBeNull();
     expect(screen.queryByTestId('slash-option-skill-proactive-coding')).toBeNull();
-    // 场景包技能的隐藏（如 cflog 的 90-cflog）由包渲染层声明，
-    // 覆盖在 packages/pack-cflog/web/index.test.ts。
+    // 场景包技能的隐藏（如某场景包的 90-xxx 技能）由包渲染层声明，
+    // 覆盖在消费方产品的包测试中。
     expect(screen.getByTestId('slash-option-skill-web-search')).toBeTruthy();
     // 面向用户的内置工作流技能必须留在菜单里
     expect(screen.getByTestId('slash-option-skill-goal')).toBeTruthy();

@@ -51,6 +51,8 @@ KIND_ASSISTANT = "assistant"
 KIND_TOOL = "tool"
 KIND_STEER = "steer.inject"
 KIND_COMPACTION_BOUNDARY = "compaction.boundary"
+KIND_COMPACTION_START = "compaction.start"
+KIND_COMPACTION_SUMMARY = "compaction.summary"
 KIND_HISTORY_SEED = "history.seed"
 
 _KIND_BY_ROLE: dict[str, str] = {
@@ -112,6 +114,50 @@ class CompactionBoundary:
     replacement_count: int | None = None
     pre_tokens: int | None = None
     post_tokens: int | None = None
+    #: Set when the boundary closes a region transaction: the
+    #: ``CompactionStart`` / ``CompactionSummary`` entries immediately
+    #: before it carry the same id (P1 bracket parity with dsh's region
+    #: records). ``None`` for fold-only passes and pre-bracket records.
+    compaction_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionStart:
+    """Opens a region transaction: the rewriter has committed to shadowing
+    the span ``[span_start_index, span_end_index)`` of the pre-rewrite
+    projection. Recorded before the summary and the boundary so the record
+    shows the full bracket — crash-safe (an open bracket without a boundary
+    changed nothing), replayable (the span refs name exactly what was
+    shadowed), auditable (the paid summary is attributable to its span).
+
+    Projection-inert: only a ``CompactionBoundary`` changes the projection.
+    """
+
+    seq: int
+    compaction_id: str
+    reason: str
+    action: str = "compact"
+    span_start_index: int | None = None
+    span_end_index: int | None = None
+    pre_tokens: int | None = None
+    turn_id: str | None = None
+    kind: str = KIND_COMPACTION_START
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionSummary:
+    """The paid summary of a region transaction, recorded before the
+    boundary closes it. Kept as its own entry (not a field on the boundary)
+    so a crash between the summarizer call and the rewrite still leaves the
+    paid summary in the record, attributable by ``compaction_id``.
+    Projection-inert.
+    """
+
+    seq: int
+    compaction_id: str
+    summary_text: str
+    turn_id: str | None = None
+    kind: str = KIND_COMPACTION_SUMMARY
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,14 +191,19 @@ class HistorySeed:
     message_kinds: tuple[str, ...] = ()
 
 
-#: The record is a linear log of items, declared-rewrite markers, and seeds.
-RecordEntry = HistoryItem | CompactionBoundary | HistorySeed
+#: The record is a linear log of items, declared-rewrite markers, region
+#: transaction brackets, and seeds.
+RecordEntry = (
+    HistoryItem | CompactionBoundary | CompactionStart | CompactionSummary | HistorySeed
+)
 
 #: Durable record format version. v1 is the pre-versioning shape (no ``v``
-#: key); writers always stamp ``v: 2``. Reads upgrade older versions on
-#: load (``upgrade_entry_dict``). Bump only on a structural change to the
+#: key); v2 stamped the ``v`` key; v3 adds the ``compaction_start`` /
+#: ``compaction_summary`` envelopes (P1 region transaction). Writers always
+#: stamp the current version. Reads upgrade older versions on load
+#: (``upgrade_entry_dict``). Bump only on a structural change to the
 #: envelope shapes below — never for additive content kinds.
-RECORD_FORMAT_VERSION = 2
+RECORD_FORMAT_VERSION = 3
 
 
 class RecordFormatError(ValueError):
@@ -413,6 +464,53 @@ class ContextManager:
             turn_id=turn_id,
         )
 
+    def record_compaction_start(
+        self,
+        *,
+        compaction_id: str,
+        reason: str,
+        action: str = "compact",
+        span_start_index: int | None = None,
+        span_end_index: int | None = None,
+        pre_tokens: int | None = None,
+        turn_id: str | None = None,
+    ) -> CompactionStart:
+        """Open a region transaction bracket (P1). Projection-inert."""
+        entry = CompactionStart(
+            seq=self._next_seq,
+            compaction_id=compaction_id,
+            reason=reason,
+            action=action,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            pre_tokens=pre_tokens,
+            turn_id=turn_id or self.turn_id,
+        )
+        self._record.append(entry)
+        self._pending.append(entry)
+        self._next_seq += 1
+        return entry
+
+    def record_compaction_summary(
+        self,
+        *,
+        compaction_id: str,
+        summary_text: str,
+        turn_id: str | None = None,
+    ) -> CompactionSummary:
+        """Record the paid summary inside an open bracket (P1).
+        Projection-inert."""
+        entry = CompactionSummary(
+            seq=self._next_seq,
+            compaction_id=compaction_id,
+            summary_text=summary_text,
+            turn_id=turn_id or self.turn_id,
+        )
+        self._record.append(entry)
+        self._pending.append(entry)
+        self._next_seq += 1
+        return entry
+
     def replace_all(
         self,
         messages: Iterable[LLMMessage],
@@ -422,12 +520,14 @@ class ContextManager:
         turn_id: str | None = None,
         pre_tokens: int | None = None,
         post_tokens: int | None = None,
+        compaction_id: str | None = None,
     ) -> CompactionBoundary:
         """The single declared rewrite path — itself append-only.
 
         Appends a ``CompactionBoundary`` superseding every prior entry,
         then appends the replacement messages as new items. The projection
-        changes; the record only grows.
+        changes; the record only grows. ``compaction_id`` closes the region
+        transaction bracket opened by ``record_compaction_start``.
         """
         replacements = list(messages)
         boundary = CompactionBoundary(
@@ -438,6 +538,7 @@ class ContextManager:
             replacement_count=len(replacements),
             pre_tokens=pre_tokens,
             post_tokens=post_tokens,
+            compaction_id=compaction_id,
         )
         self._record.append(boundary)
         self._pending.append(boundary)
@@ -652,7 +753,37 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
             out["pre_tokens"] = entry.pre_tokens
         if entry.post_tokens is not None:
             out["post_tokens"] = entry.post_tokens
+        if entry.compaction_id is not None:
+            out["compaction_id"] = entry.compaction_id
         return out
+    if isinstance(entry, CompactionStart):
+        out = {
+            "entry": "compaction_start",
+            "v": RECORD_FORMAT_VERSION,
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "turn_id": entry.turn_id,
+            "compaction_id": entry.compaction_id,
+            "reason": entry.reason,
+            "action": entry.action,
+        }
+        if entry.span_start_index is not None:
+            out["span_start_index"] = entry.span_start_index
+        if entry.span_end_index is not None:
+            out["span_end_index"] = entry.span_end_index
+        if entry.pre_tokens is not None:
+            out["pre_tokens"] = entry.pre_tokens
+        return out
+    if isinstance(entry, CompactionSummary):
+        return {
+            "entry": "compaction_summary",
+            "v": RECORD_FORMAT_VERSION,
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "turn_id": entry.turn_id,
+            "compaction_id": entry.compaction_id,
+            "summary_text": entry.summary_text,
+        }
     if isinstance(entry, HistorySeed):
         return {
             "entry": "seed",
@@ -696,6 +827,12 @@ def upgrade_entry_dict(data: dict[str, Any], *, from_version: int) -> dict[str, 
         # so the upgrade is the stamp and nothing else.
         upgraded = {**upgraded, "v": 2}
         version = 2
+    if version == 2:
+        # v2 → v3 (P1): the bump added the region-transaction envelopes,
+        # not a shape change to existing ones — a v2 record carries no
+        # bracket entries, so the upgrade is the stamp and nothing else.
+        upgraded = {**upgraded, "v": 3}
+        version = 3
     if version != RECORD_FORMAT_VERSION:
         raise RecordFormatError(
             f"no upgrade path from record format v{from_version} to "
@@ -747,6 +884,7 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
         replacement_count = data.get("replacement_count")
         pre_tokens = data.get("pre_tokens")
         post_tokens = data.get("post_tokens")
+        compaction_id = data.get("compaction_id")
         return CompactionBoundary(
             seq=int(data["seq"]),
             reason=str(data.get("reason") or ""),
@@ -757,6 +895,32 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             ),
             pre_tokens=int(pre_tokens) if pre_tokens is not None else None,
             post_tokens=int(post_tokens) if post_tokens is not None else None,
+            compaction_id=str(compaction_id) if compaction_id is not None else None,
+        )
+    if envelope == "compaction_start":
+        span_start_index = data.get("span_start_index")
+        span_end_index = data.get("span_end_index")
+        pre_tokens = data.get("pre_tokens")
+        return CompactionStart(
+            seq=int(data["seq"]),
+            compaction_id=str(data["compaction_id"]),
+            reason=str(data.get("reason") or ""),
+            action=str(data.get("action") or "compact"),
+            turn_id=data.get("turn_id"),
+            span_start_index=(
+                int(span_start_index) if span_start_index is not None else None
+            ),
+            span_end_index=(
+                int(span_end_index) if span_end_index is not None else None
+            ),
+            pre_tokens=int(pre_tokens) if pre_tokens is not None else None,
+        )
+    if envelope == "compaction_summary":
+        return CompactionSummary(
+            seq=int(data["seq"]),
+            compaction_id=str(data["compaction_id"]),
+            summary_text=str(data.get("summary_text") or ""),
+            turn_id=data.get("turn_id"),
         )
     if envelope == "seed":
         return HistorySeed(

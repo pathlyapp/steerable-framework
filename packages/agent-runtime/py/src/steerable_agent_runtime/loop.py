@@ -75,7 +75,7 @@ from .history import (
     entry_from_dict,
     entry_to_dict,
 )
-from .hooks import CompletionDraft, LoopHooks, NoopHooks
+from .hooks import CompletionDraft, LoopHooks, NoopHooks, RewriteRequest
 from .llm import ImagePart, LLMMessage, LLMProvider, LLMUsage, TextPart
 from .pseudo import (
     PseudoStreamStripper,
@@ -1137,13 +1137,7 @@ class CoreLoop:
                 )
                 return
             if pre.rewrite is not None:
-                manager.replace_all(
-                    pre.rewrite.messages,
-                    reason=pre.rewrite.reason,
-                    action=pre.rewrite.action,
-                    pre_tokens=pre.rewrite.pre_tokens,
-                    post_tokens=pre.rewrite.post_tokens,
-                )
+                _apply_rewrite(manager, pre.rewrite)
                 yield LoopEvent(
                     "hook_action",
                     {
@@ -1190,13 +1184,7 @@ class CoreLoop:
                 if callable(compact_now):
                     manual = await compact_now(manager.projection, ctx)
                     if manual.rewrite is not None:
-                        manager.replace_all(
-                            manual.rewrite.messages,
-                            reason=manual.rewrite.reason,
-                            action=manual.rewrite.action,
-                            pre_tokens=manual.rewrite.pre_tokens,
-                            post_tokens=manual.rewrite.post_tokens,
-                        )
+                        _apply_rewrite(manager, manual.rewrite)
                         yield LoopEvent(
                             "hook_action",
                             {
@@ -1459,13 +1447,7 @@ class CoreLoop:
                         # retry (context-overflow recovery compacts first) —
                         # the declared replace_all path records the boundary.
                         if action.rewrite is not None:
-                            manager.replace_all(
-                                action.rewrite.messages,
-                                reason=action.rewrite.reason,
-                                action=action.rewrite.action,
-                                pre_tokens=action.rewrite.pre_tokens,
-                                post_tokens=action.rewrite.post_tokens,
-                            )
+                            _apply_rewrite(manager, action.rewrite)
                         if action.delay_ms > 0:
                             await asyncio.sleep(action.delay_ms / 1000)
                         continue
@@ -2457,6 +2439,40 @@ async def _safe_aclose(stream: Any) -> None:
     except Exception:
         # Idle-cut leaves an incomplete chunked HTTP body; wrap-up still runs.
         pass
+
+
+def _apply_rewrite(manager: ContextManager, rewrite: RewriteRequest) -> None:
+    """Apply one declared rewrite to the record.
+
+    When the rewrite carries a region-transaction bracket (a paid summary
+    backed it), the bracket's start/summary entries land BEFORE the
+    boundary so the durable record holds the complete, ordered triplet —
+    a crash between the summarizer call and the rewrite still leaves the
+    paid summary attributable by ``compaction_id`` (P1).
+    """
+    if rewrite.bracket is not None:
+        manager.record_compaction_start(
+            compaction_id=rewrite.bracket.compaction_id,
+            reason=rewrite.reason,
+            action=rewrite.action,
+            span_start_index=rewrite.bracket.span_start_index,
+            span_end_index=rewrite.bracket.span_end_index,
+            pre_tokens=rewrite.pre_tokens,
+        )
+        manager.record_compaction_summary(
+            compaction_id=rewrite.bracket.compaction_id,
+            summary_text=rewrite.bracket.summary_text,
+        )
+    manager.replace_all(
+        rewrite.messages,
+        reason=rewrite.reason,
+        action=rewrite.action,
+        pre_tokens=rewrite.pre_tokens,
+        post_tokens=rewrite.post_tokens,
+        compaction_id=(
+            rewrite.bracket.compaction_id if rewrite.bracket is not None else None
+        ),
+    )
 
 
 def _append_unexecuted_tool_results(

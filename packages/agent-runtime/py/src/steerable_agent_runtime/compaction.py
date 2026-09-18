@@ -73,15 +73,32 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
+from uuid import uuid4
 
-from .hooks import NoopHooks, PreStepAction, RetryAction, RewriteRequest, TranscriptAppend
-from .llm import LLMMessage, LLMProvider
+from .hooks import (
+    CompactionBracket,
+    NoopHooks,
+    PreStepAction,
+    RetryAction,
+    RewriteRequest,
+    TranscriptAppend,
+)
+from .llm import ImagePart, LLMMessage, LLMProvider, TextPart
 from .llm.errors import classify_error
 from .reminders import CompactionThrashingReminder
 from .tokens import estimate_tokens
 
 _SUMMARY_MARKER = "[context compacted: earlier conversation summarized]"
 _FOLDED_TOOL_MARKER = "[tool output folded to save context]"
+_OFFLOADED_IMAGE_MARKER = "[image offloaded to save context]"
+
+#: The compaction instruction, appended as the final user message of the
+#: summarizer's warm-prefix replay (dsh compaction-basic parity).
+_SUMMARY_INSTRUCTION = (
+    "Summarize the conversation so far for an agent that needs to continue "
+    "the task. Preserve: the user's goal, actions taken, tool outcomes, and "
+    "any decisions. Be terse."
+)
 
 #: How much of a folded tool result survives as a clue (file paths, error
 #: types, key numbers) so the model can still reason about what it saw.
@@ -104,6 +121,43 @@ def _fold_content(content: str | None, excerpt_chars: int = _FOLD_EXCERPT_CHARS)
     return _FOLDED_TOOL_MARKER
 
 
+def _image_pointer_text(media_type: str) -> str:
+    """The text pointer an offloaded image leaves in the projection (P2).
+    The original bytes stay in the durable record; the pointer keeps the
+    fact and type of the image visible to the model."""
+    return f"{_OFFLOADED_IMAGE_MARKER} ({media_type}); original preserved in the record"
+
+
+def _text_pointer_span(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """Image parts → text pointers, for the summarizer replay: a text
+    summarizer cannot consume image bytes, and the offload stage writes the
+    same pointers into the projection — so the transform converges the
+    replay with the next conversation request instead of diverging from
+    the cached prefix. Text-only spans pass through untouched (byte-
+    identity with the cached prefix is preserved)."""
+    if not any(
+        isinstance(p, ImagePart) for m in messages for p in m.content
+    ):
+        return messages
+    return [
+        LLMMessage(
+            role=m.role,
+            content=[
+                TextPart(text=_image_pointer_text(p.media_type))
+                if isinstance(p, ImagePart)
+                else p
+                for p in m.content
+            ],
+            name=m.name,
+            tool_call_id=m.tool_call_id,
+            tool_calls=m.tool_calls,
+            reasoning=m.reasoning,
+            reasoning_details=m.reasoning_details,
+        )
+        for m in messages
+    ]
+
+
 class CompactionHooks(NoopHooks):
     """``pre_step`` hook: compact the transcript when context pressure is high."""
 
@@ -121,6 +175,8 @@ class CompactionHooks(NoopHooks):
         micro_compact_interval_rounds: int = 0,
         rapid_refill_window_rounds: int = 3,
         max_rapid_refills: int = 3,
+        image_offload: bool = True,
+        keep_last_images: int = 1,
     ) -> None:
         if not 0 < threshold_ratio <= 1:
             raise ValueError("threshold_ratio must be in (0, 1]")
@@ -128,6 +184,8 @@ class CompactionHooks(NoopHooks):
             raise ValueError("recompact_margin_ratio must be >= 0")
         if not 0 <= micro_compact_interval_rounds:
             raise ValueError("micro_compact_interval_rounds must be >= 0")
+        if not 0 <= keep_last_images:
+            raise ValueError("keep_last_images must be >= 0")
         if not 1 <= rapid_refill_window_rounds:
             raise ValueError("rapid_refill_window_rounds must be >= 1")
         if not 1 <= max_rapid_refills:
@@ -144,6 +202,14 @@ class CompactionHooks(NoopHooks):
         #: — each fold invalidates the provider prompt-cache prefix, so the
         #: interval trades cache hits for a bounded transcript.
         self._micro_compact_interval = micro_compact_interval_rounds
+        #: Image offload (P2, dsh compaction-basic parity): old in-middle
+        #: images are replaced by text pointers in the projection — the
+        #: original bytes stay in the durable record. The newest
+        #: ``keep_last_images`` image-bearing messages inside the prune
+        #: horizon stay raw; the tail is never touched (same no-leak rule
+        #: as the fold stage).
+        self._image_offload = image_offload
+        self._keep_last_images = keep_last_images
         #: Model name used for calibrated token estimates (see tokens.py).
         self._model = model
         #: Hysteresis: after a compaction, pressure must grow by
@@ -224,7 +290,7 @@ class CompactionHooks(NoopHooks):
             and round_index > 0
             and round_index % self._micro_compact_interval == 0
         ):
-            pruned = self._fold_old_tool_results(transcript)
+            pruned = self._prune_with_horizon(transcript)
             if pruned is not transcript:
                 self.compactions += 1
                 self.micro_compactions += 1
@@ -261,7 +327,7 @@ class CompactionHooks(NoopHooks):
             return PreStepAction(kind="proceed")
 
         threshold = self._threshold * self._max_tokens
-        compacted = self._fold_old_tool_results(transcript)
+        compacted = self._prune_with_horizon(transcript)
         if self._estimate(compacted) < threshold:
             self.compactions += 1
             self._consecutive_failures = 0
@@ -281,7 +347,17 @@ class CompactionHooks(NoopHooks):
                 append_action="reminder" if notice is not None else None,
             )
 
-        compacted = await self._summarize_middle(compacted)
+        compacted, bracket = await self._summarize_middle(
+            compacted, replay_source=transcript
+        )
+        if self._estimate(compacted) >= threshold:
+            # Last resort: the tail itself is the pressure (the middle was
+            # empty or already minimal). Fold without the horizon — lossy
+            # beats dead — accepting that these markers will be replayed
+            # folded by a later summarization.
+            refolded = self._fold_old_tool_results(compacted)
+            if self._estimate(refolded) < self._estimate(compacted):
+                compacted = refolded
         post = self._estimate(compacted)
         self.compactions += 1
         notice: TranscriptAppend | None = None
@@ -306,6 +382,7 @@ class CompactionHooks(NoopHooks):
                 action="compact",
                 pre_tokens=pressure,
                 post_tokens=post,
+                bracket=bracket,
             ),
             appends=[notice] if notice is not None else None,
             append_action="reminder" if notice is not None else None,
@@ -348,8 +425,13 @@ class CompactionHooks(NoopHooks):
         A manual pass resets both breaker counts: the user has taken over.
         """
         pre = self._estimate(transcript)
-        compacted = self._fold_old_tool_results(transcript)
-        compacted = await self._summarize_middle(compacted)
+        compacted = self._prune_with_horizon(transcript)
+        compacted, bracket = await self._summarize_middle(
+            compacted, replay_source=transcript
+        )
+        # Manual passes are exhaustive by contract: finish with the
+        # horizon-free fold so a tail-only transcript still shrinks.
+        compacted = self._fold_old_tool_results(compacted)
         self._consecutive_failures = 0
         self._rapid_refills = 0
         self._last_compact_round = None
@@ -366,6 +448,7 @@ class CompactionHooks(NoopHooks):
                 action="compact",
                 pre_tokens=pre,
                 post_tokens=self._estimate(compacted),
+                bracket=bracket,
             ),
         )
 
@@ -396,8 +479,19 @@ class CompactionHooks(NoopHooks):
                 ),
             )
 
-        compacted = self._fold_old_tool_results(transcript)
-        compacted = await self._summarize_middle(compacted)
+        compacted = self._prune_with_horizon(transcript)
+        compacted, bracket = await self._summarize_middle(
+            compacted, replay_source=transcript
+        )
+        # Retrying an unshrunk payload must re-fail, so when the horizon
+        # fold + summarize made no progress at all (all the bulk sits in
+        # the protected tail), finish with the horizon-free fold. Lossy
+        # beats dead — but only as a last resort: a productive summarize
+        # pass leaves the tail raw.
+        if self._estimate(compacted) >= self._estimate(transcript):
+            refolded = self._fold_old_tool_results(compacted)
+            if self._estimate(refolded) < self._estimate(compacted):
+                compacted = refolded
         self.compactions += 1
         self.overflow_recoveries += 1
         self._last_compaction_pressure = self._pressure(transcript, ctx)
@@ -412,18 +506,42 @@ class CompactionHooks(NoopHooks):
                 action="overflow_recovery",
                 pre_tokens=self._estimate(transcript),
                 post_tokens=self._estimate(compacted),
+                bracket=bracket,
             ),
         )
 
     # ------------------------------------------------------------------
 
-    def _fold_old_tool_results(self, transcript: list[LLMMessage]) -> list[LLMMessage]:
+    @staticmethod
+    def _head_end(transcript: list[LLMMessage]) -> int:
+        """End of the always-kept head: every system message plus the first
+        user message (the goal)."""
+        head_end = 0
+        for i, m in enumerate(transcript):
+            if m.role == "system" or (m.role == "user" and not any(
+                x.role == "user" for x in transcript[:i]
+            )):
+                head_end = i + 1
+            else:
+                break
+        return head_end
+
+    def _fold_old_tool_results(
+        self, transcript: list[LLMMessage], horizon: int | None = None
+    ) -> list[LLMMessage]:
         # Already-folded results are excluded: re-folding them would stack
         # markers and invalidate the prompt-cache prefix for zero gain, and
         # ``keep_last_tool_results`` should count *readable* results.
+        #
+        # ``horizon`` bounds folding to indices below it — in practice the
+        # summarize stage's tail start. Folding inside the tail leaks fold
+        # markers into a region a later summarization replays verbatim,
+        # destroying content the tail exists to keep raw (the sim suite's
+        # needle-recall gap on the pre-fix architecture).
+        limit = len(transcript) if horizon is None else max(horizon, 0)
         tool_idx = [
             i
-            for i, m in enumerate(transcript)
+            for i, m in enumerate(transcript[:limit])
             if m.role == "tool" and not m.content_text.startswith(_FOLDED_TOOL_MARKER)
         ]
         fold_before = len(tool_idx) - self._keep_last_tools
@@ -438,6 +556,55 @@ class CompactionHooks(NoopHooks):
                 tool_call_id=m.tool_call_id,
             )
             if i in fold_set
+            else m
+            for i, m in enumerate(transcript)
+        ]
+
+    def _prune_with_horizon(self, transcript: list[LLMMessage]) -> list[LLMMessage]:
+        """The prune stage: fold old tool results + offload old images, both
+        confined to the region the summarize stage would shadow."""
+        head_end = self._head_end(transcript)
+        horizon = self._tail_start(transcript, head_end)
+        pruned = self._fold_old_tool_results(transcript, horizon=horizon)
+        if self._image_offload:
+            pruned = self._offload_old_images(pruned, horizon=horizon)
+        return pruned
+
+    def _offload_old_images(
+        self, transcript: list[LLMMessage], horizon: int | None = None
+    ) -> list[LLMMessage]:
+        """Replace old image parts with text pointers (P2). The original
+        bytes stay in the durable record — only the projection sheds them —
+        and the pointer tells the model where the image went. Within the
+        horizon the newest ``keep_last_images`` image-bearing messages stay
+        raw; idempotent because offloaded messages carry no image parts.
+        """
+        limit = len(transcript) if horizon is None else max(horizon, 0)
+        image_idx = [
+            i
+            for i, m in enumerate(transcript[:limit])
+            if any(isinstance(p, ImagePart) for p in m.content)
+        ]
+        offload_before = len(image_idx) - self._keep_last_images
+        if offload_before <= 0:
+            return transcript
+        offload_set = set(image_idx[:offload_before])
+        return [
+            LLMMessage(
+                role=m.role,
+                content=[
+                    TextPart(text=_image_pointer_text(p.media_type))
+                    if isinstance(p, ImagePart)
+                    else p
+                    for p in m.content
+                ],
+                name=m.name,
+                tool_call_id=m.tool_call_id,
+                tool_calls=m.tool_calls,
+                reasoning=m.reasoning,
+                reasoning_details=m.reasoning_details,
+            )
+            if i in offload_set
             else m
             for i, m in enumerate(transcript)
         ]
@@ -486,44 +653,65 @@ class CompactionHooks(NoopHooks):
             tail_start -= 1
         return tail_start
 
-    async def _summarize_middle(self, transcript: list[LLMMessage]) -> list[LLMMessage]:
+    async def _summarize_middle(
+        self,
+        transcript: list[LLMMessage],
+        replay_source: list[LLMMessage] | None = None,
+    ) -> tuple[list[LLMMessage], CompactionBracket | None]:
         # Keep every system message plus the first user message (the goal) as
         # the head; keep the recent tail untouched; summarize the middle.
-        head_end = 0
-        for i, m in enumerate(transcript):
-            if m.role == "system" or (m.role == "user" and not any(
-                x.role == "user" for x in transcript[:i]
-            )):
-                head_end = i + 1
-            else:
-                break
+        head_end = self._head_end(transcript)
         tail_start = self._tail_start(transcript, head_end)
         middle = transcript[head_end:tail_start]
         if not middle:
-            return transcript
+            return transcript, None
 
-        summary = await self._summarize(middle)
+        # ``replay_source`` is the pre-fold transcript the caller just folded
+        # from (folding preserves message count and order, so indices align).
+        # The summarizer replays THAT span — see _summarize for why.
+        replay = (
+            replay_source
+            if replay_source is not None and len(replay_source) == len(transcript)
+            else transcript
+        )
+        summary = await self._summarize(replay[:head_end], replay[head_end:tail_start])
         summary_msg = LLMMessage.text_of("user", f"{_SUMMARY_MARKER}\n{summary}")
-        return [*transcript[:head_end], summary_msg, *transcript[tail_start:]]
+        # Region transaction (P1): the span indices name the shadowed middle
+        # in the pre-rewrite projection (folding preserves indices, so they
+        # resolve against the record whether or not the fold stage ran).
+        bracket = CompactionBracket(
+            compaction_id=uuid4().hex,
+            span_start_index=head_end,
+            span_end_index=tail_start,
+            summary_text=summary,
+        )
+        return [*transcript[:head_end], summary_msg, *transcript[tail_start:]], bracket
 
-    async def _summarize(self, middle: list[LLMMessage]) -> str:
+    async def _summarize(self, head: list[LLMMessage], middle: list[LLMMessage]) -> str:
         if self._summarizer is not None:
+            # Warm-prefix replay (dsh compaction-basic parity): the request is
+            # the conversation's own head + the shadowed span VERBATIM + the
+            # instruction as the final user message. Between compactions the
+            # transcript is append-only, so this is a byte-prefix of the last
+            # conversation request — the provider's prompt cache stays warm
+            # and only the instruction + summary output miss. The span is
+            # replayed unfolded (the caller passes the pre-fold transcript):
+            # folding happened moments ago and would break byte-identity with
+            # the cached prefix at the first folded message. Messages keep
+            # their real roles/parts — no ``[:2000]`` flattening, which used
+            # to silently discard exactly the content being summarized.
+            # Image parts become text pointers first: a text summarizer
+            # cannot consume image bytes (P2).
             prompt = [
-                LLMMessage.text_of(
-                    "system",
-                    "Summarize this conversation segment for an agent that "
-                    "needs to continue the task. Preserve: the user's goal, "
-                    "actions taken, tool outcomes, and any decisions. Be terse.",
-                ),
-                LLMMessage.text_of(
-                    "user",
-                    "\n".join(f"[{m.role}] {m.content_text[:2000]}" for m in middle),
-                ),
+                *_text_pointer_span(head),
+                *_text_pointer_span(middle),
+                LLMMessage.text_of("user", _SUMMARY_INSTRUCTION),
             ]
-            # One-off summarization of a transcript that is about to be
-            # discarded: never write it into the prompt cache (pi's
-            # retention=none rule). The kwarg is consumed by
-            # CacheControlProvider; providers without it ignore the key.
+            # The replayed prefix is already warm from the conversation's own
+            # requests; retention=none only skips writing the discard-bound
+            # instruction suffix as a new cache entry (pi's rule). The kwarg
+            # is consumed by CacheControlProvider; providers without it
+            # ignore the key.
             try:
                 message, _usage = await self._summarizer.complete(
                     prompt, cache_retention="none"
@@ -532,15 +720,17 @@ class CompactionHooks(NoopHooks):
                 # Transport/protocol errors here run outside the stream
                 # retry loop. Falling back keeps wrap-up running so Harbor
                 # still scores files instead of a NonZeroAgentExit.
-                return self._excerpt_summary(middle)
+                return self._excerpt_summary(_text_pointer_span(middle))
             text = (message.content_text or "").strip()
             if text:
                 return text
-        return self._excerpt_summary(middle)
+        return self._excerpt_summary(_text_pointer_span(middle))
 
     def _excerpt_summary(self, middle: list[LLMMessage]) -> str:
         # No summarizer, empty model reply, or a failed complete(): keep
-        # role + a short excerpt per message so the thread of actions survives.
+        # role + a short excerpt per message so the thread of actions
+        # survives. Image parts arrive as text pointers (the caller maps
+        # them) so an image-only message still leaves a line.
         lines = []
         for m in middle:
             excerpt = m.content_text.replace("\n", " ")[:200]

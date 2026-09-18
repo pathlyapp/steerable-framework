@@ -20,7 +20,7 @@
  * 槽位集合由真实场景包（应用仓库内）的 diff 并集论证。
  */
 
-/** 场景 id。开放字符串（不再是 'generic' | 'ciflog' 二值联合）。 */
+/** 场景 id。开放字符串（不再是二值联合）。 */
 export type ScenarioId = string;
 
 /**

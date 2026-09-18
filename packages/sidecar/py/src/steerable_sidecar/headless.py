@@ -25,11 +25,14 @@ from steerable_agent_runtime import (
     RouterToolExecutor,
     mcp_invoker,
     register_mcp_catalog,
+    resolve_compaction_policy,
+    is_large_window,
 )
 from steerable_agent_runtime.hooks import ChainHooks
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.storage import InMemoryStorage
 
+from ._version import __version__
 from .acp_adapter import _env_provider_params
 from .delivery import DeliveryGatedExecutor, DeliveryHooks
 from .loop_limits import resolve_loop_limits
@@ -40,8 +43,6 @@ from .sidecar import (
     default_llm_provider_factory,
 )
 from .workspace_tools import workspace_tools_for_cwd
-
-__version__ = "0.2.5"
 
 #: Headless system prompt.
 #:
@@ -355,18 +356,22 @@ def _assemble_harness(
         provider=params.get("provider"),
         base_url=params.get("baseUrl"),
     )
-    # Same large-window tuning as the default chain (sidecar chat path):
-    # GLM 1M Harbor traces fold compile/train tails at the small defaults.
-    large = max_ctx >= 200_000
+    # P3: the knob set is resolved explicitly per model/window — no hidden
+    # if/else at the assembly site. (Same policy as the sidecar chat path:
+    # GLM 1M Harbor traces fold compile/train tails at the small defaults.)
+    policy = resolve_compaction_policy(
+        model=params.get("model"), max_context_tokens=max_ctx
+    )
+    # Spill budgets branch on the same window size class as the compaction
+    # policy; the threshold lives in compaction_policy, not here.
+    large = is_large_window(max_ctx)
     assembled = assemble_harness(
         spec,
         provider=provider,
         runtime_params={
             "pressure_compaction": {
                 "max_context_tokens": max_ctx,
-                "keep_last_tool_results": 16 if large else 2,
-                "keep_last_messages": 16 if large else 6,
-                "fold_excerpt_chars": 4_000 if large else 160,
+                **policy.as_params(),
             },
             "informed_backtrack": {"max_context_tokens": max_ctx},
             "spill": {

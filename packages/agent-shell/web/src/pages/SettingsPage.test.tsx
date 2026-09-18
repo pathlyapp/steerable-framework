@@ -93,6 +93,7 @@ describe('SettingsPage header save', () => {
       'settings-section-llm',
       'settings-section-web-search',
       'settings-section-usage',
+      'settings-section-diagnose',
       'settings-section-security',
       'settings-section-insights',
       'settings-section-telemetry',

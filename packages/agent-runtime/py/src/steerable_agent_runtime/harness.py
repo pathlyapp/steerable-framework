@@ -202,6 +202,8 @@ class PressureCompaction:
     keep_last_messages: int = 6
     keep_last_tool_results: int = 2
     fold_excerpt_chars: int | None = None
+    keep_last_images: int = 1
+    image_offload: bool = True
     model: str | None = None
     # Proactive micro-compaction (CC time-based microcompact parity): fold old
     # tool results every N rounds regardless of pressure. 0 (default) is off —
@@ -233,6 +235,8 @@ class PressureCompaction:
                 threshold_ratio=self.threshold_ratio,
                 keep_last_messages=self.keep_last_messages,
                 keep_last_tool_results=self.keep_last_tool_results,
+                keep_last_images=self.keep_last_images,
+                image_offload=self.image_offload,
                 summarizer=provider,
                 model=self.model,
                 micro_compact_interval_rounds=self.micro_compact_interval_rounds,

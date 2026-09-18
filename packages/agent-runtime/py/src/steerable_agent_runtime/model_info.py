@@ -94,6 +94,18 @@ MODEL_INFOS: tuple[ModelInfo, ...] = (
     ModelInfo("glm", 1_048_576, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "high", "max"})),
     ModelInfo("gpt-oss", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset({"low", "medium", "high"})),
     ModelInfo("llama3", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
+    # OpenRouter serves qwen/qwen3.6-27b with a reasoning parameter (verified
+    # against GET /models supported_parameters). models.dev left that
+    # deployment's reasoning_levels empty, so the exact OpenRouter catalog
+    # hit would refuse STEERABLE_REASONING_EFFORT=medium under strict clamp.
+    # Longer than the qwen3 family prefix so the leaf wins.
+    ModelInfo(
+        "qwen3.6-27b",
+        262_144,
+        frozenset({"text", "image", "video"}),
+        TOOL_FORMAT_OPENAI,
+        frozenset({"low", "medium", "high"}),
+    ),
     ModelInfo("qwen3", 129_024, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     ModelInfo("qwen2.5", 131_072, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),
     ModelInfo("kimi-k2", 262_144, frozenset({"text"}), TOOL_FORMAT_OPENAI, frozenset()),

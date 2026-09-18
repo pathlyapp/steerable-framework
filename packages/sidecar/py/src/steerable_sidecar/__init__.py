@@ -1,5 +1,6 @@
 """steerable-sidecar — portable runtime entrypoint."""
 
+from ._version import __version__
 from .landlock import LandlockExecBackend, landlock_available
 from .sandbox import (
     BwrapExecBackend,
@@ -25,4 +26,3 @@ __all__ = [
     "seatbelt_available",
     "select_exec_backend",
 ]
-__version__ = "0.1.0"

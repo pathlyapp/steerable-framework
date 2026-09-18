@@ -22,7 +22,7 @@ sequenceDiagram
 
     P->>S: spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
     Note over S: bootstrap …
-    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.1.0","protocolVersion":"0.1.0", …}
+    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.6.4","protocolVersion":"0.1.0", …}
     S-->>P: stdout (no id):<br/>{"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
     Note over P: Now safe to send JSON-RPC frames.
 ```
@@ -47,7 +47,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 ### Successful response
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.1.0","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.6.4","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
 ```
 
 ### Error response
@@ -62,7 +62,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 {"jsonrpc":"2.0","method":"stream.chunk","params":{"streamId":"s_42","delta":"Hello"}}
 ```
 
-## Method catalog (v0.1.0)
+## Method catalog (v0.6.x)
 
 | Method                  | Direction | Result                                 |
 | ----------------------- | --------- | -------------------------------------- |
@@ -88,7 +88,18 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `trace.export`          | request   | `{status, traceId, privacyMode}` (OTLP/HTTP push) |
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
-| `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` |
+| `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` (live `GET /models` discovery against the configured gateway) |
+| `agent.session.messages`| request   | projected transcript of a history record |
+| `catalog.describe`      | request   | `{providers}` (bundled serving-provider catalog: default URLs, wire kinds, chat-capable model ids) |
+| `presets.describe`      | request   | `{presets}` (per-vendor sampling-optima table for host settings UIs) |
+| `presets.resolve`       | request   | `{preset}` the auto-matched preset for a `(baseUrl, model)` pair, or `null` |
+| `compat.describe`       | request   | `{flags}` (provider compat-flag wire vocabulary) |
+| `sandbox.describe`      | request   | per-exec sandbox enforcement the host can reach, probed with the turn's `network` / `allowedHosts` |
+| `harness.describe`      | request   | harness vocabulary + the active default selection |
+| `plugin.list`           | request   | `{plugins}` (registered plugins with their tools and state) |
+| `plugin.enable`         | request   | `{plugin}`                               |
+| `plugin.disable`        | request   | `{plugin}`                               |
+| `plugin.reload`         | request   | `{plugin}` (re-executes the module in place, swapping its tool registrations without a restart) |
 
 `config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → selected profile → `STEERABLE_*` env → per-request RPC override → managed file — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud. The defaults dict doubles as the schema: a value whose type doesn't match the declared default fails the load naming the key, the layer, and the expected type (env strings coerce). The user file may carry named `profiles` blocks, selected by `STEERABLE_PROFILE`; an unknown profile name fails loud listing the available ones. `STEERABLE_MANAGED_CONFIG_PATH` points at an enterprise-managed file applied after every other layer, so its pins (e.g. a restrictive sandbox posture) cannot be loosened from below — CC managed-settings parity.
 
@@ -365,7 +376,7 @@ corruption (a lineage cycle).
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.6.4",
   "protocolVersion": "0.1.0",
   "uptimeMs": 12345,
   "pid": 42,

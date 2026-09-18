@@ -11,7 +11,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 [![CI](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/steerable-framework/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-success)](https://steerableframework.com/)
 [![Storybook](https://img.shields.io/badge/storybook-live-ff4785)](https://steerableframework.com/storybook/)
-[![Live demo](https://img.shields.io/badge/live%20demo-web--shell-22c55e)](https://steerableframework.com/demo/)
+[![Live demo](https://img.shields.io/badge/live%20demo-agent--shell-22c55e)](https://steerableframework.com/demo/)
 
 [![npm: agent-protocol](https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-protocol)
 [![npm: agent-ui](https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837)](https://www.npmjs.com/package/@steerable/agent-ui)
@@ -27,8 +27,8 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 > **80.7% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, six-run mean. [Numbers and protocol](#terminal-bench-21).
 
 > **Want to see it running before reading anything?**
-> `git clone … && pnpm install && pnpm shell:dev` (or open the [hosted live demo](https://steerableframework.com/demo/)).
-> Zero external services required — the default mock transport replays the 14 rich chat cards out of the box.
+> Open the [hosted live demo](https://steerableframework.com/demo/) — the real Tier 5 agent shell UI running in your browser on mock data, no backend or API key required.
+> Locally: `git clone … && pnpm install && pnpm agent-shell:web` boots the same shell against your own model.
 
 </div>
 
@@ -60,10 +60,10 @@ Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, q
 |---|---|
 | **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. See the [roadmap](https://steerableframework.com/roadmap/#the-differentiator-the-model-quality-layer). |
 | **"What shape is this SSE stream?"** Every team invents their own envelope; FE and BE drift. | One JSON Schema → generated **TypeScript types + Pydantic models**, in lockstep release. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` all standardised; conformance test suite verifies the two language SDKs stay byte-compatible. |
-| **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 105 unit + golden tests. |
-| **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface, adapters for **Ollama / OpenAI-compatible / Anthropic**, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
-| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio. Bundle with Electron / Tauri / Wails / your custom shell — **macOS notarised, Windows code-signed**, ~300 MB stripped target. |
-| **Chat UI that doesn't look like 2003** | `@steerable/agent-ui`: 5 headless React components + 3 hooks + Tailwind preset. Every component has Storybook + a11y (axe) + visual-regression baselines locked in CI. |
+| **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 49 unit + golden tests. |
+| **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — with a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
+| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio (34 methods). Bundle with Electron / Tauri / Wails / your custom shell — **macOS notarised, Windows code-signed**, ~95 MB stripped on darwin-arm64 under a CI size budget. |
+| **Chat UI that doesn't look like 2003** | `@steerable/agent-ui`: 7 headless React components + 14 rich cards + 3 hooks + Tailwind preset. Every component has Storybook + a11y (axe) + visual-regression baselines locked in CI. |
 
 Every layer is independently published. Use just the protocol types, just the UI, just the sidecar — there is no monolith to swallow.
 
@@ -71,30 +71,17 @@ Every layer is independently published. Use just the protocol types, just the UI
 
 ## Terminal-Bench 2.1
 
-A Flash-cost model on Steerable lands in the same band as frontier models on the vendor CLIs. Harbor hidden tests, 89-task catalog, six independent full runs: mean **80.7%** (SD 2.9 points). We report the mean, not the 86.5 high-water mark. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
+A Flash-cost model on Steerable. Harbor hidden tests, 89-task catalog, six independent full runs: mean **80.7%** (SD 2.9 points). We report the mean, not the 86.5 high-water mark. Cost per solved task **~$0.146** (~$10.50 per catalog run). Protocol and run list: [`docs/evals.md`](./docs/evals.md).
 
-**Same model · GLM-5.3-Flash** — identical cheap model, different harness:
+**Same model · GLM-5.3-Flash** — identical cheap model, same Harbor catalog-89 protocol:
 
-| Agent | TB 2.1 | Notes |
-| ----- | ------ | ----- |
-| **Steerable** | **80.7%** | this repo, 6× catalog-89 · **+7.3 vs Pi**, in the frontier band |
-| Pi | 73% | this repo, 3 catalog runs · same model, default harness |
+| Agent | TB 2.1 | Cost / solved | Notes |
+| ----- | ------ | ------------- | ----- |
+| **Steerable** | **80.7%** | **$0.146** | this repo, 6× catalog-89 · **+7.3 vs Pi** |
+| Claude Code | 83.1% | $0.162 | this repo, 1 catalog run |
+| Pi | 73.4% | $0.061 | this repo, 3 catalog runs |
 
-Same Flash model on Claude Code is 84.3% under [Z.AI](https://z.ai/blog/glm-5.3-flash)'s 6-hour protocol (Claude Code 2.1.207) — a different protocol, not this comparison.
-
-**Frontier CLIs · public board** — different models and harnesses; shows the band 80.7% sits in:
-
-| Agent | Model | TB 2.1 | Source |
-| ----- | ----- | ------ | ------ |
-| Claude Code | Claude 5 Fable | 83.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Codex CLI | GPT-5.5 | 83.1% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Terminus 2 | Claude 5 Fable | 80.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | Claude Opus 4.8 | 78.9% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Codex CLI | GPT-5.6 Terra | 78.4% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Claude Code | Claude Sonnet 5 | 74.6% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-| Gemini CLI | Gemini 3.1 Pro | 65.8% | [Snorkel / tbench.ai](https://snorkel.ai/leaderboard/terminal-bench-2-1/) |
-
-Claude Code's 84.3% on the same Flash model uses Z.AI's 6-hour protocol; we wrap at 170 minutes. Native frontier CLIs sit 79–84% on the public board. Steerable is in that band on a Flash-cost model — usable as a coding agent, not a demo loop.
+Z.AI's own Claude Code run of the same Flash model is 84.3% under a 6-hour timeout (Claude Code 2.1.207) — a different protocol; we wrap at 170 minutes.
 
 ---
 
@@ -144,8 +131,7 @@ export function Chat() {
 ### "I'm shipping an Electron app and want LLMs to run locally"
 
 ```bash
-pnpm add @steerable/agent-protocol @steerable/agent-ui
-# Then bundle the sidecar binary into resources/python-runtime/<platform>/
+# Bundle the sidecar binary into resources/python-runtime/<platform>/
 # (build script: packages/sidecar/build/build_sidecar.py)
 ```
 
@@ -159,6 +145,8 @@ proc.stdin.write(JSON.stringify({
 }) + '\n');
 // SSE-over-JSON-RPC events stream back on stdout, one per line.
 ```
+
+TypeScript hosts can skip the subprocess plumbing with `@steerable/agent-runtime` (`packages/agent-runtime/ts` — source-consumed via `link:`, not on npm yet): it owns spawn, the `lifecycle.ready` handshake, health pings, bounded auto-restart, and graceful drain, and exposes the full CoreLoop-level API (`chatStream` / `cancelChat` / `steerChat` / session fork & branch tree / …).
 
 Full runnable: [`examples/sidecar-roundtrip`](./examples/sidecar-roundtrip). Real-world embedder: [`deeppath-agent`](https://github.com/deeppath/deeppath-agent).
 
@@ -231,7 +219,7 @@ flowchart TB
 **The rules:**
 - Tier N never imports Tier N+1. Adopting any layer means inheriting only the layers below it.
 - TS↔Py for `agent-protocol` is **codegen, not parallel implementation** — `spec/*.schema.json` is the single source of truth.
-- All 7 publishable packages release **lockstep** (same `X.Y.Z` everywhere), gated by CI on every tag push. Tier 5 (`agent-shell` / `agent-shell-web` / `pack-sdk`) is `private: true` — versioned in lockstep but never published to npm; product repos consume it via source/`link:` dependencies.
+- All 11 published packages — 6 on npm (protocol, harness, UI, pack-sdk, agent-shell, agent-shell-web) + 5 on PyPI (protocol, harness, runtime, sidecar, egress-proxy) — release **lockstep** (same `X.Y.Z` everywhere), gated by CI on every tag push. Tier 5 (`agent-shell` / `agent-shell-web` / `pack-sdk`) is published to npm (compiled `dist`, source, and pure-types respectively); the TS sidecar wrapper `@steerable/agent-runtime` is versioned in lockstep but source-consumed.
 - Tier 5 is **product-neutral**: brand, telemetry endpoints, help links, and data-directory names are injected by the consuming product's assembly root (`setProductBrand` / `setProductConfig`), enforced by the `shell:neutral` gate in CI.
 
 ---
@@ -260,30 +248,37 @@ flowchart TB
 - **Completion**: `is_terminal_result(result)` — consistent loop-termination predicate
 - **Tracing**: `HarnessTrace` builder with `TraceSpan` / `TraceEvent` recorders
 - **Safety patterns**: command-safety regex/glob compiled from `spec/safety/CommandSafetyPattern.schema.json`
-- **44 unit tests + 18 golden snapshots**; zero DB / HTTP coupling
+- **49 unit + golden snapshot tests**; zero DB / HTTP coupling
 
 </details>
 
 <details>
-<summary><b>Tier 3 — Runtime & Sidecar</b> · <code>steerable-agent-runtime</code> + <code>steerable-sidecar</code></summary>
+<summary><b>Tier 3 — Runtime & Sidecar</b> · <code>steerable-agent-runtime</code> + <code>steerable-sidecar</code> + <code>steerable-egress-proxy</code></summary>
 
-- **LLMProvider** interface + adapters: **Ollama**, **OpenAI-compat** (works with vLLM, llama.cpp server, Together, Groq, …), **Anthropic**
-- **ToolRouter** + `@tool` decorator with JSON Schema auto-derived from Python type hints (explicit `schema=` always overrides)
+- **CoreLoop** — the production single-agent step loop, yielding a structured `LoopEvent` stream (15 kinds): pseudo tool-call recovery, `before_completion` veto, three default compaction paths plus one opt-in (`micro_compact_interval_rounds`) with both circuit breakers, soft-timeout wrap-up, duplicate-call dedup, per-tool timeouts
+- **LLMProvider** interface across **four wire protocols**: **OpenAI-compatible** chat/completions (Ollama, vLLM, llama.cpp server, DeepSeek, Groq, Together, …), **OpenAI Responses** (with `store: false` + encrypted-reasoning round-trips), **Anthropic-native**, **Gemini-native** — vendor divergences are data (`PROVIDER_COMPAT_HOSTS` + per-model sampling presets)
+- **Gateway model catalog** — live `GET /models` discovery (`models.list`, refreshable), bundled serving-provider catalog (`catalog.describe`), strict `reasoning_effort` handling
+- **ToolRouter** + `@tool` decorator with JSON Schema auto-derived from Python type hints (explicit `schema=` always overrides); exposure tiers (`direct` / `deferred` / `hidden`) with `tool_search`
+- **MCP client** — stdio servers, deterministic `mcp__<server>__<tool>` naming, per-server catalog caps, deferred-by-default exposure
+- **Plugin lifecycle** — entry-point + local-directory sources; `plugin.list` / `enable` / `disable` / `reload` without a sidecar restart
+- **Subagents** — named profiles with per-profile tool domains (fail-closed), models, and system prompts; opt-in orchestration pool (`agent_spawn` / `agent_send` / `agent_wait` / …)
+- **Approval + sandbox executors** — 8-variant approval algebra across request/session/durable scopes; per-exec Seatbelt confinement with enforcement returned as a value; bundled per-host egress allow-list proxy with ask-the-user widening
 - **StorageAdapter** interface + InMemory + SQLAlchemy reference implementations
-- **TransportAdapter**: FastAPI SSE (server-sent events) + stdio JSON-RPC (sidecar)
-- **Sidecar binary** built from `python-build-standalone` — boots in <1s, ~300 MB stripped, macOS notarised, Windows signed
-- Cross-platform build (`packages/sidecar/build/build_sidecar.py`); aggressive stdlib pruning under a 800 MB CI budget gate
+- **TransportAdapter**: FastAPI SSE + stdio JSON-RPC (sidecar), plus **AG-UI** and **ACP** peer transports
+- **Sidecar binary** built from `python-build-standalone` — boots in <1s, ~95 MB stripped on darwin-arm64, macOS notarised, Windows signed
+- Cross-platform build (`packages/sidecar/build/build_sidecar.py`); aggressive stdlib pruning under a CI size budget
 
 </details>
 
 <details>
 <summary><b>Tier 4 — UI</b> · <code>@steerable/agent-ui</code></summary>
 
-- **Components**: `ChatPanel`, `MessageList`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` — all headless / Tailwind-themable
-- **Hooks**: `useChatStream`, `useAgentSession`, `useToolCallStatus`
+- **Components**: `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector` (live/stale/offline catalog states), `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` — all headless / Tailwind-themable
+- **Cards** (`@steerable/agent-ui/cards`): 14 rich message cards — `QuizCard`, `CoverageReportCard`, `AnalysisDocumentCard`, `ResearchPlanCard`, `SuggestedRepliesCard`, `AskUserQuestionsCard`, `ThinkingProcessCard`, `PlanStepsCard`, `PlanSelectorCard`, `SearchSourcesCard`, `SummaryMessageCard`, `ActionSegmentCard`, `ToolExecutionCard`, `OrchestrationPlanCard`
+- **Hooks**: `useChatStream`, `useAgentSession`, `useToolCallStatus` + chat-session state primitives (`useChatSession`, `useChatComposer`, `useChatList`, `MockChatStreamTransport`, …)
 - **Tailwind preset** — drop-in tokens (`bg-agent-canvas`, `rounded-agent-md`, etc.)
 - **Storybook** — every component, every state, with axe a11y + Playwright visual-regression locked in CI
-- 44 unit tests + 27 stories + 4 MDX docs
+- 167 unit tests + 43 stories + 4 MDX docs
 
 </details>
 
@@ -291,13 +286,14 @@ flowchart TB
 <summary><b>Tier 5 — Host Shell</b> · <code>@steerable/agent-shell</code> + <code>@steerable/agent-shell-web</code> + <code>@steerable/pack-sdk</code> (private)</summary>
 
 - **Two hosts, one runtime**: Electron desktop shell (main process, IPC, strict CSP, visible PTY via node-pty) and headless HTTP server (`/api/v2/*`, SSE) assembled from the same `HostRuntime`
-- **Local backend**: chat/project/agent CRUD, CoreLoop streaming, skill loader (brand-placeholder rendering), subagent profiles, worktree service, usage/insights storage (SQLite via better-sqlite3)
+- **Local backend**: chat/project/agent CRUD, CoreLoop streaming, skill loader (brand-placeholder rendering), subagent profiles, cross-turn background tasks with a panel UI, git-worktree isolation, session branch tree, usage/insights storage (SQLite via better-sqlite3)
 - **Sidecar supervision**: boot, health, egress proxy, seatbelt/exec sandbox, reverse approval/ask-user bridges
+- **Connection diagnostics**: LLM connection diagnosis panel, system/ambient proxy detection, and egress hints surfaced in settings — a misconfigured gateway fails with a remedy, not a hang
 - **Scenario-pack extension points** (`pack-sdk` types): services, tools, migrations, seeds, skills, IPC namespaces, HTTP routes, renderer chat slots & settings panels, brand/logo — composed at build time by the product's assembly root
 - **Renderer SPA source** (`agent-shell-web`): product-neutral React app consumed by product web entries via the `@/` alias + `createProductViteConfig` factory
 - **Packaging helpers**: `scripts/prepare-sidecar.sh` / `prepare-framework-wheels.sh` build the embedded Python runtime for product installers
 - **Neutrality gate**: `pnpm --filter @steerable/agent-shell shell:neutral` fails CI on any product hardcoding in shell sources or skill text
-- 617 node-side unit tests + 225 renderer component tests
+- 615 node-side unit tests + 220 renderer component tests
 
 </details>
 
@@ -334,13 +330,14 @@ If you're using Steerable in production, send a PR adding your project here.
 
 ## Project status & roadmap
 
-**Current**: `0.2.x` series — public registries, lockstep tag-driven releases, three production consumers shipping.
+**Current**: `0.6.x` series — public registries, lockstep tag-driven releases, one production consumer ([DeepPath](https://deeppath.cc)) shipping on web, API, and desktop.
 
 | Phase | Status | What lands |
 |---|---|---|
-| **0.x consolidation** | 🟢 in progress | Stable surface API, integration tests against three downstream repos, downstream lockfile bumps semi-automated |
-| **0.3+ Trusted Publishing** | 🟡 next | PyPI auth migrates from API token → OIDC; cross-platform sidecar build matrix in GHA |
+| **0.x consolidation** | 🟢 in progress | Stable surface API, integration tests against downstream repos, downstream lockfile bumps semi-automated |
+| **0.3+ Trusted Publishing** | ✅ done | npm `--provenance` (sigstore) + PyPI Trusted Publishing over OIDC; cross-platform sidecar build/sign matrix in GHA |
 | **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
+| **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog — details in the [roadmap](https://steerableframework.com/roadmap/) |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
 
 Where the architecture is headed, what's genuinely missing, and what's explicitly out of scope: **[Architecture Review & Roadmap](https://steerableframework.com/roadmap/)** — a gap scorecard against Codex and DeepSeek Harness, with the honest negatives.
@@ -385,8 +382,8 @@ pnpm install
 uv sync --all-packages
 
 pnpm gen          # regenerate TS+Py types from spec/
-pnpm test         # 44 + 27 stories
-uv run pytest     # 105 tests
+pnpm test         # ~1,000 TS tests (incl. Storybook stories)
+uv run pytest     # ~1,950 tests
 ```
 
 If your change touches `spec/`, the codegen drift checker will fire in CI — re-run `pnpm gen && uv run python scripts/generate_py.py` and commit the regenerated files.

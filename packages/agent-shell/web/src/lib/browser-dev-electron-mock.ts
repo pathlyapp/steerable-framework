@@ -11,6 +11,7 @@ import type {
   LlmSettings,
 } from './local-api';
 import { pickDefaultAgentId } from '@/brand';
+import { isDemoMode } from './demo-flag';
 import browserDevData from '../fixtures/browser-dev-data.json';
 
 type MutableChat = LocalChat;
@@ -37,6 +38,10 @@ interface BrowserMockState {
   source: 'fixture' | 'fallback';
   fixtureMeta: Pick<BrowserDevFixture, 'exportedAt' | 'source'> | null;
 }
+
+const suggestedReplyListeners = new Set<
+  (payload: { chatId: string; messageId: string; suggestions: string[] }) => void
+>();
 
 const USER_ID = 'browser-preview-user';
 const now = new Date();
@@ -575,6 +580,7 @@ async function startStream(
           { type: 'text', content: reply },
         ],
         durationMs: 1_200,
+        suggestedReplies: ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'],
       }),
     });
     assistantMessage.createdAt = new Date().toISOString();
@@ -587,6 +593,10 @@ async function startStream(
     pushSse(onEvent, '[DONE]');
     onEvent({ type: 'end', status: 200 });
     state.activeStreams.delete(streamId);
+    const suggestions = ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'];
+    for (const listener of suggestedReplyListeners) {
+      listener({ chatId, messageId: assistantMessage.id, suggestions });
+    }
   }, 440 + chunks.length * 80);
 
   return streamId;
@@ -599,7 +609,10 @@ function cancelStream(streamId: string) {
 }
 
 export function installBrowserDevElectronMock() {
-  if (!import.meta.env.DEV || typeof window === 'undefined' || window.electron) return;
+  if (typeof window === 'undefined' || window.electron) return;
+  // DEV 浏览器预览自动安装；官网静态 demo 构建（app-demo 入口）经 demo flag
+  // 显式安装。普通 prod 构建两条路都不通，本模块根本不会进产物。
+  if (!import.meta.env.DEV && !isDemoMode()) return;
 
   window.electron = {
     runtime: 'local',
@@ -625,6 +638,12 @@ export function installBrowserDevElectronMock() {
     onMenuOpenTerminal: () => undefined,
     offMenuOpenTerminal: () => undefined,
     onChatTitleUpdated: () => () => undefined,
+    onSuggestedReplies: (callback) => {
+      suggestedReplyListeners.add(callback);
+      return () => {
+        suggestedReplyListeners.delete(callback);
+      };
+    },
   } satisfies ElectronBridge;
 
   console.info(

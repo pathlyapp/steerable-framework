@@ -83,6 +83,10 @@ export interface LocalFileReadRequest {
   path: string;
   encoding?: BufferEncoding;
   maxSize?: number;
+  /** 1-based 起始行（CC Read 风格分页）。与 limit 配合做部分视图读取。 */
+  offset?: number;
+  /** 最多返回的行数（配合 offset 分页）；缺省返回到文件尾。 */
+  limit?: number;
 }
 
 export interface LocalFileReadResult {
@@ -90,6 +94,12 @@ export interface LocalFileReadResult {
   content?: string;
   /** 内容版本令牌（SHA-256）。读后写场景把它回传给 edit/write 做冲突检测。 */
   version?: string;
+  /**
+   * 本次返回的只是部分视图（offset/limit 分页或超长裁剪）——模型没看到完整
+   * 内容，本会话对该路径的整体覆写将被拒绝（框架 partial_reads / CC
+   * isPartialView 对齐）；定点修改走 local_edit_file 不受此限。
+   */
+  partial?: boolean;
   error?: string;
 }
 
@@ -178,6 +188,60 @@ const NPM_PACKAGE_RE = /^(@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+(@[A-Za-z0-9._~^<>=
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 100 * 1024;
 const DEFAULT_MAX_READ_SIZE = 1024 * 1024;
+/**
+ * 单次读取返回给模型的字符上限（框架 workspace_tools `_MAX_OUTPUT` 对齐）。
+ * 超出部分头尾裁剪并打标记——保留尾部，日志/编译错误的关键行通常在末尾。
+ */
+const MAX_READ_OUTPUT_CHARS = 100_000;
+
+/**
+ * 部分视图裁剪（框架 `_clip` / CC Read 对齐）。version 永远基于完整内容计算，
+ * 部分视图的 CAS 令牌保持有效；返回的 partial 标记驱动整体覆写门。
+ *
+ * - 给了 offset/limit：按 1-based 行号切片，并在省略处打行数标记（含继续
+ *   分页的下一个 offset）；
+ * - 没给但内容超长：头尾裁剪，中间打省略字符数标记。
+ */
+export function slicePartialView(
+  content: string,
+  offset?: number,
+  limit?: number,
+): { content: string; partial: boolean } {
+  if (offset !== undefined || limit !== undefined) {
+    const start = offset ?? 1;
+    if (!Number.isInteger(start) || start < 1) {
+      throw new Error(`offset 必须是 >= 1 的整数（1-based 行号），收到 ${offset}`);
+    }
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+      throw new Error(`limit 必须是 >= 1 的整数，收到 ${limit}`);
+    }
+    const lines = content.split('\n');
+    if (start > lines.length) {
+      throw new Error(`offset ${start} 超出文件行数（共 ${lines.length} 行）。`);
+    }
+    const end = limit === undefined ? lines.length : Math.min(lines.length, start - 1 + limit);
+    let view = lines.slice(start - 1, end).join('\n');
+    const omittedAbove = start - 1;
+    const omittedBelow = lines.length - end;
+    if (omittedAbove > 0) {
+      view = `...[{上文省略 ${omittedAbove} 行}]...\n${view}`;
+    }
+    if (omittedBelow > 0) {
+      view = `${view}\n...[{下文省略 ${omittedBelow} 行；用 offset=${end + 1} 继续}]...`;
+    }
+    return { content: view, partial: omittedAbove > 0 || omittedBelow > 0 };
+  }
+  if (content.length <= MAX_READ_OUTPUT_CHARS) {
+    return { content, partial: false };
+  }
+  const head = Math.floor(MAX_READ_OUTPUT_CHARS / 5);
+  const tail = MAX_READ_OUTPUT_CHARS - head;
+  const omitted = content.length - head - tail;
+  return {
+    content: `${content.slice(0, head)}\n...[{省略 ${omitted} 字符；用 offset/limit 分段读取}]...\n${content.slice(-tail)}`,
+    partial: true,
+  };
+}
 
 /** 内容版本令牌：UTF-8 内容的 SHA-256。用于 read-before-write 冲突检测。 */
 /**
@@ -336,6 +400,13 @@ export class LocalExecutor {
    * 由 sidecar 的 `read_state.seed` 反向调用重灌（seedReadState）。
    */
   private readonly readFileState = new Map<string, string>();
+  /**
+   * 部分视图门（框架 partial_reads / CC isPartialView 对齐）：本会话只读到
+   * 部分内容的分页/裁剪读取把路径登记在这里；writeLocalFile 拒绝整体覆写
+   * 未见全文的文件。完整读取或本会话自己的写/编辑成功后销记。会话恢复不
+   * 重灌此集合（与框架一致：resume 只重建 version 证据，门退化为 CAS）。
+   */
+  private readonly partialReadPaths = new Set<string>();
 
   constructor(maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES, applyEditsFn: ApplyEditsFn = applyEdits) {
     this.maxOutputBytes = maxOutputBytes;
@@ -583,10 +654,18 @@ export class LocalExecutor {
         return { success: false, error: `File too large (${fileStat.size} bytes), max=${maxSize}` };
       }
       const content = await readFile(filePath, { encoding });
+      // version 基于完整内容：部分视图的读证据 CAS 仍然有效（框架对齐）。
       const version = hashContent(content);
       // P2b: 记录读证据，后续 write/edit 缺省 expectedVersion 时自动 CAS。
       this.readFileState.set(filePath, version);
-      return { success: true, content, version };
+      const view = slicePartialView(content, request.offset, request.limit);
+      // 部分视图登记/销记：整体覆写门（writeLocalFile）据此拒绝未见全文的覆写。
+      if (view.partial) {
+        this.partialReadPaths.add(filePath);
+      } else {
+        this.partialReadPaths.delete(filePath);
+      }
+      return { success: true, content: view.content, version, partial: view.partial };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, error: message };
@@ -608,6 +687,18 @@ export class LocalExecutor {
     return this.serializeFileOp(filePath, async () => {
       try {
         const encoding = request.encoding ?? 'utf-8';
+        // 部分视图门：本会话对该路径只读到分页/裁剪后的内容，整体覆写会销毁
+        // 未见内容（框架 partial_reads / CC isPartialView 对齐）。定点修改走
+        // local_edit_file；确需整体重写时先用 offset/limit 分段读完。
+        if (this.partialReadPaths.has(filePath)) {
+          return {
+            success: false,
+            error:
+              `拒绝整体覆写：${filePath} 本会话只读到部分内容（分页/裁剪），` +
+              '覆写会销毁未见内容。请改用 local_edit_file 做定点修改；' +
+              '确需整体重写时先用 offset/limit 分段读完。',
+          };
+        }
         // P2b 自动 CAS：调用方没给 expectedVersion 时回落到本会话的读证据
         // （含 read_state.seed 重灌的）。隐式期望只对仍存在的文件生效——
         // 读后被删除的文件重新写入是新建，没有可覆盖的他人改动。
@@ -633,6 +724,8 @@ export class LocalExecutor {
         const version = hashContent(request.content);
         // 写成功后回写读证据：本会话自己的连续写不互相冲突。
         this.readFileState.set(filePath, version);
+        // 模型亲自写了全文，部分视图门不再适用（框架对齐）。
+        this.partialReadPaths.delete(filePath);
         return { success: true, version };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -680,6 +773,8 @@ export class LocalExecutor {
         await this.atomicWrite(filePath, result.content, encoding);
         const version = hashContent(result.content);
         this.readFileState.set(filePath, version);
+        // 注意：编辑不销记 partialReadPaths——定点编辑不代表模型见过全文，
+        // 后续盲写仍会销毁未见内容（框架「Cleared by a full read or a write」对齐）。
         return {
           success: true,
           version,

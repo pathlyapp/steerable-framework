@@ -41,7 +41,7 @@ function makeSkill(overrides: Partial<SkillModule>): SkillModule {
 
 // 基础 + 任务技能的分层共存：
 //   00-base       —— eager 层（正文常驻系统提示词）
-//   90-cflog      —— catalog 层（只进目录，按需加载）
+//   90-csv-tools  —— catalog 层（只进目录，按需加载）
 //   aa-user-skill —— catalog 层用户技能（带 displayName）
 //   zz-other-skill—— catalog 层，验证 dirName 排序
 const BASE = makeSkill({
@@ -52,9 +52,9 @@ const BASE = makeSkill({
   content: 'BASE_EAGER_CONTENT 你是本地助手',
 });
 const CFLOG = makeSkill({
-  name: 'cflog',
-  dirName: '90-cflog',
-  content: 'CFLOG_EMBEDDED_GUIDANCE 用 cflog_scan_workspace 读取工区',
+  name: 'csv-tools',
+  dirName: '90-csv-tools',
+  content: 'CSV_EMBEDDED_GUIDANCE 用 csv_scan_workspace 读取目录',
 });
 const USER = makeSkill({
   name: 'my-workspace',
@@ -81,7 +81,7 @@ describe('prompt-builder / A6 分层披露', () => {
       eagerOnly: true,
     });
     expect(prompt).toContain('BASE_EAGER_CONTENT');
-    expect(prompt).not.toContain('CFLOG_EMBEDDED_GUIDANCE');
+    expect(prompt).not.toContain('CSV_EMBEDDED_GUIDANCE');
     expect(prompt).not.toContain('USER_SKILL_PROCEDURE');
     expect(prompt).not.toContain('OTHER_SKILL_CONTENT');
     expect(modules.map((m) => m.dirName)).toEqual(['00-base']);
@@ -90,13 +90,13 @@ describe('prompt-builder / A6 分层披露', () => {
   it('eagerOnly 缺省时两层都进（非 CoreLoop 路径的兼容行为），按 dirName 排序', async () => {
     const { prompt } = await buildSystemPrompt({ ignoreConditions: true });
     const basePos = prompt.indexOf('BASE_EAGER_CONTENT');
-    const cflogPos = prompt.indexOf('CFLOG_EMBEDDED_GUIDANCE');
+    const csvPos = prompt.indexOf('CSV_EMBEDDED_GUIDANCE');
     const userPos = prompt.indexOf('USER_SKILL_PROCEDURE');
     const otherPos = prompt.indexOf('OTHER_SKILL_CONTENT');
-    for (const pos of [basePos, cflogPos, userPos, otherPos]) expect(pos).toBeGreaterThan(-1);
+    for (const pos of [basePos, csvPos, userPos, otherPos]) expect(pos).toBeGreaterThan(-1);
     // localeCompare：数字前缀排字母前缀之前
-    expect(basePos).toBeLessThan(cflogPos);
-    expect(userPos).toBeGreaterThan(cflogPos);
+    expect(basePos).toBeLessThan(csvPos);
+    expect(userPos).toBeGreaterThan(csvPos);
     expect(otherPos).toBeGreaterThan(userPos);
   });
 
@@ -113,7 +113,7 @@ describe('prompt-builder / A6 分层披露', () => {
       eagerOnly: true,
     });
     expect(prompt).toContain('PINNED_EAGER_CONTENT');
-    expect(prompt).not.toContain('CFLOG_EMBEDDED_GUIDANCE');
+    expect(prompt).not.toContain('CSV_EMBEDDED_GUIDANCE');
   });
 
   it('catalog 层技能即使 priority 高也不进 eagerOnly 提示词', async () => {
@@ -138,12 +138,12 @@ describe('prompt-builder / 智能体勾选的技能', () => {
     const { prompt, modules } = await buildSystemPrompt({
       ignoreConditions: true,
       eagerOnly: true,
-      pinnedSkillNames: ['90-cflog'],
+      pinnedSkillNames: ['90-csv-tools'],
     });
     expect(prompt).toContain('BASE_EAGER_CONTENT');
-    expect(prompt).toContain('CFLOG_EMBEDDED_GUIDANCE');
+    expect(prompt).toContain('CSV_EMBEDDED_GUIDANCE');
     expect(prompt).not.toContain('USER_SKILL_PROCEDURE');
-    expect(modules.map((m) => m.dirName)).toEqual(['00-base', '90-cflog']);
+    expect(modules.map((m) => m.dirName)).toEqual(['00-base', '90-csv-tools']);
   });
 
   it('触发条件没命中的技能也能被勾选进来', async () => {
@@ -159,7 +159,7 @@ describe('prompt-builder / 智能体勾选的技能', () => {
     });
     expect(prompt).toContain('BASE_EAGER_CONTENT');
     expect(prompt).toContain('USER_SKILL_PROCEDURE');
-    expect(prompt).not.toContain('CFLOG_EMBEDDED_GUIDANCE');
+    expect(prompt).not.toContain('CSV_EMBEDDED_GUIDANCE');
   });
 
   it('模式级排除优先于勾选：plan 模式的执行类技能不因勾选而回来', async () => {
@@ -174,16 +174,50 @@ describe('prompt-builder / 智能体勾选的技能', () => {
     const { prompt } = await buildSystemPrompt({
       ignoreConditions: true,
       eagerOnly: true,
-      excludeSkillNames: ['cflog'],
-      pinnedSkillNames: ['90-cflog'],
+      excludeSkillNames: ['csv-tools'],
+      pinnedSkillNames: ['90-csv-tools'],
     });
     expect(prompt).toContain('BASE_EAGER_CONTENT');
-    expect(prompt).not.toContain('CFLOG_EMBEDDED_GUIDANCE');
+    expect(prompt).not.toContain('CSV_EMBEDDED_GUIDANCE');
   });
 
   it('没有勾选项时不额外取一次全量技能', async () => {
     await buildSystemPrompt({ ignoreConditions: true, eagerOnly: true });
     expect(mocks.loadSkills).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('prompt-builder / 智能体自称', () => {
+  const IDENTITY = makeSkill({
+    name: 'identity',
+    dirName: '00-identity',
+    priority: 1000,
+    layer: 'eager',
+    content: '你是 **{agentName}**。问你是谁时回答 "{agentName}"。',
+  });
+
+  it('有 identityName 时技能正文 {agentName} 用智能体显示名', async () => {
+    mocks.loadSkills.mockResolvedValue([IDENTITY]);
+    const { prompt } = await buildSystemPrompt({
+      eagerOnly: true,
+      identityName: '电脑操作员',
+    });
+    expect(prompt).toContain('你是 **电脑操作员**');
+    expect(prompt).toContain('回答 "电脑操作员"');
+    expect(prompt).not.toContain('{agentName}');
+  });
+
+  it('没有 identityName 时 {agentName} 回落产品品牌', async () => {
+    mocks.loadSkills.mockResolvedValue([IDENTITY]);
+    const { prompt } = await buildSystemPrompt({ eagerOnly: true });
+    expect(prompt).toContain('你是 **Agent**');
+    expect(prompt).not.toContain('{agentName}');
+  });
+
+  it('没有技能时 fallback 自称也用 identityName', async () => {
+    mocks.loadSkills.mockResolvedValue([]);
+    const { prompt } = await buildSystemPrompt({ identityName: '电脑操作员' });
+    expect(prompt).toContain('你是 电脑操作员');
   });
 });
 

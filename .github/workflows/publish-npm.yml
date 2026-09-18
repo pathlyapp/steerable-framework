@@ -1,7 +1,7 @@
 name: Publish to npm
 
 # Chained from release.yml after the lockstep gate passes. We walk the
-# three `@steerable/*` TypeScript packages and publish whichever ones
+# publishable `@steerable/*` TypeScript packages and publish whichever ones
 # declare a version that isn't already on the registry. Idempotent by
 # design — safe to re-dispatch after a partial failure; only missing
 # versions get pushed.
@@ -73,7 +73,10 @@ jobs:
           fi
 
           published_any=0
-          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts; do
+          # pack-sdk 是 agent-shell 的纯类型依赖（workspace:* 会被 pnpm 重写为
+          # 锁步版本号），必须先于 agent-shell 发布；agent-shell-web 是源码包，
+          # 产品经 vite.base + @/ alias 消费其 src/，与 ts 同版本发布。
+          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-shell/ts packages/agent-shell/web; do
             name=$(node -p "require('./${dir}/package.json').name")
             local_version=$(node -p "require('./${dir}/package.json').version")
 

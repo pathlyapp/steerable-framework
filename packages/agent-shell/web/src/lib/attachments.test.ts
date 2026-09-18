@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   appendAttachmentRefs,
   collectImageAttachments,
+  fileToBase64,
   formatAttachmentFailures,
   isImageFile,
   saveChatAttachments,
@@ -169,5 +170,23 @@ describe('appendAttachmentRefs / collectImageAttachments（文件优先，图片
       { name: 'a.docx', path: '/d/a.docx' },
     ];
     expect(collectImageAttachments(files)).toEqual([{ path: '/d/p.png', name: 'p.png' }]);
+  });
+});
+
+describe('fileToBase64', () => {
+  it('小文件逐字节编码', async () => {
+    const file = new File([new Uint8Array([1, 2, 3, 255])], 'x.bin');
+    expect(await fileToBase64(file)).toBe('AQID/w==');
+  });
+
+  it('空文件编码为空串', async () => {
+    expect(await fileToBase64(new File([], 'empty'))).toBe('');
+  });
+
+  it('跨 0x8000 分块边界的编码与一次性编码一致', async () => {
+    const bytes = new Uint8Array(0x8000 + 100).fill(0x61);
+    const file = new File([bytes], 'big.bin');
+    const expected = Buffer.from(bytes).toString('base64');
+    expect(await fileToBase64(file)).toBe(expected);
   });
 });

@@ -70,6 +70,25 @@ class TranscriptAppend:
 
 
 @dataclass(frozen=True, slots=True)
+class CompactionBracket:
+    """Region-transaction payload a rewriter attaches to a rewrite when a
+    summarization ran (P1). The loop records it as the
+    ``CompactionStart`` → ``CompactionSummary`` → boundary triplet sharing
+    ``compaction_id``: the paid summary lands in the durable record inside
+    the bracket it paid for, attributable to the shadowed span.
+
+    ``span_start_index`` / ``span_end_index`` index the pre-rewrite
+    projection (the transcript the rewriter saw), naming exactly what the
+    summary shadows.
+    """
+
+    compaction_id: str
+    span_start_index: int
+    span_end_index: int
+    summary_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class RewriteRequest:
     """The one declared rewrite: replace the visible projection wholesale.
 
@@ -83,6 +102,12 @@ class RewriteRequest:
     around the rewrite; the loop forwards them onto the recorded boundary
     (CC ``compact_boundary`` parity) so traces chart compaction
     effectiveness. ``None`` when the rewriter does not estimate.
+
+    ``bracket`` carries the region-transaction payload when the rewrite is
+    backed by a paid summary; the loop records the start/summary entries
+    before the boundary so the bracket is complete and ordered in the
+    durable record. ``None`` for rewrites that did not summarize (fold-only
+    passes keep the bare boundary).
     """
 
     messages: list[LLMMessage]
@@ -90,6 +115,7 @@ class RewriteRequest:
     action: str = "compact"
     pre_tokens: int | None = None
     post_tokens: int | None = None
+    bracket: CompactionBracket | None = None
 
 
 @dataclass(slots=True)

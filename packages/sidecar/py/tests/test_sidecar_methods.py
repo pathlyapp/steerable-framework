@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from steerable_sidecar import Sidecar
+from steerable_sidecar.sidecar import PROTOCOL_VERSION, SIDECAR_VERSION
 
 
 @pytest.fixture
@@ -22,8 +23,8 @@ async def _call(sidecar: Sidecar, method: str, params: dict | None = None, reque
 
 async def test_system_ping_returns_health(sidecar: Sidecar) -> None:
     response = await _call(sidecar, "system.ping")
-    assert response["result"]["version"] == "0.1.0"
-    assert response["result"]["protocolVersion"] == "0.1.0"
+    assert response["result"]["version"] == SIDECAR_VERSION
+    assert response["result"]["protocolVersion"] == PROTOCOL_VERSION
     assert response["result"]["loadedTools"] == 0
 
 
@@ -532,29 +533,29 @@ async def test_skills_list_applies_conditions_and_exclude(
         "name: local-exec\ndescription: x\npriority: 700\nconditions: [tool:local_exec_shell]\n",
         "body",
     )
-    _write_skill(root, "90-cflog", "name: cflog\ndescription: y\npriority: 600\n", "body")
+    _write_skill(root, "90-csv-tools", "name: csv-tools\ndescription: y\npriority: 600\n", "body")
     # No conditions → only the unconditional skill matches.
     gated = await _call(sidecar, "skills.list", {"roots": [str(root)]})
-    assert {s["name"] for s in gated["result"]["skills"]} == {"cflog"}
+    assert {s["name"] for s in gated["result"]["skills"]} == {"csv-tools"}
     # Matching condition → both.
     matched = await _call(
         sidecar,
         "skills.list",
         {"roots": [str(root)], "conditions": ["tool:local_exec_shell"]},
     )
-    assert {s["name"] for s in matched["result"]["skills"]} == {"local-exec", "cflog"}
-    # Exclusion drops cflog even though it matches.
+    assert {s["name"] for s in matched["result"]["skills"]} == {"local-exec", "csv-tools"}
+    # Exclusion drops csv-tools even though it matches.
     excluded = await _call(
         sidecar,
         "skills.list",
-        {"roots": [str(root)], "conditions": ["tool:local_exec_shell"], "exclude": ["cflog"]},
+        {"roots": [str(root)], "conditions": ["tool:local_exec_shell"], "exclude": ["csv-tools"]},
     )
     assert {s["name"] for s in excluded["result"]["skills"]} == {"local-exec"}
     # ignoreConditions lists everything.
     all_skills = await _call(
         sidecar, "skills.list", {"roots": [str(root)], "ignoreConditions": True}
     )
-    assert {s["name"] for s in all_skills["result"]["skills"]} == {"local-exec", "cflog"}
+    assert {s["name"] for s in all_skills["result"]["skills"]} == {"local-exec", "csv-tools"}
 
 
 async def test_skills_list_requires_roots(sidecar: Sidecar) -> None:

@@ -38,7 +38,7 @@
     "scenario": {
       "type": "string",
       "default": "agent-entry",
-      "description": "Scenario tag used to select the FSM definition (e.g. 'agent-entry', 'cflog-operator')."
+      "description": "Scenario tag used to select the FSM definition (e.g. 'agent-entry', 'data-analyst')."
     },
     "stageData": {
       "type": ["object", "null"],

@@ -135,7 +135,6 @@ export function createHostRuntime(options: HostRuntimeOptions): HostRuntime {
   const maybeExecInTerminal = createVisibleTerminalExec({
     localExecutor,
     terminalManager,
-    broadcast,
   });
   const toolRouter = new ToolRouter(
     localExecutor,

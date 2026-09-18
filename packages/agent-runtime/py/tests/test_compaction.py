@@ -464,7 +464,7 @@ async def test_summarize_middle_widens_the_tail_off_an_orphan_tool_result() -> N
     ]
     hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=3)
 
-    out = await hooks._summarize_middle(transcript)
+    out, bracket = await hooks._summarize_middle(transcript)
 
     assert CompactionHooks._orphan_tool_ids(out) == set()
     assert any("[context compacted" in m.content_text for m in out)
@@ -493,7 +493,7 @@ async def test_summarize_middle_still_compacts_an_already_orphaned_transcript() 
     ]
     hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=2)
 
-    out = await hooks._summarize_middle(transcript)
+    out, bracket = await hooks._summarize_middle(transcript)
 
     assert len(out) < len(transcript)
     assert any("[context compacted" in m.content_text for m in out)
@@ -513,7 +513,7 @@ async def test_summarize_middle_keeps_an_aligned_tail_at_keep_last() -> None:
     ]
     hooks = CompactionHooks(max_context_tokens=1_000, keep_last_messages=3)
 
-    out = await hooks._summarize_middle(transcript)
+    out, bracket = await hooks._summarize_middle(transcript)
 
     assert [m.content_text for m in out[-3:]] == ["second", "keep going", "third"]
     assert len(out) == 6  # system + goal + summary + 3 kept
@@ -529,11 +529,13 @@ async def test_micro_compact_trigger_schedule() -> None:
         max_context_tokens=1_000_000,  # pressure never fires
         micro_compact_interval_rounds=2,
     )
+    # Ten tool results so the middle (everything before the kept tail)
+    # holds foldable content — folding never reaches into the tail.
     transcript = [
         LLMMessage.text_of("user", "goal"),
         *[
             LLMMessage.text_of("tool", "x" * 500, name="emit", tool_call_id=f"c{i}")
-            for i in range(4)
+            for i in range(10)
         ],
         LLMMessage.text_of("assistant", "working"),
     ]
@@ -579,13 +581,14 @@ async def test_micro_compact_folds_periodically_under_no_pressure() -> None:
     """Loop level: with the interval set, old tool results get folded on
     schedule even though pressure never crosses the threshold."""
     big = "y" * 3_000
+    # Eight rounds so the transcript outgrows the kept tail and the middle
+    # holds foldable results — folding never reaches into the tail.
     provider = make_provider(
         [
-            {"content": "", "tool_calls": [tc("emit", {"n": 1})]},
-            {"content": "", "tool_calls": [tc("emit", {"n": 2})]},
-            {"content": "", "tool_calls": [tc("emit", {"n": 3})]},
-            {"content": "final"},
+            {"content": "", "tool_calls": [tc("emit", {"n": i})]}
+            for i in range(1, 9)
         ]
+        + [{"content": "final"}]
     )
     router = ToolRouter()
 
@@ -871,7 +874,9 @@ async def test_micro_compaction_does_not_count_as_refill() -> None:
     class _Ctx:
         round_index = 0
 
-    transcript = _refill_transcript([LLMMessage.text_of("user", "go")], 0, n_new=3)
+    # Ten results per pass so the middle holds foldable content beyond the
+    # kept tail — folding never reaches into the tail.
+    transcript = _refill_transcript([LLMMessage.text_of("user", "go")], 0, n_new=10)
     for round_index in range(1, 5):
         _Ctx.round_index = round_index
         action = await hooks.pre_step(list(transcript), _Ctx())

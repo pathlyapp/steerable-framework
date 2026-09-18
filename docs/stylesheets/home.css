@@ -542,29 +542,6 @@
   color: #86efac;
 }
 
-.sf-bench-note,
-.sf-bench-src {
-  color: var(--md-default-fg-color--light);
-}
-
-.sf-bench-src a {
-  color: inherit;
-}
-
-.sf-bench-group:not(.sf-bench-group--focus) .sf-bench-row {
-  padding-top: 0.45rem;
-  padding-bottom: 0.5rem;
-}
-
-.sf-bench-group:not(.sf-bench-group--focus) .sf-bench-pct {
-  font-size: 0.82rem;
-  font-weight: 650;
-}
-
-.sf-bench-group:not(.sf-bench-group--focus) .sf-bench-track {
-  height: 0.28rem;
-}
-
 /* ---- feature grid ------------------------------------------------------- */
 
 .sf-grid {

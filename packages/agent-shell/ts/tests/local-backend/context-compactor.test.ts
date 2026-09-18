@@ -87,14 +87,14 @@ describe('compactToolResultJson', () => {
       result: {
         success: false,
         error: 'connection refused',
-        hint: '请先启动 CIFLog',
+        hint: '请先启动目标应用',
         stdout: 'w'.repeat(30000),
       },
     });
     const out = compactToolResultJson(json, { maxTotalChars: 3000, maxFieldChars: 500 });
     const parsed = JSON.parse(out);
     expect(parsed.result.error).toBe('connection refused');
-    expect(parsed.result.hint).toBe('请先启动 CIFLog');
+    expect(parsed.result.hint).toBe('请先启动目标应用');
   });
 });
 

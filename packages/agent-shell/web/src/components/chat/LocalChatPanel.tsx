@@ -15,6 +15,7 @@ import { MessageList } from './MessageList';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
+import type { TurnFile } from './turn-files';
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -99,6 +100,10 @@ export interface LocalChatPanelProps {
   currentTurnTimeline?: TurnBlock[];
   currentTurnStartedAtMs?: number;
   durationByMessageId?: Record<string, number>;
+  /** 回合产物文件列表（按落库消息 id 键控），转发给 MessageList。 */
+  turnFilesByMessageId?: Record<string, TurnFile[]>;
+  /** 当轮产物文件（流尾声到达、尚未归档到落库 id 的尾部消息用）。 */
+  currentTurnFiles?: TurnFile[];
   /** P3.1: in-flight child agents + per-message reconciliation map. */
   currentTurnChildren?: ChildInfo[];
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
@@ -143,6 +148,11 @@ export interface LocalChatPanelProps {
   onDismissFinishedTask?: (taskId: string) => void;
   /** 分享当前对话（截图）。落到最近一条助手消息的时间戳行。 */
   onShare?: () => Promise<boolean>;
+  /**
+   * 最近一条助手回复下的下一轮输入建议。点击即作为新用户消息发出。
+   */
+  suggestedReplies?: string[];
+  onSelectSuggestion?: (text: string) => void;
 }
 
 export function LocalChatPanel({
@@ -168,6 +178,8 @@ export function LocalChatPanel({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  turnFilesByMessageId,
+  currentTurnFiles,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -191,6 +203,8 @@ export function LocalChatPanel({
   onInspectTask,
   onDismissFinishedTask,
   onShare,
+  suggestedReplies,
+  onSelectSuggestion,
 }: LocalChatPanelProps) {
   const [inputValue, setInputValue] = useState('');
   const [files, setFiles] = useState<AttachmentFile[]>([]);
@@ -214,9 +228,14 @@ export function LocalChatPanel({
     // 把上传的文件持久化到会话空间：成功项用落盘路径（稳定、可被 agent
     // 读回），失败项若在 Electron 下有源路径则退回源路径；浏览器模式下没有
     // 任何可用路径的失败项会被剔除并上报，绝不把空路径写进正文。
-    const { files: resolvedFiles, failures } = chatId
-      ? await saveChatAttachments(chatId, files)
-      : { files, failures: [] };
+    // 没有文件就没有可持久化的东西，直接跳过 saveChatAttachments：它的 await
+    // 会让「无附件提交」多出一个微任务，打乱调用方基于 streaming 上升/下降沿的
+    // 判定（plan 模式操作条依赖该沿）。语义与 saveChatAttachments(chatId, [])
+    // 完全一致（后者原样返回空列表、无失败）。
+    const { files: resolvedFiles, failures } =
+      chatId && files.length > 0
+        ? await saveChatAttachments(chatId, files)
+        : { files, failures: [] };
 
     if (failures.length > 0) {
       // 本次消息至少保留可用的文件继续发送，但失败项必须让用户看到。
@@ -400,6 +419,7 @@ export function LocalChatPanel({
                 isStreaming={isStreaming}
                 agents={agents}
                 chats={chats}
+                chatId={chatId}
                 currentAgent={currentAgent}
                 executedActionsByMessageId={executedActionsByMessageId}
                 currentTurnActions={currentTurnActions}
@@ -407,6 +427,8 @@ export function LocalChatPanel({
                 currentTurnTimeline={currentTurnTimeline}
                 currentTurnStartedAtMs={currentTurnStartedAtMs}
                 durationByMessageId={durationByMessageId}
+                turnFilesByMessageId={turnFilesByMessageId}
+                currentTurnFiles={currentTurnFiles}
                 currentTurnChildren={currentTurnChildren}
                 orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
                 currentRound={currentRound}
@@ -420,6 +442,8 @@ export function LocalChatPanel({
                 onInspectTask={onInspectTask}
                 onDismissFinishedTask={onDismissFinishedTask}
                 onShare={onShare}
+                suggestedReplies={suggestedReplies}
+                onSelectSuggestion={onSelectSuggestion}
               />
               {inputBanner}
               {chatInputNode}

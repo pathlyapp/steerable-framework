@@ -1,3 +1,11 @@
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
+
+try:
+    __version__ = _dist_version("steerable-agent-harness")
+except PackageNotFoundError:  # source tree without installed metadata
+    __version__ = "0.0.0"
+
 from .budget import (
     DEFAULT_CACHED_TOKEN_WEIGHT,
     BudgetLimit,
@@ -17,8 +25,6 @@ from .safety import (
     get_patterns_by_category,
 )
 from .tracing import TraceSpan
-
-__version__ = "0.2.0"
 
 __all__ = [
     "BUILTIN_PATTERNS",

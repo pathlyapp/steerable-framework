@@ -6,35 +6,14 @@
  *     持久放行要走设置的出网白名单，不是这个模态）；
  *   - 普通工具调用的 7 变体行为不回归。
  */
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalPromptRequest } from '@/lib/electron-bridge';
-import { ApprovalModalHost } from './ApprovalModal';
+import { ApprovalPromptMenu } from './ApprovalModal';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
 });
-
-function installBridge() {
-  const listeners = new Set<(request: ApprovalPromptRequest) => void>();
-  const decide = vi.fn().mockResolvedValue(undefined);
-  (window as { electron?: unknown }).electron = {
-    approval: {
-      onRequest: (callback: (request: ApprovalPromptRequest) => void) => {
-        listeners.add(callback);
-        return () => listeners.delete(callback);
-      },
-      decide,
-    },
-  };
-  return {
-    decide,
-    emit: (request: ApprovalPromptRequest) => {
-      for (const callback of Array.from(listeners)) callback(request);
-    },
-  };
-}
 
 const EGRESS_REQUEST: ApprovalPromptRequest = {
   requestId: 'req-egress',
@@ -56,9 +35,9 @@ const SHELL_REQUEST: ApprovalPromptRequest = {
 
 describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
   it('以 host:port 标题 + 仿冒警示展示，并隐藏「始终」变体', () => {
-    const bridge = installBridge();
-    render(<ApprovalModalHost />);
-    act(() => bridge.emit(EGRESS_REQUEST));
+    render(
+      <ApprovalPromptMenu request={EGRESS_REQUEST} pendingCount={0} onDecide={vi.fn()} />,
+    );
 
     expect(screen.getByText('Agent 请求访问外网')).toBeTruthy();
     expect(screen.getByText('cdn.example.com:443')).toBeTruthy();
@@ -71,13 +50,18 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
   });
 
   it('普通工具调用的 7 变体不回归', () => {
-    const bridge = installBridge();
-    render(<ApprovalModalHost />);
-    act(() => bridge.emit(SHELL_REQUEST));
+    const onDecide = vi.fn();
+    render(
+      <ApprovalPromptMenu request={SHELL_REQUEST} pendingCount={1} onDecide={onDecide} />,
+    );
 
     expect(screen.getByText('Agent 请求执行')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('还有 1 个待审批')).toBeTruthy();
     expect(screen.getByText('始终允许')).toBeTruthy();
     expect(screen.getByText('始终拒绝')).toBeTruthy();
     expect(screen.getByText(/工作区沙箱/)).toBeTruthy();
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(onDecide).toHaveBeenCalledWith('allow_once');
   });
 });

@@ -6,7 +6,7 @@ import {
 
 // 测试夹具：两个已知技能 + 一个已注册 MCP 工具（注意注册 token 含大写，
 // 用来验证 resolveMcpToolToken 的规范化作用）。
-const KNOWN_SKILLS = ['read-workspace', '智能测井处理链'];
+const KNOWN_SKILLS = ['read-workspace', 'CSV 处理链'];
 const REGISTERED_MCP_TOKEN = 'mcp__demo_local__add';
 
 const resolvers: TriggerResolvers = {
