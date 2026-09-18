@@ -45,6 +45,7 @@ vi.mock('@/lib/local-api', () => ({
 
 vi.mock('@/brand', () => ({
   BRAND_NAME: '测试助手',
+  BRAND_TITLE: '测试助手',
   getBrandLogoUrl: () => 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>',
 }));
 

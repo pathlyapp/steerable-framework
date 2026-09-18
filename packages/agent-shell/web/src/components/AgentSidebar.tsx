@@ -120,13 +120,7 @@ import {
 import type { UseChatsAndAgentsResult } from '@/hooks/useChatsAndAgents';
 import type { PackChatSlotContribution } from '@/packs/registry';
 import type { RightPanelState } from '@/layouts/AgentLayout';
-// 必须 import 而不是写 src="/favicon.png"：public/ 下的资源 Vite 永远按绝对路径
-// /favicon.png 输出，dev 模式下 dev server 提供根路径所以能加载，但打包成
-// Electron 后渲染进程走 file:// 协议，/favicon.png 会被解析成文件系统根目录
-// 下的 favicon.png（必然 404）。改成模块导入后，Vite 会把图片放到 dist/assets
-// 下并发出 base-relative URL，配合 vite.config.ts 的 `base: './'` 在两种模式
-// 下都能正确加载。
-import { getBrandLogoUrl, BRAND_NAME } from '@/brand';
+import { BrandLockup } from '@/components/BrandLockup';
 
 const DEFAULT_DOT_COLOR = '#7c3aed';
 
@@ -627,22 +621,7 @@ export function AgentSidebar({
     <div className="flex h-full w-full flex-col border-r border-agent-border/60 bg-agent-muted/70 backdrop-blur-md">
       {/* ───── Brand + actions ───── */}
       <div className="flex h-12 flex-shrink-0 items-center justify-between px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          {/*
-            品牌 logo —— src 用 module-imported asset，不要写 /favicon.png（见
-            文件顶部 import 的注释）。shell 默认是中性通用图标；产品品牌
-            logo 由激活包的 web 模块在注册时注入（getBrandLogoUrl）。
-          */}
-          <img
-            src={getBrandLogoUrl()}
-            alt={BRAND_NAME}
-            className="h-6 w-6 flex-shrink-0 select-none"
-            draggable={false}
-          />
-          <span className="truncate text-sm font-semibold tracking-tight text-agent-foreground">
-            {BRAND_NAME}
-          </span>
-        </div>
+        <BrandLockup />
         <div className="flex items-center gap-1">
           <button
             type="button"

@@ -37,6 +37,11 @@ export interface Brand {
   flavor: AppFlavor;
   /** UI 显示名：窗口标题、通知标题等 */
   displayName: string;
+  /**
+   * 侧栏等品牌锁头里 logo 旁的标题。省略则只显示 logo，
+   * 并按 logo 原尺寸等比例缩放（一体字标不要再叠标题、不要压成方图）。
+   */
+  title?: string;
   /** LLM 身份自称（系统提示词里用） */
   agentName: string;
   /** 一句话定位（fallback prompt 用） */
@@ -51,6 +56,7 @@ export interface Brand {
  */
 const SHELL_BRAND: Omit<Brand, 'flavor'> = {
   displayName: 'Steerable Shell',
+  title: 'Steerable Shell',
   agentName: 'Agent',
   tagline: '一款本地桌面 AI 伙伴',
   defaultAgentId: LOCAL_ASSISTANT_AGENT_ID,

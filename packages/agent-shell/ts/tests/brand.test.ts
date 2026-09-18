@@ -9,6 +9,7 @@ describe('brand / shell 默认（无产品注入）', () => {
   it('中性 Steerable Shell 品牌 + 默认智能体 local-assistant（3.1 起产品品牌由 products/<id>/ 注入）', () => {
     const brand = getBrand();
     expect(brand.displayName).toBe('Steerable Shell');
+    expect(brand.title).toBe('Steerable Shell');
     expect(brand.defaultAgentId).toBe(LOCAL_ASSISTANT_AGENT_ID);
   });
 });
@@ -17,12 +18,14 @@ describe('brand / setProductBrand 注入（产品组装根 products/<id>/active.
   it('注入后 getBrand 反映产品品牌；重复注入抛错', () => {
     setProductBrand({
       displayName: '测试助手',
+      title: '侧栏标题',
       agentName: '测试助手',
       tagline: '通用智能助手',
       defaultAgentId: 'test-operator',
     });
     const brand = getBrand();
     expect(brand.displayName).toBe('测试助手');
+    expect(brand.title).toBe('侧栏标题');
     expect(brand.defaultAgentId).toBe('test-operator');
     expect(() =>
       setProductBrand({
