@@ -1,18 +1,21 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { LuChevronDown, LuChevronRight } from 'react-icons/lu';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import { useShowThinkingContent } from '@/lib/show-thinking-content';
 import { Markdown } from './Markdown';
 import { ToolsFlow } from './ExecutedActionsCard';
 import { processStatusLabel } from './process-status';
-import { splitTurnProcess, type TurnBlock } from './turn-timeline';
+import { processHasReasoning, splitTurnProcess, type TurnBlock } from './turn-timeline';
 
 /**
  * Codex / DeepSeek-style turn process: think + tool rows stay in one
- * disclosure. Default is collapsed (settings 「显示思考内容」 off) even
- * while streaming — the status line still shows 思考中 / 工具名 / tok/s /
+ * disclosure. Default is collapsed (settings 「显示思考内容」 off). While
+ * streaming, a fixed 7-line peek shows the latest reasoning; it folds when
+ * the turn ends. The status line still shows 思考中 / 工具名 / tok/s /
  * elapsed. The summary itself stays outside the fold.
  */
+
+export const THINKING_PEEK_LINES = 7;
 
 function useLiveElapsedMs(
   startedAtMs: number | undefined,
@@ -72,6 +75,50 @@ function ProcessBlocks({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function ThinkingPeek({
+  blocks,
+  isStreaming,
+  agents,
+  chats,
+  chatId,
+}: {
+  blocks: TurnBlock[];
+  isStreaming: boolean;
+  agents: LocalChatAgent[];
+  chats: LocalChat[];
+  chatId?: string | null;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const reasoning = blocks.filter(
+    (block) => block.type === 'reasoning' && block.content.trim().length > 0,
+  );
+  const sig = reasoning.map((block) => block.content.length).join(',');
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [sig]);
+  const lastIndex = reasoning.length - 1;
+  return (
+    <div
+      ref={scrollerRef}
+      className="h-[7lh] overflow-hidden border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground"
+      data-thinking-peek=""
+      data-testid="thinking-peek"
+      data-peek-lines={THINKING_PEEK_LINES}
+    >
+      {reasoning.map((block, index) => (
+        <div key={`peek-reasoning-${index}`}>
+          <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
+          {isStreaming && index === lastIndex && (
+            <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -166,6 +213,8 @@ export function TurnProcessGroup({
 
   const showToggle = process.length > 0;
   const showProcess = !showToggle || open;
+  const showThinkingPeek =
+    isStreaming && !open && showToggle && processHasReasoning(process);
   const showStreamingHint =
     Boolean(streamingHint) && isStreaming && answer.length === 0 && !showToggle;
 
@@ -199,6 +248,15 @@ export function TurnProcessGroup({
         <ProcessBlocks
           blocks={process}
           isStreaming={isStreaming && answer.length === 0}
+          agents={agents}
+          chats={chats}
+          chatId={chatId}
+        />
+      )}
+      {showThinkingPeek && (
+        <ThinkingPeek
+          blocks={process}
+          isStreaming={answer.length === 0}
           agents={agents}
           chats={chats}
           chatId={chatId}

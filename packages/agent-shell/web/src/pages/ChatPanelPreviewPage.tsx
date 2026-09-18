@@ -188,7 +188,19 @@ export function ChatPanelPreviewPage() {
           currentTurnActions: MOCK_ACTIONS.slice(0, 2),
           timelineByMsgId: {} as Record<string, TurnBlock[]>,
           currentTurnTimeline: [
-            { type: 'reasoning', content: '先检查连通性，再跑测试。' },
+            {
+              type: 'reasoning',
+              content: [
+                '先检查服务是否还能连上。',
+                '如果端口通了，再跑本目录的测试套件。',
+                '失败的话只读失败文件，不要整仓扫一遍。',
+                '断言颜色对不上时优先看 AssistantMessage 的默认色。',
+                '改完再复跑一次，确认没有带出新的失败。',
+                '工具调用保持最少：连通性检查、跑测试、必要时读文件。',
+                '最后用一两句说清楚结果和下一步。',
+                '如果还在思考，后面的句子会被 7 行窗口裁掉。',
+              ].join('\n'),
+            },
             {
               type: 'tools',
               actions: [MOCK_ACTIONS[0], { ...MOCK_ACTIONS[1], result: undefined }],

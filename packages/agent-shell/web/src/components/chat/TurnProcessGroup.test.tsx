@@ -80,7 +80,7 @@ describe('TurnProcessGroup', () => {
 
     expect(screen.getByRole('button').textContent).toContain('思考中');
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByText('先读配置')).toBeNull();
+    expect(screen.queryByTestId('tools-flow')).toBeNull();
     expect(screen.queryByTestId('answer')).toBeNull();
 
     view.rerender(
@@ -98,6 +98,37 @@ describe('TurnProcessGroup', () => {
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByRole('button').textContent).toContain('2 次工具调用 · 已思考');
     expect(screen.queryByText('先读配置')).toBeNull();
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
+    expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
+  });
+
+  it('shows a fixed 7-line thinking peek while streaming, then folds it', () => {
+    const view = renderGroup({
+      isStreaming: true,
+      blocks: blocks.slice(0, 4),
+      showThinkingContent: false,
+    });
+
+    const peek = screen.getByTestId('thinking-peek');
+    expect(peek.getAttribute('data-peek-lines')).toBe('7');
+    expect(peek.className).toContain('h-[7lh]');
+    expect(screen.getByText('再查天气')).toBeTruthy();
+    expect(screen.queryByTestId('tools-flow')).toBeNull();
+
+    view.rerender(
+      <TurnProcessGroup
+        blocks={blocks}
+        isStreaming={false}
+        showThinkingContent={false}
+        agents={[]}
+        chats={[]}
+        emptyFallback={<div>empty</div>}
+        renderAnswer={(block) => <div data-testid="answer">{block.content}</div>}
+      />,
+    );
+
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
+    expect(screen.queryByText('再查天气')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
@@ -110,6 +141,7 @@ describe('TurnProcessGroup', () => {
 
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('先读配置')).toBeTruthy();
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
 
     view.rerender(
       <TurnProcessGroup
@@ -177,7 +209,8 @@ describe('TurnProcessGroup', () => {
       showThinkingContent: false,
     });
     expect(screen.getByRole('button').textContent).toContain('调用工具中 · local_run_snippet');
-    expect(screen.queryByText('先读配置')).toBeNull();
+    expect(screen.getByTestId('thinking-peek')).toBeTruthy();
+    expect(screen.queryByTestId('tools-flow')).toBeNull();
   });
 
   it('shows elapsed while streaming', () => {

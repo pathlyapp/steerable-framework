@@ -16,8 +16,7 @@ export function AppearanceSettingsPanel() {
         <div className="min-w-0">
           <p className="text-sm font-medium text-agent-foreground">显示思考内容</p>
           <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
-            关闭后思考过程默认折叠，状态行仍显示思考中、正在调用的工具、token
-            速度和用时。点开单条即可查看原文。
+            关闭后流式中只露出 7 行思考，结束后自动折叠。状态行仍显示思考中、工具名、速度和用时。
           </p>
         </div>
         <button
