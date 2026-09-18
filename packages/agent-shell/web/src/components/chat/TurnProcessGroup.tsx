@@ -1,22 +1,17 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { LuChevronDown, LuChevronRight } from 'react-icons/lu';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { useShowThinkingContent } from '@/lib/show-thinking-content';
 import { Markdown } from './Markdown';
 import { ToolsFlow } from './ExecutedActionsCard';
-import { formatElapsedCompact } from './elapsed';
-import {
-  countProcessTools,
-  processHasReasoning,
-  splitTurnProcess,
-  type TurnBlock,
-} from './turn-timeline';
+import { processStatusLabel } from './process-status';
+import { splitTurnProcess, type TurnBlock } from './turn-timeline';
 
 /**
  * Codex / DeepSeek-style turn process: think + tool rows stay in one
- * disclosure. Expanded while the turn streams; collapsed once the trailing
- * summary is on screen. The summary itself stays outside the fold.
- * Elapsed time ticks while streaming (Codex status line) and freezes as
- * 「工作了 …」 after the turn ends.
+ * disclosure. Default is collapsed (settings 「显示思考内容」 off) even
+ * while streaming — the status line still shows 思考中 / 工具名 / tok/s /
+ * elapsed. The summary itself stays outside the fold.
  */
 
 function useLiveElapsedMs(
@@ -32,27 +27,6 @@ function useLiveElapsedMs(
   }, [enabled, startedAtMs]);
   if (startedAtMs == null) return undefined;
   return Math.max(0, now - startedAtMs);
-}
-
-function processLabel(
-  process: TurnBlock[],
-  isStreaming: boolean,
-  elapsedMs: number | undefined,
-): string {
-  const elapsed =
-    elapsedMs != null && (isStreaming || elapsedMs >= 1000)
-      ? formatElapsedCompact(elapsedMs)
-      : null;
-  if (isStreaming) {
-    return elapsed ? `正在执行… ${elapsed}` : '正在执行…';
-  }
-  const parts: string[] = [];
-  const tools = countProcessTools(process);
-  if (tools > 0) parts.push(`${tools} 次工具调用`);
-  if (processHasReasoning(process)) parts.push('已思考');
-  if (elapsed) parts.push(`工作了 ${elapsed}`);
-  if (parts.length === 0) return '执行过程';
-  return parts.join(' · ');
 }
 
 function ProcessBlocks({
@@ -112,6 +86,7 @@ export function TurnProcessGroup({
   streamingHint,
   startedAtMs,
   durationMs,
+  showThinkingContent: showThinkingContentProp,
   renderAnswer,
 }: {
   blocks: TurnBlock[];
@@ -126,11 +101,24 @@ export function TurnProcessGroup({
   startedAtMs?: number;
   /** Frozen wall-clock of a finished turn (metadata or just-ended stream). */
   durationMs?: number;
+  /**
+   * Override the settings preference. Omitted = read 「显示思考内容」.
+   * Task process panel passes true so the inspector stays expanded.
+   */
+  showThinkingContent?: boolean;
   renderAnswer: (block: Extract<TurnBlock, { type: 'text' }>, isLast: boolean) => ReactNode;
 }) {
+  const preference = useShowThinkingContent();
+  const showThinkingContent = showThinkingContentProp ?? preference;
   const { process, answer } = splitTurnProcess(blocks);
-  const [open, setOpen] = useState(() => isStreaming || answer.length === 0);
+  const [open, setOpen] = useState(
+    () => showThinkingContent && (isStreaming || answer.length === 0),
+  );
   const wasStreamingRef = useRef(isStreaming);
+  const isStreamingRef = useRef(isStreaming);
+  const answerLenRef = useRef(answer.length);
+  isStreamingRef.current = isStreaming;
+  answerLenRef.current = answer.length;
   const liveElapsedMs = useLiveElapsedMs(startedAtMs, isStreaming);
   const lastLiveElapsedRef = useRef<number | undefined>(undefined);
   if (isStreaming && liveElapsedMs != null) {
@@ -140,24 +128,46 @@ export function TurnProcessGroup({
     ? liveElapsedMs
     : durationMs ?? lastLiveElapsedRef.current;
 
+  const lastProcess = process[process.length - 1];
+  const reasoningClockRef = useRef<{ index: number; startedAt: number } | null>(null);
+  if (isStreaming && lastProcess?.type === 'reasoning') {
+    const index = process.length - 1;
+    if (reasoningClockRef.current?.index !== index) {
+      reasoningClockRef.current = { index, startedAt: Date.now() };
+    }
+  } else if (!isStreaming) {
+    reasoningClockRef.current = null;
+  }
+  const reasoningElapsedMs =
+    isStreaming && lastProcess?.type === 'reasoning' && reasoningClockRef.current
+      ? Math.max(0, Date.now() - reasoningClockRef.current.startedAt)
+      : undefined;
+
+  useEffect(() => {
+    if (!showThinkingContent) {
+      setOpen(false);
+      return;
+    }
+    if (isStreamingRef.current || answerLenRef.current === 0) setOpen(true);
+  }, [showThinkingContent]);
+
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
     if (wasStreaming && !isStreaming && answer.length > 0) {
       setOpen(false);
     }
     if (!wasStreaming && isStreaming) {
-      setOpen(true);
+      setOpen(showThinkingContent);
     }
     wasStreamingRef.current = isStreaming;
-  }, [isStreaming, answer.length]);
+  }, [isStreaming, answer.length, showThinkingContent]);
 
   if (blocks.length === 0) return <>{emptyFallback}</>;
 
   const showToggle = process.length > 0;
   const showProcess = !showToggle || open;
-  const lastProcess = process[process.length - 1];
   const showStreamingHint =
-    Boolean(streamingHint) && isStreaming && answer.length === 0 && lastProcess?.type === 'tools';
+    Boolean(streamingHint) && isStreaming && answer.length === 0 && !showToggle;
 
   return (
     <div className="space-y-1.5" data-turn-timeline>
@@ -175,7 +185,14 @@ export function TurnProcessGroup({
           ) : (
             <LuChevronRight className="h-3.5 w-3.5 shrink-0" />
           )}
-          <span className="truncate">{processLabel(process, isStreaming, elapsedMs)}</span>
+          <span className="truncate">
+            {processStatusLabel({
+              process,
+              isStreaming,
+              elapsedMs,
+              reasoningElapsedMs,
+            })}
+          </span>
         </button>
       )}
       {showProcess && (

@@ -84,12 +84,14 @@ describe('SettingsPage header save', () => {
 
   it('orders general sections by how often they are used', () => {
     renderSettings();
+    expect(screen.getByRole('heading', { name: '界面' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: '帮助改进产品' })).toBeTruthy();
     expect(
       [...document.querySelectorAll('[data-testid^="settings-section-"]')].map(
         (el) => el.getAttribute('data-testid'),
       ),
     ).toEqual([
+      'settings-section-appearance',
       'settings-section-llm',
       'settings-section-web-search',
       'settings-section-usage',

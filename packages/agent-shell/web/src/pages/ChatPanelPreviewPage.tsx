@@ -189,7 +189,10 @@ export function ChatPanelPreviewPage() {
           timelineByMsgId: {} as Record<string, TurnBlock[]>,
           currentTurnTimeline: [
             { type: 'reasoning', content: '先检查连通性，再跑测试。' },
-            { type: 'tools', actions: MOCK_ACTIONS.slice(0, 2) },
+            {
+              type: 'tools',
+              actions: [MOCK_ACTIONS[0], { ...MOCK_ACTIONS[1], result: undefined }],
+            },
           ],
           currentTurnStartedAtMs: Date.now() - 12_000,
           currentRound: 2,

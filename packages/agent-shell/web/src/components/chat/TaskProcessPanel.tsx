@@ -167,6 +167,7 @@ export function TaskProcessPanel({
             <TurnProcessGroup
               blocks={blocks}
               isStreaming={live}
+              showThinkingContent
               agents={[]}
               chats={[]}
               emptyFallback={
