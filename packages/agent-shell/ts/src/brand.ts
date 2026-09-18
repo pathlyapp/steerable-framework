@@ -2,7 +2,7 @@
  * 品牌/ flavor 单一真源（主进程与 Node 侧共用）。
  *
  * flavor 是开放字符串（ScenarioId，0.3g 起不再是二值联合）：`generic`
- * 是无场景包的产品 flavor，其余 flavor 由场景包激活。合法 flavor 集合
+ * 是无品牌 shell 兜底，产品 flavor 由应用层注入。合法 flavor 集合
  * = 应用层 products/manifest.json 的 flavors 键（best-effort 校验，
  * 读不到清单时不强制）。
  *
@@ -25,7 +25,7 @@ import path from 'node:path';
 import { getAppRootDir } from './runtime.js';
 import type { ScenarioId } from './scenario/pack.js';
 
-/** 开放字符串（0.3g）：'generic' | 各场景产品 flavor | 未来产品 id。 */
+/** 开放字符串（0.3g）：'generic'（无品牌兜底）| 各产品 flavor。 */
 export type AppFlavor = ScenarioId;
 
 /** shell 默认智能体；场景产品里仍可选，但不一定作为首页默认。 */

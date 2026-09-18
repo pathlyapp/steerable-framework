@@ -17,9 +17,11 @@ export const BRAND_NAME: string = import.meta.env.VITE_BRAND_NAME ?? 'Steerable 
 
 /**
  * 品牌锁头标题。产品/包可在 brand.title 注入；空字符串表示不配标题，
- * 侧栏只按原比例显示 logo。未 define 时回落壳默认名。
+ * 侧栏只按原比例显示 logo。未 define 时回落 displayName，避免旧
+ * vite.base.js 漏注入时露出壳默认名。
  */
-export const BRAND_TITLE: string = import.meta.env.VITE_BRAND_TITLE ?? 'Steerable Shell';
+export const BRAND_TITLE: string =
+  import.meta.env.VITE_BRAND_TITLE ?? import.meta.env.VITE_BRAND_NAME ?? 'Steerable Shell';
 
 /** shell 默认 logo（中性通用图标）；包品牌 logo 由包 web 模块注册覆盖。 */
 let brandLogoUrl: string = shellLogoUrl;

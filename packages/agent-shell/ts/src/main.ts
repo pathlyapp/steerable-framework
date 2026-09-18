@@ -91,11 +91,13 @@ const START_PATH = process.env.DEEPPATH_START_PATH || '/agent';
 // Linux 必须显式给 BrowserWindow 一个 icon（不会自动从 .deb/.AppImage 继承）；
 // Windows 一般用 .exe 自带的 ICO，但 dev 模式下传 PNG 能让任务栏立刻看到 logo；
 // macOS 用 .icns（package.json 里 electron-builder 配置已指向 icon-mac.png）。
-const APP_ICON_PATH = path.join(
-  app.getAppPath(),
-  'assets',
-  getBrand().flavor === 'generic' ? 'icon-generic.png' : 'icon.png',
-);
+function resolveAppIconPath(): string {
+  const assetsDir = path.join(app.getAppPath(), 'assets');
+  const flavorIcon = path.join(assetsDir, `icon-${getBrand().flavor}.png`);
+  if (existsSync(flavorIcon)) return flavorIcon;
+  return path.join(assetsDir, 'icon.png');
+}
+const APP_ICON_PATH = resolveAppIconPath();
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
