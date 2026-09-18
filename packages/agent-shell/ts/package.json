@@ -1,6 +1,6 @@
 {
   "name": "@steerable/agent-shell",
-  "version": "0.6.22",
+  "version": "0.6.23",
   "description": "Steerable framework \u2014 product-neutral desktop/headless agent host (Tier 5). Electron main + preload + headless HTTP server (BS) sharing one storage/sidecar/tooling core; scenario packs extend it through the @steerable/pack-sdk contract and are composed at build time by the consuming product.",
   "license": "Apache-2.0",
   "homepage": "https://steerableframework.com/",
