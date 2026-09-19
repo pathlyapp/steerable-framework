@@ -61,11 +61,7 @@ import { parseUserMessageTriggers } from './message-triggers.js';
 import { findSkill, getUserSkillsDir, loadSkills, classifySkillOrigin, listSkillRoots } from './skill-loader.js';
 import { installSkillFromDirectory } from './skill-install.js';
 import { generateChatTitle } from './ai-title.js';
-import {
-  fallbackSuggestedReplies,
-  generateSuggestedReplies,
-  listedSuggestedReplies,
-} from './ai-suggestions.js';
+import { generateSuggestedReplies } from './ai-suggestions.js';
 import { detectDeferredExecution } from './deferred-detector.js';
 import {
   formatHistoryForSummary,
@@ -3596,9 +3592,8 @@ export class LocalBackendRouter {
   }
 
   /**
-   * 回合结束后生成下一轮用户输入建议。只广播一次最终结果：
-   * 回复/技能里已有下一步就直接用，不再额外跑 LLM 改写；
-   * 否则等这一次 LLM（失败再用启发式）。
+   * 回合结束后生成下一轮用户输入建议。只走一次 LLM 判断
+   *（来源：`[next_steps]` 或最后一段），只广播一次最终结果。
    * 走 broadcast 而不是 SSE：`[DONE]` 之后渲染端已经不再监听这条流。
    */
   private runSuggestedRepliesInBackground(args: {
@@ -3614,47 +3609,14 @@ export class LocalBackendRouter {
 
     void (async () => {
       try {
-        const skillContents = await this.loadUserSkillSuggestionTexts();
-        const listed = listedSuggestedReplies(userText, assistantText, { skillContents });
-        if (listed.length > 0) {
-          this.publishSuggestedReplies(chatId, messageId, listed);
-          return;
-        }
-        const fallback = fallbackSuggestedReplies(userText, assistantText, { skillContents });
         const result = await generateSuggestedReplies(userText, assistantText, {
           perAttemptTimeoutMs: 60_000,
-          skillContents,
         });
-        this.publishSuggestedReplies(
-          chatId,
-          messageId,
-          result.usedFallback ? fallback : result.suggestions,
-        );
+        this.publishSuggestedReplies(chatId, messageId, result.suggestions);
       } catch (err) {
         console.warn('[local-backend] suggested-replies failed', { chatId, err });
-        const fallback = fallbackSuggestedReplies(userText, assistantText);
-        this.publishSuggestedReplies(chatId, messageId, fallback);
       }
     })();
-  }
-
-  /** 用户/工作区技能正文，供追问建议抽出「下一步」。内置技能不参与。 */
-  private async loadUserSkillSuggestionTexts(): Promise<string[]> {
-    try {
-      const modules = await loadSkills({ ignoreConditions: true });
-      return modules
-        .filter((module) => classifySkillOrigin(module.skillsDir) !== 'builtin')
-        .map((module) => {
-          const title = (module.displayName || module.name || module.dirName || '').trim();
-          const body = (module.content ?? '').trim();
-          if (!body) return '';
-          return title ? `# ${title}\n${body}` : body;
-        })
-        .filter(Boolean);
-    } catch (err) {
-      console.warn('[local-backend] suggested-replies skill load failed', err);
-      return [];
-    }
   }
 
   private async publishSuggestedReplies(

@@ -1,8 +1,8 @@
 /**
  * 回合追问建议（local-backend/ai-suggestions.ts）行为测试。
  *
- * 钉住：JSON / 编号列表解析、单条清洗、从用户技能/助手回复抽下一步（条数不固定）、
- * 启发式兜底（PPT / 计划 / 代码 / 通用）、LLM 成功替换、失败/超时走兜底且永不抛错。
+ * 钉住：只把 `[next_steps]` / 最后一段交给 LLM 判断，JSON / 编号列表解析，
+ * 失败或超时返回空数组且永不抛错。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -16,47 +16,14 @@ vi.mock('../../src/llm/index.js', () => ({
 
 import {
   cleanSuggestedReply,
-  extractListedNextSteps,
-  extractSkillNextSteps,
-  fallbackSuggestedReplies,
+  extractNextStepsSource,
   generateSuggestedReplies,
-  listedSuggestedReplies,
   parseSuggestedReplies,
-  stripSkillInvocation,
 } from '../../src/local-backend/ai-suggestions.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
-
-const WELL_SKILL = `# 井密度交会图
-
-按层位画井密度交会图。用户提到交会图 / 井密度时使用。
-
-## 用法
-用 {scripts}/invoke-crossplot.ps1。
-
-## 下一步
-1. 画接底层井密度交会图（先核对井位）
-2. 再画一层井密度交会图
-3. 统计本区有效厚度与净毛比
-4. 输出气层厚度分层表
-5. 绘制气层厚度等值线
-6. 复核井位/层位完整性
-7. 补画 CAL / CNL 缺失井
-`;
-
-const WELL_ASSISTANT = `本轮已完成接底层数据检查。
-
-下一步：
-1. 画接底层井密度交会图（先核对井位） & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\plot-crossplot\\scripts\\invoke-crossplot.ps1' -Action plot -Projectpath 'D:\\data'
-2. 再画一层井密度交会图 & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\plot-crossplot\\scripts\\invoke-crossplot.ps1' -Action plot
-3. 统计本区有效厚度与净毛比 & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\analyze-reservoir-thickness\\scripts\\analyze.ps1'
-4. 输出气层厚度分层表 & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\report-fluid-layers\\scripts\\report.ps1'
-5. 绘制气层厚度等值线 & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\plot-contour-map\\scripts\\invoke-contour.ps1'
-6. 复核井位/层位完整性 & 'C:\\Users\\me\\AppData\\Roaming\\app\\skills\\audit-well-data\\scripts\\audit.ps1'
-7. 补画 CAL / CNL 缺失井
-`;
 
 describe('cleanSuggestedReply / parseSuggestedReplies', () => {
   it('去掉编号、引号、尾标点并截断', () => {
@@ -65,14 +32,6 @@ describe('cleanSuggestedReply / parseSuggestedReplies', () => {
     expect(cleanSuggestedReply('• 再加一页')).toBe('再加一页');
     expect(cleanSuggestedReply('x')).toBe('');
     expect(Array.from(cleanSuggestedReply('字'.repeat(60))).length).toBe(48);
-  });
-
-  it('剥掉脚本调用只留标题', () => {
-    expect(
-      stripSkillInvocation(
-        "画接底层井密度交会图 & 'C:\\\\skills\\\\plot-crossplot\\\\scripts\\\\invoke-crossplot.ps1' -Action plot",
-      ),
-    ).toBe('画接底层井密度交会图');
   });
 
   it('解析 JSON 数组（含 markdown 代码块）', () => {
@@ -101,131 +60,43 @@ describe('cleanSuggestedReply / parseSuggestedReplies', () => {
   });
 });
 
-describe('extractSkillNextSteps / extractListedNextSteps', () => {
-  it('从用户技能「下一步」节抽出全部条目', () => {
-    expect(extractSkillNextSteps(WELL_SKILL)).toEqual([
-      '画接底层井密度交会图（先核对井位）',
-      '再画一层井密度交会图',
-      '统计本区有效厚度与净毛比',
-      '输出气层厚度分层表',
-      '绘制气层厚度等值线',
-      '复核井位/层位完整性',
-      '补画 CAL / CNL 缺失井',
-    ]);
-  });
-
-  it('助手按技能列出带脚本的下一步时抽出标题且不限 3 条', () => {
-    expect(extractListedNextSteps(WELL_ASSISTANT)).toEqual([
-      '画接底层井密度交会图（先核对井位）',
-      '再画一层井密度交会图',
-      '统计本区有效厚度与净毛比',
-      '输出气层厚度分层表',
-      '绘制气层厚度等值线',
-      '复核井位/层位完整性',
-      '补画 CAL / CNL 缺失井',
-    ]);
-  });
-
-  it('没有下一步标题或脚本列表时不误抽页面大纲', () => {
+describe('extractNextStepsSource', () => {
+  it('优先取最后一段 [next_steps] 正文', () => {
     expect(
-      extractListedNextSteps('PPT 已生成，包含：\n1. 封面\n2. 个人简介\n3. 项目经历'),
-    ).toEqual([]);
-  });
-
-  it('带括号补充的「后续动作」标题也识别，列表不带脚本也能抽', () => {
-    expect(
-      extractListedNextSteps(
-        '统计完成。\n\n后续动作（可点选，也可继续对话）\n1. 按层位画交会图\n2. 统计有效厚度\n3. 复核井位完整性\n4. 单位换算',
+      extractNextStepsSource(
+        'PPT 已完成。\n\n文件位置：桌面\n\n[next_steps]\n- 调整封面配色\n- 再加一页项目案例\n[/next_steps]',
       ),
-    ).toEqual(['按层位画交会图', '统计有效厚度', '复核井位完整性', '单位换算']);
+    ).toBe('- 调整封面配色\n- 再加一页项目案例');
   });
 
-  it('普通句尾出现「建议」「下一步」不触发抽取', () => {
+  it('多段标签时取最后一段', () => {
     expect(
-      extractListedNextSteps('以上是我的建议\n1. 封面\n2. 个人简介\n3. 项目经历'),
-    ).toEqual([]);
-    expect(
-      extractListedNextSteps('我不知道下一步\n- 封面\n- 个人简介'),
-    ).toEqual([]);
-  });
-
-  it('短引导行带冒号时仍然识别', () => {
-    expect(
-      extractSkillNextSteps('完成后可以继续：\n1. 导出分层表\n2. 绘制等值线'),
-    ).toEqual(['导出分层表', '绘制等值线']);
-  });
-});
-
-describe('listedSuggestedReplies', () => {
-  it('只返回回复/技能里已列出的下一步，没有则空', () => {
-    expect(listedSuggestedReplies('继续分析这口井', WELL_ASSISTANT)).toEqual(
-      extractListedNextSteps(WELL_ASSISTANT),
-    );
-    expect(listedSuggestedReplies('制作自我介绍ppt', 'PPT 已生成 /tmp/自我介绍_PPT.pptx')).toEqual([]);
-  });
-});
-
-describe('fallbackSuggestedReplies', () => {
-  it('回复里已有技能下一步时采用那些条目', () => {
-    expect(fallbackSuggestedReplies('继续分析这口井', WELL_ASSISTANT)).toEqual(
-      extractListedNextSteps(WELL_ASSISTANT),
-    );
-  });
-
-  it('技能正文有下一步时即使回复没列出也采用', () => {
-    expect(
-      fallbackSuggestedReplies('按技能继续', '本轮只做了数据检查。', { skillContents: [WELL_SKILL] }),
-    ).toEqual(extractSkillNextSteps(WELL_SKILL));
-  });
-
-  it('本轮点到名的技能，其下一步排在其它技能前面', () => {
-    const other = '# 导出井报告\n\n## 下一步\n1. 导出井报告 PDF\n2. 校对报告页眉';
-    expect(
-      fallbackSuggestedReplies('帮我用井密度交会图看看', '本轮只做了数据检查。', {
-        skillContents: [other, WELL_SKILL],
-      })[0],
-    ).toBe('画接底层井密度交会图（先核对井位）');
-  });
-
-  it('PPT 产物走封面/内容/加页', () => {
-    expect(fallbackSuggestedReplies('制作自我介绍ppt', 'PPT 已生成 /tmp/自我介绍_PPT.pptx')).toEqual([
-      '调整封面标题和配色',
-      '把某一页内容写得更具体',
-      '再加一页项目案例',
-    ]);
-  });
-
-  it('助手邀请改内容/样式时把邀请具体化', () => {
-    expect(
-      fallbackSuggestedReplies(
-        '做个 ppt',
-        'PPT 已生成。如需修改内容或调整样式，请告诉我。',
+      extractNextStepsSource(
+        '[next_steps]\n旧建议\n[/next_steps]\n\n正文\n\n[next_steps]\n新建议甲\n新建议乙\n[/next_steps]',
       ),
-    ).toEqual(['调整幻灯片的内容和文案', '调整配色和版式', '再加一页补充材料']);
+    ).toBe('新建议甲\n新建议乙');
   });
 
-  it('代码回复走解释/测试/可读性', () => {
-    expect(fallbackSuggestedReplies('修这个函数', '```ts\nexport function foo() {}\n```')).toEqual([
-      '解释这段实现的思路',
-      '帮我补上测试',
-      '再优化一下可读性',
-    ]);
+  it('没有标签时取最后一段', () => {
+    expect(
+      extractNextStepsSource(
+        'PPT 已制作完成并已打开。\n\n**文件位置**：桌面\n**页数**：8 页\n\n可以接着改封面配色，或再加一页作品赏析。',
+      ),
+    ).toBe('可以接着改封面配色，或再加一页作品赏析。');
   });
 
-  it('其它走通用三条', () => {
-    expect(fallbackSuggestedReplies('你好', '你好，需要帮忙吗？')).toEqual([
-      '继续完善这份结果',
-      '换一种呈现方式',
-      '告诉我下一步怎么做',
-    ]);
+  it('空回复得到空来源', () => {
+    expect(extractNextStepsSource('')).toBe('');
+    expect(extractNextStepsSource('   ')).toBe('');
   });
 });
 
 describe('generateSuggestedReplies', () => {
   const user = '制作自我介绍ppt';
-  const assistant = 'PPT 已生成并打开。包含 6 页幻灯片。如需修改内容或调整样式，请告诉我。';
+  const assistant =
+    'PPT 已生成并打开。\n\n[next_steps]\n- 把封面改成深蓝商务风\n- 第2页个人简介写具体\n[/next_steps]';
 
-  it('LLM 返回合格 JSON 时 usedFallback=false', async () => {
+  it('把 next_steps 正文交给 LLM，合格 JSON 时 usedFallback=false', async () => {
     mocks.generate.mockResolvedValue({
       content: '["把封面改成深蓝商务风","第2页个人简介写具体","再加一页项目经历"]',
     });
@@ -236,54 +107,56 @@ describe('generateSuggestedReplies', () => {
       '第2页个人简介写具体',
       '再加一页项目经历',
     ]);
+    const prompt = mocks.generate.mock.calls[0][0].messages[1].content as string;
+    expect(prompt).toContain('把封面改成深蓝商务风');
+    expect(prompt).not.toContain('PPT 已生成并打开');
   });
 
-  it('用户技能有多条下一步时按实际条数保留', async () => {
+  it('没有标签时只把最后一段当来源', async () => {
     mocks.generate.mockResolvedValue({
-      content: JSON.stringify([
-        '画接底层井密度交会图',
-        '再画一层井密度交会图',
-        '统计本区有效厚度',
-        '输出气层厚度分层表',
-        '绘制气层厚度等值线',
-        '复核井位完整性',
-        '补画 CAL CNL 缺失井',
-      ]),
+      content: '["调整封面配色","再加一页作品赏析"]',
     });
-    const result = await generateSuggestedReplies('继续分析这口井', '数据检查完成。', {
-      skillContents: [WELL_SKILL],
-    });
-    expect(result.usedFallback).toBe(false);
-    expect(result.suggestions).toHaveLength(7);
-    expect(mocks.generate.mock.calls[0][0].messages[1].content).toContain('用户技能中的下一步');
-    expect(mocks.generate.mock.calls[0][0].messages[1].content).toContain('不要压成 3 条');
+    await generateSuggestedReplies(
+      '介绍杜甫',
+      'PPT 已完成。\n\n**页数**：8 页\n\n可以接着改封面配色，或再加一页作品赏析。',
+    );
+    const prompt = mocks.generate.mock.calls[0][0].messages[1].content as string;
+    expect(prompt).toContain('可以接着改封面配色，或再加一页作品赏析。');
+    expect(prompt).not.toContain('**页数**：8 页');
   });
 
-  it('LLM 失败但技能已有下一步时仍返回那些条目', async () => {
-    mocks.generate.mockRejectedValue(new Error('boom'));
-    const result = await generateSuggestedReplies('继续', '检查完成。', {
-      skillContents: [WELL_SKILL],
-    });
+  it('模型判定没有下一步时返回空数组且不算兜底', async () => {
+    mocks.generate.mockResolvedValue({ content: '[]' });
+    const result = await generateSuggestedReplies(
+      '介绍杜甫',
+      'PPT 已完成。\n\n**文件位置**：桌面\n**页数**：8 页',
+    );
     expect(result.usedFallback).toBe(false);
-    expect(result.suggestions).toEqual(extractSkillNextSteps(WELL_SKILL));
+    expect(result.suggestions).toEqual([]);
   });
 
-  it('LLM 空白 / 抛错且无技能下一步时走启发式兜底', async () => {
+  it('没有来源时不调 LLM', async () => {
+    const result = await generateSuggestedReplies('你好', '   ');
+    expect(mocks.generate).not.toHaveBeenCalled();
+    expect(result).toEqual({ suggestions: [], usedFallback: false });
+  });
+
+  it('LLM 空白 / 抛错时返回空数组', async () => {
     mocks.generate.mockResolvedValue({ content: '' });
     const empty = await generateSuggestedReplies(user, assistant);
     expect(empty.usedFallback).toBe(true);
-    expect(empty.suggestions).toHaveLength(3);
+    expect(empty.suggestions).toEqual([]);
 
     mocks.generate.mockRejectedValue(new Error('boom'));
     const failed = await generateSuggestedReplies(user, assistant);
     expect(failed.usedFallback).toBe(true);
-    expect(failed.suggestions).toEqual(empty.suggestions);
+    expect(failed.suggestions).toEqual([]);
   });
 
-  it('超时走兜底且不抛错', async () => {
+  it('超时返回空数组且不抛错', async () => {
     mocks.generate.mockImplementation(() => new Promise(() => {}));
     const result = await generateSuggestedReplies(user, assistant, { perAttemptTimeoutMs: 20 });
     expect(result.usedFallback).toBe(true);
-    expect(result.suggestions).toHaveLength(3);
+    expect(result.suggestions).toEqual([]);
   });
 });

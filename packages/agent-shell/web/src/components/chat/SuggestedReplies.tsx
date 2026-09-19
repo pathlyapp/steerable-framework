@@ -1,7 +1,8 @@
 /**
  * WorkBuddy-style follow-up chips: next-turn user inputs rendered under the
- * latest assistant reply. Count follows the turn (skill next steps), not a
- * fixed three. Clicking one sends that text immediately.
+ * latest assistant reply. Source is the model's judgment of `[next_steps]`
+ * or the last paragraph — count follows that, not a fixed three. Clicking
+ * one sends that text immediately.
  */
 export function SuggestedReplies({
   suggestions,

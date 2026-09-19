@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import { ChatPanel } from '@steerable/agent-ui';
 import type { SteerOutcome } from '@steerable/agent-ui';
@@ -17,6 +17,8 @@ import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
 import type { LlmSpeedSnapshot } from './process-status';
+import { SessionTodoList } from './SessionTodoList';
+import { resolveLatestSessionTodos } from './todo-list-model';
 import {
   isImageFile,
   saveChatAttachments,
@@ -290,6 +292,30 @@ export function LocalChatPanel({
   // 空会话 hero：messages 为空且未在流式时整面板切到居中首屏布局。
   const showEmptyHero = Boolean(emptyHero) && messages.length === 0 && !isStreaming;
 
+  const sessionTodos = useMemo(
+    () =>
+      resolveLatestSessionTodos({
+        messages,
+        executedActionsByMessageId,
+        currentTurnActions,
+        timelineByMessageId,
+        currentTurnTimeline,
+      }),
+    [
+      messages,
+      executedActionsByMessageId,
+      currentTurnActions,
+      timelineByMessageId,
+      currentTurnTimeline,
+    ],
+  );
+
+  const sessionTodoBanner = sessionTodos ? (
+    <div className="px-2.5">
+      <SessionTodoList todos={sessionTodos} />
+    </div>
+  ) : null;
+
   // Sync `chat-input-box-width` CSS var so bubbles match the input width
   // (cloud product uses 95% of the input box; we mirror that here so message
   // bubbles + input visually align in a column).
@@ -375,6 +401,7 @@ export function LocalChatPanel({
               </div>
               <div className="w-full">
                 {inputBanner}
+                {sessionTodoBanner}
                 {chatInputNode}
               </div>
             </div>
@@ -422,6 +449,7 @@ export function LocalChatPanel({
                 onSelectSuggestion={onSelectSuggestion}
               />
               {inputBanner}
+              {sessionTodoBanner}
               {chatInputNode}
             </div>
           </>

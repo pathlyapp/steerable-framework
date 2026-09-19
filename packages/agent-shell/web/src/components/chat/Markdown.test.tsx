@@ -167,4 +167,16 @@ describe('Markdown 普通文本', () => {
     renderMessage('普通一句话，没有任何 token。');
     expect(screen.getByText('普通一句话，没有任何 token。')).toBeTruthy();
   });
+
+  it('不显示 [next_steps] 标签，只显示里面的内容', () => {
+    const { container } = render(
+      <Markdown inlineParagraph>
+        {'PPT 已完成。\n[next_steps]\n调整封面配色\n[/next_steps]'}
+      </Markdown>,
+    );
+    expect(container.textContent).toContain('PPT 已完成。');
+    expect(container.textContent).toContain('调整封面配色');
+    expect(container.textContent).not.toContain('[next_steps]');
+    expect(container.textContent).not.toContain('[/next_steps]');
+  });
 });

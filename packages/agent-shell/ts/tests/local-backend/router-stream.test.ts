@@ -983,39 +983,11 @@ describe('后台标题生成', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 后台追问建议（WorkBuddy 式下一轮输入，条数随技能/回复下一步）
+// 后台追问建议（只走一次 LLM，来源是 next_steps / 最后一段）
 // ---------------------------------------------------------------------------
 
 describe('后台追问建议', () => {
-  it('回复已列出下一步时直接广播，不再调 LLM', async () => {
-    const listed = [
-      '直接打开文件预览',
-      '把配色改成浅蓝加橙色',
-      '在第二页加上我的工作年限',
-    ];
-    h.listedSuggestedReplies.mockReturnValue(listed);
-    const chat = await seedChat();
-    installStream((opts) => opts.onText('PPT 已生成。\n下一步：\n1. 打开预览'));
-    const { broadcast, calls } = makeBroadcast();
-    await makeRouter({ broadcast }).handleStream(
-      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '制作自我介绍ppt' } },
-      makeEmitCapture().emit,
-    );
-    const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
-    await vi.waitFor(() =>
-      expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1),
-    );
-    expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
-    expect(calls).toContainEqual({
-      event: 'suggested-replies',
-      payload: { chatId: chat.id, messageId: assistant.id, suggestions: listed },
-    });
-    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
-      suggestedReplies: listed,
-    });
-  });
-
-  it('没有列出的下一步时等 LLM，只广播一次最终建议', async () => {
+  it('回合结束后等 LLM，只广播一次最终建议', async () => {
     const chat = await seedChat();
     installStream((opts) => opts.onText('PPT 已生成'));
     let finishLlm: (value: {
@@ -1036,15 +1008,10 @@ describe('后台追问建议', () => {
 
     const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
     await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
-    expect(h.listedSuggestedReplies).toHaveBeenCalledWith(
-      '制作自我介绍ppt',
-      'PPT 已生成',
-      expect.objectContaining({ skillContents: [] }),
-    );
     expect(h.generateSuggestedReplies).toHaveBeenCalledWith(
       '制作自我介绍ppt',
       'PPT 已生成',
-      expect.objectContaining({ skillContents: [] }),
+      expect.objectContaining({ perAttemptTimeoutMs: 60_000 }),
     );
     expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(0);
     const pendingMeta = assistant.messageMetadata
@@ -1072,47 +1039,21 @@ describe('后台追问建议', () => {
     });
   });
 
-  it('把用户技能正文交给建议生成器', async () => {
-    h.loadSkills.mockResolvedValue([
-      {
-        name: 'plot-crossplot',
-        displayName: '井密度交会图',
-        dirName: 'plot-crossplot',
-        skillsDir: '/tmp/user/skills',
-        content: '## 下一步\n1. 画接底层交会图\n2. 再画一层',
-      },
-    ]);
-    const chat = await seedChat();
-    installStream((opts) => opts.onText('检查完成'));
-    await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
-      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '继续分析' } },
-      makeEmitCapture().emit,
-    );
-    await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
-    expect(h.generateSuggestedReplies).toHaveBeenCalledWith(
-      '继续分析',
-      '检查完成',
-      expect.objectContaining({
-        skillContents: [expect.stringContaining('## 下一步')],
-      }),
-    );
-  });
-
-  it('LLM 走兜底时只广播一次启发式', async () => {
+  it('模型判定没有下一步时不广播', async () => {
     h.generateSuggestedReplies.mockResolvedValue({
-      suggestions: ['兜底-1', '兜底-2', '兜底-3'],
-      usedFallback: true,
+      suggestions: [],
+      usedFallback: false,
     });
     const chat = await seedChat();
-    installStream((opts) => opts.onText('回答'));
+    installStream((opts) => opts.onText('PPT 已完成。\n\n**页数**：8 页'));
     const { broadcast, calls } = makeBroadcast();
     await makeRouter({ broadcast }).handleStream(
-      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '你好' } },
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '介绍杜甫' } },
       makeEmitCapture().emit,
     );
     await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
-    expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1);
+    expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(0);
   });
 
   it('取消 / 失败 / 空回复不生成建议', async () => {
@@ -1124,12 +1065,8 @@ describe('后台追问建议', () => {
       { method: 'POST', path: `/api/v2/chats/${cancelled.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
     );
-    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
-    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
     expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
 
-    h.fallbackSuggestedReplies.mockClear();
-    h.listedSuggestedReplies.mockClear();
     h.generateSuggestedReplies.mockClear();
     const failed = await seedChat();
     installStream(() => {}, { status: 'failed', reason: 'HTTP 401' });
@@ -1137,12 +1074,8 @@ describe('后台追问建议', () => {
       { method: 'POST', path: `/api/v2/chats/${failed.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
     );
-    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
-    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
     expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
 
-    h.fallbackSuggestedReplies.mockClear();
-    h.listedSuggestedReplies.mockClear();
     h.generateSuggestedReplies.mockClear();
     const empty = await seedChat();
     installStream(() => {});
@@ -1150,8 +1083,6 @@ describe('后台追问建议', () => {
       { method: 'POST', path: `/api/v2/chats/${empty.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
     );
-    expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
-    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
     expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
   });
 });

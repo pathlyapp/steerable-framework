@@ -13,6 +13,7 @@ import type { TurnBlock } from './turn-timeline';
 import { TurnProcessGroup } from './TurnProcessGroup';
 import { TurnFilesCard } from './TurnFilesCard';
 import type { TurnFile } from './turn-files';
+import { stripNextStepsTags } from './next-steps-tags';
 import {
   formatTokenSpeed,
   llmRequestElapsedMs,
@@ -248,7 +249,7 @@ export function AssistantMessage({
   // live 错误文本（"[stream error] ..."）不当正文渲染；落库的失败回合可能
   // 留有部分正文，此时正文与错误气泡都展示。
   const displayContent = failure?.contentIsError ? '' : content;
-  const { copied, copy } = useCopy(content);
+  const { copied, copy } = useCopy(stripNextStepsTags(content));
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const persistedAgent = message.agentId

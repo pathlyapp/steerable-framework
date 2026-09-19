@@ -82,7 +82,28 @@ Tests: 1 failed, 2 passed, 3 total
   },
 ];
 
+const MOCK_TODOS = [
+  { id: 'survey', content: '检查服务连通性', status: 'completed' as const },
+  { id: 'test', content: '跑本目录测试套件', status: 'in_progress' as const },
+  { id: 'fix', content: '修失败的断言颜色', status: 'pending' as const },
+];
+
+const MOCK_TODO_ACTION: ExecutedAction = {
+  tool: 'todo_write',
+  arguments: { todos: MOCK_TODOS },
+  result: {
+    success: true,
+    data: {
+      value: {
+        todos: MOCK_TODOS,
+        summary: { total: 3, pending: 1, inProgress: 1, completed: 1 },
+      },
+    },
+  },
+};
+
 const MOCK_ACTIONS: ExecutedAction[] = [
+  MOCK_TODO_ACTION,
   {
     tool: 'check_connection',
     arguments: { host: '127.0.0.1', port: 8765 },
@@ -107,11 +128,12 @@ const MOCK_ACTIONS: ExecutedAction[] = [
 
 const MOCK_TIMELINE: TurnBlock[] = [
   { type: 'reasoning', content: '先检查服务连通性，再跑测试套件。' },
-  { type: 'tools', actions: [MOCK_ACTIONS[0]] },
-  { type: 'text', content: '连接正常。接下来跑测试套件。' },
+  { type: 'tools', actions: [MOCK_TODO_ACTION] },
   { type: 'tools', actions: [MOCK_ACTIONS[1]] },
-  { type: 'reasoning', content: '测试失败，读一下失败文件再给建议。' },
+  { type: 'text', content: '连接正常。接下来跑测试套件。' },
   { type: 'tools', actions: [MOCK_ACTIONS[2]] },
+  { type: 'reasoning', content: '测试失败，读一下失败文件再给建议。' },
+  { type: 'tools', actions: [MOCK_ACTIONS[3]] },
   { type: 'text', content: MOCK_MESSAGES[1].content ?? '' },
 ];
 

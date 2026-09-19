@@ -20,6 +20,7 @@ import {
 import { PlanTodoList } from './PlanTodoList';
 import { FilePathCode } from './FilePathCode';
 import { looksLikeFilePath } from './path-mentions';
+import { stripNextStepsTags } from './next-steps-tags';
 
 /**
  * Markdown renderer shared by `UserMessage` and `AssistantMessage`.
@@ -453,7 +454,7 @@ export function Markdown({
       rehypePlugins={[rehypeRaw]}
       components={finalComponents}
     >
-      {children}
+      {stripNextStepsTags(children)}
     </ReactMarkdown>
   );
 }
