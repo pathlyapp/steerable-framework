@@ -16,7 +16,7 @@ vi.mock('./ExecutedActionsCard', () => ({
   ),
 }));
 
-const { TurnProcessGroup } = await import('./TurnProcessGroup');
+const { TurnProcessGroup, THINKING_PEEK_HEIGHT } = await import('./TurnProcessGroup');
 
 afterEach(() => {
   cleanup();
@@ -111,7 +111,7 @@ describe('TurnProcessGroup', () => {
 
     const peek = screen.getByTestId('thinking-peek');
     expect(peek.getAttribute('data-peek-lines')).toBe('7');
-    expect(peek.className).toContain('h-[7lh]');
+    expect(peek.style.height).toBe(THINKING_PEEK_HEIGHT);
     expect(screen.getByText('再查天气')).toBeTruthy();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
 
@@ -130,6 +130,17 @@ describe('TurnProcessGroup', () => {
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.queryByText('再查天气')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
+  });
+
+  it('renders HTML-like reasoning as plain text in the peek', () => {
+    renderGroup({
+      isStreaming: true,
+      blocks: [{ type: 'reasoning', content: '比较 a < b 再调用 <tool>' }],
+      showThinkingContent: false,
+    });
+    expect(screen.getByTestId('thinking-peek').textContent).toContain(
+      '比较 a < b 再调用 <tool>',
+    );
   });
 
   it('expands while streaming when 显示思考内容 is on, then auto-collapses', () => {

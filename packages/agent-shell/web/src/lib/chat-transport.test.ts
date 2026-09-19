@@ -51,6 +51,21 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
     expect(last.payload.blocks).toEqual([{ type: 'text', content: '你好世界' }]);
   });
 
+  it('reasoning 帧写入 turn_timeline', () => {
+    const { events, onEvent } = collectEvents();
+    const adapter = new LocalBackendSseAdapter(onEvent);
+    adapter.feed('data: {"type":"reasoning","content":"想一下"}\n\n');
+    adapter.feed('data: {"type":"reasoning","content":"再决定"}\n\n');
+    const timelines = events.filter(
+      (e) => e.type === 'agent' && (e as { event?: string }).event === 'turn_timeline',
+    );
+    expect(timelines.length).toBe(2);
+    const last = timelines[1] as unknown as {
+      payload: { blocks: Array<{ type: string; content: string }> };
+    };
+    expect(last.payload.blocks).toEqual([{ type: 'reasoning', content: '想一下再决定' }]);
+  });
+
   it('[DONE] 帧触发一次 done；之后再 end 不重复', () => {
     const { events, onEvent } = collectEvents();
     const adapter = new LocalBackendSseAdapter(onEvent);

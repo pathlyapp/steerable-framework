@@ -16,6 +16,29 @@ import { processHasReasoning, splitTurnProcess, type TurnBlock } from './turn-ti
  */
 
 export const THINKING_PEEK_LINES = 7;
+/**
+ * 7 行 `text-xs` + `leading-relaxed` 的稳定高度。
+ * 不用 CSS `lh`：Windows Electron 在中文字体尚未就绪时 `lh` 会算成 0，
+ * 思考 peek 整块消失，字体加载后又把主列表高度撑跳。
+ */
+export const THINKING_PEEK_HEIGHT = `${THINKING_PEEK_LINES * 1.625}em`;
+
+function ReasoningBody({
+  content,
+  showCursor,
+}: {
+  content: string;
+  showCursor?: boolean;
+}) {
+  return (
+    <>
+      <div className="whitespace-pre-wrap break-words">{content}</div>
+      {showCursor ? (
+        <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
+      ) : null}
+    </>
+  );
+}
 
 function useLiveElapsedMs(
   startedAtMs: number | undefined,
@@ -56,10 +79,7 @@ function ProcessBlocks({
               key={`reasoning-${index}`}
               className="text-xs leading-relaxed text-agent-muted-foreground"
             >
-              <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
-              {isStreaming && isLast && (
-                <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
-              )}
+              <ReasoningBody content={block.content} showCursor={isStreaming && isLast} />
             </div>
           );
         }
@@ -82,15 +102,9 @@ function ProcessBlocks({
 function ThinkingPeek({
   blocks,
   isStreaming,
-  agents,
-  chats,
-  chatId,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
-  agents: LocalChatAgent[];
-  chats: LocalChat[];
-  chatId?: string | null;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const reasoning = blocks.filter(
@@ -107,17 +121,15 @@ function ThinkingPeek({
   return (
     <div
       ref={scrollerRef}
-      className="h-[7lh] overflow-hidden border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground"
+      className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground"
+      style={{ height: THINKING_PEEK_HEIGHT }}
       data-thinking-peek=""
       data-testid="thinking-peek"
       data-peek-lines={THINKING_PEEK_LINES}
     >
       {reasoning.map((block, index) => (
         <div key={`peek-reasoning-${index}`}>
-          <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
-          {isStreaming && index === lastIndex && (
-            <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
-          )}
+          <ReasoningBody content={block.content} showCursor={isStreaming && index === lastIndex} />
         </div>
       ))}
     </div>
@@ -255,13 +267,7 @@ export function TurnProcessGroup({
         />
       )}
       {showThinkingPeek && (
-        <ThinkingPeek
-          blocks={process}
-          isStreaming={answer.length === 0}
-          agents={agents}
-          chats={chats}
-          chatId={chatId}
-        />
+        <ThinkingPeek blocks={process} isStreaming={answer.length === 0} />
       )}
       {showStreamingHint ? streamingHint : null}
       {answer.map((block, index) => (

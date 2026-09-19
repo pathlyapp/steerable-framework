@@ -88,24 +88,39 @@ describe('TaskProcessPanel', () => {
   });
 
   it('live 增量时把滚动条钉在底部', async () => {
-    const scrollTo = vi.spyOn(HTMLElement.prototype, 'scrollTo').mockImplementation(() => {});
-    const { emit } = installBridge([], true, false);
-    render(
-      <TaskProcessPanel
-        inspected={{ id: 'task-1', chatId: 'chat_1', title: '问好循环' }}
-        onClose={() => {}}
-      />,
-    );
-    await waitFor(() => screen.getByText(/正在推理/));
-    scrollTo.mockClear();
-
-    emit({
-      chatId: 'chat_1',
-      taskId: 'task-1',
-      live: true,
-      timeline: [{ type: 'reasoning', content: '开始第一轮。' }],
+    let pinned = 0;
+    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTop');
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get() {
+        return desc?.get?.call(this) ?? 0;
+      },
+      set(value: number) {
+        pinned += 1;
+        desc?.set?.call(this, value);
+      },
     });
-    await waitFor(() => screen.getByText('开始第一轮。'));
-    expect(scrollTo).toHaveBeenCalled();
+    try {
+      const { emit } = installBridge([], true, false);
+      render(
+        <TaskProcessPanel
+          inspected={{ id: 'task-1', chatId: 'chat_1', title: '问好循环' }}
+          onClose={() => {}}
+        />,
+      );
+      await waitFor(() => screen.getByText(/正在推理/));
+      pinned = 0;
+
+      emit({
+        chatId: 'chat_1',
+        taskId: 'task-1',
+        live: true,
+        timeline: [{ type: 'reasoning', content: '开始第一轮。' }],
+      });
+      await waitFor(() => screen.getByText('开始第一轮。'));
+      expect(pinned).toBeGreaterThan(0);
+    } finally {
+      if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollTop', desc);
+    }
   });
 });
