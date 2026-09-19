@@ -289,7 +289,7 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                 ));
             }
 
-            if round_index >= self.config.max_rounds && terminal_override.is_none() {
+            if round_index >= self.config.max_rounds && !wrap_up && terminal_override.is_none() {
                 let reason = format!("reached maxRounds={} runaway guard", self.config.max_rounds);
                 let narration = if completion_redos < MAX_COMPLETION_REDOS {
                     match self
@@ -324,6 +324,7 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                         }),
                     ));
                     completion_redos += 1;
+                    wrap_up = true;
                     narration_active = true;
                     terminal_override = Some(("budget_exhausted".into(), reason));
                 } else {
@@ -418,7 +419,9 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                 && (!self.config.wrap_up_keeps_tools
                     || (wrap_up_tool_rounds_used >= self.config.wrap_up_max_tool_rounds
                         && self.hooks.wrap_up_may_drop_tools()));
-            let request_tools = if narration_active || wrap_up_withholds_tools {
+            let request_tools = if (narration_active && !self.config.wrap_up_keeps_tools)
+                || wrap_up_withholds_tools
+            {
                 Vec::new()
             } else {
                 self.tools.clone()
@@ -525,12 +528,17 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
             let mut token_exhausted = false;
             let mut stream_cancelled = false;
             let mut stream_soft_cut = false;
+            let mut stream_wrap_cut = false;
             let mut stream_idle_cut: Option<(String, u64, u64)> = None;
 
             for chunk in chunks {
                 if let Some(finish_reason) = chunk.finish_reason.as_deref() {
                     if finish_reason == "__soft_timeout_cut__" {
                         stream_soft_cut = true;
+                        break;
+                    }
+                    if finish_reason == "__wrap_stream_cut__" {
+                        stream_wrap_cut = true;
                         break;
                     }
                     if let Some(details) = finish_reason.strip_prefix("__idle_stream_cut__:") {
@@ -649,10 +657,18 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                 continue;
             }
 
-            if let Some((trigger, chars, stale_chars)) = stream_idle_cut {
+            if stream_wrap_cut && tool_calls.is_empty() && !wrap_up_withholds_tools {
                 if !content.trim().is_empty() {
                     history.push(LLMMessage::text("assistant", content));
                 }
+                self.observe_history(&history);
+                wrap_up_tool_rounds_used += 1;
+                round_index += 1;
+                continue;
+            }
+
+            if let Some((trigger, chars, stale_chars)) = stream_idle_cut {
+                let was_wrap = wrap_up;
                 if !history
                     .iter()
                     .any(|message| message.content_text().contains("was cut off mid-reasoning"))
@@ -691,9 +707,22 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                         }),
                     ));
                 }
+                if was_wrap {
+                    wrap_up_tool_rounds_used += 1;
+                }
+                let idle_withholds_tools = wrap_up
+                    && (!self.config.wrap_up_keeps_tools
+                        || (wrap_up_tool_rounds_used >= self.config.wrap_up_max_tool_rounds
+                            && self.hooks.wrap_up_may_drop_tools()));
+                if !idle_withholds_tools {
+                    if !content.trim().is_empty() {
+                        history.push(LLMMessage::text("assistant", content));
+                    }
+                    self.observe_history(&history);
+                    round_index += 1;
+                    continue;
+                }
                 self.observe_history(&history);
-                round_index += 1;
-                continue;
             }
 
             if token_exhausted {
@@ -752,6 +781,9 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                     reason = override_reason.clone();
                     confidence = 1.0;
                 }
+                let hook_eligible = !wrap_up
+                    || content.trim().is_empty()
+                    || (self.config.wrap_up_keeps_tools && !wrap_up_withholds_tools);
                 if completion_redos >= MAX_COMPLETION_REDOS {
                     emit(LoopEvent::new(
                         "hook_action",
@@ -764,7 +796,7 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                             "round": round_index,
                         }),
                     ));
-                } else {
+                } else if hook_eligible {
                     let action = self
                         .hooks
                         .before_completion(&CompletionDraft {
@@ -827,6 +859,7 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                                     "round": round_index,
                                 }),
                             ));
+                            wrap_up = true;
                             narration_active = true;
                             continue;
                         }
@@ -1173,6 +1206,7 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
                     }),
                 ));
                 completion_redos += 1;
+                wrap_up = true;
                 narration_active = true;
                 ctx.consecutive_tool_errors = 0;
             }

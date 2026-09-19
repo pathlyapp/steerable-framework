@@ -183,10 +183,17 @@ async def _collect_stream(
         and message.content_text.startswith("[system notice] The time budget")
         for message in messages
     )
+    stream_kwargs: dict[str, Any] = {}
+    if tool_choice:
+        stream_kwargs["tool_choice"] = tool_choice
+    if loop._config.temperature is not None:
+        stream_kwargs["temperature"] = loop._config.temperature
+    if loop._config.max_tokens is not None:
+        stream_kwargs["max_tokens"] = loop._config.max_tokens
     stream = loop._provider.stream(
         messages,
         tools=tools if tools_enabled else None,
-        **({"tool_choice": tool_choice} if tool_choice else {}),
+        **stream_kwargs,
     )
     chunks: list[dict[str, Any]] = []
     stream_started = time.monotonic()
@@ -204,7 +211,15 @@ async def _collect_stream(
         while True:
             soft_timeout_ms = loop._config.soft_timeout_ms
             wait_seconds = None
-            if soft_timeout_ms is not None and not wrap_up_request:
+            timeout_finish_reason = "__soft_timeout_cut__"
+            if wrap_up_request and loop._config.wrap_up_tool_timeout_ms is not None:
+                wait_seconds = max(
+                    loop._config.wrap_up_tool_timeout_ms / 1000
+                    - (time.monotonic() - stream_started),
+                    0.000_001,
+                )
+                timeout_finish_reason = "__wrap_stream_cut__"
+            elif soft_timeout_ms is not None and not wrap_up_request:
                 wait_seconds = max(
                     soft_timeout_ms / 1000 - (time.monotonic() - run_started),
                     0.000_001,
@@ -217,13 +232,19 @@ async def _collect_stream(
             except StopAsyncIteration:
                 break
             except TimeoutError:
-                cut_finish_reason = "__soft_timeout_cut__"
+                cut_finish_reason = timeout_finish_reason
                 break
             now = time.monotonic()
             gap = now - last_chunk_at
             last_chunk_at = now
             if gap <= loop_module._IDLE_REASONING_GAP_SEC:
                 active_ms += int(gap * 1000)
+            observe_chunk = getattr(loop._hooks, "on_stream_chunk", None)
+            if callable(observe_chunk):
+                try:
+                    observe_chunk(chunk, loop._run_context)
+                except Exception:  # noqa: BLE001 — observation cannot break streaming
+                    logger.exception("native_bridge_on_stream_chunk_failed")
             payload = _chunk_to_json(chunk)
             if chunk.content_delta:
                 raw_content.append(chunk.content_delta)
@@ -437,6 +458,11 @@ def _native_history_kind(message: LLMMessage) -> str | None:
         and message.content_text.startswith("[system notice] The time budget")
     ):
         return "loop.soft_timeout_notice"
+    if (
+        message.role == "user"
+        and "was cut off mid-reasoning" in message.content_text
+    ):
+        return "loop.stream_cut_notice"
     if (
         message.role == "tool"
         and "not executed" in message.content_text

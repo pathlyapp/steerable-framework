@@ -577,3 +577,49 @@ async def test_before_completion_redo_budget_exhausted_disclosed() -> None:
     assert exhausted[0].data["hook"] == "before_completion"
     assert "32" in exhausted[0].data["reason"]
     assert final_completion(events)["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_native_bridge_forwards_generation_controls_and_stream_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("steerable_agent_runtime_native")
+    monkeypatch.setenv("STEERABLE_RUST_CORELOOP", "1")
+
+    class _Provider:
+        name = "capture"
+        model = "capture-model"
+
+        def __init__(self) -> None:
+            self.kwargs: dict[str, Any] = {}
+
+        def stream(self, messages, *, tools=None, **kwargs):
+            self.kwargs = kwargs
+
+            async def _gen():
+                yield LLMStreamChunk(content_delta="done")
+                yield LLMStreamChunk(finish_reason="stop")
+
+            return _gen()
+
+    class _Hooks(NoopHooks):
+        def __init__(self) -> None:
+            self.chunks: list[LLMStreamChunk] = []
+
+        def on_stream_chunk(self, chunk, ctx) -> None:
+            self.chunks.append(chunk)
+
+    provider = _Provider()
+    hooks = _Hooks()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(ToolRouter()),
+        LoopConfig(temperature=0.7, max_tokens=1234),
+        hooks=hooks,
+    )
+
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")]))
+
+    assert events[-1].data["status"] == "completed"
+    assert provider.kwargs == {"temperature": 0.7, "max_tokens": 1234}
+    assert len(hooks.chunks) == 2

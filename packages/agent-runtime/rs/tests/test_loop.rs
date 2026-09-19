@@ -734,6 +734,7 @@ async fn test_wrap_up_uses_shorter_tool_timeout() {
         "function": {"name": "hang", "parameters": {"type": "object"}},
     })])
     .with_config(LoopConfig {
+        max_rounds: 1,
         soft_timeout_ms: Some(5),
         wrap_up_keeps_tools: true,
         wrap_up_max_tool_rounds: 1,

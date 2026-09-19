@@ -1172,3 +1172,76 @@ async def test_idle_stream_ignores_long_sse_gaps(
     ]
     assert not cuts
     assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_native_wrap_stream_timeout_keeps_delivery_rounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("steerable_agent_runtime_native")
+    monkeypatch.setenv("STEERABLE_RUST_CORELOOP", "1")
+
+    class _WrapProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream(self, messages, *, tools=None, **kwargs):
+            call = self.calls
+            self.calls += 1
+
+            async def _gen():
+                if call == 0:
+                    yield LLMStreamChunk(tool_call_delta=tc("slow"))
+                    yield LLMStreamChunk(finish_reason="tool_calls")
+                elif call == 1:
+                    yield LLMStreamChunk(reasoning_delta="wrap-up spiral")
+                    await asyncio.sleep(0.2)
+                    yield LLMStreamChunk(content_delta="never reached")
+                elif call == 2:
+                    yield LLMStreamChunk(tool_call_delta=tc("write"))
+                    yield LLMStreamChunk(finish_reason="tool_calls")
+                else:
+                    yield LLMStreamChunk(content_delta="files are on disk")
+                    yield LLMStreamChunk(finish_reason="stop")
+
+            return _gen()
+
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def slow() -> str:
+        await asyncio.sleep(0.03)
+        executed.append("slow")
+        return "slow"
+
+    async def write() -> str:
+        executed.append("write")
+        return "wrote"
+
+    router.register(slow)
+    router.register(write)
+    provider = _WrapProvider()
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(
+            max_rounds=1,
+            soft_timeout_ms=5,
+            wrap_up_keeps_tools=True,
+            wrap_up_max_tool_rounds=2,
+            wrap_up_tool_timeout_ms=20,
+        ),
+    )
+    tools = [
+        {"type": "function", "function": {"name": "slow", "parameters": {}}},
+        {"type": "function", "function": {"name": "write", "parameters": {}}},
+    ]
+
+    events = await collect(loop.run([LLMMessage.text_of("user", "go")], tools=tools))
+
+    assert provider.calls == 4
+    assert executed == ["slow", "write"]
+    assert events[-1].data["status"] == "completed"
