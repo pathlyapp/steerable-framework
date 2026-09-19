@@ -72,6 +72,16 @@ describe('processStatusLabel', () => {
     ).toBe('思考中 · 8s');
   });
 
+  it('keeps tok/s on 思考中 from earlier reasoning after tools finish', () => {
+    expect(
+      processStatusLabel({
+        process: [reasoning('先读配置先读配置先读配置先读配置'), tool('web_fetch', false)],
+        isStreaming: true,
+        elapsedMs: 2000,
+      }),
+    ).toBe('思考中 · 5 tok/s · 2s');
+  });
+
   it('keeps the finished summary', () => {
     expect(
       processStatusLabel({

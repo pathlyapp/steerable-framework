@@ -9,23 +9,25 @@ afterEach(() => {
 });
 
 describe('AppearanceSettingsPanel', () => {
-  it('defaults the thinking-content switch off', () => {
+  it('defaults to 显示5行', () => {
     render(<AppearanceSettingsPanel />);
-    const toggle = screen.getByTestId('show-thinking-content-toggle');
-    expect(toggle.getAttribute('aria-checked')).toBe('false');
-  });
-
-  it('persists the switch immediately', () => {
-    render(<AppearanceSettingsPanel />);
-    fireEvent.click(screen.getByTestId('show-thinking-content-toggle'));
-    expect(screen.getByTestId('show-thinking-content-toggle').getAttribute('aria-checked')).toBe(
-      'true',
-    );
-    expect(localStorage.getItem(SHOW_THINKING_CONTENT_STORAGE_KEY)).toBe('1');
-    fireEvent.click(screen.getByTestId('show-thinking-content-toggle'));
-    expect(screen.getByTestId('show-thinking-content-toggle').getAttribute('aria-checked')).toBe(
+    expect(screen.getByTestId('thinking-display-peek').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('thinking-display-hidden').getAttribute('aria-checked')).toBe(
       'false',
     );
-    expect(localStorage.getItem(SHOW_THINKING_CONTENT_STORAGE_KEY)).toBe('0');
+    expect(screen.getByTestId('thinking-display-full').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('persists the segmented choice immediately', () => {
+    render(<AppearanceSettingsPanel />);
+    fireEvent.click(screen.getByTestId('thinking-display-hidden'));
+    expect(screen.getByTestId('thinking-display-hidden').getAttribute('aria-checked')).toBe('true');
+    expect(localStorage.getItem(SHOW_THINKING_CONTENT_STORAGE_KEY)).toBe('hidden');
+    fireEvent.click(screen.getByTestId('thinking-display-full'));
+    expect(screen.getByTestId('thinking-display-full').getAttribute('aria-checked')).toBe('true');
+    expect(localStorage.getItem(SHOW_THINKING_CONTENT_STORAGE_KEY)).toBe('full');
+    fireEvent.click(screen.getByTestId('thinking-display-peek'));
+    expect(screen.getByTestId('thinking-display-peek').getAttribute('aria-checked')).toBe('true');
+    expect(localStorage.getItem(SHOW_THINKING_CONTENT_STORAGE_KEY)).toBe('peek');
   });
 });

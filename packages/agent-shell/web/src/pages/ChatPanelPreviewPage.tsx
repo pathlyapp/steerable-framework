@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import { LocalChatPanel } from '@/components/chat/LocalChatPanel';
 import { ChatHeader } from '@/components/ChatHeader';
@@ -123,17 +123,53 @@ const MOCK_TIMELINE: TurnBlock[] = [
  *     StreamingStatus's "正在思考..." baseline.
  *   • `tools-run`  — in-flight bubble, round 2, 2 tools just ran; verifies
  *     StreamingStatus's "已调用 N 个工具" + "Round N" badge interaction.
+ *   • `reasoning-stream` — reasoning tokens arrive over time; verifies the
+ *     5-line peek stays visible and the list scrollbar sticks to the bottom.
  */
-type PreviewScene = 'static' | 'thinking' | 'tools-run';
+type PreviewScene = 'static' | 'thinking' | 'tools-run' | 'reasoning-stream';
+
+const STREAMING_REASONING = [
+  '先检查服务是否还能连上。',
+  '如果端口通了，再跑本目录的测试套件。',
+  '失败的话只读失败文件，不要整仓扫一遍。',
+  '断言颜色对不上时优先看 AssistantMessage 的默认色。',
+  '改完再复跑一次，确认没有带出新的失败。',
+  '工具调用保持最少：连通性检查、跑测试、必要时读文件。',
+  '最后用一两句说清楚结果和下一步。',
+  '如果还在思考，后面的句子会被 5 行窗口裁掉。',
+  '比较 a < b 时不要被 Markdown 当成 HTML 标签吃掉。',
+  '滚动条应一直钉在最下面，不要随着 token 上下跳。',
+].join('\n');
 
 const SCENES: { id: PreviewScene; label: string }[] = [
   { id: 'static', label: '静态历史' },
   { id: 'thinking', label: '流式 · 空内容' },
   { id: 'tools-run', label: '流式 · 工具已跑 · round 2' },
+  { id: 'reasoning-stream', label: '流式 · 推理打字' },
 ];
 
 export function ChatPanelPreviewPage() {
   const [scene, setScene] = useState<PreviewScene>('static');
+  const [streamedReasoning, setStreamedReasoning] = useState('');
+
+  useEffect(() => {
+    if (scene !== 'reasoning-stream') {
+      setStreamedReasoning('');
+      return;
+    }
+    setStreamedReasoning('');
+    let index = 0;
+    const id = window.setInterval(() => {
+      index += 2;
+      if (index >= STREAMING_REASONING.length) {
+        setStreamedReasoning(STREAMING_REASONING);
+        window.clearInterval(id);
+        return;
+      }
+      setStreamedReasoning(STREAMING_REASONING.slice(0, index));
+    }, 40);
+    return () => window.clearInterval(id);
+  }, [scene]);
 
   // Explicit struct type so TS doesn't try to narrow `actionsByMsgId` to the
   // union of {} | { m2: ... } — both shapes are valid `Record<string, ...>`
@@ -198,7 +234,7 @@ export function ChatPanelPreviewPage() {
                 '改完再复跑一次，确认没有带出新的失败。',
                 '工具调用保持最少：连通性检查、跑测试、必要时读文件。',
                 '最后用一两句说清楚结果和下一步。',
-                '如果还在思考，后面的句子会被 7 行窗口裁掉。',
+                '如果还在思考，后面的句子会被 5 行窗口裁掉。',
               ].join('\n'),
             },
             {
@@ -208,6 +244,28 @@ export function ChatPanelPreviewPage() {
           ],
           currentTurnStartedAtMs: Date.now() - 12_000,
           currentRound: 2,
+        };
+      case 'reasoning-stream':
+        return {
+          messages: [
+            MOCK_MESSAGES[0],
+            {
+              id: 'm-streaming',
+              role: 'assistant',
+              agentId: MOCK_AGENT.id,
+              content: '',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          isStreaming: true,
+          actionsByMsgId: {} as Record<string, ExecutedAction[]>,
+          currentTurnActions: [],
+          timelineByMsgId: {} as Record<string, TurnBlock[]>,
+          currentTurnTimeline: streamedReasoning
+            ? [{ type: 'reasoning', content: streamedReasoning }]
+            : [],
+          currentTurnStartedAtMs: Date.now() - 1_000,
+          currentRound: 1,
         };
       case 'static':
       default:
@@ -222,7 +280,7 @@ export function ChatPanelPreviewPage() {
           suggestedReplies: ['修一下失败的断言颜色', '把测试再跑一遍', '解释这次失败的原因'],
         };
     }
-  }, [scene]);
+  }, [scene, streamedReasoning]);
 
   return (
     <div className="flex h-full w-full flex-col bg-agent-muted/30">
