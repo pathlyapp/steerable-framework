@@ -284,7 +284,7 @@ export function ChatPanelPreviewPage() {
 
   return (
     <div className="flex h-full w-full flex-col bg-agent-muted/30">
-      <div className="flex shrink-0 items-center gap-2 border-b border-agent-border bg-agent-canvas px-3 py-2 text-xs">
+      <div className="flex shrink-0 items-center gap-2 border-b border-agent-border bg-agent-canvas px-2.5 py-1.5 text-xs">
         <span className="text-agent-muted-foreground">
           /preview/chat (dev harness)
         </span>

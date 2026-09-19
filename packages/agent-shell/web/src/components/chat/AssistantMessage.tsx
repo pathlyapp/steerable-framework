@@ -13,6 +13,11 @@ import type { TurnBlock } from './turn-timeline';
 import { TurnProcessGroup } from './TurnProcessGroup';
 import { TurnFilesCard } from './TurnFilesCard';
 import type { TurnFile } from './turn-files';
+import {
+  formatTokenSpeed,
+  llmRequestElapsedMs,
+  type LlmSpeedSnapshot,
+} from './process-status';
 
 /**
  * AssistantMessage — Tier-1 port of `deeppath`'s assistant-bubble.
@@ -99,6 +104,12 @@ interface AssistantMessageProps {
   /** Frozen wall-clock of a finished turn. */
   durationMs?: number;
   /**
+   * Model-request generation speed (reasoning + reply + any other LLM
+   * output). Elapsed excludes tool waits. Live snapshots keep ticking
+   * while `live` is true.
+   */
+  llmSpeed?: LlmSpeedSnapshot;
+  /**
    * 本回合产生/修改的文件列表（local-backend 回合收尾时收集，经
    * `turn_files` SSE + messageMetadata.turnFiles 持久化）。渲染在回答
    * 气泡之下，点击用系统默认应用打开。空/undefined = 不渲染。
@@ -152,7 +163,7 @@ const META_ACTION =
   'inline-flex items-center gap-0.5 rounded transition-all duration-200 hover:text-agent-foreground opacity-0 focus:opacity-100 group-hover/message:opacity-100';
 
 function bubbleClass(isPlanMode: boolean): string {
-  return `rounded-agent-lg border p-3 shadow-sm transition-all duration-200 ${
+  return `rounded-agent-lg border px-2.5 py-2 shadow-sm transition-all duration-200 ${
     isPlanMode
       ? 'border-amber-400/50 dark:border-amber-500/30 bg-amber-50/10 dark:bg-amber-950/5 shadow-amber-500/5'
       : 'border-agent-border bg-agent-canvas'
@@ -194,7 +205,7 @@ function readTurnFailure(
 
 function TurnErrorBubble({ reason }: { reason: string }) {
   return (
-    <div className="rounded-agent-lg border border-agent-destructive/40 bg-agent-destructive/5 p-3 text-sm leading-relaxed text-agent-destructive shadow-sm">
+    <div className="rounded-agent-lg border border-agent-destructive/40 bg-agent-destructive/5 px-2.5 py-2 text-xs leading-relaxed text-agent-destructive shadow-sm">
       请求失败：{reason}
     </div>
   );
@@ -204,6 +215,17 @@ function StreamingCursor() {
   return (
     <span className="ml-0.5 inline-block h-3.5 w-[3px] animate-agent-cursor-blink bg-agent-foreground/60 align-text-bottom" />
   );
+}
+
+function useLiveNow(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [enabled]);
+  return now;
 }
 
 export function AssistantMessage({
@@ -221,6 +243,7 @@ export function AssistantMessage({
   onRegenerate,
   startedAtMs,
   durationMs,
+  llmSpeed,
   turnFiles,
   onShare,
 }: AssistantMessageProps) {
@@ -240,10 +263,15 @@ export function AssistantMessage({
   const displayAgent = persistedAgent ?? (isStreaming ? currentAgent : null);
   const useTimeline = timeline !== undefined;
   const blocks = timeline ?? [];
+  const now = useLiveNow(Boolean(isStreaming && llmSpeed?.live));
+  const tokenSpeed = formatTokenSpeed(
+    llmSpeed?.tokens ?? 0,
+    llmRequestElapsedMs(llmSpeed, now),
+  );
 
   return (
     <motion.div
-      className="group/message mb-2"
+      className="group/message mb-1"
       data-message-role="assistant"
       data-message-id={message.id}
       initial={{ opacity: 0, y: 8 }}
@@ -252,7 +280,7 @@ export function AssistantMessage({
     >
       <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] px-1">
         {(displayAgent || isPlanMode) && (
-          <div className="flex items-center justify-between mb-1.5 min-h-[18px]">
+          <div className="mb-1 flex min-h-4 items-center justify-between">
             {displayAgent ? (
               <AgentBadge agent={displayAgent} isStreaming={isStreaming} />
             ) : (
@@ -291,7 +319,7 @@ export function AssistantMessage({
                   />
                 </div>
               ) : (
-                <div className={`${bubbleClass(isPlanMode)} text-sm italic text-agent-muted-foreground`}>
+                <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
                   (空消息)
                 </div>
               )
@@ -305,7 +333,7 @@ export function AssistantMessage({
             }
             renderAnswer={(block, isLast) => (
               <div className={bubbleClass(isPlanMode)}>
-                <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
+                <div className="markdown-content text-xs leading-relaxed text-agent-foreground">
                   <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
                 </div>
                 {isStreaming && isLast && <StreamingCursor />}
@@ -327,7 +355,7 @@ export function AssistantMessage({
             )}
             {displayContent ? (
               <div className={bubbleClass(isPlanMode)}>
-                <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
+                <div className="markdown-content text-xs leading-relaxed text-agent-foreground">
                   <Markdown agents={agents} chats={chats} chatId={chatId}>{displayContent}</Markdown>
                 </div>
                 {isStreaming && <StreamingCursor />}
@@ -343,7 +371,7 @@ export function AssistantMessage({
                 />
               </div>
             ) : (
-              <div className={`${bubbleClass(isPlanMode)} text-sm italic text-agent-muted-foreground`}>
+              <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
                 (空消息)
               </div>
             )}
@@ -367,6 +395,9 @@ export function AssistantMessage({
               ? getFriendlyDate(new Date(message.createdAt))
               : ''}
           </span>
+          {tokenSpeed ? (
+            <span data-testid="turn-token-speed">{tokenSpeed}</span>
+          ) : null}
           {content && !isStreaming && (
             <button
               type="button"

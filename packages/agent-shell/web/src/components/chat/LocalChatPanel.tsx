@@ -16,6 +16,7 @@ import type { ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
+import type { LlmSpeedSnapshot } from './process-status';
 import {
   isImageFile,
   saveChatAttachments,
@@ -98,6 +99,8 @@ export interface LocalChatPanelProps {
   currentTurnTimeline?: TurnBlock[];
   currentTurnStartedAtMs?: number;
   durationByMessageId?: Record<string, number>;
+  currentLlmSpeed?: LlmSpeedSnapshot;
+  llmSpeedByMessageId?: Record<string, LlmSpeedSnapshot>;
   /** 回合产物文件列表（按落库消息 id 键控），转发给 MessageList。 */
   turnFilesByMessageId?: Record<string, TurnFile[]>;
   /** 当轮产物文件（流尾声到达、尚未归档到落库 id 的尾部消息用）。 */
@@ -176,6 +179,8 @@ export function LocalChatPanel({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  currentLlmSpeed,
+  llmSpeedByMessageId,
   turnFilesByMessageId,
   currentTurnFiles,
   currentTurnChildren,
@@ -356,14 +361,14 @@ export function LocalChatPanel({
     >
       <ChatPanel.Root className="flex h-full flex-col overflow-hidden" unstyled>
         {showEmptyHero ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-8">
-            <div className="flex w-full max-w-2xl flex-col items-center gap-6">
+          <div className="flex min-h-0 flex-1 items-center justify-center p-3 sm:p-5">
+            <div className="flex w-full max-w-2xl flex-col items-center gap-4">
               <div className="text-center">
                 <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
                   {emptyHero?.title}
                 </h1>
                 {emptyHero?.subtitle && (
-                  <p className="mt-1.5 text-sm text-agent-muted-foreground">
+                  <p className="mt-1.5 text-xs text-agent-muted-foreground">
                     {emptyHero.subtitle}
                   </p>
                 )}
@@ -396,6 +401,8 @@ export function LocalChatPanel({
                 currentTurnTimeline={currentTurnTimeline}
                 currentTurnStartedAtMs={currentTurnStartedAtMs}
                 durationByMessageId={durationByMessageId}
+                currentLlmSpeed={currentLlmSpeed}
+                llmSpeedByMessageId={llmSpeedByMessageId}
                 turnFilesByMessageId={turnFilesByMessageId}
                 currentTurnFiles={currentTurnFiles}
                 currentTurnChildren={currentTurnChildren}

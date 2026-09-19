@@ -3,8 +3,12 @@ import type { TurnBlock } from './turn-timeline';
 import {
   activeToolNames,
   estimateTextTokens,
+  estimateTurnTokens,
   formatTokenSpeed,
   lastToolsAreRunning,
+  llmRequestElapsedMs,
+  LlmRequestSpeedTracker,
+  parseLlmSpeedPayload,
   processStatusLabel,
   thinkingFoldLabel,
 } from './process-status';
@@ -88,14 +92,24 @@ describe('processStatusLabel', () => {
 });
 
 describe('thinkingFoldLabel', () => {
-  it('shows 思考中 plus speed and elapsed while that round is live', () => {
+  it('shows 思考中 plus elapsed while that round is live', () => {
     expect(
       thinkingFoldLabel({
         content: '先读配置先读配置先读配置先读配置',
         isLive: true,
         elapsedMs: 1000,
       }),
-    ).toBe('思考中 · 10 tok/s · 1s');
+    ).toBe('思考中 · 1s');
+  });
+
+  it('estimates turn tokens from reasoning and text', () => {
+    expect(
+      estimateTurnTokens([
+        { type: 'reasoning', content: '先读配置先读配置先读配置先读配置' },
+        { type: 'text', content: '问好完成。' },
+      ]),
+    ).toBe(13);
+    expect(estimateTurnTokens([], 'abcd')).toBe(1);
   });
 
   it('freezes to 思考 · duration after that round ends', () => {
@@ -110,5 +124,44 @@ describe('thinkingFoldLabel', () => {
 
   it('is just 思考 when a finished round has no recorded duration', () => {
     expect(thinkingFoldLabel({ content: '先读配置', isLive: false })).toBe('思考');
+  });
+});
+
+describe('LlmRequestSpeedTracker', () => {
+  it('counts every model stage and excludes the gap between requests', () => {
+    const tracker = new LlmRequestSpeedTracker();
+    tracker.noteOutput('思考思考思考思考', 1_000);
+    tracker.noteOutput('回答回答回答回答', 1_500);
+    tracker.endRequest(2_000);
+    tracker.noteOutput('结论结论结论结论', 5_000);
+    const live = tracker.snapshot(5_200);
+    expect(live.live).toBe(true);
+    expect(live.tokens).toBe(15);
+    expect(live.elapsedMs).toBe(1_200);
+    const done = tracker.endRequest(5_500);
+    expect(done.live).toBe(false);
+    expect(done.elapsedMs).toBe(1_500);
+    expect(done.tokens).toBe(15);
+    expect(llmRequestElapsedMs(done, 9_000)).toBe(1_500);
+    expect(formatTokenSpeed(done.tokens, done.elapsedMs)).toBe('10 tok/s');
+  });
+
+  it('parses an llm_speed payload', () => {
+    expect(
+      parseLlmSpeedPayload({
+        tokens: 8,
+        elapsedMs: 800,
+        live: true,
+        closedMs: 200,
+        requestStartedAt: 100,
+      }),
+    ).toEqual({
+      tokens: 8,
+      elapsedMs: 800,
+      live: true,
+      closedMs: 200,
+      requestStartedAt: 100,
+    });
+    expect(parseLlmSpeedPayload({ tokens: 1 })).toBeNull();
   });
 });

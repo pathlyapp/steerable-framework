@@ -126,6 +126,24 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
     expect(last.payload.blocks.map((b) => b.content)).toEqual(['第一轮', '第二轮']);
   });
 
+  it('llm_speed 统计思考和回复，round_end 冻结当前请求', () => {
+    const { events, onEvent } = collectEvents();
+    const adapter = new LocalBackendSseAdapter(onEvent);
+    adapter.feed('data: {"type":"reasoning","content":"先读配置先读配置先读配置先读配置"}\n\n');
+    adapter.feed('data: {"content":"问好完成。"}\n\n');
+    const speeds = events.filter(
+      (e) => e.type === 'agent' && (e as { event?: string }).event === 'llm_speed',
+    ) as Array<{ payload: { tokens: number; live: boolean } }>;
+    expect(speeds.length).toBeGreaterThanOrEqual(2);
+    expect(speeds[speeds.length - 1].payload.tokens).toBe(13);
+    expect(speeds[speeds.length - 1].payload.live).toBe(true);
+    adapter.feed('data: {"type":"completion","status":"executing"}\n\n');
+    const afterRound = events.filter(
+      (e) => e.type === 'agent' && (e as { event?: string }).event === 'llm_speed',
+    ) as Array<{ payload: { live: boolean } }>;
+    expect(afterRound[afterRound.length - 1].payload.live).toBe(false);
+  });
+
   it('executed_actions 帧透出并同步进时间线', () => {
     const { events, onEvent } = collectEvents();
     const adapter = new LocalBackendSseAdapter(onEvent);

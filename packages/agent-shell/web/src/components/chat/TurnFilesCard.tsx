@@ -57,7 +57,7 @@ export function TurnFilesCard({ files }: TurnFilesCardProps) {
       className="rounded-agent-lg border border-agent-border bg-agent-canvas shadow-sm"
       data-turn-files=""
     >
-      <div className="flex items-center gap-1.5 border-b border-agent-border/60 px-3 py-1.5 text-[11px] text-agent-muted-foreground">
+      <div className="flex items-center gap-1.5 border-b border-agent-border/60 px-2.5 py-1 text-[11px] text-agent-muted-foreground">
         <LuFiles className="h-3.5 w-3.5" />
         <span>本轮产生了 {files.length} 个文件，点击打开</span>
       </div>
@@ -74,7 +74,7 @@ export function TurnFilesCard({ files }: TurnFilesCardProps) {
                 onClick={() => void handleOpen(file)}
                 disabled={openingPath !== null}
                 title={file.path}
-                className="flex w-full items-center gap-2 px-3 py-1 text-left text-xs transition-colors hover:bg-agent-foreground/5 disabled:cursor-wait"
+                className="flex w-full items-center gap-2 px-2.5 py-1 text-left text-xs transition-colors hover:bg-agent-foreground/5 disabled:cursor-wait"
                 data-turn-file=""
                 data-kind={file.kind}
               >

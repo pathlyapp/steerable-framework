@@ -186,8 +186,8 @@ export function ExecutedActionsCard({ actions }: ExecutedActionsCardProps) {
   const runningCount = expanded.filter((a) => deriveStatus(a) === 'running').length;
 
   return (
-    <div className="my-2 overflow-hidden rounded-agent-md border border-agent-border bg-agent-canvas">
-      <div className="flex items-center justify-between border-b border-agent-border bg-agent-muted/30 px-3 py-1.5">
+    <div className="my-1.5 overflow-hidden rounded-agent-md border border-agent-border bg-agent-canvas">
+      <div className="flex items-center justify-between border-b border-agent-border bg-agent-muted/30 px-2.5 py-1">
         <div className="flex items-center gap-1.5 text-xs">
           {failureCount === 0 ? (
             <LuCircleCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />

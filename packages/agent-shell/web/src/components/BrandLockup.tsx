@@ -15,7 +15,7 @@ export function BrandLockup() {
         draggable={false}
       />
       {title ? (
-        <span className="truncate text-sm font-semibold tracking-tight text-agent-foreground">
+        <span className="truncate text-xs font-semibold tracking-tight text-agent-foreground">
           {title}
         </span>
       ) : null}

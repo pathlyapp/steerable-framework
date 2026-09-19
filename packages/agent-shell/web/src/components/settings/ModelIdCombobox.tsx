@@ -119,7 +119,7 @@ export function ModelIdCombobox({
                       setOpen(false);
                     }}
                     className={[
-                      'flex w-full flex-col gap-1 px-3 py-1.5 text-left text-sm',
+                      'flex w-full flex-col gap-0.5 px-2.5 py-1 text-left text-xs',
                       selected
                         ? 'bg-agent-foreground/10 text-agent-foreground'
                         : 'text-agent-foreground hover:bg-agent-foreground/5',
@@ -159,7 +159,7 @@ export function ModelIdCombobox({
         }}
         onFocus={show}
         placeholder={placeholder}
-        className="h-9 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 pr-8 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+        className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 pr-8 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
       />
       <button
         type="button"

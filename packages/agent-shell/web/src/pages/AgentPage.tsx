@@ -26,6 +26,10 @@ import type { ExecutedAction } from "@/components/chat/ExecutedActionsCard";
 import type { ChildInfo } from "@/components/chat/OrchestrationChildrenCard";
 import { foldOrchestrationChildEvents } from "@/components/chat/orchestration-children-model";
 import { parseTurnBlocks, type TurnBlock } from "@/components/chat/turn-timeline";
+import {
+  parseLlmSpeedPayload,
+  type LlmSpeedSnapshot,
+} from "@/components/chat/process-status";
 import { parseTurnFiles, type TurnFile } from "@/components/chat/turn-files";
 import { readPersistedDurationMs } from "@/components/chat/elapsed";
 import {
@@ -297,7 +301,7 @@ function AgentChatLoader({
 
   if (initialMessages === null) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-sm text-agent-muted-foreground">
+      <div className="flex h-full w-full items-center justify-center text-xs text-agent-muted-foreground">
         加载对话历史…
       </div>
     );
@@ -449,6 +453,13 @@ function AgentChatView({
     number | undefined
   >(undefined);
   const pendingDurationMessageIdRef = useRef<string | null>(null);
+  const [currentLlmSpeed, setCurrentLlmSpeed] = useState<LlmSpeedSnapshot | undefined>(
+    undefined,
+  );
+  const currentLlmSpeedRef = useRef<LlmSpeedSnapshot | null>(null);
+  const [llmSpeedByMessageId, setLlmSpeedByMessageId] = useState<
+    Record<string, LlmSpeedSnapshot>
+  >({});
   // P3.1 编排：本轮子代理生命周期（orchestration_child SSE 事件累积），
   // 与 currentTurnActions 同款 reconcile 模式（message_id 落库后按键归档）。
   const [currentTurnChildren, setCurrentTurnChildren] = useState<ChildInfo[]>([]);
@@ -519,6 +530,13 @@ function AgentChatView({
       }
       return;
     }
+    if (ev.event === "llm_speed") {
+      const snap = parseLlmSpeedPayload(ev.payload);
+      if (!snap) return;
+      currentLlmSpeedRef.current = snap;
+      setCurrentLlmSpeed(snap);
+      return;
+    }
     if (ev.event === "turn_files") {
       // 回合收尾时后端发一次（在 message_id 之前）；先挂 pending，
       // message_id 到达时随其他队列一起归档。
@@ -583,6 +601,13 @@ function AgentChatView({
       const messageId = ev.payload?.messageId as string | undefined;
       if (!messageId) return;
       pendingDurationMessageIdRef.current = messageId;
+      const queuedSpeed = currentLlmSpeedRef.current;
+      if (queuedSpeed) {
+        setLlmSpeedByMessageId((prev) => ({
+          ...prev,
+          [messageId]: queuedSpeed,
+        }));
+      }
       const queued = pendingActionsRef.current;
       if (queued.length > 0) {
         setExecutedActionsByMessageId((prev) => ({
@@ -727,6 +752,25 @@ function AgentChatView({
           }
           return next;
         });
+        const snap = currentLlmSpeedRef.current;
+        if (snap) {
+          const frozen: LlmSpeedSnapshot = {
+            ...snap,
+            live: false,
+            requestStartedAt: null,
+            elapsedMs: snap.elapsedMs,
+          };
+          currentLlmSpeedRef.current = frozen;
+          setCurrentLlmSpeed(frozen);
+          setLlmSpeedByMessageId((prev) => {
+            const next = { ...prev };
+            if (lastAssistant) next[lastAssistant.id] = frozen;
+            if (pendingDurationMessageIdRef.current) {
+              next[pendingDurationMessageIdRef.current] = frozen;
+            }
+            return next;
+          });
+        }
       }
     }
     wasStreamingRef.current = isStreaming;
@@ -770,6 +814,8 @@ function AgentChatView({
       turnStartedAtRef.current = started;
       setCurrentTurnStartedAtMs(started);
       pendingDurationMessageIdRef.current = null;
+      currentLlmSpeedRef.current = null;
+      setCurrentLlmSpeed(undefined);
       // 新一轮开始：记录本轮是否为 plan 模式，并隐藏上一份计划的操作条。
       planTurnRef.current = input.metadata?.mode === "plan";
       setPlanReady(false);
@@ -842,6 +888,8 @@ function AgentChatView({
     turnStartedAtRef.current = started;
     setCurrentTurnStartedAtMs(started);
     pendingDurationMessageIdRef.current = null;
+    currentLlmSpeedRef.current = null;
+    setCurrentLlmSpeed(undefined);
     planTurnRef.current = mode === "plan";
     setPlanReady(false);
     const metadata = {
@@ -987,7 +1035,7 @@ function AgentChatView({
   return (
     <div className="flex h-full w-full flex-col">
       {hydrationError && (
-        <div className="border-b border-agent-border bg-agent-muted/60 px-3 py-1 text-xs text-agent-destructive">
+        <div className="border-b border-agent-border bg-agent-muted/60 px-2.5 py-1 text-xs text-agent-destructive">
           加载对话历史失败：{hydrationError}
         </div>
       )}
@@ -1035,6 +1083,8 @@ function AgentChatView({
         currentTurnTimeline={effectiveCurrentTurnTimeline}
         currentTurnStartedAtMs={currentTurnStartedAtMs}
         durationByMessageId={durationByMessageId}
+        currentLlmSpeed={currentLlmSpeed}
+        llmSpeedByMessageId={llmSpeedByMessageId}
         turnFilesByMessageId={turnFilesByMessageId}
         currentTurnFiles={currentTurnFiles}
         currentTurnChildren={effectiveCurrentTurnChildren}
@@ -1083,7 +1133,7 @@ function AgentChatView({
               onTrustChanged={fetchProjects}
             />
             {planReady && !isStreaming ? (
-            <div className="mx-3 mb-1 flex items-center justify-between gap-3 rounded-agent-md border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-xs">
+            <div className="mx-2.5 mb-1 flex items-center justify-between gap-2 rounded-agent-md border border-amber-400/50 bg-amber-400/10 px-2.5 py-1.5 text-xs">
               <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
                 <LuListChecks className="h-4 w-4 shrink-0" />
                 <span>计划已生成。确认无误后可切换到 Agent 模式开始执行。</span>
@@ -1264,15 +1314,15 @@ function EmptyChatGate() {
 
   return (
     <div
-      className="flex h-full w-full items-center justify-center p-4 sm:p-8"
+      className="flex h-full w-full items-center justify-center p-3 sm:p-5"
       data-testid="empty-chat-home"
     >
-      <div className="flex w-full max-w-2xl flex-col items-center gap-6">
+      <div className="flex w-full max-w-2xl flex-col items-center gap-4">
         <div className="text-center">
           <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
             {BRAND_NAME}
           </h1>
-          <p className="mt-1.5 text-sm text-agent-muted-foreground">
+          <p className="mt-1.5 text-xs text-agent-muted-foreground">
             输入消息，直接开始一段新对话。
           </p>
         </div>

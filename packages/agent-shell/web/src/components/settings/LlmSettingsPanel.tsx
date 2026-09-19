@@ -397,9 +397,9 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
   }, [saving, savedOk, loading, onSaveUiChange]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
           {loading ? (
-            <div className="flex items-center gap-2 py-4 text-sm text-agent-muted-foreground">
+            <div className="flex items-center gap-2 py-2 text-xs text-agent-muted-foreground">
               <LuLoaderCircle className="h-4 w-4 animate-spin" />
               加载当前配置...
             </div>
@@ -413,7 +413,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     data-testid="llm-vendor-select"
                     value={selectedVendor?.id ?? 'custom'}
                     onChange={(e) => handleSwitchVendor(e.target.value)}
-                    className="h-9 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                    className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   >
                     {featuredVendors.length > 0 && (
                       <optgroup label="常用">
@@ -465,7 +465,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         ? 'https://your-gateway.example/v1'
                         : '该服务商没有默认地址，请手动填写')
                     }
-                    className="h-9 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                    className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   />
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                     {selectedVendor?.apiBaseUrl
@@ -491,7 +491,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                             ? 'sk-... (可选，私有部署可留空)'
                             : 'sk-... (必填，到服务商控制台创建)'
                         }
-                        className="h-9 min-w-0 flex-1 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                        className="h-8 min-w-0 flex-1 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                       />
                       <button
                         type="button"
@@ -499,7 +499,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         title="用当前 URL 和 Key 向网关拉一次模型目录"
                         disabled={!settings.baseUrl?.trim() || keyTest.status === 'testing'}
                         onClick={() => void handleTestKey()}
-                        className="inline-flex h-9 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs font-medium text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex h-8 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs font-medium text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {keyTest.status === 'testing' ? (
                           <LuLoaderCircle className="h-4 w-4 animate-spin" />
@@ -551,7 +551,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       aria-label="刷新模型目录"
                       disabled={!settings.baseUrl?.trim() || modelsRefreshing}
                       onClick={() => void handleRefreshModels()}
-                      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <LuRefreshCw className={`h-4 w-4 ${modelsRefreshing ? 'animate-spin' : ''}`} />
                     </button>
@@ -819,7 +819,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       setSettings((prev) => ({ ...prev, maxTotalTokens: isNaN(val) ? undefined : val }));
                     }}
                     placeholder="60000"
-                    className="h-9 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                    className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   />
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                     单次对话中累积消耗的最大 Token 数量（默认 60,000）。超限后将自动停止，防止模型死循环或意外消耗过多 Token。
@@ -827,7 +827,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                 </div>
 
                 {/* ───── 超时设置 ───── */}
-                <div className="border-t border-agent-border/60 pt-4 space-y-4">
+                <div className="border-t border-agent-border/60 pt-3 space-y-3">
                   <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
                     超时设置
                   </h4>
@@ -842,7 +842,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       value={execTimeoutInput}
                       onChange={(e) => setExecTimeoutInput(e.target.value)}
                       placeholder="留空 = 默认（后台 30s / 终端 60s）"
-                      className="h-9 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-sm text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                      className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                     />
                     <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                       执行本地命令时未显式指定超时的默认等待时长。命令行带 “gui” 的启动命令不受此限制：超时后按“程序已启动、仍在运行”处理，不会被判为失败或重复启动。

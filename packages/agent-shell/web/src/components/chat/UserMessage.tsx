@@ -62,7 +62,7 @@ export function UserMessage({ message, agents = [], chats = [] }: UserMessagePro
 
   return (
     <motion.div
-      className="group/message mb-2"
+      className="group/message mb-1"
       data-message-role="user"
       data-message-id={message.id}
       initial={{ opacity: 0, y: 20 }}
@@ -70,7 +70,7 @@ export function UserMessage({ message, agents = [], chats = [] }: UserMessagePro
       transition={{ duration: 0.3 }}
     >
       <div className="flex justify-start">
-        <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] rounded-lg border border-agent-border bg-agent-muted p-3 text-sm text-agent-foreground">
+        <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] rounded-lg border border-agent-border bg-agent-muted px-2.5 py-2 text-xs text-agent-foreground">
           <div className="relative">
             <div
               ref={contentRef}
@@ -121,7 +121,7 @@ export function UserMessage({ message, agents = [], chats = [] }: UserMessagePro
             </button>
           )}
 
-          <div className="mt-2 flex items-center justify-between">
+          <div className="mt-1 flex items-center justify-between">
             <button
               type="button"
               onClick={() => void copy()}
@@ -140,7 +140,7 @@ export function UserMessage({ message, agents = [], chats = [] }: UserMessagePro
                 <LuCopy className="h-3 w-3" />
               )}
             </button>
-            <div className="text-[13px] text-agent-muted-foreground">
+            <div className="text-[11px] text-agent-muted-foreground">
               {message.createdAt
                 ? getFriendlyDate(new Date(message.createdAt))
                 : getFriendlyDate(new Date())}

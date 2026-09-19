@@ -135,9 +135,9 @@ export function TaskPanelModal({
       data-task-panel-modal
     >
       <div className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas shadow-xl">
-        <div className="flex items-center gap-2 border-b border-agent-border px-4 py-2.5">
+        <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
           <LuListTodo className="h-4 w-4 shrink-0 text-agent-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-agent-foreground">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-agent-foreground">
             后台任务
             {tasks && tasks.length > 0 && (
               <span className="ml-1.5 text-xs font-normal text-agent-muted-foreground">
@@ -298,7 +298,7 @@ export function TaskPanelModal({
           )}
         </div>
 
-        <div className="border-t border-agent-border px-4 py-2 text-[10px] text-agent-muted-foreground/80">
+        <div className="border-t border-agent-border px-3 py-1.5 text-[10px] text-agent-muted-foreground/80">
           任务由后台智能体独立执行。点任务名可在右侧看推理过程；Esc 关闭。
         </div>
       </div>

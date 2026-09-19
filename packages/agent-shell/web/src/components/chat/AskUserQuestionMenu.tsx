@@ -120,7 +120,7 @@ function Footer({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="mt-4 flex items-center justify-between gap-3 border-t border-agent-border px-4 py-3">
+    <div className="mt-3 flex items-center justify-between gap-2 border-t border-agent-border px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
         {canGoBack && onBack && (
           <button
@@ -279,7 +279,7 @@ function SelectQuestionStep({
         role={question.multiSelect ? 'checkbox' : 'radio'}
         aria-checked={active}
         className={[
-          'flex w-full items-center gap-2 rounded-agent-md border px-3 py-2 text-left text-sm transition',
+          'flex w-full items-center gap-2 rounded-agent-md border px-3 py-2 text-left text-xs transition',
           active
             ? 'border-agent-foreground bg-agent-muted text-agent-foreground'
             : 'border-agent-border bg-agent-canvas text-agent-foreground hover:bg-agent-muted',
@@ -335,7 +335,7 @@ function SelectQuestionStep({
         role={question.multiSelect ? 'checkbox' : 'radio'}
         aria-checked={active}
         className={[
-          'flex w-full items-center gap-2 rounded-agent-md border border-dashed px-3 py-2 text-left text-sm transition',
+          'flex w-full items-center gap-2 rounded-agent-md border border-dashed px-3 py-2 text-left text-xs transition',
           active
             ? 'border-agent-foreground bg-agent-muted text-agent-foreground'
             : 'border-agent-border bg-agent-canvas text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground',
@@ -359,13 +359,13 @@ function SelectQuestionStep({
 
   return (
     <div>
-      <div className="space-y-2 px-4 py-3">
+      <div className="space-y-2 px-3 py-2">
         {question.header && (
           <p className="text-[11px] font-medium uppercase tracking-wide text-agent-muted-foreground">
             {question.header}
           </p>
         )}
-        <p className="text-sm font-medium text-agent-foreground">{question.text}</p>
+        <p className="text-xs font-medium text-agent-foreground">{question.text}</p>
         {question.detail && (
           <p className="whitespace-pre-line text-xs text-agent-muted-foreground">
             {question.detail}
@@ -396,7 +396,7 @@ function SelectQuestionStep({
               }
             }}
             placeholder={question.placeholder || '输入你的补充...'}
-            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-sm text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
+            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
           />
         )}
 
@@ -414,7 +414,7 @@ function SelectQuestionStep({
                 }
               }}
               placeholder={question.placeholder || '输入你的回答...'}
-              className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-sm text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
+              className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
             />
             <button
               type="button"
@@ -488,13 +488,13 @@ function TextQuestionStep({
 
   return (
     <div>
-      <div className="space-y-2 px-4 py-3">
+      <div className="space-y-2 px-3 py-2">
         {question.header && (
           <p className="text-[11px] font-medium uppercase tracking-wide text-agent-muted-foreground">
             {question.header}
           </p>
         )}
-        <p className="text-sm font-medium text-agent-foreground">{question.text}</p>
+        <p className="text-xs font-medium text-agent-foreground">{question.text}</p>
         {question.detail && (
           <p className="whitespace-pre-line text-xs text-agent-muted-foreground">
             {question.detail}
@@ -512,7 +512,7 @@ function TextQuestionStep({
             }
           }}
           placeholder={question.placeholder || '输入你的回答...'}
-          className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-sm text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
+          className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
         />
       </div>
 
@@ -577,10 +577,10 @@ export function AskUserQuestionMenu({
   if (!current) return null;
 
   return (
-    <div className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-sm text-agent-foreground shadow-xl">
-      <div className="flex items-start justify-between gap-3 border-b border-agent-border px-4 py-3">
+    <div className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-xs text-agent-foreground shadow-xl">
+      <div className="flex items-start justify-between gap-2 border-b border-agent-border px-3 py-2">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-agent-foreground">
+          <p className="text-xs font-medium text-agent-foreground">
             {intro || '需要你的输入'}
           </p>
           <p className="mt-0.5 text-[11px] text-agent-muted-foreground">

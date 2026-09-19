@@ -394,14 +394,14 @@ function AgentLayoutContent() {
   }, [chatId, persistRightPanel]);
 
   // Same drag ergonomics as the sidebar handle, mirrored: the terminal's
-  // right edge is pinned to the window's right padding (p-2 = 8px), so the
+  // right edge is pinned to the window's right padding (p-1.5 = 6px), so the
   // width is the distance from the cursor to that edge.
   useEffect(() => {
     if (!isTerminalResizing) return;
     const onMove = (e: MouseEvent) => {
       const next = Math.min(
         MAX_TERMINAL_WIDTH,
-        Math.max(MIN_TERMINAL_WIDTH, window.innerWidth - 8 - e.clientX),
+        Math.max(MIN_TERMINAL_WIDTH, window.innerWidth - 6 - e.clientX),
       );
       terminalWidthRef.current = next;
       setTerminalWidth(next);
@@ -484,7 +484,7 @@ function AgentLayoutContent() {
           />
         </>
       )}
-      <div className="h-full min-w-0 flex-1 p-2">
+      <div className="h-full min-w-0 flex-1 p-1.5">
         <div className="flex h-full w-full">
           <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-agent-lg bg-agent-canvas shadow-sm">
             <div className="min-h-0 flex-1 overflow-hidden">

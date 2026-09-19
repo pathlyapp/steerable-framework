@@ -81,7 +81,7 @@ export type { ExecPolicy, McpToolItem, SkillItem };
  *   - Compact-mode responsive layout.
  */
 
-const MIN_HEIGHT_PX = 44;
+const MIN_HEIGHT_PX = 36;
 const MAX_HEIGHT_PX = 220;
 const MENTION_PATTERN = /(@[^\s@]+)/g;
 const MAX_MENTION_SUGGESTIONS = 8;
@@ -1512,7 +1512,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     if (approvalPrompt?.current) {
       return (
-        <div className="chat-input-container @container relative px-3 pb-3 pt-1">
+        <div className="chat-input-container @container relative px-2.5 pb-2 pt-0.5">
           <ApprovalPromptMenu
             key={approvalPrompt.current.requestId}
             request={approvalPrompt.current}
@@ -1527,7 +1527,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const request = askUserPrompt.current;
       return (
         <div
-          className="chat-input-container @container relative px-3 pb-3 pt-1"
+          className="chat-input-container @container relative px-2.5 pb-2 pt-0.5"
           data-testid="ask-user-composer"
         >
           <AskUserQuestionMenu
@@ -1549,7 +1549,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     return (
       // @container：底栏元素的显隐/宽度用容器查询（@sm = 384px）而不是
       // 视口断点——侧边栏占宽后，视口够宽但输入框本身可能已经很窄。
-      <div className="chat-input-container @container relative px-3 pb-3 pt-1">
+      <div className="chat-input-container @container relative px-2.5 pb-2 pt-0.5">
         {(leadingChrome || selectedAgent) && (
           <div
             className="relative mb-1 flex min-w-0 items-center gap-1.5"
@@ -1712,7 +1712,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           onDrop={handleDrop}
         >
           {pendingFollowUps.length > 0 && (
-            <div className="flex flex-col gap-1 border-b border-agent-border bg-agent-muted/30 px-3 py-2">
+            <div className="flex flex-col gap-1 border-b border-agent-border bg-agent-muted/30 px-2.5 py-1.5">
               <div className="text-[11px] font-medium text-agent-muted-foreground">
                 排队中（{pendingFollowUps.length}）· 本轮结束后自动发出 · 停止将丢弃
               </div>
@@ -1739,14 +1739,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           {steerNotice && (
             <div
               role="status"
-              className="border-b border-agent-border bg-agent-muted/20 px-3 py-1.5 text-[11px] text-agent-muted-foreground"
+              className="border-b border-agent-border bg-agent-muted/20 px-2.5 py-1 text-[11px] text-agent-muted-foreground"
             >
               {steerNotice}
             </div>
           )}
           <div className="chat-input-surface relative overflow-hidden">
             <div
-              className="chat-input-placeholder pointer-events-none absolute inset-x-0 top-0 px-3 pt-3 text-sm text-agent-muted-foreground"
+              className="chat-input-placeholder pointer-events-none absolute inset-x-0 top-0 px-2.5 pt-2 text-xs text-agent-muted-foreground"
               style={{ visibility: value ? 'hidden' : undefined }}
             >
               {placeholder}
@@ -1769,7 +1769,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               onScroll={handleEditorScroll}
-              className="chat-input-editor relative z-10 block w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-3 pt-3 text-sm text-agent-foreground caret-agent-foreground outline-none selection:bg-agent-foreground/20"
+              className="chat-input-editor relative z-10 block w-full overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-2.5 pt-2 text-xs text-agent-foreground caret-agent-foreground outline-none selection:bg-agent-foreground/20"
               style={{
                 minHeight: MIN_HEIGHT_PX,
                 maxHeight: MAX_HEIGHT_PX,
@@ -1777,7 +1777,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             />
           </div>
           {actualFiles.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-3 pb-2 pt-0.5">
+            <div className="flex flex-wrap gap-1.5 px-2.5 pb-1.5 pt-0.5">
               {actualFiles.map((file, idx) => (
                 <div
                   key={idx}
@@ -1802,7 +1802,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           )}
           <div
             ref={toolbarRowRef}
-            className="flex items-center justify-between gap-2 px-2 pb-2 pt-1"
+            className="flex items-center justify-between gap-1.5 px-2 pb-1.5 pt-0.5"
           >
             {/* Left toolbar: mode + exec sandbox + host extras + settings.
                 Agent picker lives in the meta row above the box, next to
@@ -1921,10 +1921,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 disabled={!isStreaming && !canSend}
                 className={
                   isStreaming
-                    ? 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
+                    ? 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
                     : canSend
-                      ? 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
-                      : 'flex h-8 w-8 shrink-0 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
+                      ? 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
+                      : 'flex h-7 w-7 shrink-0 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
                 }
                 title={
                   isStreaming

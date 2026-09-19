@@ -14,7 +14,7 @@ export function SuggestedReplies({
 
   return (
     <div
-      className="mx-auto flex w-full max-w-[var(--chat-input-box-width)] flex-col items-start gap-1.5 px-1 pt-1"
+      className="mx-auto flex w-full max-w-[var(--chat-input-box-width)] flex-col items-start gap-1 px-1 pt-0.5"
       data-testid="suggested-replies"
     >
       {suggestions.map((text) => (
@@ -23,7 +23,7 @@ export function SuggestedReplies({
           type="button"
           data-testid="suggested-reply"
           onClick={() => onSelect(text)}
-          className="max-w-full rounded-full border border-agent-border bg-agent-muted/40 px-3 py-1.5 text-left text-[13px] leading-snug text-agent-foreground transition-colors hover:bg-agent-foreground/5"
+          className="max-w-full rounded-full border border-agent-border bg-agent-muted/40 px-2.5 py-1 text-left text-xs leading-snug text-agent-foreground transition-colors hover:bg-agent-foreground/5"
         >
           {text}
         </button>

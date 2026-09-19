@@ -136,9 +136,9 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
       data-session-tree-modal
     >
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas shadow-xl">
-        <div className="flex items-center gap-2 border-b border-agent-border px-4 py-2.5">
+        <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
           <LuGitBranch className="h-4 w-4 shrink-0 text-agent-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-agent-foreground">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium text-agent-foreground">
             会话分支树
             {data && data.nodeCount > 1 && (
               <span className="ml-1.5 text-xs font-normal text-agent-muted-foreground">
@@ -206,7 +206,7 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
         </div>
 
         {!loading && !isEmpty && (
-          <div className="border-t border-agent-border px-4 py-2 text-[10px] text-agent-muted-foreground/80">
+          <div className="border-t border-agent-border px-3 py-1.5 text-[10px] text-agent-muted-foreground/80">
             {data?.truncated
               ? '分支过多，树已被截断（仅显示部分节点）。'
               : '点击切换分支；↑↓ 移动，Enter 切换，Esc 关闭。'}

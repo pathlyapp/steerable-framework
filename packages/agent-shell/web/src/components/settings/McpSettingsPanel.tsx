@@ -230,9 +230,9 @@ export function McpSettingsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* JSON 导入 */}
-      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-3.5 space-y-2">
+      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
           <LuPlug className="h-3.5 w-3.5 text-agent-muted-foreground" />
           粘贴 JSON 导入 (Claude Desktop 格式)
@@ -271,7 +271,7 @@ export function McpSettingsPanel() {
 
       {/* 手动添加 / 编辑表单 */}
       {mcpFormOpen ? (
-        <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-3.5 space-y-2.5">
+        <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2.5">
           <h4 className="text-xs font-semibold text-agent-foreground">
             {mcpEditingId ? '编辑 MCP 服务' : '手动添加 MCP 服务'}
           </h4>

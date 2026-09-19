@@ -68,14 +68,14 @@ export function InsightsConsentBanner() {
 
   return (
     <div
-      className="flex-shrink-0 border-t border-agent-border bg-agent-muted px-4 py-3"
+      className="flex-shrink-0 border-t border-agent-border bg-agent-muted px-2.5 py-2"
       data-testid="insights-consent-banner"
       role="region"
       aria-label="帮助改进产品同意"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-agent-foreground">帮助改进{BRAND_NAME}</p>
+          <p className="text-xs font-medium text-agent-foreground">帮助改进{BRAND_NAME}</p>
           <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
             同意上传数据到服务器，帮助改进产品。之后可在设置里更改。
           </p>
@@ -198,8 +198,8 @@ export function InsightsSettingsPanel() {
   const stats = data.stats ?? empty.stats!;
 
   return (
-    <div className="space-y-4" data-testid="insights-settings-panel">
-      <div className="rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-3.5 space-y-3">
+    <div className="space-y-3" data-testid="insights-settings-panel">
+      <div className="rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-2.5 space-y-2">
         <h4 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
           <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
           帮助改进产品（行为 / 对话 / 用户信息 分开确认）

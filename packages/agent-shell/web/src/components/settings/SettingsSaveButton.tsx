@@ -22,7 +22,7 @@ export function SettingsSaveButton({
       data-testid={testId}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-8 items-center gap-1.5 rounded-full bg-agent-foreground px-5 text-xs font-medium text-agent-canvas transition-all hover:opacity-90 disabled:opacity-50"
+      className="flex h-7 items-center gap-1.5 rounded-full bg-agent-foreground px-3 text-xs font-medium text-agent-canvas transition-all hover:opacity-90 disabled:opacity-50"
     >
       {saving ? (
         <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />

@@ -55,6 +55,10 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { getElectronBridge } from './electron-bridge';
 import { appendDelta, sealLastBlock, syncTools, type TurnBlock } from '@/components/chat/turn-timeline';
 import type { ExecutedAction } from '@/components/chat/ExecutedActionsCard';
+import {
+  LlmRequestSpeedTracker,
+  type LlmSpeedSnapshot,
+} from '@/components/chat/process-status';
 
 // ---------------------------------------------------------------------------
 // Local-backend SSE adapter — feeds opaque IPC chunks into the framework's
@@ -68,6 +72,7 @@ class LocalBackendSseAdapter {
   private completed = false;
   private readonly parser: SSEParser;
   private timeline: TurnBlock[] = [];
+  private readonly speed = new LlmRequestSpeedTracker();
 
   constructor(private readonly onEvent: (event: SSEEvent) => void) {
     this.parser = new SSEParser({
@@ -78,10 +83,7 @@ class LocalBackendSseAdapter {
         if (ev) this.handleNormalised(ev);
       },
       onComplete: () => {
-        if (!this.completed) {
-          this.completed = true;
-          this.onEvent({ type: 'done' });
-        }
+        this.finishStream();
       },
     });
   }
@@ -92,10 +94,22 @@ class LocalBackendSseAdapter {
 
   end(): void {
     this.parser.end();
-    if (!this.completed) {
-      this.completed = true;
-      this.onEvent({ type: 'done' });
-    }
+    this.finishStream();
+  }
+
+  private finishStream(): void {
+    if (this.completed) return;
+    this.completed = true;
+    this.emitLlmSpeed(this.speed.endRequest());
+    this.onEvent({ type: 'done' });
+  }
+
+  private emitLlmSpeed(snapshot: LlmSpeedSnapshot): void {
+    this.onEvent({
+      type: 'agent',
+      event: 'llm_speed',
+      payload: snapshot,
+    });
   }
 
   private handleNormalised(event: SSEEvent): void {
@@ -108,13 +122,11 @@ class LocalBackendSseAdapter {
         event: 'budget_exhausted_suppressed',
         payload: { reason: event.message ?? 'budget_exhausted' },
       } as any);
-      if (!this.completed) {
-        this.completed = true;
-        this.onEvent({ type: 'done' });
-      }
+      this.finishStream();
       return;
     }
     const timelineChanged = this.applyToTimeline(event);
+    const speedSnapshot = this.applyLlmClock(event);
     this.onEvent(event);
     if (timelineChanged) {
       this.onEvent({
@@ -123,6 +135,28 @@ class LocalBackendSseAdapter {
         payload: { blocks: this.timeline },
       });
     }
+    if (speedSnapshot) this.emitLlmSpeed(speedSnapshot);
+  }
+
+  private applyLlmClock(event: SSEEvent): LlmSpeedSnapshot | null {
+    if (event.type === 'content' && typeof event.content === 'string' && event.content.length > 0) {
+      return this.speed.noteOutput(event.content);
+    }
+    if (event.type !== 'agent') return null;
+    if (event.event === 'reasoning') {
+      const delta =
+        typeof event.payload?.content === 'string'
+          ? event.payload.content
+          : typeof event.payload?.delta === 'string'
+            ? event.payload.delta
+            : '';
+      if (!delta) return null;
+      return this.speed.noteOutput(delta);
+    }
+    if (event.event === 'round_end') {
+      return this.speed.endRequest();
+    }
+    return null;
   }
 
   private applyToTimeline(event: SSEEvent): boolean {

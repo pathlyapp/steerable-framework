@@ -149,7 +149,7 @@ export function TaskProcessPanel({
           )
         }
       />
-      <div className="border-b border-agent-border/60 px-3 py-2">
+      <div className="border-b border-agent-border/60 px-2.5 py-1.5">
         <div className="line-clamp-3 text-xs leading-relaxed text-agent-foreground">
           {inspected.title}
         </div>
@@ -157,7 +157,7 @@ export function TaskProcessPanel({
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <div
           ref={containerRef}
-          className="h-full overflow-y-auto overflow-anchor-none p-3"
+          className="h-full overflow-y-auto overflow-anchor-none p-2.5"
           data-testid="task-process-scroll"
         >
           {loading ? (
@@ -172,6 +172,7 @@ export function TaskProcessPanel({
               blocks={blocks}
               isStreaming={live}
               showThinkingContent
+              collapseWhenFinished={false}
               agents={[]}
               chats={[]}
               emptyFallback={
@@ -184,7 +185,7 @@ export function TaskProcessPanel({
                 </div>
               }
               renderAnswer={(block) => (
-                <div className="text-sm leading-relaxed text-agent-foreground">
+                <div className="text-xs leading-relaxed text-agent-foreground">
                   <Markdown agents={[]} chats={[]}>{block.content}</Markdown>
                 </div>
               )}
@@ -199,7 +200,7 @@ export function TaskProcessPanel({
               setIsAtBottom(true);
               scrollToBottom('smooth');
             }}
-            className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
+            className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
             title="回到底部"
             aria-label="回到底部"
           >

@@ -106,17 +106,17 @@ export function ApprovalPromptMenu({
 
   return (
     <div
-      className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-sm text-agent-foreground shadow-xl"
+      className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-xs text-agent-foreground shadow-xl"
       data-testid="approval-composer"
     >
-        <div className="flex items-center gap-2 border-b border-agent-border px-4 py-3">
+        <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
           {destructive ? (
             <LuTriangleAlert className="h-4 w-4 shrink-0 text-agent-destructive" />
           ) : (
             <LuShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
           )}
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-agent-foreground">
+            <div className="text-xs font-medium text-agent-foreground">
               {isEgress ? (
                 <>
                   Agent 请求访问外网
@@ -143,7 +143,7 @@ export function ApprovalPromptMenu({
           </div>
         </div>
 
-        <div className="max-h-48 overflow-auto px-4 py-3">
+        <div className="max-h-48 overflow-auto px-3 py-2">
           <pre className="whitespace-pre-wrap break-all rounded-agent-md bg-agent-muted/50 px-3 py-2 font-mono text-xs text-agent-foreground">
             {summarizeArguments(current.arguments)}
           </pre>
@@ -169,7 +169,7 @@ export function ApprovalPromptMenu({
           )}
         </div>
 
-        <div className="space-y-2 border-t border-agent-border px-4 py-3">
+        <div className="space-y-2 border-t border-agent-border px-3 py-2">
           <DecisionRow
             buttons={
               isEgress

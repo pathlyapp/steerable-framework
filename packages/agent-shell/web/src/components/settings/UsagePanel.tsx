@@ -86,8 +86,8 @@ export function UsagePanel() {
   }, [fetchSummary, days]);
 
   return (
-    <div className="space-y-4">
-      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-3.5 space-y-3">
+    <div className="space-y-3">
+      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
             <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
@@ -135,19 +135,19 @@ export function UsagePanel() {
             <div className="grid grid-cols-4 gap-2">
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
                 <div className="text-[10px] text-agent-muted-foreground">总轮次</div>
-                <div className="text-sm font-semibold text-agent-foreground">{summary.totals.turns}</div>
+                <div className="text-xs font-semibold text-agent-foreground">{summary.totals.turns}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
                 <div className="text-[10px] text-agent-muted-foreground">总 Token</div>
-                <div className="text-sm font-semibold text-agent-foreground">{formatTokens(summary.totals.totalTokens)}</div>
+                <div className="text-xs font-semibold text-agent-foreground">{formatTokens(summary.totals.totalTokens)}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
                 <div className="text-[10px] text-agent-muted-foreground">缓存命中</div>
-                <div className="text-sm font-semibold text-agent-foreground">{formatTokens(summary.totals.cachedPromptTokens)}</div>
+                <div className="text-xs font-semibold text-agent-foreground">{formatTokens(summary.totals.cachedPromptTokens)}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
                 <div className="text-[10px] text-agent-muted-foreground">估算成本</div>
-                <div className="text-sm font-semibold text-agent-foreground">{formatCost(summary.totals.costUsd)}</div>
+                <div className="text-xs font-semibold text-agent-foreground">{formatCost(summary.totals.costUsd)}</div>
               </div>
             </div>
 

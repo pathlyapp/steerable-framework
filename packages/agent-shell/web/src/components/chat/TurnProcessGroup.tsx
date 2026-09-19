@@ -84,7 +84,7 @@ function ThinkingFold({
   }, [defaultOpen]);
 
   const body = (
-    <div className="border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground">
+    <div className="border-l border-agent-border/70 pl-2 text-xs leading-relaxed text-agent-muted-foreground">
       <ReasoningBody content={content} showCursor={showCursor} />
     </div>
   );
@@ -169,8 +169,8 @@ function ProcessBlockItems({
         }
         return (
           <div key={`text-${index}`} data-testid="turn-response">
-            <div className="rounded-agent-lg border border-agent-border bg-agent-canvas p-2.5 shadow-sm">
-              <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
+            <div className="rounded-agent-lg border border-agent-border bg-agent-canvas px-2.5 py-2 shadow-sm">
+              <div className="markdown-content text-xs leading-relaxed text-agent-foreground">
                 <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
               </div>
               {isStreaming && isLast ? (
@@ -202,7 +202,7 @@ function ProcessBlocks({
   thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <ProcessBlockItems
         blocks={blocks}
         isStreaming={isStreaming}
@@ -251,7 +251,7 @@ function ThinkingPeek({
   return (
     <div
       ref={scrollerRef}
-      className="space-y-2 overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      className="space-y-1.5 overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       style={{ height: THINKING_PEEK_HEIGHT }}
       data-thinking-peek=""
       data-testid="thinking-peek"
@@ -281,6 +281,7 @@ export function TurnProcessGroup({
   durationMs,
   thinkingDisplay: thinkingDisplayProp,
   showThinkingContent: showThinkingContentProp,
+  collapseWhenFinished = true,
   renderAnswer,
 }: {
   blocks: TurnBlock[];
@@ -302,6 +303,11 @@ export function TurnProcessGroup({
    * Task process panel passes true so the inspector stays expanded.
    */
   showThinkingContent?: boolean;
+  /**
+   * After the stream ends, fold the work row to the summary line.
+   * Task inspector sets false so the replay stays open.
+   */
+  collapseWhenFinished?: boolean;
   renderAnswer: (block: Extract<TurnBlock, { type: 'text' }>, isLast: boolean) => ReactNode;
 }) {
   const preference = useThinkingDisplay();
@@ -313,7 +319,9 @@ export function TurnProcessGroup({
   const showFullThinking = thinkingDisplay === 'full';
   const showThinkingPeekAllowed = thinkingDisplay === 'peek';
   const { process, answer } = splitTurnProcess(blocks, { finalize: !isStreaming });
-  const [open, setOpen] = useState(() => showFullThinking);
+  const [open, setOpen] = useState(
+    () => showFullThinking && (isStreaming || !collapseWhenFinished),
+  );
   const wasStreamingRef = useRef(isStreaming);
   const isStreamingRef = useRef(isStreaming);
   const answerLenRef = useRef(answer.length);
@@ -369,21 +377,19 @@ export function TurnProcessGroup({
   });
 
   useEffect(() => {
-    setOpen(showFullThinking);
+    if (isStreamingRef.current) setOpen(showFullThinking);
   }, [showFullThinking]);
 
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
-    // peek / hidden fold after the summary lands. full stays open so every
-    // round's thinking and tool result remains on screen (hint: 结束后可手动折叠).
-    if (wasStreaming && !isStreaming && answer.length > 0 && !showFullThinking) {
+    if (wasStreaming && !isStreaming && collapseWhenFinished) {
       setOpen(false);
     }
     if (!wasStreaming && isStreaming) {
       setOpen(showFullThinking);
     }
     wasStreamingRef.current = isStreaming;
-  }, [isStreaming, answer.length, showFullThinking]);
+  }, [isStreaming, showFullThinking, collapseWhenFinished]);
 
   if (blocks.length === 0) return <>{emptyFallback}</>;
 
@@ -398,7 +404,7 @@ export function TurnProcessGroup({
     Boolean(streamingHint) && isStreaming && answer.length === 0 && !showToggle;
 
   return (
-    <div className="space-y-1.5" data-turn-timeline>
+    <div className="space-y-1" data-turn-timeline>
       {showToggle && (
         <button
           type="button"

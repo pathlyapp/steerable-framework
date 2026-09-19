@@ -27,7 +27,7 @@ export function DiagnoseSettingsPanel() {
   };
 
   return (
-    <div className="space-y-3 rounded-agent-md border border-agent-border bg-agent-card p-4">
+    <div className="space-y-2 rounded-agent-md border border-agent-border bg-agent-card p-2.5">
       <p className="text-xs text-agent-muted-foreground">
         诊断当前模型服务的网络连通性，包括 DNS 解析、TCP 连接、TLS 握手、HTTP 接口与对话补全。
         诊断在宿主进程内执行，会同时报告系统/环境代理配置。
@@ -60,7 +60,7 @@ export function DiagnoseSettingsPanel() {
 
       {result && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 text-xs">
             {result.ok ? (
               <span className="inline-flex items-center gap-1 text-agent-success">
                 <LuCircleCheck className="h-4 w-4" />

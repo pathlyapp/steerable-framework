@@ -21,7 +21,7 @@ export const THINKING_DISPLAY_OPTIONS: ReadonlyArray<{
 }> = [
   { mode: 'hidden', label: '隐藏', hint: '只保留状态行，不展示思考正文。' },
   { mode: 'peek', label: '显示5行', hint: '流式中露出 5 行思考，结束后自动折叠。' },
-  { mode: 'full', label: '完整显示', hint: '流式中展开全部思考与工具过程，结束后可手动折叠。' },
+  { mode: 'full', label: '完整显示', hint: '流式中展开全部思考与工具过程，结束后自动折叠。' },
 ];
 
 export function isThinkingDisplayMode(value: unknown): value is ThinkingDisplayMode {

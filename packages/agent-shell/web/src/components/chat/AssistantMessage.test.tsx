@@ -73,6 +73,39 @@ describe('AssistantMessage 分享', () => {
   });
 });
 
+describe('AssistantMessage token 速度', () => {
+  it('结束后把模型请求 tok/s 画在时间戳旁边', () => {
+    render(
+      <AssistantMessage
+        message={MESSAGE}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        llmSpeed={{
+          tokens: 13,
+          elapsedMs: 1000,
+          live: false,
+          closedMs: 1000,
+          requestStartedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByTestId('turn-token-speed').textContent).toBe('13 tok/s');
+  });
+
+  it('没有用时或几乎没产出时不画速度', () => {
+    render(
+      <AssistantMessage
+        message={MESSAGE}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.queryByTestId('turn-token-speed')).toBeNull();
+  });
+});
+
 describe('AssistantMessage 回合产物列表', () => {
   it('turnFiles 非空且非流式时渲染在回答之下', () => {
     render(

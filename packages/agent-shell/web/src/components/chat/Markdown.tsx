@@ -59,25 +59,25 @@ const components: Components = {
   h1: (props: ComponentPropsWithoutRef<'h1'>) => (
     <h1
       {...props}
-      className="mb-2 mt-3 text-base font-semibold text-agent-foreground first:mt-0"
+      className="mb-0.5 mt-1.5 text-xs font-semibold text-agent-foreground first:mt-0"
     />
   ),
   h2: (props: ComponentPropsWithoutRef<'h2'>) => (
     <h2
       {...props}
-      className="mb-1.5 mt-3 text-[14px] font-semibold text-agent-foreground first:mt-0"
+      className="mb-0.5 mt-1.5 text-xs font-semibold text-agent-foreground first:mt-0"
     />
   ),
   h3: (props: ComponentPropsWithoutRef<'h3'>) => (
     <h3
       {...props}
-      className="mb-1 mt-2 text-[13px] font-semibold text-agent-foreground first:mt-0"
+      className="mb-0.5 mt-1.5 text-xs font-semibold text-agent-foreground first:mt-0"
     />
   ),
   h4: (props: ComponentPropsWithoutRef<'h4'>) => (
     <h4
       {...props}
-      className="mb-1 mt-2 text-[13px] font-semibold text-agent-foreground first:mt-0"
+      className="mb-0.5 mt-1.5 text-xs font-semibold text-agent-foreground first:mt-0"
     />
   ),
 
@@ -85,16 +85,16 @@ const components: Components = {
     <p
       style={{ whiteSpace: 'pre-line' }}
       {...props}
-      className="my-1 leading-relaxed"
+      className="my-0.5 leading-relaxed"
     />
   ),
 
   // ── Lists ─────────────────────────────────────────────────────────────
   ul: (props: ComponentPropsWithoutRef<'ul'>) => (
-    <ul {...props} className="my-1.5 list-disc space-y-0.5 pl-5" />
+    <ul {...props} className="my-1 list-disc space-y-0.5 pl-4" />
   ),
   ol: (props: ComponentPropsWithoutRef<'ol'>) => (
-    <ol {...props} className="my-1.5 list-decimal space-y-0.5 pl-5" />
+    <ol {...props} className="my-1 list-decimal space-y-0.5 pl-4" />
   ),
   li: (props: ComponentPropsWithoutRef<'li'>) => (
     <li
@@ -115,18 +115,18 @@ const components: Components = {
   blockquote: (props: ComponentPropsWithoutRef<'blockquote'>) => (
     <blockquote
       {...props}
-      className="my-1.5 border-l-2 border-agent-border bg-agent-muted/40 px-3 py-1 text-[13px] text-agent-muted-foreground [&>p]:my-0"
+      className="my-1 border-l-2 border-agent-border bg-agent-muted/40 px-2 py-0.5 text-xs text-agent-muted-foreground [&>p]:my-0"
     />
   ),
 
   // ── Horizontal rule ──────────────────────────────────────────────────
   hr: (props: ComponentPropsWithoutRef<'hr'>) => (
-    <hr {...props} className="my-3 border-agent-border" />
+    <hr {...props} className="my-2 border-agent-border" />
   ),
 
   // ── Tables ───────────────────────────────────────────────────────────
   table: (props: ComponentPropsWithoutRef<'table'>) => (
-    <div className="my-2 w-full overflow-x-auto rounded-md border border-agent-border">
+    <div className="my-1.5 w-full overflow-x-auto rounded-md border border-agent-border">
       <table {...props} className="w-full border-collapse text-[12px]" />
     </div>
   ),
@@ -136,13 +136,13 @@ const components: Components = {
   th: (props: ComponentPropsWithoutRef<'th'>) => (
     <th
       {...props}
-      className="border-b border-agent-border px-2 py-1.5 text-left font-medium text-agent-foreground"
+      className="border-b border-agent-border px-2 py-1 text-left font-medium text-agent-foreground"
     />
   ),
   td: (props: ComponentPropsWithoutRef<'td'>) => (
     <td
       {...props}
-      className="border-b border-agent-border px-2 py-1.5 align-top break-words"
+      className="border-b border-agent-border px-2 py-1 align-top break-words"
       style={{ maxWidth: '300px' }}
     />
   ),
@@ -159,7 +159,7 @@ const components: Components = {
     return (
       <pre
         {...props}
-        className="my-2 overflow-x-auto rounded-md border border-agent-border bg-agent-muted/60 p-2.5 text-[12px] leading-relaxed text-agent-foreground"
+        className="my-1.5 overflow-x-auto rounded-md border border-agent-border bg-agent-muted/60 p-2 text-[12px] leading-relaxed text-agent-foreground"
       />
     );
   },

@@ -40,7 +40,7 @@ export function TerminalPanel({
   }
   if (!hasElectron) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-black p-6 text-center font-mono text-sm text-white">
+      <div className="flex h-full w-full items-center justify-center bg-black p-4 text-center font-mono text-xs text-white">
         <div>
           <p className="mb-2">⚠️ 此面板需要桌面客户端或 BS server 连接。</p>
           <p className="text-white/60">

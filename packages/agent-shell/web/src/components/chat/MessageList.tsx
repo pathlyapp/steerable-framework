@@ -20,6 +20,7 @@ import type { ChatMode } from './ChatInput';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
+import type { LlmSpeedSnapshot } from './process-status';
 
 /**
  * MessageList — scrolling viewport that renders user/assistant message
@@ -80,6 +81,10 @@ interface MessageListProps {
   currentTurnStartedAtMs?: number;
   /** Frozen duration keyed by assistant message id (live freeze + history). */
   durationByMessageId?: Record<string, number>;
+  /** Live model-request speed for the in-flight assistant turn. */
+  currentLlmSpeed?: LlmSpeedSnapshot;
+  /** Frozen model-request speed keyed by assistant message id. */
+  llmSpeedByMessageId?: Record<string, LlmSpeedSnapshot>;
   /**
    * 回合产物文件列表，按落库消息 id 键控（live 回合在 message_id 事件时
    * 归档；历史回合从 messageMetadata.turnFiles 水合）。
@@ -155,6 +160,8 @@ export function MessageList({
   currentTurnTimeline,
   currentTurnStartedAtMs,
   durationByMessageId,
+  currentLlmSpeed,
+  llmSpeedByMessageId,
   turnFilesByMessageId,
   currentTurnFiles,
   currentTurnChildren,
@@ -241,12 +248,12 @@ export function MessageList({
     <div className="relative flex-1 overflow-hidden">
       <div
         ref={containerRef}
-        className="h-full overflow-y-auto overflow-anchor-none px-3 py-3"
+        className="h-full overflow-y-auto overflow-anchor-none px-2.5 py-2"
       >
         {visibleMessages.length === 0 ? (
           emptyState ?? null
         ) : (
-          <div className="mx-auto w-full space-y-1.5">
+          <div className="mx-auto w-full space-y-1">
             {visibleMessages.map((message, index) => {
               const isLast = index === visibleMessages.length - 1;
               if (message.role === 'user') {
@@ -311,6 +318,11 @@ export function MessageList({
                 : durationByMessageId?.[message.id]
                   ?? readPersistedDurationMs(metadataJson)
                   ?? inferDurationMs(previousUserCreatedAt, message.createdAt);
+              const persistedSpeed = llmSpeedByMessageId?.[message.id];
+              const isSpeedTail = isLast && currentLlmSpeed !== undefined;
+              const llmSpeed =
+                persistedSpeed
+                ?? (isStreamingTail || isSpeedTail ? currentLlmSpeed : undefined);
 
               return (
                 <div key={message.id}>
@@ -329,6 +341,7 @@ export function MessageList({
                     onRegenerate={onRegenerate}
                     startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
                     durationMs={durationMs}
+                    llmSpeed={llmSpeed}
                     turnFiles={turnFiles}
                     onShare={message.id === lastAssistantId ? onShare : undefined}
                   />
@@ -376,7 +389,7 @@ export function MessageList({
             setIsAtBottom(true);
             scrollToBottom('smooth');
           }}
-          className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
+          className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
           title="回到底部"
           aria-label="回到底部"
         >

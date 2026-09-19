@@ -14,13 +14,13 @@ export function AppearanceSettingsPanel() {
 
   return (
     <div
-      className="space-y-3 rounded-agent-md border border-agent-border bg-agent-card p-4"
+      className="space-y-2 rounded-agent-md border border-agent-border bg-agent-card p-2.5"
       data-testid="appearance-settings-panel"
     >
       <div>
-        <p className="text-sm font-medium text-agent-foreground">显示思考内容</p>
+        <p className="text-xs font-medium text-agent-foreground">显示思考内容</p>
         <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
-          {current?.hint} 工作行只显示「工作中」或结束后的思考次数、工具次数和用时；速度和思考时间在思考行上。
+          {current?.hint} 工作行只显示「工作中」或结束后的思考次数、工具次数和用时；底部 tok/s 是整段模型请求的生成速度（思考+回复），不含工具等待。
         </p>
       </div>
       <div

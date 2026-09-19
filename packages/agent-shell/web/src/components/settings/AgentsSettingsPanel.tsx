@@ -200,14 +200,14 @@ export function AgentsSettingsPanel({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <p className="text-[11px] text-agent-muted-foreground">
         自定义智能体会出现在输入框上方的专家选择器里。角色设定会作为对话的人设前言，
         勾选的技能与工具权限在每一轮真实生效。内置智能体可以改文案和能力，但不能删除。
       </p>
 
       {formOpen ? (
-        <div className="space-y-2.5 rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-3.5">
+        <div className="space-y-2 rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-2.5">
           <h4 className="text-xs font-semibold text-agent-foreground">
             {editingId ? '编辑智能体' : '新建智能体'}
           </h4>

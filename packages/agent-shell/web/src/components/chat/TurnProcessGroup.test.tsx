@@ -147,7 +147,7 @@ describe('TurnProcessGroup', () => {
     expect(screen.queryByText('先读配置先读配置先读配置先读配置')).toBeNull();
   });
 
-  it('shows tok/s on the 思考 fold while that round is live', () => {
+  it('shows live thinking time on the 思考 fold', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-08T12:00:00.000Z'));
     renderGroup({
@@ -161,7 +161,8 @@ describe('TurnProcessGroup', () => {
     });
     const fold = screen.getByTestId('turn-thinking').querySelector('button');
     expect(fold?.textContent).toContain('思考中');
-    expect(fold?.textContent).toMatch(/\d+(\.\d+)? tok\/s/);
+    expect(fold?.textContent).toContain('1s');
+    expect(fold?.textContent).not.toMatch(/tok\/s/);
   });
 
   it('shows a fixed 5-line thinking peek while streaming, then folds it', () => {
@@ -205,7 +206,7 @@ describe('TurnProcessGroup', () => {
     );
   });
 
-  it('keeps the process open after the summary when 完整显示 is on', () => {
+  it('folds the work row after the summary even when 完整显示 is on', () => {
     const view = renderGroup({
       isStreaming: true,
       blocks: blocks.slice(0, 4),
@@ -228,14 +229,8 @@ describe('TurnProcessGroup', () => {
       />,
     );
 
-    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('先读配置')).toBeTruthy();
-    expect(screen.getByText('再查天气')).toBeTruthy();
-    expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
-    expect(screen.queryByText('工具', { exact: true })).toBeNull();
-    expect(
-      screen.getAllByTestId('tools-flow').every((el) => el.getAttribute('data-expanded') === 'false'),
-    ).toBe(true);
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
@@ -307,8 +302,9 @@ describe('TurnProcessGroup', () => {
       ],
     });
 
-    expect(screen.getByTestId('turn-response').textContent).toContain('我先搜工具');
     expect(screen.getByTestId('answer').textContent).toBe('PPT 已生成');
+    fireEvent.click(processToggle());
+    expect(screen.getByTestId('turn-response').textContent).toContain('我先搜工具');
     expect(screen.queryByText('PPT 已生成')?.closest('[data-testid="turn-response"]')).toBeNull();
   });
 
@@ -335,14 +331,15 @@ describe('TurnProcessGroup', () => {
     expect(processToggle().textContent).toContain('工具调用 1 次');
   });
 
-  it('does not fold a tools-only turn when the setting is on', () => {
+  it('folds a finished tools-only turn even when 完整显示 is on', () => {
     renderGroup({
       isStreaming: false,
       blocks: [tool('csv_get_config')],
       showThinkingContent: true,
     });
-    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByTestId('tools-flow').textContent).toBe('csv_get_config');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('tools-flow')).toBeNull();
+    expect(processToggle().textContent).toContain('工具调用 1 次');
   });
 
   it('keeps the work line as 工作中 while a tool is running', () => {

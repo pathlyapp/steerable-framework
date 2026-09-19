@@ -1,7 +1,7 @@
 /**
  * Work-row summary vs per-thinking-fold live stats.
- * Token speed is a coarse estimate from reasoning text (same CJK/other
- * weights as the desktop compactor).
+ * Footer tok/s is the model HTTP-stream generation speed across every
+ * output stage (reasoning + reply), excluding tool-wait gaps.
  */
 
 import { formatElapsedCompact } from './elapsed';
@@ -81,7 +81,7 @@ export function processStatusLabel(input: {
   return parts.join(' · ');
 }
 
-/** Per-round 思考 fold: live speed + time, or frozen duration after that round ends. */
+/** Per-round 思考 fold: live time, or frozen duration after that round ends. */
 export function thinkingFoldLabel(input: {
   content: string;
   isLive: boolean;
@@ -89,11 +89,99 @@ export function thinkingFoldLabel(input: {
 }): string {
   const elapsed = formatElapsedPart(input.isLive, input.elapsedMs);
   if (input.isLive) {
-    const parts = ['思考中'];
-    const speed = formatTokenSpeed(estimateTextTokens(input.content), input.elapsedMs ?? 0);
-    if (speed) parts.push(speed);
-    if (elapsed) parts.push(elapsed);
-    return parts.join(' · ');
+    return elapsed ? `思考中 · ${elapsed}` : '思考中';
   }
   return elapsed ? `思考 · ${elapsed}` : '思考';
+}
+
+/** Reasoning + reply tokens for the message-footer tok/s. */
+export function estimateTurnTokens(blocks: TurnBlock[], fallbackContent = ''): number {
+  if (blocks.length === 0) return estimateTextTokens(fallbackContent);
+  let tokens = 0;
+  for (const block of blocks) {
+    if (block.type === 'reasoning' || block.type === 'text') {
+      tokens += estimateTextTokens(block.content);
+    }
+  }
+  return tokens;
+}
+
+/** Snapshot of model-request generation speed (all LLM output stages). */
+export type LlmSpeedSnapshot = {
+  tokens: number;
+  elapsedMs: number;
+  live: boolean;
+  closedMs: number;
+  requestStartedAt: number | null;
+};
+
+export function parseLlmSpeedPayload(payload: unknown): LlmSpeedSnapshot | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = payload as Record<string, unknown>;
+  if (typeof value.tokens !== 'number' || typeof value.elapsedMs !== 'number') {
+    return null;
+  }
+  return {
+    tokens: value.tokens,
+    elapsedMs: value.elapsedMs,
+    live: value.live === true,
+    closedMs: typeof value.closedMs === 'number' ? value.closedMs : value.elapsedMs,
+    requestStartedAt:
+      typeof value.requestStartedAt === 'number' ? value.requestStartedAt : null,
+  };
+}
+
+export function llmRequestElapsedMs(
+  snap: LlmSpeedSnapshot | null | undefined,
+  now: number,
+): number {
+  if (!snap) return 0;
+  if (snap.live && snap.requestStartedAt != null) {
+    return snap.closedMs + Math.max(0, now - snap.requestStartedAt);
+  }
+  return snap.elapsedMs;
+}
+
+/**
+ * Accumulates tokens + elapsed only while the model is streaming.
+ * `endRequest` freezes the current burst so tool waits do not dilute tok/s.
+ */
+export class LlmRequestSpeedTracker {
+  private requestStartedAt: number | null = null;
+  private requestText = '';
+  private closedText = '';
+  private closedMs = 0;
+
+  noteOutput(delta: string, now = Date.now()): LlmSpeedSnapshot {
+    if (delta) {
+      if (this.requestStartedAt == null) this.requestStartedAt = now;
+      this.requestText += delta;
+    }
+    return this.snapshot(now);
+  }
+
+  endRequest(now = Date.now()): LlmSpeedSnapshot {
+    if (this.requestStartedAt != null) {
+      this.closedText += this.requestText;
+      this.closedMs += Math.max(0, now - this.requestStartedAt);
+      this.requestStartedAt = null;
+      this.requestText = '';
+    }
+    return this.snapshot(now);
+  }
+
+  snapshot(now = Date.now()): LlmSpeedSnapshot {
+    const tokens = estimateTextTokens(this.closedText + this.requestText);
+    let elapsedMs = this.closedMs;
+    if (this.requestStartedAt != null) {
+      elapsedMs += Math.max(0, now - this.requestStartedAt);
+    }
+    return {
+      tokens,
+      elapsedMs,
+      live: this.requestStartedAt != null,
+      closedMs: this.closedMs,
+      requestStartedAt: this.requestStartedAt,
+    };
+  }
 }

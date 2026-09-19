@@ -153,9 +153,9 @@ export function SkillsSettingsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Import Skill Bar */}
-      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-3.5 space-y-2">
+      <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
           <LuBlocks className="h-3.5 w-3.5 text-agent-muted-foreground" />
           导入本地技能目录 (Import Local Skill Directory)
