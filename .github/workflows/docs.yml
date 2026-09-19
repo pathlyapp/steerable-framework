@@ -10,6 +10,7 @@ on:
       - "packages/agent-shell/web/**"
       - "spec/blocks/**"
       - ".github/workflows/docs.yml"
+      - "wrangler.jsonc"
   pull_request:
     paths:
       - "docs/**"
@@ -18,11 +19,10 @@ on:
       - "packages/agent-shell/web/**"
       - "spec/blocks/**"
       - ".github/workflows/docs.yml"
+      - "wrangler.jsonc"
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   # Per PR / branch. A repo-wide `pages` group made every docs PR cancel
@@ -136,18 +136,10 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-pages-artifact@v5
+      - name: Deploy to Cloudflare Workers
         if: github.ref == 'refs/heads/main'
+        uses: cloudflare/wrangler-action@v4
         with:
-          path: _site
-
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

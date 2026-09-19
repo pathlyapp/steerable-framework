@@ -1,0 +1,16 @@
+{
+  "name": "steerableframework-docs",
+  "account_id": "f8536a10716e8461e535bb924c277e63",
+  "compatibility_date": "2026-09-19",
+  "workers_dev": true,
+  "preview_urls": true,
+  "routes": [
+    { "pattern": "steerableframework.com", "custom_domain": true },
+    { "pattern": "www.steerableframework.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./_site",
+    "not_found_handling": "404-page",
+    "html_handling": "auto-trailing-slash"
+  }
+}
