@@ -2,8 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SHOW_THINKING_CONTENT_STORAGE_KEY,
-  persistShowThinkingContent,
+  persistThinkingDisplay,
 } from '@/lib/show-thinking-content';
+import type { ThinkingDisplayMode } from '@/lib/show-thinking-content';
 import type { TurnBlock } from './turn-timeline';
 
 vi.mock('./Markdown', () => ({
@@ -16,7 +17,7 @@ vi.mock('./ExecutedActionsCard', () => ({
   ),
 }));
 
-const { TurnProcessGroup } = await import('./TurnProcessGroup');
+const { TurnProcessGroup, THINKING_PEEK_HEIGHT } = await import('./TurnProcessGroup');
 
 afterEach(() => {
   cleanup();
@@ -42,6 +43,7 @@ function renderGroup(overrides: {
   isStreaming?: boolean;
   startedAtMs?: number;
   durationMs?: number;
+  thinkingDisplay?: ThinkingDisplayMode;
   showThinkingContent?: boolean;
 } = {}) {
   return render(
@@ -50,6 +52,7 @@ function renderGroup(overrides: {
       isStreaming={overrides.isStreaming ?? false}
       startedAtMs={overrides.startedAtMs}
       durationMs={overrides.durationMs}
+      thinkingDisplay={overrides.thinkingDisplay}
       showThinkingContent={overrides.showThinkingContent}
       agents={[]}
       chats={[]}
@@ -102,16 +105,46 @@ describe('TurnProcessGroup', () => {
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
-  it('shows a fixed 7-line thinking peek while streaming, then folds it', () => {
+  it('hides thinking body while streaming when mode is hidden', () => {
+    renderGroup({
+      isStreaming: true,
+      blocks: blocks.slice(0, 4),
+      thinkingDisplay: 'hidden',
+    });
+
+    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
+    expect(screen.queryByText('再查天气')).toBeNull();
+    expect(screen.queryByTestId('tools-flow')).toBeNull();
+  });
+
+  it('shows tok/s on the 思考中 line when thinking body is hidden', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T12:00:12.000Z'));
+    renderGroup({
+      isStreaming: true,
+      thinkingDisplay: 'hidden',
+      startedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
+      blocks: [{ type: 'reasoning', content: '先读配置先读配置先读配置先读配置' }],
+    });
+
+    const label = screen.getByRole('button').textContent ?? '';
+    expect(label).toContain('思考中');
+    expect(label).toMatch(/\d+(\.\d+)? tok\/s/);
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
+    expect(screen.queryByText('先读配置先读配置先读配置先读配置')).toBeNull();
+  });
+
+  it('shows a fixed 5-line thinking peek while streaming, then folds it', () => {
     const view = renderGroup({
       isStreaming: true,
       blocks: blocks.slice(0, 4),
-      showThinkingContent: false,
+      thinkingDisplay: 'peek',
     });
 
     const peek = screen.getByTestId('thinking-peek');
-    expect(peek.getAttribute('data-peek-lines')).toBe('7');
-    expect(peek.className).toContain('h-[7lh]');
+    expect(peek.getAttribute('data-peek-lines')).toBe('5');
+    expect(peek.style.height).toBe(THINKING_PEEK_HEIGHT);
     expect(screen.getByText('再查天气')).toBeTruthy();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
 
@@ -119,7 +152,7 @@ describe('TurnProcessGroup', () => {
       <TurnProcessGroup
         blocks={blocks}
         isStreaming={false}
-        showThinkingContent={false}
+        thinkingDisplay="peek"
         agents={[]}
         chats={[]}
         emptyFallback={<div>empty</div>}
@@ -132,11 +165,22 @@ describe('TurnProcessGroup', () => {
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
-  it('expands while streaming when 显示思考内容 is on, then auto-collapses', () => {
+  it('renders HTML-like reasoning as plain text in the peek', () => {
+    renderGroup({
+      isStreaming: true,
+      blocks: [{ type: 'reasoning', content: '比较 a < b 再调用 <tool>' }],
+      thinkingDisplay: 'peek',
+    });
+    expect(screen.getByTestId('thinking-peek').textContent).toContain(
+      '比较 a < b 再调用 <tool>',
+    );
+  });
+
+  it('expands while streaming when 完整显示 is on, then auto-collapses', () => {
     const view = renderGroup({
       isStreaming: true,
       blocks: blocks.slice(0, 4),
-      showThinkingContent: true,
+      thinkingDisplay: 'full',
     });
 
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
@@ -147,7 +191,7 @@ describe('TurnProcessGroup', () => {
       <TurnProcessGroup
         blocks={blocks}
         isStreaming={false}
-        showThinkingContent={true}
+        thinkingDisplay="full"
         agents={[]}
         chats={[]}
         emptyFallback={<div>empty</div>}
@@ -166,7 +210,7 @@ describe('TurnProcessGroup', () => {
       blocks: blocks.slice(0, 1),
     });
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-    persistShowThinkingContent(true);
+    persistThinkingDisplay('full');
     await waitFor(() =>
       expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true'),
     );

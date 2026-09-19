@@ -173,8 +173,8 @@ export function MessageList({
   onSelectSuggestion,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
 
   const visibleMessages = messages.filter(
     (m) => m.role === 'user' || m.role === 'assistant',
@@ -192,13 +192,18 @@ export function MessageList({
     if (!el) return;
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX;
+    isAtBottomRef.current = atBottom;
     setIsAtBottom(atBottom);
   }, []);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const el = endRef.current;
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = containerRef.current;
     if (!el) return;
-    el.scrollIntoView({ behavior, block: 'end' });
+    if (behavior === 'smooth') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
   }, []);
 
   useEffect(() => {
@@ -213,28 +218,30 @@ export function MessageList({
   // Snap to bottom on first paint, regardless of whether the user "was" at
   // the bottom — there's no "before" on mount.
   useLayoutEffect(() => {
-    scrollToBottom('instant' as ScrollBehavior);
+    isAtBottomRef.current = true;
+    scrollToBottom('auto');
     setIsAtBottom(true);
   }, [scrollToBottom]);
 
-  // Subsequent auto-scroll only when the user is already near the bottom,
-  // so reading old messages doesn't get yanked.
+  // Stick to the bottom *before paint* while the user is still anchored.
+  // Smooth `scrollIntoView` on every reasoning token paints a frame mid-list
+  // then animates down — on Windows the classic scrollbar visibly jumps.
   const lastMessageId = visibleMessages[visibleMessages.length - 1]?.id;
   const lastContentLen = visibleMessages[visibleMessages.length - 1]?.content?.length ?? 0;
   const lastTimelineSig = currentTurnTimeline
     ?.map((block) => (block.type === 'tools' ? `t${block.actions.length}` : `c${block.content.length}`))
     .join('|') ?? '';
   const suggestedSig = suggestedReplies?.join('\0') ?? '';
-  useEffect(() => {
-    if (!isAtBottom) return;
-    scrollToBottom('smooth');
-  }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, isAtBottom, scrollToBottom]);
+  useLayoutEffect(() => {
+    if (!isAtBottomRef.current) return;
+    scrollToBottom('auto');
+  }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, scrollToBottom]);
 
   return (
     <div className="relative flex-1 overflow-hidden">
       <div
         ref={containerRef}
-        className="h-full overflow-y-auto px-3 py-3"
+        className="h-full overflow-y-auto overflow-anchor-none px-3 py-3"
       >
         {visibleMessages.length === 0 ? (
           emptyState ?? null
@@ -359,13 +366,16 @@ export function MessageList({
             ) : null}
           </div>
         )}
-        <div ref={endRef} />
       </div>
 
       {!isAtBottom && visibleMessages.length > 0 && (
         <button
           type="button"
-          onClick={() => scrollToBottom('smooth')}
+          onClick={() => {
+            isAtBottomRef.current = true;
+            setIsAtBottom(true);
+            scrollToBottom('smooth');
+          }}
           className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
           title="回到底部"
           aria-label="回到底部"

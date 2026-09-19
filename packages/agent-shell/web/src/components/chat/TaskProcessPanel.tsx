@@ -35,16 +35,18 @@ export function TaskProcessPanel({
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const isAtBottomRef = useRef(true);
 
   const checkAtBottom = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX;
+    isAtBottomRef.current = atBottom;
     setIsAtBottom(atBottom);
   }, []);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const el = containerRef.current;
     if (!el) return;
     if (behavior === 'smooth') {
@@ -65,20 +67,22 @@ export function TaskProcessPanel({
 
   // 换任务 / 首屏：没有「之前在不在底部」可言，直接钉到底。
   useLayoutEffect(() => {
-    scrollToBottom('instant' as ScrollBehavior);
+    isAtBottomRef.current = true;
+    scrollToBottom('auto');
     setIsAtBottom(true);
   }, [inspected.id, scrollToBottom]);
 
-  // live 增量只在用户还贴着底部时跟滚——往上翻看前面的工具调用时不要拽走。
+  // live 增量在 paint 前钉住底部。smooth scroll 会先露出一帧半截内容再往下
+  // 滑，Windows 经典滚动条就会上下跳。
   const timelineSig = blocks
     .map((block) =>
       block.type === 'tools' ? `t${block.actions.length}` : `c${block.content.length}`,
     )
     .join('|');
-  useEffect(() => {
-    if (!isAtBottom) return;
-    scrollToBottom('smooth');
-  }, [timelineSig, live, isAtBottom, scrollToBottom]);
+  useLayoutEffect(() => {
+    if (!isAtBottomRef.current) return;
+    scrollToBottom('auto');
+  }, [timelineSig, live, scrollToBottom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,7 +157,7 @@ export function TaskProcessPanel({
       <div className="relative min-h-0 flex-1 overflow-hidden">
         <div
           ref={containerRef}
-          className="h-full overflow-y-auto p-3"
+          className="h-full overflow-y-auto overflow-anchor-none p-3"
           data-testid="task-process-scroll"
         >
           {loading ? (
@@ -191,6 +195,7 @@ export function TaskProcessPanel({
           <button
             type="button"
             onClick={() => {
+              isAtBottomRef.current = true;
               setIsAtBottom(true);
               scrollToBottom('smooth');
             }}

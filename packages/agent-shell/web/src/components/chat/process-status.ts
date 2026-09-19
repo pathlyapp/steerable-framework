@@ -35,6 +35,22 @@ export function formatTokenSpeed(tokens: number, elapsedMs: number): string | nu
   return `${shown} tok/s`;
 }
 
+export function estimateProcessReasoningTokens(process: TurnBlock[]): number {
+  let tokens = 0;
+  for (const block of process) {
+    if (block.type === 'reasoning') tokens += estimateTextTokens(block.content);
+  }
+  return tokens;
+}
+
+function speedElapsedMs(
+  reasoningElapsedMs: number | undefined,
+  elapsedMs: number | undefined,
+): number {
+  if (reasoningElapsedMs != null && reasoningElapsedMs >= 400) return reasoningElapsedMs;
+  return elapsedMs ?? reasoningElapsedMs ?? 0;
+}
+
 export function lastToolsAreRunning(process: TurnBlock[]): boolean {
   const last = process[process.length - 1];
   if (last?.type !== 'tools' || last.actions.length === 0) return false;
@@ -79,13 +95,18 @@ export function processStatusLabel(input: {
       if (names.length > 0) parts.push(names.join('、'));
     } else {
       parts.push('思考中');
-      if (last?.type === 'reasoning') {
-        const speed = formatTokenSpeed(
-          estimateTextTokens(last.content),
-          reasoningElapsedMs ?? elapsedMs ?? 0,
-        );
-        if (speed) parts.push(speed);
-      }
+      const tokens =
+        last?.type === 'reasoning'
+          ? estimateTextTokens(last.content)
+          : estimateProcessReasoningTokens(process);
+      const speed = formatTokenSpeed(
+        tokens,
+        speedElapsedMs(
+          last?.type === 'reasoning' ? reasoningElapsedMs : undefined,
+          elapsedMs,
+        ),
+      );
+      if (speed) parts.push(speed);
     }
     if (elapsed) parts.push(elapsed);
     return parts.join(' · ');
