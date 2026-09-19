@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { openLocalPath, type ResolvedLocalPath } from '@/lib/local-api';
 import { peekResolvedPath, subscribeResolvedPath } from './path-mentions';
+import { splitTurnFilePath } from './turn-files';
 
 /**
  * 行内代码里的文件路径：后端确认存在后变成可点击，点击用系统默认应用打开。
@@ -59,7 +60,7 @@ export function FilePathCode({ candidate, chatId, children, ...rest }: FilePathC
         openError ? 'text-red-600 dark:text-red-400' : ''
       }`}
     >
-      {children}
+      {splitTurnFilePath(resolved.path).name || children}
     </button>
   );
 }

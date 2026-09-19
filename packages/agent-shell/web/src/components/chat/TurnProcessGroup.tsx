@@ -20,14 +20,15 @@ import { splitTurnProcess, type TurnBlock } from './turn-timeline';
  * (cards). Trailing text becomes 最后一次结论 only after the stream ends —
  * promoting it earlier would restyle it as thinking when the next round
  * starts. Settings 「显示思考内容」 only clip the 思考正文: hidden /
- * 5-line peek / full. Tools and the work row stay independent.
+ * 5-line peek / full. A finished 思考 fold auto-collapses in chat;
+ * only the live round stays open. Tools and the work row stay independent.
  */
 
 export const THINKING_PEEK_LINES = 5;
 /** 思考正文行高（`leading-snug`）。 */
 const THINKING_LINE_HEIGHT = 1.375;
 /**
- * 5 行 `text-xs` + `leading-snug` 的稳定高度。
+ * 最多 5 行：用 max-height，短思考按内容收，不撑空。
  * 不用 CSS `lh`：Windows Electron 在中文字体尚未就绪时 `lh` 会算成 0，
  * 思考 peek 整块消失，字体加载后又把主列表高度撑跳。
  */
@@ -112,7 +113,7 @@ function ReasoningPane({
     <div
       ref={scrollerRef}
       className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-      style={{ height: THINKING_PEEK_HEIGHT }}
+      style={{ maxHeight: THINKING_PEEK_HEIGHT }}
       data-thinking-peek=""
       data-testid="thinking-peek"
       data-peek-lines={THINKING_PEEK_LINES}
@@ -151,12 +152,12 @@ function ThinkingFold({
         aria-expanded={open}
         data-thinking-fold=""
       >
+        <span className="truncate">{label}</span>
         {open ? (
           <LuChevronDown className="h-3 w-3 shrink-0" />
         ) : (
           <LuChevronRight className="h-3 w-3 shrink-0" />
         )}
-        <span className="truncate">{label}</span>
       </button>
       {open ? (
         <ReasoningPane
@@ -176,7 +177,7 @@ function ProcessBlockItems({
   chats,
   chatId,
   thinkingDisplay,
-  thinkingDefaultOpen = false,
+  keepFinishedThinkingOpen = false,
   thinkingElapsedByIndex,
 }: {
   blocks: TurnBlock[];
@@ -185,7 +186,7 @@ function ProcessBlockItems({
   chats: LocalChat[];
   chatId?: string | null;
   thinkingDisplay: ThinkingDisplayMode;
-  thinkingDefaultOpen?: boolean;
+  keepFinishedThinkingOpen?: boolean;
   thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
   const lastIndex = blocks.length - 1;
@@ -210,9 +211,7 @@ function ProcessBlockItems({
               })}
               showCursor={isLive}
               mode={thinkingDisplay}
-              defaultOpen={
-                thinkingDisplay === 'peek' || (thinkingDisplay === 'full' && thinkingDefaultOpen)
-              }
+              defaultOpen={isLive || keepFinishedThinkingOpen}
             />
           );
         }
@@ -247,7 +246,7 @@ function ProcessBlocks({
   chats,
   chatId,
   thinkingDisplay,
-  thinkingDefaultOpen,
+  keepFinishedThinkingOpen,
   thinkingElapsedByIndex,
 }: {
   blocks: TurnBlock[];
@@ -256,7 +255,7 @@ function ProcessBlocks({
   chats: LocalChat[];
   chatId?: string | null;
   thinkingDisplay: ThinkingDisplayMode;
-  thinkingDefaultOpen: boolean;
+  keepFinishedThinkingOpen: boolean;
   thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
   return (
@@ -268,62 +267,9 @@ function ProcessBlocks({
         chats={chats}
         chatId={chatId}
         thinkingDisplay={thinkingDisplay}
-        thinkingDefaultOpen={thinkingDefaultOpen}
+        keepFinishedThinkingOpen={keepFinishedThinkingOpen}
         thinkingElapsedByIndex={thinkingElapsedByIndex}
       />
-    </div>
-  );
-}
-
-function processPeekSignature(blocks: TurnBlock[]): string {
-  return blocks
-    .map((block) => {
-      if (block.type === 'tools') return `t${block.actions.length}`;
-      return `${block.type[0]}${block.content.length}`;
-    })
-    .join(',');
-}
-
-function ThinkingPeek({
-  blocks,
-  isStreaming,
-}: {
-  blocks: TurnBlock[];
-  isStreaming: boolean;
-}) {
-  const reasoning = blocks.filter((block) => block.type === 'reasoning');
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const sig = processPeekSignature(reasoning);
-  useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [sig]);
-  if (reasoning.length === 0) return null;
-  const lastIndex = reasoning.length - 1;
-  return (
-    <div
-      ref={scrollerRef}
-      className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-      style={{ height: THINKING_PEEK_HEIGHT }}
-      data-thinking-peek=""
-      data-testid="thinking-peek"
-      data-peek-lines={THINKING_PEEK_LINES}
-    >
-      <div className="space-y-1">
-        {reasoning.map((block, index) => (
-          <div
-            key={`peek-reasoning-${index}`}
-            className={THINKING_TEXT}
-            data-testid="turn-thinking"
-          >
-            <ReasoningBody
-              content={block.content}
-              showCursor={isStreaming && index === lastIndex}
-            />
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -376,15 +322,16 @@ export function TurnProcessGroup({
     showThinkingContentProp,
   );
   const showFullThinking = thinkingDisplay === 'full';
-  const showThinkingPeekAllowed = thinkingDisplay === 'peek';
   const { process, answer } = splitTurnProcess(blocks, { finalize: !isStreaming });
-  const [open, setOpen] = useState(
-    () => showFullThinking && (isStreaming || !collapseWhenFinished),
-  );
-  const wasStreamingRef = useRef(isStreaming);
-  const isStreamingRef = useRef(isStreaming);
+  const defaultOpen = isStreaming
+    ? thinkingDisplay !== 'hidden'
+    : showFullThinking && !collapseWhenFinished;
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? defaultOpen;
+  useEffect(() => {
+    setUserOpen(null);
+  }, [isStreaming]);
   const answerLenRef = useRef(answer.length);
-  isStreamingRef.current = isStreaming;
   answerLenRef.current = answer.length;
   const now = useLiveNow(isStreaming);
   const streamClockRef = useRef<number | undefined>(undefined);
@@ -435,30 +382,10 @@ export function TurnProcessGroup({
     return reasoningDurationsRef.current[index];
   });
 
-  useEffect(() => {
-    if (isStreamingRef.current) setOpen(showFullThinking);
-  }, [showFullThinking]);
-
-  useEffect(() => {
-    const wasStreaming = wasStreamingRef.current;
-    if (wasStreaming && !isStreaming && collapseWhenFinished) {
-      setOpen(false);
-    }
-    if (!wasStreaming && isStreaming) {
-      setOpen(showFullThinking);
-    }
-    wasStreamingRef.current = isStreaming;
-  }, [isStreaming, showFullThinking, collapseWhenFinished]);
-
   if (blocks.length === 0) return <>{emptyFallback}</>;
 
   const showToggle = process.length > 0;
   const showProcess = !showToggle || open;
-  const showThinkingPeek =
-    showThinkingPeekAllowed &&
-    isStreaming &&
-    !open &&
-    showToggle;
   const showStreamingHint =
     Boolean(streamingHint) && isStreaming && answer.length === 0 && !showToggle;
 
@@ -467,25 +394,25 @@ export function TurnProcessGroup({
       {showToggle && (
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => setUserOpen(!open)}
           className="flex w-full items-center gap-1 py-0.5 text-left text-xs text-agent-muted-foreground transition-colors hover:text-agent-foreground"
           aria-expanded={open}
           data-turn-process=""
           data-testid="turn-process-toggle"
           data-open={open || undefined}
         >
-          {open ? (
-            <LuChevronDown className="h-3.5 w-3.5 shrink-0" />
-          ) : (
-            <LuChevronRight className="h-3.5 w-3.5 shrink-0" />
-          )}
-          <span className="truncate">
+          <span className="min-w-0 truncate">
             {processStatusLabel({
               process,
               isStreaming,
               elapsedMs,
             })}
           </span>
+          {open ? (
+            <LuChevronDown className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <LuChevronRight className="h-3.5 w-3.5 shrink-0" />
+          )}
         </button>
       )}
       {showProcess && (
@@ -496,28 +423,9 @@ export function TurnProcessGroup({
           chats={chats}
           chatId={chatId}
           thinkingDisplay={thinkingDisplay}
-          thinkingDefaultOpen={showFullThinking}
+          keepFinishedThinkingOpen={!collapseWhenFinished}
           thinkingElapsedByIndex={thinkingElapsedByIndex}
         />
-      )}
-      {showThinkingPeek && (
-        <>
-          <ThinkingPeek
-            blocks={process}
-            isStreaming={answer.length === 0}
-          />
-          <div className="space-y-1.5">
-            <ProcessBlockItems
-              blocks={process}
-              isStreaming={isStreaming && answer.length === 0}
-              agents={agents}
-              chats={chats}
-              chatId={chatId}
-              thinkingDisplay="hidden"
-              thinkingElapsedByIndex={thinkingElapsedByIndex}
-            />
-          </div>
-        </>
       )}
       {showStreamingHint ? streamingHint : null}
       {answer.map((block, index) => (

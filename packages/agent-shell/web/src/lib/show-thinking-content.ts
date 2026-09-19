@@ -1,7 +1,7 @@
 /**
  * 聊天里「显示思考内容」的本机偏好：隐藏 / 显示 5 行 / 完整显示。
  *
- * 默认「显示 5 行」：流式中露出固定行数，结束后折叠，只留状态行。
+ * 默认「显示 5 行」：流式中按轮次各露出 5 行，结束后折叠工作区，只留状态行。
  * 存在 localStorage，设置页切换立即生效，不走后端。
  */
 
@@ -20,8 +20,8 @@ export const THINKING_DISPLAY_OPTIONS: ReadonlyArray<{
   hint: string;
 }> = [
   { mode: 'hidden', label: '隐藏', hint: '不展示思考正文，只保留工作状态行。' },
-  { mode: 'peek', label: '显示5行', hint: '点「思考」展开后露出 5 行，折叠后不显示。完整正文请用「完整显示」。' },
-  { mode: 'full', label: '完整显示', hint: '思考正文完整展开；结束后工作行仍自动折叠。' },
+  { mode: 'peek', label: '显示5行', hint: '当前轮思考最多露出 5 行，不足不撑开；该轮结束后自动折叠。完整正文请用「完整显示」。' },
+  { mode: 'full', label: '完整显示', hint: '当前轮思考完整展开，该轮结束后自动折叠；工作行结束后仍自动折叠。' },
 ];
 
 export function isThinkingDisplayMode(value: unknown): value is ThinkingDisplayMode {
