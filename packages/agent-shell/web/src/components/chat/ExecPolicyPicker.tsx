@@ -64,16 +64,16 @@ export function ExecPolicyPicker({
         title={current.description}
         onClick={() => setOpen((next) => !next)}
         className={[
-          'inline-flex h-7 max-w-[140px] items-center gap-1 rounded-full border px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-70',
+          'inline-flex h-6 max-w-[140px] items-center gap-1 rounded-full border px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
           isFull
             ? 'border-amber-400/50 bg-amber-400/10 text-amber-700 dark:text-amber-400'
             : 'border-agent-border bg-agent-canvas text-agent-foreground hover:bg-agent-foreground/5',
         ].join(' ')}
       >
         {isFull ? (
-          <LuLockOpen className="h-3.5 w-3.5 shrink-0" />
+          <LuLockOpen className="h-3 w-3 shrink-0" />
         ) : (
-          <LuFolderLock className="h-3.5 w-3.5 shrink-0" />
+          <LuFolderLock className="h-3 w-3 shrink-0" />
         )}
         <span className="truncate">{current.label}</span>
         <LuChevronDown className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
@@ -104,7 +104,7 @@ export function ExecPolicyPicker({
                     : 'hover:bg-agent-foreground/5',
                 ].join(' ')}
               >
-                <span className="text-xs font-medium text-agent-foreground">
+                <span className="text-[12px] font-medium leading-[1.45] text-agent-foreground">
                   {option.label}
                 </span>
                 <span className="text-[11px] leading-snug text-agent-muted-foreground">

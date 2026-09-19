@@ -182,11 +182,6 @@ export function ChatHeader({
         >
           {chat?.title ?? '未选择对话'}
         </span>
-        {chat && (
-          <span className="hidden shrink-0 font-mono text-[10px] text-agent-muted-foreground/70 md:inline">
-            {shortenId(chat.id)}
-          </span>
-        )}
       </div>
       {chat && onBranchSwitched && (
         <div className="shrink-0">
@@ -365,11 +360,6 @@ function taskButtonTitle(
   return shortcut.kind === 'process'
     ? `${base} · 点击查看推理过程`
     : `${base} · 点击处理 worktree`;
-}
-
-function shortenId(id: string): string {
-  if (id.length <= 12) return id;
-  return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
 /** Pin the branch menu to the trigger, clamped inside the chat panel so

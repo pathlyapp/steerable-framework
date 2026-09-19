@@ -4,6 +4,7 @@ import {
   activeToolNames,
   estimateTextTokens,
   estimateTurnTokens,
+  estimateReasoningDurationMs,
   formatTokenSpeed,
   lastToolsAreRunning,
   llmRequestElapsedMs,
@@ -20,6 +21,11 @@ const tool = (name: string, running = true): TurnBlock => ({
 });
 
 describe('estimateTextTokens / formatTokenSpeed', () => {
+  it('estimates a display duration for long thinking without a stored clock', () => {
+    expect(estimateReasoningDurationMs('短')).toBeUndefined();
+    expect(estimateReasoningDurationMs('先读配置先读配置先读配置先读配置先读配置')).toBeGreaterThanOrEqual(1000);
+  });
+
   it('counts CJK cheaper than ASCII and formats tok/s', () => {
     expect(estimateTextTokens('你好世界')).toBe(3);
     expect(estimateTextTokens('abcd')).toBe(1);
@@ -77,7 +83,7 @@ describe('processStatusLabel', () => {
         isStreaming: false,
         elapsedMs: 83_000,
       }),
-    ).toBe('思考 2 次 · 工具调用 1 次 · 工作了 1m 23s');
+    ).toBe('工作了 1m 23s · 思考 2 次 · 工具调用 1 次');
   });
 
   it('omits empty counts and sub-second work time', () => {

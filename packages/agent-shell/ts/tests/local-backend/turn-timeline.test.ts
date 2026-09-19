@@ -24,9 +24,12 @@ describe('local-backend turn-timeline', () => {
     appendTimelineDelta(blocks, 'reasoning', '第一轮');
     sealLastTimelineBlock(blocks);
     appendTimelineDelta(blocks, 'reasoning', '第二轮');
-    expect(blocks).toEqual([
-      { type: 'reasoning', content: '第一轮', sealed: true },
-      { type: 'reasoning', content: '第二轮' },
-    ]);
+    expect(blocks[0]).toMatchObject({
+      type: 'reasoning',
+      content: '第一轮',
+      sealed: true,
+    });
+    expect(typeof (blocks[0] as { durationMs?: number }).durationMs).toBe('number');
+    expect(blocks[1]).toMatchObject({ type: 'reasoning', content: '第二轮' });
   });
 });

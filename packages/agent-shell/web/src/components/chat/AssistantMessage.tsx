@@ -163,11 +163,7 @@ const META_ACTION =
   'inline-flex items-center gap-0.5 rounded transition-all duration-200 hover:text-agent-foreground opacity-0 focus:opacity-100 group-hover/message:opacity-100';
 
 function bubbleClass(isPlanMode: boolean): string {
-  return `rounded-agent-lg border px-2.5 py-2 shadow-sm transition-all duration-200 ${
-    isPlanMode
-      ? 'border-amber-400/50 dark:border-amber-500/30 bg-amber-50/10 dark:bg-amber-950/5 shadow-amber-500/5'
-      : 'border-agent-border bg-agent-canvas'
-  }`;
+  return isPlanMode ? 'rounded-agent-lg bg-amber-50/10 dark:bg-amber-950/5' : '';
 }
 
 // 框架 useChatStream 收到 SSE error 事件时把最后一条助手消息的内容打成

@@ -23,10 +23,9 @@ describe('turn-timeline', () => {
     blocks = appendDelta(blocks, 'reasoning', '一下');
     blocks = appendDelta(blocks, 'text', '先读文件');
     blocks = appendDelta(blocks, 'text', '。');
-    expect(blocks).toEqual([
-      { type: 'reasoning', content: '想一下' },
-      { type: 'text', content: '先读文件。' },
-    ]);
+    expect(blocks[0]).toMatchObject({ type: 'reasoning', content: '想一下' });
+    expect(blocks[1]).toEqual({ type: 'text', content: '先读文件。' });
+    expect(typeof (blocks[0] as { durationMs?: number }).durationMs).toBe('number');
   });
 
   it('places tools after the text that preceded them, then more text', () => {
@@ -57,17 +56,20 @@ describe('turn-timeline', () => {
     let blocks = appendDelta([], 'reasoning', '第一轮');
     blocks = sealLastBlock(blocks);
     blocks = appendDelta(blocks, 'reasoning', '第二轮');
-    expect(blocks).toEqual([
-      { type: 'reasoning', content: '第一轮', sealed: true },
-      { type: 'reasoning', content: '第二轮' },
-    ]);
+    expect(blocks[0]).toMatchObject({
+      type: 'reasoning',
+      content: '第一轮',
+      sealed: true,
+    });
+    expect(typeof (blocks[0] as { durationMs?: number }).durationMs).toBe('number');
+    expect(blocks[1]).toMatchObject({ type: 'reasoning', content: '第二轮' });
   });
 
   it('is a no-op when the last block is already tools or sealed', () => {
     const tools = sealLastBlock([{ type: 'tools', actions: [tool('read')] }]);
     expect(tools).toEqual([{ type: 'tools', actions: [tool('read')] }]);
     const once = sealLastBlock([{ type: 'reasoning', content: '想', sealed: true }]);
-    expect(once).toEqual([{ type: 'reasoning', content: '想', sealed: true }]);
+    expect(once).toMatchObject([{ type: 'reasoning', content: '想', sealed: true }]);
   });
 
   it('falls back to tools-then-text for history without a timeline', () => {
@@ -116,11 +118,17 @@ describe('turn-timeline', () => {
 
   it('parses persisted timeline JSON and rejects unknown kinds', () => {
     const parsed = parseTurnBlocks([
-      { type: 'reasoning', content: 'hmm' },
+      { type: 'reasoning', content: 'hmm', durationMs: 8000, sealed: true },
       { type: 'tools', actions: [tool('read')] },
       { type: 'text', content: 'ok' },
     ]);
     expect(parsed).toHaveLength(3);
+    expect(parsed?.[0]).toEqual({
+      type: 'reasoning',
+      content: 'hmm',
+      sealed: true,
+      durationMs: 8000,
+    });
     expect(parseTurnBlocks([{ type: 'image' }])).toBeNull();
     expect(parseTurnBlocks([])).toBeNull();
   });

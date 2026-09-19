@@ -7,7 +7,11 @@ import {
 } from '@/lib/show-thinking-content';
 import { Markdown } from './Markdown';
 import { ToolsFlow } from './ExecutedActionsCard';
-import { processStatusLabel, thinkingFoldLabel } from './process-status';
+import {
+  estimateReasoningDurationMs,
+  processStatusLabel,
+  thinkingFoldLabel,
+} from './process-status';
 import { splitTurnProcess, type TurnBlock } from './turn-timeline';
 
 /**
@@ -15,16 +19,26 @@ import { splitTurnProcess, type TurnBlock } from './turn-timeline';
  * distinct: 思考 (muted CoT), 思考后的 response (reply bubble), 工具
  * (cards). Trailing text becomes 最后一次结论 only after the stream ends —
  * promoting it earlier would restyle it as thinking when the next round
- * starts. Settings 「显示思考内容」: hidden / 5-line peek / full.
+ * starts. Settings 「显示思考内容」 only clip the 思考正文: hidden /
+ * 5-line peek / full. Tools and the work row stay independent.
  */
 
 export const THINKING_PEEK_LINES = 5;
+/** 思考正文行高（`leading-snug`）。 */
+const THINKING_LINE_HEIGHT = 1.375;
 /**
- * 5 行 `text-xs` + `leading-relaxed` 的稳定高度。
+ * 5 行 `text-xs` + `leading-snug` 的稳定高度。
  * 不用 CSS `lh`：Windows Electron 在中文字体尚未就绪时 `lh` 会算成 0，
  * 思考 peek 整块消失，字体加载后又把主列表高度撑跳。
  */
-export const THINKING_PEEK_HEIGHT = `${THINKING_PEEK_LINES * 1.625}em`;
+export const THINKING_PEEK_HEIGHT = `${THINKING_PEEK_LINES * THINKING_LINE_HEIGHT}em`;
+
+const THINKING_TEXT =
+  'border-l border-agent-border/70 pl-2 text-xs leading-snug text-agent-muted-foreground';
+
+function splitThinkingParagraphs(content: string): string[] {
+  return content.split(/\n{2,}/).filter((part) => part.length > 0);
+}
 
 function ReasoningBody({
   content,
@@ -33,9 +47,16 @@ function ReasoningBody({
   content: string;
   showCursor?: boolean;
 }) {
+  const parts = splitThinkingParagraphs(content);
   return (
     <>
-      <div className="whitespace-pre-wrap break-words">{content}</div>
+      <div className="space-y-1">
+        {parts.map((part, index) => (
+          <div key={index} className="whitespace-pre-wrap break-words">
+            {part}
+          </div>
+        ))}
+      </div>
       {showCursor ? (
         <span className="ml-0.5 inline-block h-3 w-[2px] animate-agent-cursor-blink bg-agent-muted-foreground/60 align-text-bottom" />
       ) : null}
@@ -65,17 +86,53 @@ function useLiveNow(enabled: boolean): number {
   return now;
 }
 
+function ReasoningPane({
+  content,
+  showCursor,
+  clipped,
+}: {
+  content: string;
+  showCursor?: boolean;
+  clipped?: boolean;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!clipped) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [clipped, content]);
+  const body = (
+    <div className={THINKING_TEXT}>
+      <ReasoningBody content={content} showCursor={showCursor} />
+    </div>
+  );
+  if (!clipped) return body;
+  return (
+    <div
+      ref={scrollerRef}
+      className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      style={{ height: THINKING_PEEK_HEIGHT }}
+      data-thinking-peek=""
+      data-testid="thinking-peek"
+      data-peek-lines={THINKING_PEEK_LINES}
+    >
+      {body}
+    </div>
+  );
+}
+
 function ThinkingFold({
   content,
   label,
   showCursor,
-  collapsible,
+  mode,
   defaultOpen,
 }: {
   content: string;
   label: string;
   showCursor?: boolean;
-  collapsible: boolean;
+  mode: ThinkingDisplayMode;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -83,20 +140,7 @@ function ThinkingFold({
     setOpen(defaultOpen);
   }, [defaultOpen]);
 
-  const body = (
-    <div className="border-l border-agent-border/70 pl-2 text-xs leading-relaxed text-agent-muted-foreground">
-      <ReasoningBody content={content} showCursor={showCursor} />
-    </div>
-  );
-
-  if (!collapsible) {
-    return (
-      <div className="space-y-1" data-testid="turn-thinking">
-        <div className="text-[11px] text-agent-muted-foreground/80">{label}</div>
-        {body}
-      </div>
-    );
-  }
+  if (mode === 'hidden') return null;
 
   return (
     <div className="space-y-1" data-testid="turn-thinking">
@@ -114,7 +158,13 @@ function ThinkingFold({
         )}
         <span className="truncate">{label}</span>
       </button>
-      {open ? body : null}
+      {open ? (
+        <ReasoningPane
+          content={content}
+          showCursor={showCursor}
+          clipped={mode === 'peek'}
+        />
+      ) : null}
     </div>
   );
 }
@@ -125,7 +175,7 @@ function ProcessBlockItems({
   agents,
   chats,
   chatId,
-  foldThinking = false,
+  thinkingDisplay,
   thinkingDefaultOpen = false,
   thinkingElapsedByIndex,
 }: {
@@ -134,7 +184,7 @@ function ProcessBlockItems({
   agents: LocalChatAgent[];
   chats: LocalChat[];
   chatId?: string | null;
-  foldThinking?: boolean;
+  thinkingDisplay: ThinkingDisplayMode;
   thinkingDefaultOpen?: boolean;
   thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
@@ -145,6 +195,10 @@ function ProcessBlockItems({
         const isLast = index === lastIndex;
         if (block.type === 'reasoning') {
           const isLive = isStreaming && isLast;
+          const elapsedMs =
+            thinkingElapsedByIndex?.[index]
+            ?? block.durationMs
+            ?? (isLive ? undefined : estimateReasoningDurationMs(block.content));
           return (
             <ThinkingFold
               key={`reasoning-${index}`}
@@ -152,11 +206,13 @@ function ProcessBlockItems({
               label={thinkingFoldLabel({
                 content: block.content,
                 isLive,
-                elapsedMs: thinkingElapsedByIndex?.[index],
+                elapsedMs,
               })}
               showCursor={isLive}
-              collapsible={foldThinking}
-              defaultOpen={thinkingDefaultOpen || isLive}
+              mode={thinkingDisplay}
+              defaultOpen={
+                thinkingDisplay === 'peek' || (thinkingDisplay === 'full' && thinkingDefaultOpen)
+              }
             />
           );
         }
@@ -169,7 +225,7 @@ function ProcessBlockItems({
         }
         return (
           <div key={`text-${index}`} data-testid="turn-response">
-            <div className="rounded-agent-lg border border-agent-border bg-agent-canvas px-2.5 py-2 shadow-sm">
+            <div>
               <div className="markdown-content text-xs leading-relaxed text-agent-foreground">
                 <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
               </div>
@@ -190,6 +246,7 @@ function ProcessBlocks({
   agents,
   chats,
   chatId,
+  thinkingDisplay,
   thinkingDefaultOpen,
   thinkingElapsedByIndex,
 }: {
@@ -198,6 +255,7 @@ function ProcessBlocks({
   agents: LocalChatAgent[];
   chats: LocalChat[];
   chatId?: string | null;
+  thinkingDisplay: ThinkingDisplayMode;
   thinkingDefaultOpen: boolean;
   thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
@@ -209,7 +267,7 @@ function ProcessBlocks({
         agents={agents}
         chats={chats}
         chatId={chatId}
-        foldThinking
+        thinkingDisplay={thinkingDisplay}
         thinkingDefaultOpen={thinkingDefaultOpen}
         thinkingElapsedByIndex={thinkingElapsedByIndex}
       />
@@ -229,42 +287,43 @@ function processPeekSignature(blocks: TurnBlock[]): string {
 function ThinkingPeek({
   blocks,
   isStreaming,
-  agents,
-  chats,
-  chatId,
-  thinkingElapsedByIndex,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
-  agents: LocalChatAgent[];
-  chats: LocalChat[];
-  chatId?: string | null;
-  thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
+  const reasoning = blocks.filter((block) => block.type === 'reasoning');
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const sig = processPeekSignature(blocks);
+  const sig = processPeekSignature(reasoning);
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [sig]);
+  if (reasoning.length === 0) return null;
+  const lastIndex = reasoning.length - 1;
   return (
     <div
       ref={scrollerRef}
-      className="space-y-1.5 overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+      className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       style={{ height: THINKING_PEEK_HEIGHT }}
       data-thinking-peek=""
       data-testid="thinking-peek"
       data-peek-lines={THINKING_PEEK_LINES}
     >
-      <ProcessBlockItems
-        blocks={blocks}
-        isStreaming={isStreaming}
-        agents={agents}
-        chats={chats}
-        chatId={chatId}
-        thinkingElapsedByIndex={thinkingElapsedByIndex}
-      />
+      <div className="space-y-1">
+        {reasoning.map((block, index) => (
+          <div
+            key={`peek-reasoning-${index}`}
+            className={THINKING_TEXT}
+            data-testid="turn-thinking"
+          >
+            <ReasoningBody
+              content={block.content}
+              showCursor={isStreaming && index === lastIndex}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -436,19 +495,29 @@ export function TurnProcessGroup({
           agents={agents}
           chats={chats}
           chatId={chatId}
+          thinkingDisplay={thinkingDisplay}
           thinkingDefaultOpen={showFullThinking}
           thinkingElapsedByIndex={thinkingElapsedByIndex}
         />
       )}
       {showThinkingPeek && (
-        <ThinkingPeek
-          blocks={process}
-          isStreaming={answer.length === 0}
-          agents={agents}
-          chats={chats}
-          chatId={chatId}
-          thinkingElapsedByIndex={thinkingElapsedByIndex}
-        />
+        <>
+          <ThinkingPeek
+            blocks={process}
+            isStreaming={answer.length === 0}
+          />
+          <div className="space-y-1.5">
+            <ProcessBlockItems
+              blocks={process}
+              isStreaming={isStreaming && answer.length === 0}
+              agents={agents}
+              chats={chats}
+              chatId={chatId}
+              thinkingDisplay="hidden"
+              thinkingElapsedByIndex={thinkingElapsedByIndex}
+            />
+          </div>
+        </>
       )}
       {showStreamingHint ? streamingHint : null}
       {answer.map((block, index) => (

@@ -16,7 +16,9 @@ describe('SuggestedReplies', () => {
     );
     fireEvent.click(screen.getByText('把个人简介写得更具体'));
     expect(onSelect).toHaveBeenCalledWith('把个人简介写得更具体');
-    expect(screen.getByTestId('suggested-replies').querySelectorAll('[data-testid="suggested-reply"]')).toHaveLength(3);
+    const chips = screen.getByTestId('suggested-replies').querySelectorAll('[data-testid="suggested-reply"]');
+    expect(chips).toHaveLength(3);
+    expect(chips[0].className).toContain('text-[12px]');
   });
 
   it('技能下一步多于 3 条时全部画出', () => {

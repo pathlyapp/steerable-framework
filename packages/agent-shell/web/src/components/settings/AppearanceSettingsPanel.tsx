@@ -20,7 +20,7 @@ export function AppearanceSettingsPanel() {
       <div>
         <p className="text-xs font-medium text-agent-foreground">显示思考内容</p>
         <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
-          {current?.hint} 工作行只显示「工作中」或结束后的思考次数、工具次数和用时；底部 tok/s 是整段模型请求的生成速度（思考+回复），不含工具等待。
+          {current?.hint} 这三档只控制思考正文，不影响工具卡片和工作行。工作行只显示「工作中」或结束后的次数与用时。
         </p>
       </div>
       <div

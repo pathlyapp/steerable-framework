@@ -98,7 +98,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
       <button
         type="button"
         onClick={() => expandable && setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left"
         aria-expanded={expanded}
         aria-disabled={!expandable}
       >
@@ -126,7 +126,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
         </span>
       </button>
       {expandable && expanded && (
-        <div className="space-y-2 border-t border-[var(--agent-border,#e5e7eb)] px-3 py-2">
+        <div className="space-y-1.5 border-t border-[var(--agent-border,#e5e7eb)] px-2.5 py-1.5">
           {payload.args !== undefined && (
             <section>
               <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#6b7280)]">

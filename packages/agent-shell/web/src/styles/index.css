@@ -87,6 +87,16 @@ body {
   white-space: nowrap;
 }
 
+/* 12px 字号下收紧工具行：框架卡默认还是 px-3 py-2。 */
+.steerable-tool-execution > button {
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+}
+
+.steerable-tool-execution > button + div {
+  padding: 0.375rem 0.625rem;
+}
+
 /*
  * ChatInput overlay: the contenteditable must keep a real text fill.
  * macOS Pinyin inspects fill during the first letter's keydown — before

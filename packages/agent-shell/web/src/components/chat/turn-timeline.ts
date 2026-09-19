@@ -11,23 +11,60 @@
 import type { ExecutedAction } from './ExecutedActionsCard';
 
 export type TurnBlock =
-  | { type: 'reasoning'; content: string; sealed?: boolean }
+  | {
+      type: 'reasoning';
+      content: string;
+      sealed?: boolean;
+      startedAtMs?: number;
+      durationMs?: number;
+    }
   | { type: 'text'; content: string; sealed?: boolean }
   | { type: 'tools'; actions: ExecutedAction[] };
+
+function freezeReasoningBlock(
+  block: Extract<TurnBlock, { type: 'reasoning' }>,
+  now: number,
+): Extract<TurnBlock, { type: 'reasoning' }> {
+  if (block.durationMs != null || block.startedAtMs == null) return block;
+  return { ...block, durationMs: Math.max(0, now - block.startedAtMs) };
+}
+
+/** Stamp duration on a trailing open reasoning block so the fold can keep 思考时间. */
+export function freezeReasoningDurations(
+  blocks: TurnBlock[],
+  now = Date.now(),
+): TurnBlock[] {
+  if (blocks.length === 0) return blocks;
+  const last = blocks[blocks.length - 1];
+  if (last.type !== 'reasoning') return blocks;
+  const frozen = freezeReasoningBlock(last, now);
+  if (frozen === last) return blocks;
+  const next = blocks.slice();
+  next[next.length - 1] = frozen;
+  return next;
+}
 
 export function appendDelta(
   blocks: TurnBlock[],
   type: 'text' | 'reasoning',
   delta: string,
+  now = Date.now(),
 ): TurnBlock[] {
   if (!delta) return blocks;
   const last = blocks[blocks.length - 1];
   if (last && last.type === type && !last.sealed) {
     const next = blocks.slice();
-    next[next.length - 1] = { type, content: last.content + delta };
+    next[next.length - 1] =
+      last.type === 'reasoning'
+        ? { ...last, content: last.content + delta }
+        : { type, content: last.content + delta };
     return next;
   }
-  return [...blocks, { type, content: delta }];
+  const frozen = freezeReasoningDurations(blocks, now);
+  if (type === 'reasoning') {
+    return [...frozen, { type, content: delta, startedAtMs: now }];
+  }
+  return [...frozen, { type, content: delta }];
 }
 
 /**
@@ -36,25 +73,29 @@ export function appendDelta(
  * hook retry, auto-continue) — otherwise consecutive rounds concatenate
  * into one wall of thought and hide the intermediate results between them.
  */
-export function sealLastBlock(blocks: TurnBlock[]): TurnBlock[] {
+export function sealLastBlock(blocks: TurnBlock[], now = Date.now()): TurnBlock[] {
   if (blocks.length === 0) return blocks;
   const last = blocks[blocks.length - 1];
   if (last.type === 'tools' || last.sealed) return blocks;
   const next = blocks.slice();
-  next[next.length - 1] = { ...last, sealed: true };
+  next[next.length - 1] =
+    last.type === 'reasoning'
+      ? { ...freezeReasoningBlock(last, now), sealed: true }
+      : { ...last, sealed: true };
   return next;
 }
 
 export function syncTools(
   blocks: TurnBlock[],
   actions: ExecutedAction[],
+  now = Date.now(),
 ): TurnBlock[] {
   let placed = 0;
   for (const block of blocks) {
     if (block.type === 'tools') placed += block.actions.length;
   }
 
-  const next: TurnBlock[] = blocks.map((block) =>
+  const next: TurnBlock[] = freezeReasoningDurations(blocks, now).map((block) =>
     block.type === 'tools' ? { type: 'tools', actions: [...block.actions] } : block,
   );
 
@@ -104,7 +145,25 @@ export function parseTurnBlocks(raw: unknown): TurnBlock[] | null {
     const rec = item as Record<string, unknown>;
     if (rec.type === 'text' || rec.type === 'reasoning') {
       if (typeof rec.content !== 'string') return null;
-      blocks.push({ type: rec.type, content: rec.content });
+      const block: TurnBlock =
+        rec.type === 'reasoning'
+          ? {
+              type: 'reasoning',
+              content: rec.content,
+              ...(rec.sealed === true ? { sealed: true } : {}),
+              ...(typeof rec.startedAtMs === 'number' && Number.isFinite(rec.startedAtMs)
+                ? { startedAtMs: rec.startedAtMs }
+                : {}),
+              ...(typeof rec.durationMs === 'number' && Number.isFinite(rec.durationMs)
+                ? { durationMs: rec.durationMs }
+                : {}),
+            }
+          : {
+              type: 'text',
+              content: rec.content,
+              ...(rec.sealed === true ? { sealed: true } : {}),
+            };
+      blocks.push(block);
       continue;
     }
     if (rec.type === 'tools') {

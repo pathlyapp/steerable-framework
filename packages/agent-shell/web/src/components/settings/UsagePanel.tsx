@@ -7,7 +7,7 @@ import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
  *
  * 每轮 CoreLoop 结束后,local-backend 把该轮的累计 token 用量(以及按
  * framework pricing 单价表估算的 USD 成本)落进 `usage_events` 表;本面板
- * 按 model 分桶聚合展示近 N 天的用量与成本。
+ * 按 model 分桶聚合展示近 N 天的用量,成本按固定汇率换算为人民币。
  *
  * 成本口径:只统计有单价的模型(framework `MODEL_PRICES`);本地/未知模型
  * 无单价,token 照常计入但成本列渲染为 "—",不计入总成本。
@@ -52,10 +52,14 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+/** 展示用估算汇率。底层仍存 USD,仅在面板换成人民币。 */
+const USD_TO_CNY = 7.2;
+
 function formatCost(usd: number | null): string {
   if (usd === null) return '—';
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(2)}`;
+  const cny = usd * USD_TO_CNY;
+  if (cny < 0.01) return `¥${cny.toFixed(4)}`;
+  return `¥${cny.toFixed(2)}`;
 }
 
 export function UsagePanel() {
@@ -180,7 +184,7 @@ export function UsagePanel() {
             </div>
 
             <p className="text-[10px] text-agent-muted-foreground">
-              成本按 framework 单价表估算,只统计有单价的模型;"—" 表示该模型无单价(本地/未知)。缓存命中为命中 prompt 缓存的 token 数。
+              成本按 framework 单价表估算后按约 1 美元 = 7.2 元换算为人民币,只统计有单价的模型;"—" 表示该模型无单价(本地/未知)。缓存命中为命中 prompt 缓存的 token 数。
             </p>
           </>
         )}

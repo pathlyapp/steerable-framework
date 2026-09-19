@@ -95,7 +95,10 @@ describe('TurnProcessGroup', () => {
 
     expect(processToggle().textContent).toBe('工作中');
     expect(processToggle().getAttribute('aria-expanded')).toBe('false');
-    expect(screen.getByTestId('thinking-peek')).toBeTruthy();
+    const peek = screen.getByTestId('thinking-peek');
+    expect(peek.getAttribute('data-peek-lines')).toBe('5');
+    expect(peek.textContent).toContain('再查天气');
+    expect(peek.textContent).not.toContain('csv_get_config');
     expect(screen.getAllByTestId('tools-flow').map((el) => el.textContent)).toEqual([
       'csv_get_config',
       'web_fetch',
@@ -175,7 +178,8 @@ describe('TurnProcessGroup', () => {
     const peek = screen.getByTestId('thinking-peek');
     expect(peek.getAttribute('data-peek-lines')).toBe('5');
     expect(peek.style.height).toBe(THINKING_PEEK_HEIGHT);
-    expect(screen.getByText('再查天气')).toBeTruthy();
+    expect(peek.textContent).toContain('再查天气');
+    expect(peek.textContent).not.toContain('csv_get_config');
     expect(screen.getAllByTestId('tools-flow').length).toBeGreaterThan(0);
 
     view.rerender(
@@ -308,15 +312,45 @@ describe('TurnProcessGroup', () => {
     expect(screen.queryByText('PPT 已生成')?.closest('[data-testid="turn-response"]')).toBeNull();
   });
 
+  it('peek fold shows 5 lines when expanded and hides when collapsed', () => {
+    renderGroup({ isStreaming: false, thinkingDisplay: 'peek' });
+    fireEvent.click(processToggle());
+    const fold = screen.getAllByTestId('turn-thinking')[0].querySelector('button');
+    expect(fold?.getAttribute('aria-expanded')).toBe('true');
+    const peek = screen.getAllByTestId('thinking-peek')[0];
+    expect(peek.getAttribute('data-peek-lines')).toBe('5');
+    expect(peek.style.height).toBe(THINKING_PEEK_HEIGHT);
+    expect(peek.textContent).toContain('先读配置');
+    fireEvent.click(fold!);
+    expect(fold?.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('先读配置')).toBeNull();
+  });
+
   it('expands the process again when the disclosure is clicked', () => {
     renderGroup({ isStreaming: false });
     fireEvent.click(processToggle());
     expect(processToggle().getAttribute('aria-expanded')).toBe('true');
     const folds = screen.getAllByTestId('turn-thinking');
     expect(folds).toHaveLength(2);
-    expect(screen.queryByText('再查天气')).toBeNull();
+    const peeks = screen.getAllByTestId('thinking-peek');
+    expect(peeks).toHaveLength(2);
+    expect(peeks[1].getAttribute('data-peek-lines')).toBe('5');
+    expect(peeks[1].style.height).toBe(THINKING_PEEK_HEIGHT);
+    expect(peeks[1].textContent).toContain('再查天气');
+    expect(folds[1].querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
     fireEvent.click(folds[1].querySelector('button')!);
-    expect(screen.getByText('再查天气')).toBeTruthy();
+    expect(folds[1].querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
+    expect(folds[1].querySelector('[data-testid="thinking-peek"]')).toBeNull();
+    expect(screen.queryByText('再查天气')).toBeNull();
+    expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
+  });
+
+  it('hides thinking body when the setting is 隐藏, even after expanding work', () => {
+    renderGroup({ isStreaming: false, thinkingDisplay: 'hidden' });
+    fireEvent.click(processToggle());
+    expect(screen.queryByTestId('turn-thinking')).toBeNull();
+    expect(screen.queryByTestId('thinking-peek')).toBeNull();
+    expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
   });
 
@@ -370,10 +404,25 @@ describe('TurnProcessGroup', () => {
     expect(screen.getByTestId('turn-thinking').querySelector('button')?.textContent).toContain('12s');
   });
 
+  it('keeps thinking duration on the 思考 fold after the turn finishes', () => {
+    renderGroup({
+      isStreaming: false,
+      thinkingDisplay: 'full',
+      blocks: [
+        { type: 'reasoning', content: '先读配置', durationMs: 8000 },
+        { type: 'text', content: '本地 CSV 配置' },
+      ],
+    });
+    fireEvent.click(processToggle());
+    expect(screen.getByTestId('turn-thinking').querySelector('button')?.textContent).toBe(
+      '思考 · 8s',
+    );
+  });
+
   it('appends worked duration after the turn finishes', () => {
     renderGroup({ isStreaming: false, durationMs: 83_000 });
     expect(processToggle().textContent).toContain(
-      '思考 2 次 · 工具调用 2 次 · 工作了 1m 23s',
+      '工作了 1m 23s · 思考 2 次 · 工具调用 2 次',
     );
   });
 
@@ -406,7 +455,7 @@ describe('TurnProcessGroup', () => {
       />,
     );
     expect(processToggle().textContent).toContain(
-      '思考 2 次 · 工具调用 2 次 · 工作了 12s',
+      '工作了 12s · 思考 2 次 · 工具调用 2 次',
     );
   });
 });

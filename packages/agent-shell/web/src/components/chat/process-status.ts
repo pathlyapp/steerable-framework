@@ -11,6 +11,13 @@ import {
   type TurnBlock,
 } from './turn-timeline';
 
+/** Fallback thinking duration for legacy timelines that never stored durationMs. */
+export function estimateReasoningDurationMs(content: string): number | undefined {
+  const tokens = estimateTextTokens(content);
+  if (tokens < 4) return undefined;
+  return Math.max(1000, Math.round((tokens / 35) * 1000));
+}
+
 export function estimateTextTokens(text: string): number {
   if (!text) return 0;
   let cjk = 0;
@@ -73,10 +80,10 @@ export function processStatusLabel(input: {
   const parts: string[] = [];
   const thinks = countProcessReasoning(process);
   const tools = countProcessTools(process);
-  if (thinks > 0) parts.push(`思考 ${thinks} 次`);
-  if (tools > 0) parts.push(`工具调用 ${tools} 次`);
   const elapsed = formatElapsedPart(false, elapsedMs);
   if (elapsed) parts.push(`工作了 ${elapsed}`);
+  if (thinks > 0) parts.push(`思考 ${thinks} 次`);
+  if (tools > 0) parts.push(`工具调用 ${tools} 次`);
   if (parts.length === 0) return '执行过程';
   return parts.join(' · ');
 }

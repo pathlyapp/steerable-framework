@@ -1802,7 +1802,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           )}
           <div
             ref={toolbarRowRef}
-            className="flex items-center justify-between gap-1.5 px-2 pb-1.5 pt-0.5"
+            className="flex items-center justify-between gap-1.5 px-2 py-1 text-[12px] leading-[1.45]"
           >
             {/* Left toolbar: mode + exec sandbox + host extras + settings.
                 Agent picker lives in the meta row above the box, next to
@@ -1827,11 +1827,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 type="button"
                 onClick={handlePickFiles}
                 disabled={disabled || isStreaming}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 title="上传文件（可多选）"
                 aria-label="上传文件"
               >
-                <LuPaperclip className="h-3.5 w-3.5" />
+                <LuPaperclip className="h-3 w-3" />
               </button>
               {/* 隐藏的原生多选文件输入：点击回形针按钮触发系统选择框。 */}
               <input
@@ -1847,12 +1847,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 <button
                   type="button"
                   onClick={onOpenSettings}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
                   title="LLM 设置"
                   aria-label="LLM 设置"
                   data-testid="chat-llm-settings"
                 >
-                  <LuSettings className="h-3.5 w-3.5" />
+                  <LuSettings className="h-3 w-3" />
                 </button>
               )}
             </div>
@@ -1921,10 +1921,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 disabled={!isStreaming && !canSend}
                 className={
                   isStreaming
-                    ? 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
+                    ? 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-agent-destructive text-white transition hover:opacity-90'
                     : canSend
-                      ? 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
-                      : 'flex h-7 w-7 shrink-0 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
+                      ? 'flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-agent-foreground text-agent-canvas transition hover:opacity-90'
+                      : 'flex h-6 w-6 shrink-0 cursor-not-allowed items-center justify-center rounded-full bg-agent-muted text-agent-muted-foreground'
                 }
                 title={
                   isStreaming
@@ -1937,9 +1937,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 data-testid="chat-send"
               >
                 {isStreaming ? (
-                  <LuSquare className="h-3.5 w-3.5 fill-current" />
+                  <LuSquare className="h-3 w-3 fill-current" />
                 ) : (
-                  <LuArrowUp className="h-4 w-4" />
+                  <LuArrowUp className="h-3.5 w-3.5" />
                 )}
               </button>
             </div>
@@ -1971,7 +1971,7 @@ function ModeToggle({
     // shrink-0：分段控件被 flex 压缩会压扁文字；极窄容器（<@sm）退化为
     // 纯图标（title 兜底语义），把收缩量让给可截断的选择器。
     <div
-      className="inline-flex h-7 shrink-0 items-center rounded-full border border-agent-border bg-agent-canvas p-0.5"
+      className="inline-flex h-6 shrink-0 items-center rounded-full border border-agent-border bg-agent-canvas p-0.5"
       role="radiogroup"
       aria-label="对话模式"
       data-testid="mode-toggle"
@@ -1985,13 +1985,13 @@ function ModeToggle({
         title="Agent 模式：直接执行任务"
         data-testid="mode-agent"
         className={[
-          'inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-70',
+          'inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
           mode === 'agent'
             ? 'bg-agent-foreground/10 text-agent-foreground'
             : 'text-agent-muted-foreground hover:text-agent-foreground',
         ].join(' ')}
       >
-        <LuInfinity className="h-3.5 w-3.5" />
+        <LuInfinity className="h-3 w-3" />
         <span className="@max-sm:hidden">Agent</span>
       </button>
       <button
@@ -2003,13 +2003,13 @@ function ModeToggle({
         title="Plan 模式：先制定计划，只读不执行"
         data-testid="mode-plan"
         className={[
-          'inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-70',
+          'inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
           mode === 'plan'
             ? 'bg-amber-400/20 text-amber-600 dark:text-amber-400'
             : 'text-agent-muted-foreground hover:text-agent-foreground',
         ].join(' ')}
       >
-        <LuListChecks className="h-3.5 w-3.5" />
+        <LuListChecks className="h-3 w-3" />
         <span className="@max-sm:hidden">Plan</span>
       </button>
     </div>

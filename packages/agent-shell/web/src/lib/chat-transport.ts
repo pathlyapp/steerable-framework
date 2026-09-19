@@ -53,7 +53,13 @@ import {
 } from '@steerable/agent-ui/state';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { getElectronBridge } from './electron-bridge';
-import { appendDelta, sealLastBlock, syncTools, type TurnBlock } from '@/components/chat/turn-timeline';
+import {
+  appendDelta,
+  freezeReasoningDurations,
+  sealLastBlock,
+  syncTools,
+  type TurnBlock,
+} from '@/components/chat/turn-timeline';
 import type { ExecutedAction } from '@/components/chat/ExecutedActionsCard';
 import {
   LlmRequestSpeedTracker,
@@ -100,6 +106,15 @@ class LocalBackendSseAdapter {
   private finishStream(): void {
     if (this.completed) return;
     this.completed = true;
+    const frozen = freezeReasoningDurations(this.timeline);
+    if (frozen !== this.timeline) {
+      this.timeline = frozen;
+      this.onEvent({
+        type: 'agent',
+        event: 'turn_timeline',
+        payload: { blocks: this.timeline },
+      });
+    }
     this.emitLlmSpeed(this.speed.endRequest());
     this.onEvent({ type: 'done' });
   }

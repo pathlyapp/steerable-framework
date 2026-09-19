@@ -117,7 +117,7 @@ export function ModelPicker({
             if (next && status !== 'live' && !loading) void refresh();
           }}
           disabled={disabled}
-          className="inline-flex h-7 min-w-0 max-w-[160px] items-center gap-1.5 rounded-full border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70 @sm:max-w-[220px]"
+          className="inline-flex h-6 min-w-0 max-w-[160px] items-center gap-1 rounded-full border border-agent-border bg-agent-canvas px-1.5 text-[12px] leading-[1.45] text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70 @sm:max-w-[220px]"
           title={
             status === 'offline'
               ? `模型目录不可用${catalog?.error ? `：${catalog.error}` : ''}（仍可手动指定模型）`
@@ -165,7 +165,7 @@ export function ModelPicker({
                 setModelMenuOpen(false);
               }}
               className={[
-                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors',
+                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] leading-[1.45] transition-colors',
                 model == null
                   ? 'bg-agent-foreground/10 text-agent-foreground'
                   : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
@@ -192,7 +192,7 @@ export function ModelPicker({
                     setModelMenuOpen(false);
                   }}
                   className={[
-                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors',
+                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] leading-[1.45] transition-colors',
                     isActive
                       ? 'bg-agent-foreground/10 text-agent-foreground'
                       : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
@@ -232,7 +232,7 @@ export function ModelPicker({
               setModelMenuOpen(false);
             }}
             disabled={disabled}
-            className="inline-flex h-7 items-center gap-1 rounded-full border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70"
+            className="inline-flex h-6 items-center gap-1 rounded-full border border-agent-border bg-agent-canvas px-1.5 text-[12px] leading-[1.45] text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70"
             title="推理档位（随每轮请求下发；模型不支持会直接报错）"
             aria-haspopup="menu"
             aria-expanded={effortMenuOpen}
@@ -253,7 +253,7 @@ export function ModelPicker({
                   setEffortMenuOpen(false);
                 }}
                 className={[
-                  'flex w-full rounded px-2 py-1.5 text-left text-xs transition-colors',
+                  'flex w-full rounded px-2 py-1.5 text-left text-[12px] leading-[1.45] transition-colors',
                   reasoningEffort == null
                     ? 'bg-agent-foreground/10 text-agent-foreground'
                     : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
@@ -271,7 +271,7 @@ export function ModelPicker({
                     setEffortMenuOpen(false);
                   }}
                   className={[
-                    'flex w-full rounded px-2 py-1.5 text-left text-xs transition-colors',
+                    'flex w-full rounded px-2 py-1.5 text-left text-[12px] leading-[1.45] transition-colors',
                     reasoningEffort === level
                       ? 'bg-agent-foreground/10 text-agent-foreground'
                       : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',

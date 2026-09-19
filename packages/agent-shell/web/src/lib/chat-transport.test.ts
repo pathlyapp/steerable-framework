@@ -63,7 +63,7 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
     const last = timelines[1] as unknown as {
       payload: { blocks: Array<{ type: string; content: string }> };
     };
-    expect(last.payload.blocks).toEqual([{ type: 'reasoning', content: '想一下再决定' }]);
+    expect(last.payload.blocks).toMatchObject([{ type: 'reasoning', content: '想一下再决定' }]);
   });
 
   it('[DONE] 帧触发一次 done；之后再 end 不重复', () => {

@@ -23,6 +23,7 @@ import {
 import { builtinSubagentParam } from './subagent-profiles.js';
 import {
   appendTimelineDelta,
+  freezeTimelineReasoning,
   sealLastTimelineBlock,
   syncTimelineTools,
   type PersistedTurnBlock,
@@ -3482,6 +3483,7 @@ export class LocalBackendRouter {
     } catch (turnFilesErr) {
       console.warn('[local-backend] collect turn files failed', turnFilesErr);
     }
+    freezeTimelineReasoning(timeline);
     const assistant = await this.store.addMessage(
       chatId,
       'assistant',
