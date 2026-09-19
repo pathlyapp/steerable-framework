@@ -45,6 +45,10 @@ python -m evals.run --agent claude-code-glm --split loss-34 --dry-run
 python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 ```
 
+The `Evals weekly` dispatch accepts `coreloop=rust|python` for controlled
+Steerable A/B runs. The model, tasks, effort, and Harbor settings stay fixed;
+Feishu start/result cards include the selected CoreLoop.
+
 `--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 27 coin-toss tasks for paired A/B (six-run rebuild). `--split loss-34` is those 27 plus the 7 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
 
 The Steerable Harbor jobs build both manylinux and musllinux `cp310-abi3`
