@@ -60,7 +60,6 @@ _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
 # as JSON (a YAML subset the runtime loader parses with stdlib json).
 _HARNESS_REMOTE = "/tmp/steerable-harness.json"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
-_NATIVE_WHEEL_REMOTE = "/tmp/steerable-agent-runtime-native.whl"
 _NATIVE_WHEEL_ENV = "STEERABLE_NATIVE_WHEEL"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
@@ -492,12 +491,13 @@ class SteerableHarborAgent(BaseInstalledAgent):
             raise RuntimeError(
                 f"{_NATIVE_WHEEL_ENV} does not name a wheel file: {wheel}"
             )
-        await environment.upload_file(wheel, _NATIVE_WHEEL_REMOTE)
+        wheel_remote = f"/tmp/{wheel.name}"
+        await environment.upload_file(wheel, wheel_remote)
         await self.exec_as_root(
             environment,
             command=(
                 f"{shlex.quote(_VENV_PYTHON)} -m pip install --no-deps "
-                f"--force-reinstall {shlex.quote(_NATIVE_WHEEL_REMOTE)}"
+                f"--force-reinstall {shlex.quote(wheel_remote)}"
             ),
             timeout_sec=600,
         )
