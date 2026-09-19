@@ -1,0 +1,479 @@
+{
+  "version": 1,
+  "p0Means": "Must stay green through the matching Rust CoreLoop plan stage. A miss blocks that stage, not a substitute subset.",
+  "pyo3Surface": {
+    "steerable_agent_runtime": [
+      "CoreLoop",
+      "LoopConfig",
+      "LoopEvent",
+      "LoopContext",
+      "LoopHooks",
+      "NoopHooks",
+      "CompletionAction",
+      "PreStepAction",
+      "RetryAction",
+      "LLMMessage",
+      "LLMStreamChunk",
+      "LLMUsage",
+      "ImagePart",
+      "load_history_transcript"
+    ],
+    "steerable_agent_runtime.llm": [
+      "LLMMessage",
+      "LLMStreamChunk",
+      "LLMUsage"
+    ],
+    "steerable_agent_runtime.llm.parts": [
+      "ImagePart",
+      "TextPart"
+    ],
+    "steerable_agent_runtime.hooks": [
+      "CompletionAction",
+      "NoopHooks",
+      "PreStepAction",
+      "RetryAction",
+      "LoopHooks"
+    ],
+    "steerable_agent_runtime.resume": [
+      "load_history_transcript"
+    ],
+    "steerable_agent_runtime.storage.in_memory": [
+      "InMemoryStorage"
+    ],
+    "steerable_agent_runtime.loop": [
+      "LoopEvent",
+      "LoopContext",
+      "LoopConfig",
+      "CoreLoop",
+      "ToolExecutor"
+    ]
+  },
+  "coreLoopInitParams": [
+    "provider",
+    "executor",
+    "config",
+    "hooks",
+    "history_store",
+    "record_id"
+  ],
+  "coreLoopRunKwargs": [
+    "tools",
+    "chat_id"
+  ],
+  "loopConfigFieldsUsedByApi": [
+    "max_rounds",
+    "max_tool_errors",
+    "tool_dedup",
+    "soft_timeout_ms",
+    "wrap_up_hard_cap_ms",
+    "reasoning_without_progress_chars"
+  ],
+  "loopEventKinds": [
+    "stage_start",
+    "stage_complete",
+    "error",
+    "content_delta",
+    "reasoning_delta",
+    "llm_request",
+    "llm_response",
+    "tool_call_start",
+    "tool_call_result",
+    "tool_error",
+    "budget_exhausted",
+    "soft_timeout",
+    "completion",
+    "steer",
+    "hook_action"
+  ],
+  "loopHooksMethods": [
+    "pre_step",
+    "post_tool_result",
+    "on_request_error",
+    "before_completion",
+    "on_stream_chunk",
+    "tool_made_progress"
+  ],
+  "sidecarRpcMethods": [
+    "system.ping",
+    "system.shutdown",
+    "system.shutdown_now",
+    "agent.session.create",
+    "agent.session.resume",
+    "agent.session.list",
+    "tool.list",
+    "tool.invoke",
+    "workspace.apply_edits",
+    "skills.list",
+    "trace.fetch",
+    "trace.export",
+    "config.get",
+    "config.set",
+    "compat.describe",
+    "sandbox.describe",
+    "plugin.list",
+    "plugin.enable",
+    "plugin.disable",
+    "plugin.reload",
+    "presets.describe",
+    "presets.resolve",
+    "catalog.describe",
+    "models.list",
+    "harness.describe",
+    "agent.chat.stream",
+    "agent.chat.cancel",
+    "agent.chat.steer",
+    "agent.chat.compact",
+    "agent.chat.fork",
+    "agent.session.fork",
+    "agent.session.branches",
+    "agent.session.tree",
+    "agent.session.messages"
+  ],
+  "pythonRuntimeByProduct": {
+    "aroli": "none",
+    "ciflog": "bundle",
+    "etown": "bundle"
+  },
+  "stages": [
+    {
+      "id": "verify-api-surface",
+      "priority": "P0",
+      "title": "Freeze deeppath-api CoreLoop import surface for PyO3",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_pyo3_api_surface.py"
+        }
+      ]
+    },
+    {
+      "id": "freeze-contract",
+      "priority": "P0",
+      "title": "Freeze LoopEvent / ToolExecutor / sidecar JSON-RPC",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_pyo3_api_surface.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/py/tests/test_rpc_method_contract.py"
+        }
+      ]
+    },
+    {
+      "id": "rust-loop-mvp",
+      "priority": "P0",
+      "title": "Scripted-provider CoreLoop behavior (not replay fixture)",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_loop.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_golden.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_harness.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_loop_cancellation.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_steer.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_loop.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/Cargo.toml"
+        }
+      ]
+    },
+    {
+      "id": "rust-llm-providers",
+      "priority": "P0",
+      "title": "LLM provider wire parity",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_llm_wire.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_llm_wire_helpers.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_llm_responses_wire.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_llm_gemini_wire.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_provider_compat.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_provider_presets.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_model_resolve.py"
+        }
+      ]
+    },
+    {
+      "id": "rust-sidecar-bin",
+      "priority": "P0",
+      "title": "Sidecar JSON-RPC + sessions db write lease",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/stdio_ping.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_file_edit.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_skills.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_write_lease.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_write_lease.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/py/tests/test_sidecar_coreloop.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/py/tests/test_sidecar_methods.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_write_lease.py"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/write-lease.e2e.test.ts"
+        }
+      ]
+    },
+    {
+      "id": "rust-egress-and-sandbox",
+      "priority": "P0",
+      "title": "Egress proxy + sandbox chain (aroli-without-Python prerequisite)",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/egress-proxy/rs/tests/test_proxy.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/egress-proxy/rs/tests/test_forward.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/egress-proxy/rs/tests/test_control.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_sandbox.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_landlock.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-shell/ts/tests/sidecar/supervisor-sandbox.test.ts"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-shell/ts/tests/sidecar/egress-proxy.test.ts"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-shell/ts/tests/sidecar/exec-sandbox.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/sandbox-posture.e2e.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/egress-widening.e2e.test.ts"
+        }
+      ]
+    },
+    {
+      "id": "rust-builtin-tools",
+      "priority": "P0",
+      "title": "Built-in tools; expand tool_contract for dual implementations",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_todo.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_web.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_run_code.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_run_code.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/tests/test_ptc_js.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/rs/tests/test_ptc_js.rs"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/py/tests/test_tool_contract.py"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/web-tools.e2e.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/run-code.e2e.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/e2e/ptc-js.e2e.test.ts"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/sidecar/py/src/steerable_sidecar/tool_contract.json",
+          "note": "web_search / web_fetch / todo_write / run_code / run_js / wait_js are dual-implemented"
+        }
+      ]
+    },
+    {
+      "id": "pyo3-wheel",
+      "priority": "P0",
+      "title": "PyO3 wheel so deeppath-api keeps CoreLoop.run",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/py/tests/test_pyo3_api_surface.py"
+        },
+        {
+          "repo": "steerable-framework",
+          "path": "packages/agent-runtime/rs/pyproject.toml"
+        }
+      ]
+    },
+    {
+      "id": "python-runtime",
+      "priority": "P0",
+      "title": "product.json pythonRuntime; packing skips CPython only after Rust sidecar",
+      "tests": [
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/python-runtime.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "scripts/python-runtime.mjs"
+        }
+      ]
+    },
+    {
+      "id": "eval-parity",
+      "priority": "P1",
+      "title": "Harbor catalog on Rust loop before deleting Python CoreLoop",
+      "tests": [
+        {
+          "repo": "steerable-framework",
+          "path": "docs/evals.md"
+        }
+      ]
+    },
+    {
+      "id": "frontend-aroli",
+      "priority": "P0",
+      "title": "Aroli frontend agent",
+      "tests": [
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/ui/product-smoke.spec.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/ui/home-chat.spec.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/flavor.test.ts"
+        }
+      ]
+    },
+    {
+      "id": "frontend-ciflog",
+      "priority": "P0",
+      "title": "CIFLog frontend agent + 测井闭环",
+      "tests": [
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/ui/product-smoke.spec.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/cflog/service.integration.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/cflog/tool-router.integration.test.ts"
+        }
+      ]
+    },
+    {
+      "id": "frontend-etown",
+      "priority": "P0",
+      "title": "Etown frontend agent + PPT",
+      "tests": [
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/ui/product-smoke.spec.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/etown/ppt-preview.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/etown/ppt-edit.test.ts"
+        },
+        {
+          "repo": "deeppath-agent",
+          "path": "tests/team/product-mode.test.ts"
+        }
+      ]
+    }
+  ]
+}

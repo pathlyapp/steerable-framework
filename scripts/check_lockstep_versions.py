@@ -45,6 +45,7 @@ PY_PACKAGES: list[tuple[str, str]] = [
     ("steerable-agent-protocol", "packages/agent-protocol/py/pyproject.toml"),
     ("steerable-agent-harness",  "packages/agent-harness/py/pyproject.toml"),
     ("steerable-agent-runtime",  "packages/agent-runtime/py/pyproject.toml"),
+    ("steerable-plugin-sdk",     "packages/plugin-sdk/py/pyproject.toml"),
     ("steerable-sidecar",        "packages/sidecar/py/pyproject.toml"),
     ("steerable-egress-proxy",   "packages/egress-proxy/py/pyproject.toml"),
 ]

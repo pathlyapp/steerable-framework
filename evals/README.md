@@ -47,6 +47,23 @@ python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 
 `--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 27 coin-toss tasks for paired A/B (six-run rebuild). `--split loss-34` is those 27 plus the 7 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
 
+The Steerable Harbor jobs build a Linux `cp310-abi3` native wheel and set
+`STEERABLE_RUST_CORELOOP=1`. Local Linux runs must do the same explicitly:
+
+```bash
+uvx maturin build --release --features python,extension-module \
+  --manifest-path packages/agent-runtime/rs/Cargo.toml
+export STEERABLE_NATIVE_WHEEL="$(
+  python -c 'from pathlib import Path; print(next(Path("packages/agent-runtime/rs/target/wheels").glob("*-cp310-abi3-linux_x86_64.whl")).resolve())'
+)"
+export STEERABLE_RUST_CORELOOP=1
+python -m evals.run --agent steerable --split cheap-12
+```
+
+The wheel must match the Harbor container platform; a macOS wheel cannot be
+installed into its Linux trial. The adapter fails before the paid model run if
+Rust is enabled without a valid wheel.
+
 ## Claude Code on GLM (same-model comparison)
 
 The published **83.1% (74/89)** used `--agent claude-code-glm`

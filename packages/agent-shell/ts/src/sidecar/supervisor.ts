@@ -58,6 +58,8 @@ const READY_PREFIX = '__SIDECAR_READY__:';
 const DEFAULT_BOOT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEALTH_INTERVAL_MS = 5_000;
 const DEFAULT_RESTART_AFTER_FAILED_PINGS = 3;
+export const RUST_SIDECAR_ENV = 'STEERABLE_RUST_SIDECAR';
+export const RUST_SIDECAR_BIN_ENV = 'STEERABLE_RUST_SIDECAR_BIN';
 // Only /usr/bin/sandbox-exec is trusted — a PATH-relative lookup could
 // resolve to an attacker-planted binary (codex's rule).
 const SEATBELT_EXECUTABLE = '/usr/bin/sandbox-exec';
@@ -519,11 +521,18 @@ export class SidecarSupervisor extends EventEmitter {
   // ------------------------------------------------------------------
 
   private async boot(): Promise<void> {
-    const py = this.resolvePythonBinary();
-    const entry = this.options.entryModule ?? 'steerable_sidecar';
-    const args = ['-m', entry, ...(this.options.args ?? [])];
-
-    const spawnPlan = await this.resolveSandboxedSpawn(py, args);
+    const rustBin = rustSidecarEnabled()
+      ? resolveRustSidecarBin(this.options.rustSidecarBin)
+      : undefined;
+    let spawnPlan: { command: string; args: string[]; env?: NodeJS.ProcessEnv };
+    if (rustBin) {
+      spawnPlan = await this.resolveSandboxedSpawn(rustBin, this.options.args ?? []);
+    } else {
+      const py = this.resolvePythonBinary();
+      const entry = this.options.entryModule ?? 'steerable_sidecar';
+      const args = ['-m', entry, ...(this.options.args ?? [])];
+      spawnPlan = await this.resolveSandboxedSpawn(py, args);
+    }
     const child = spawn(spawnPlan.command, spawnPlan.args, {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env, ...spawnPlan.env },
@@ -555,10 +564,10 @@ export class SidecarSupervisor extends EventEmitter {
    * unconfined path. Every exit records `sandboxPosture`.
    */
   private async resolveSandboxedSpawn(
-    py: string,
+    command: string,
     args: string[],
   ): Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> {
-    const plain = { command: py, args };
+    const plain = { command, args };
     const enabled = this.options.sandbox ?? process.env.STEERABLE_SIDECAR_SANDBOX !== '0';
     if (!enabled) {
       this.sandboxPosture = {
@@ -588,18 +597,17 @@ export class SidecarSupervisor extends EventEmitter {
         .filter(Boolean);
     const webEgress = Boolean(this.options.sandboxWebEgress) && allowedHosts.length > 0;
     // 3.1b: egress-proxy 模式下 web_fetch 的 SSRF 预检在沙箱内解析 DNS，
-    // 只放行解析器 socket（无 IP 可达性）；webEgress 已含解析器，互斥。
-    const allowResolver =
-      Boolean(this.options.sandboxAllowResolver) && allowedHosts.length > 0 && !webEgress;
+    // 但真正的出口走代理。Seatbelt 只放行 resolver socket，不放行 *:80/443。
+    const allowResolver = Boolean(this.options.sandboxAllowResolver) && allowedHosts.length > 0 && !webEgress;
 
     if (process.platform === 'darwin') {
-      return this.wrapSeatbelt(py, args, writableRoots, allowedHosts, webEgress, allowResolver);
+      return this.wrapSeatbelt(command, args, writableRoots, allowedHosts, webEgress, allowResolver);
     }
     if (process.platform === 'linux') {
-      return this.wrapLinux(py, args, writableRoots);
+      return this.wrapLinux(command, args, writableRoots);
     }
     if (process.platform === 'win32') {
-      return this.wrapWindows(py, args, writableRoots);
+      return this.wrapWindows(command, args, writableRoots);
     }
     const posture: SidecarSandboxPosture = {
       backend: 'none',
@@ -620,7 +628,7 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   private async wrapSeatbelt(
-    py: string,
+    command: string,
     args: string[],
     writableRoots: string[],
     allowedHosts: string[],
@@ -634,16 +642,22 @@ export class SidecarSupervisor extends EventEmitter {
       );
     }
     try {
-      const profileArgs = [
-        '-m',
-        'steerable_sidecar.sandbox',
-        'profile',
+      const flags = [
         ...writableRoots.flatMap((root) => ['--writable-root', root]),
         ...allowedHosts.flatMap((h) => ['--allow-host', h]),
         ...(webEgress ? ['--allow-web-egress'] : []),
         ...(allowResolver ? ['--allow-resolver'] : []),
       ];
-      const { stdout } = await execFileAsync(py, profileArgs, { timeout: 10_000 });
+      const rustBin = rustSidecarEnabled()
+        ? resolveRustSidecarBin(this.options.rustSidecarBin)
+        : undefined;
+      const { stdout } = rustBin
+        ? await execFileAsync(rustBin, ['sandbox', 'profile', ...flags], { timeout: 10_000 })
+        : await execFileAsync(
+            command,
+            ['-m', 'steerable_sidecar.sandbox', 'profile', ...flags],
+            { timeout: 10_000 },
+          );
       const profile = stdout.trim();
       if (!profile.includes('(deny default)')) {
         throw new Error('generated profile is not a Seatbelt policy');
@@ -658,7 +672,7 @@ export class SidecarSupervisor extends EventEmitter {
       this.sandboxPosture = { backend: 'seatbelt', enforcement: 'partial', reason: 'active' };
       return {
         command: SEATBELT_EXECUTABLE,
-        args: ['-p', profile, py, ...args],
+        args: ['-p', profile, command, ...args],
         env: {
           PYTHONDONTWRITEBYTECODE: '1',
           // macOS denies a nested sandbox_apply once the outer profile allows
@@ -681,7 +695,7 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   private async wrapLinux(
-    py: string,
+    command: string,
     args: string[],
     writableRoots: string[],
   ): Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> {
@@ -692,17 +706,29 @@ export class SidecarSupervisor extends EventEmitter {
     // 都透传环境）+ sidecar 应用层域名名单强制，网络命名空间保持共享。
     // 这里如实记录，不假装接上了实际不强制的参数。
     const egressViaProxy = this.options.env?.STEERABLE_EGRESS_CONFINED === '1';
-    const wrapArgs = [
-      '-m',
-      'steerable_sidecar.sandbox',
-      'linux-wrap',
-      ...writableRoots.flatMap((root) => ['--writable-root', root]),
-      '--',
-      py,
-      ...args,
-    ];
+    const rustBin = rustSidecarEnabled()
+      ? resolveRustSidecarBin(this.options.rustSidecarBin)
+      : undefined;
+    const wrapArgs = rustBin
+      ? [
+          'sandbox',
+          'linux-wrap',
+          ...writableRoots.flatMap((root) => ['--writable-root', root]),
+          '--',
+          command,
+          ...args,
+        ]
+      : [
+          '-m',
+          'steerable_sidecar.sandbox',
+          'linux-wrap',
+          ...writableRoots.flatMap((root) => ['--writable-root', root]),
+          '--',
+          command,
+          ...args,
+        ];
     try {
-      const { stdout } = await execFileAsync(py, wrapArgs, { timeout: 15_000 });
+      const { stdout } = await execFileAsync(rustBin ?? command, wrapArgs, { timeout: 15_000 });
       const plan = JSON.parse(stdout.trim()) as {
         argv?: unknown;
         backend?: unknown;
@@ -741,7 +767,7 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   private wrapWindows(
-    py: string,
+    command: string,
     args: string[],
     writableRoots: string[],
   ): { command: string; args: string[]; env?: NodeJS.ProcessEnv } {
@@ -777,7 +803,7 @@ export class SidecarSupervisor extends EventEmitter {
         steerableDir,
         ...extraRoots.flatMap((root) => ['--writable-root', root]),
         '--',
-        py,
+        command,
         ...args,
       ],
       env: {
@@ -1142,4 +1168,39 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   }
   // Fallback to system python (developer machines).
   return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+function envFlag(name: string): boolean {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+export function rustSidecarEnabled(): boolean {
+  return envFlag(RUST_SIDECAR_ENV);
+}
+
+/**
+ * Resolve the optional Rust sidecar binary. Missing binary with the flag
+ * on is a silent fallback to Python (`python -m steerable_sidecar`).
+ */
+export function resolveRustSidecarBin(explicit?: string): string | undefined {
+  if (explicit) {
+    return existsSync(explicit) ? explicit : undefined;
+  }
+  const fromEnv = process.env[RUST_SIDECAR_BIN_ENV];
+  if (fromEnv) {
+    return existsSync(fromEnv) ? fromEnv : undefined;
+  }
+  const exe = process.platform === 'win32' ? 'steerable-sidecar.exe' : 'steerable-sidecar';
+  const relatives = [
+    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
+    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
+    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
+    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
+  ];
+  for (const rel of relatives) {
+    const candidate = join(__dirname, rel);
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
 }

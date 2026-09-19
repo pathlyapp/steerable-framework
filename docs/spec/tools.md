@@ -98,7 +98,7 @@ my_tools = "my_package.tools:register"
 
 ```python
 # my_package/tools.py
-from steerable_agent_runtime import tool
+from steerable_plugin_sdk import tool
 
 def register(router):
     @tool(router=router, description="Greet by name")

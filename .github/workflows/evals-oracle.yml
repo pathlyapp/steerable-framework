@@ -58,6 +58,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - uses: ./.github/actions/setup-harbor
+        with:
+          rust-coreloop: "true"
       - run: docker info
       - name: Harbor product canary
         env:

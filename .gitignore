@@ -83,6 +83,9 @@ _site-preview/
 # Harbor job outputs and cloned task trees (evals/run.py)
 evals/jobs/
 
+# Rust
+**/target/
+
 # Misc
 *.log
 .tmp/

@@ -246,6 +246,7 @@ def test_install_sidecar_from_wheels_validates_inventory(
         (wheels / f"{stem}-0.1.0-py3-none-any.whl").write_bytes(b"PK\x03\x04stub\n")
 
     target = build_sidecar.TARGETS["darwin-arm64"]
+    monkeypatch.setenv("STEERABLE_BUILD_RUST_CORELOOP", "0")
     monkeypatch.setattr(build_sidecar.subprocess, "run", lambda *a, **kw: None)
 
     with pytest.raises(SystemExit) as excinfo:
@@ -280,6 +281,7 @@ def test_install_sidecar_from_wheels_picks_latest(
         return _R()
 
     target = build_sidecar.TARGETS["darwin-arm64"]
+    monkeypatch.setenv("STEERABLE_BUILD_RUST_CORELOOP", "0")
     monkeypatch.setattr(build_sidecar.subprocess, "run", fake_run)
 
     build_sidecar.install_sidecar(fake_runtime, target, wheels_dir=wheels)
@@ -292,3 +294,41 @@ def test_install_sidecar_from_wheels_picks_latest(
     for path in pip_install_targets:
         assert "0.2.0" in path
         assert "0.1.0" not in path
+
+
+def test_install_sidecar_from_wheels_installs_native_coreloop(
+    fake_runtime: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheels = tmp_path / "dist-py"
+    wheels.mkdir()
+    for stem in (
+        "steerable_agent_protocol",
+        "steerable_agent_harness",
+        "steerable_agent_runtime",
+        "steerable_sidecar",
+        "steerable_egress_proxy",
+        "steerable_agent_runtime_native",
+    ):
+        (wheels / f"{stem}-0.6.26-py3-none-any.whl").write_bytes(b"stub")
+
+    invocations: list[list[str]] = []
+
+    def fake_run(cmd, **_kw):
+        invocations.append(list(cmd))
+
+        class _R:
+            returncode = 0
+
+        return _R()
+
+    target = build_sidecar.TARGETS["linux-x64"]
+    monkeypatch.setattr(build_sidecar.subprocess, "run", fake_run)
+    build_sidecar.install_sidecar(fake_runtime, target, wheels_dir=wheels)
+    native = [
+        cmd[-1]
+        for cmd in invocations
+        if "install" in cmd and "steerable_agent_runtime_native" in cmd[-1]
+    ]
+    assert native and "0.6.26" in native[-1]

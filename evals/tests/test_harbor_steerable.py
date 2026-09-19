@@ -267,6 +267,20 @@ def test_calibration_knobs_can_be_overridden_per_arm() -> None:
     assert run_body.index("_forwarded_env(") < run_body.index("env.setdefault(")
 
 
+def test_rust_coreloop_requires_and_installs_a_native_wheel() -> None:
+    src = Path(__file__).resolve().parents[1] / "harbor_steerable.py"
+    text = src.read_text()
+    tuning = text[text.index("_TUNING_KEYS = (") : text.index("_PROXY_KEYS = (")]
+    assert '"STEERABLE_RUST_CORELOOP"' in tuning
+    assert 'os.environ.get("STEERABLE_RUST_CORELOOP") != "1"' in text
+    assert "STEERABLE_NATIVE_WHEEL" in text
+    assert "pip install --no-deps" in text
+    assert "import steerable_agent_runtime_native as n; assert n.run_turn" in text
+    assert text.index("await self._install_native_coreloop(environment)") < text.index(
+        "await self._save_venv"
+    )
+
+
 def test_zai_defaults_do_not_follow_a_model_switch() -> None:
     """`reasoning_effort=max` and the z-ai endpoint pin are GLM-only.
 

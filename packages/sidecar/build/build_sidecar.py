@@ -240,6 +240,7 @@ def install_sidecar(
                 [str(py), "-m", "pip", "install", "--no-warn-script-location", str(wheel)],
                 check=True,
             )
+        install_native_coreloop(py, target, wheels_dir=wheels_dir)
         return
 
     pkg_paths = (
@@ -255,6 +256,61 @@ def install_sidecar(
             [str(py), "-m", "pip", "install", "--no-warn-script-location", str(path)],
             check=True,
         )
+    install_native_coreloop(py, target, wheels_dir=None)
+
+
+def install_native_coreloop(
+    py: Path,
+    target: Target,
+    *,
+    wheels_dir: Path | None = None,
+) -> None:
+    """Install the PyO3 CoreLoop extension into the embedded interpreter.
+
+    Release wheels win when present. Host-target source builds run maturin
+    when cargo is on PATH. Cross-compile targets skip — those need a
+    pre-built native wheel in ``--from-wheels``.
+    """
+    if wheels_dir is not None:
+        matches = sorted(wheels_dir.glob("steerable_agent_runtime_native-*.whl"))
+        if matches:
+            wheel = matches[-1]
+            print(f"[pip] install (native wheel) {wheel.name}")
+            subprocess.run(
+                [str(py), "-m", "pip", "install", "--no-warn-script-location", str(wheel)],
+                check=True,
+            )
+            return
+    if target.name != host_target().name:
+        print(f"[native] skip {target.name}: cross-compile not in this builder")
+        return
+    flag = os.environ.get("STEERABLE_BUILD_RUST_CORELOOP", "1").strip().lower()
+    if flag in {"0", "false", "off", "no"}:
+        print("[native] skip STEERABLE_BUILD_RUST_CORELOOP=0")
+        return
+    if shutil.which("cargo") is None:
+        print("[native] skip: cargo not on PATH")
+        return
+    native_rs = ROOT / "packages" / "agent-runtime" / "rs"
+    maturin = shutil.which("maturin")
+    cmd = [maturin] if maturin else [sys.executable, "-m", "maturin"]
+    env = os.environ.copy()
+    env.pop("CONDA_PREFIX", None)
+    print("[native] maturin build --release --features python,extension-module")
+    subprocess.run(
+        [*cmd, "build", "--release", "--features", "python,extension-module"],
+        cwd=native_rs,
+        check=True,
+        env=env,
+    )
+    wheels = sorted((native_rs / "target" / "wheels").glob("steerable_agent_runtime_native-*.whl"))
+    if not wheels:
+        raise SystemExit("maturin produced no steerable_agent_runtime_native wheel")
+    print(f"[pip] install (native wheel) {wheels[-1].name}")
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--no-warn-script-location", str(wheels[-1])],
+        check=True,
+    )
 
 
 def python_binary(out_dir: Path, target: Target) -> Path:

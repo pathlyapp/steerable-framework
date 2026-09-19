@@ -76,10 +76,13 @@ nav:
       - Architecture: spec/architecture.md
       - Events: spec/events.md
       - Tools: spec/tools.md
+      - Plugin host: spec/plugin-host.md
       - Chat: spec/chat.md
       - Safety: spec/safety.md
       - Runtime: spec/runtime.md
       - Sidecar: spec/sidecar.md
+      - CoreLoop: spec/core-loop.md
+      - CoreLoop Rust tests: spec/coreloop-rust-test-catalog.md
       - Compaction: spec/compaction.md
   - UI Components: ui/index.md
   - Migration:

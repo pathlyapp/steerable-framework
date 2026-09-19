@@ -6,6 +6,10 @@ inputs:
     description: Harbor version (keep in sync with evals/suite.yaml run.harbor_version)
     required: false
     default: "0.22.0"
+  rust-coreloop:
+    description: Build and expose the Linux abi3 wheel used by Rust CoreLoop trials
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -15,6 +19,24 @@ runs:
       run: |
         uv tool install "harbor==${{ inputs.version }}"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+    - name: Build Rust CoreLoop wheel
+      if: inputs.rust-coreloop == 'true'
+      shell: bash
+      run: |
+        uvx maturin build \
+          --release \
+          --features python,extension-module \
+          --manifest-path packages/agent-runtime/rs/Cargo.toml
+        wheel=$(python - <<'PY'
+        from pathlib import Path
+        wheels = sorted(Path("packages/agent-runtime/rs/target/wheels").glob("*.whl"))
+        if len(wheels) != 1:
+            raise SystemExit(f"expected one Rust CoreLoop wheel, found {len(wheels)}")
+        print(wheels[0].resolve())
+        PY
+        )
+        echo "STEERABLE_NATIVE_WHEEL=$wheel" >> "$GITHUB_ENV"
+        echo "STEERABLE_RUST_CORELOOP=1" >> "$GITHUB_ENV"
     - name: Prefetch musl uv for qemu trials
       shell: bash
       run: |

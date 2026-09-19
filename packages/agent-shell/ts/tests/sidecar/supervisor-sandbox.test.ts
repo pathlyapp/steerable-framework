@@ -14,13 +14,14 @@ import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock, execFileImpl, seatbelt, winHelper } = vi.hoisted(() => ({
+const { spawnMock, execFileImpl, seatbelt, winHelper, rustBin } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   execFileImpl: vi.fn(),
   // Tests run on Linux CI too: the sandboxed-path cases stub their way onto
   // a macOS host where /usr/bin/sandbox-exec exists.
   seatbelt: { exists: true },
   winHelper: { exists: false },
+  rustBin: { exists: false, path: '/fake/steerable-sidecar' },
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -44,6 +45,7 @@ vi.mock('node:fs', async (importOriginal) => {
       const s = String(p);
       if (s === '/usr/bin/sandbox-exec') return seatbelt.exists;
       if (s.includes('win-spawn-helper')) return winHelper.exists;
+      if (s === rustBin.path) return rustBin.exists;
       return mod.existsSync(p);
     },
   };
@@ -125,11 +127,14 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     spawnMock.mockImplementation(() => fakeChild());
     execFileImpl.mockResolvedValue({ stdout: PROFILE, stderr: '' });
     delete process.env.STEERABLE_SIDECAR_SANDBOX;
+    delete process.env.STEERABLE_RUST_SIDECAR;
+    delete process.env.STEERABLE_RUST_SIDECAR_BIN;
     SidecarSupervisor.lastSpawnRefusal = null;
     // Default to a Seatbelt-capable macOS host; the off-macOS case restubs.
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     seatbelt.exists = true;
     winHelper.exists = false;
+    rustBin.exists = false;
   });
 
   afterEach(() => {
@@ -181,6 +186,19 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(args.slice(2)).toEqual(['/fake/python3', '-m', 'steerable_sidecar']);
     // The sandbox denies __pycache__ writes; bytecode caching is disabled.
     expect(spawnOptions.env.PYTHONDONTWRITEBYTECODE).toBe('1');
+  });
+
+  it('generates the Seatbelt profile from the rust sidecar when the flag is on', async () => {
+    process.env.STEERABLE_RUST_SIDECAR = '1';
+    rustBin.exists = true;
+    await startAndStop({ rustSidecarBin: '/fake/steerable-sidecar', sandbox: true });
+    const [bin, cliArgs] = execFileImpl.mock.calls[0];
+    expect(bin).toBe('/fake/steerable-sidecar');
+    expect(cliArgs.slice(0, 2)).toEqual(['sandbox', 'profile']);
+    expect(cliArgs).toContain('--writable-root');
+    const [command, args] = spawnMock.mock.calls[0];
+    expect(command).toBe('/usr/bin/sandbox-exec');
+    expect(args.slice(2)).toEqual(['/fake/steerable-sidecar']);
   });
 
   it('STEERABLE_SIDECAR_SANDBOX=0 opts out when the option is unset', async () => {
@@ -286,6 +304,28 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(lines.some((l) => l.includes('bwrap') && l.includes('active'))).toBe(true);
   });
 
+  it('wraps the Linux rust sidecar via sandbox linux-wrap', async () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    process.env.STEERABLE_RUST_SIDECAR = '1';
+    rustBin.exists = true;
+    execFileImpl.mockResolvedValue({
+      stdout:
+        JSON.stringify({
+          argv: ['/usr/bin/bwrap', '--ro-bind', '/', '/', '--', '/fake/steerable-sidecar'],
+          backend: 'bwrap',
+          enforcement: 'partial',
+        }) + '\n',
+      stderr: '',
+    });
+    await startAndStop({ rustSidecarBin: '/fake/steerable-sidecar', sandbox: true });
+    const [bin, cliArgs] = execFileImpl.mock.calls[0];
+    expect(bin).toBe('/fake/steerable-sidecar');
+    expect(cliArgs.slice(0, 2)).toEqual(['sandbox', 'linux-wrap']);
+    const [command, args] = spawnMock.mock.calls[0];
+    expect(command).toBe('/usr/bin/bwrap');
+    expect(args.at(-1)).toBe('/fake/steerable-sidecar');
+  });
+
   it('logs the honest egress story on Linux when the proxy holds the host list (3.1c)', async () => {
     // linux-wrap has no per-host pinning: under the egress proxy the
     // per-host enforcement lives in the proxy (HTTPS_PROXY env) plus the
@@ -364,10 +404,13 @@ describe('SidecarSupervisor sandbox posture (W4-3 disclosure contract)', () => {
     spawnMock.mockImplementation(() => fakeChild());
     execFileImpl.mockResolvedValue({ stdout: PROFILE, stderr: '' });
     delete process.env.STEERABLE_SIDECAR_SANDBOX;
+    delete process.env.STEERABLE_RUST_SIDECAR;
+    delete process.env.STEERABLE_RUST_SIDECAR_BIN;
     SidecarSupervisor.lastSpawnRefusal = null;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     seatbelt.exists = true;
     winHelper.exists = false;
+    rustBin.exists = false;
   });
 
   afterEach(() => {

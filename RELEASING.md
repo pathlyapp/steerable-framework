@@ -18,10 +18,11 @@ This document covers two release modes:
 | 2 | `@steerable/agent-harness` | `dist/npm/steerable-agent-harness-X.Y.Z.tgz` |
 | 2 | `steerable-agent-harness` (Py) | `dist/py/steerable_agent_harness-X.Y.Z-*.whl` + sdist |
 | 3 | `steerable-agent-runtime` (Py) | `dist/py/steerable_agent_runtime-X.Y.Z-*.whl` + sdist |
+| 3 | `steerable-plugin-sdk` (Py) | `dist/py/steerable_plugin_sdk-X.Y.Z-*.whl` + sdist |
 | 3 | `steerable-sidecar` (Py) | `dist/py/steerable_sidecar-X.Y.Z-*.whl` + sdist |
 | 4 | `@steerable/agent-ui` | `dist/npm/steerable-agent-ui-X.Y.Z.tgz` |
 
-**All 7 packages release in lock-step** (every release publishes the same
+**All listed packages release in lock-step** (every release publishes the same
 `X.Y.Z` for everything, even no-op bumps). Enforced by
 `scripts/check_lockstep_versions.py` in CI as a gate on every tag push.
 See "Mode C" below for the operator workflow.
@@ -170,6 +171,7 @@ without a registry.
          return HTTP 404 on the registry, confirming the slot is free.
    - [ ] PyPI project names `steerable-agent-protocol`,
          `steerable-agent-harness`, `steerable-agent-runtime`,
+         `steerable-plugin-sdk`,
          `steerable-sidecar`. See "Configuring PyPI publish" below.
 
 2. **Configure `NPM_TOKEN`**:

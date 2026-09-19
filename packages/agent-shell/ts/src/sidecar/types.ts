@@ -32,6 +32,8 @@ export interface SidecarSandboxPosture {
 export interface SidecarStartOptions {
   /** Override the python binary; defaults to the bundled portable runtime. */
   pythonExecutable?: string;
+  /** Optional Rust sidecar binary; used when STEERABLE_RUST_SIDECAR is on. */
+  rustSidecarBin?: string;
   /** Override the entrypoint module; defaults to ``steerable_sidecar``. */
   entryModule?: string;
   /** Extra arguments appended after ``-m <entryModule>``. */

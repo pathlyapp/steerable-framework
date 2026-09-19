@@ -8,6 +8,11 @@ The gate is [Terminal-Bench 2.1](https://github.com/harbor-framework/terminal-be
 
 **Steerable + GLM-5.3-Flash = 80.7%** on the 89-task catalog. Six independent full runs at commit `8e260de` (tag `tb-8e260de`), mean **0.8071**, SD **0.0288**. We report the mean, not the 0.8652 high-water mark (run 3 is the top of the distribution; the three added runs all landed at 71/89, pulling the three-run 0.8165 down to the six-run 0.8071 and tightening the SD from ±4.3 to ±2.9 — the high-water run was distribution top, not the level). The every-round ≥72/89 gate was attempted on this stack and **missed**: rounds posted 70, 71, 77, 71, 71, 71 — the floor is the flaky layer's coin tosses, not a crash or a systematic hole (see Pending measurement for the full arm history). Two of the added runs each lost one shard to runner infrastructure (a SIGKILL and a runner shutdown); the failed shards were rerun to completion, and each run's score counts the first valid attempt per task. `8e260de` includes everything the old `27d521a` score predates: the persistence prompt and post-write verify gate (`20a854d`), the left-tail stack (`4746d14`: git-history rewrite gate, named-output prefix/stub vetoes, wrap-up instruction-example), and the EOL-apt bring-up fix that converted two deterministic setup crashes (`qemu-alpine-ssh`, `qemu-startup`) into passes.
 
+That score was produced by the Python CoreLoop. Steerable Harbor jobs now build
+and install the Linux `cp310-abi3` wheel and run with
+`STEERABLE_RUST_CORELOOP=1`; a new catalog-89 run is required before claiming
+the Rust loop matches the score of record or deleting the Python loop.
+
 | Sample | GitHub Actions | Mean |
 | ------ | -------------- | ---- |
 | 1 | [34031313764](https://github.com/pathlyapp/steerable-framework/actions/runs/34031313764) | 0.7865 (70/89) |

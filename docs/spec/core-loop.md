@@ -80,8 +80,10 @@ becomes a registered handler.
 class ToolExecutor(Protocol):
     async def execute(
         self, call: ToolCall, ctx: LoopContext
-    ) -> AsyncIterator[LoopEvent | ToolResult]: ...
+    ) -> ToolResult: ...
 ```
+
+The executor returns one `ToolResult`. Optional duck-typed `concurrency_safe(call) -> bool` lets consecutive safe calls in a round run in parallel when `LoopConfig.parallel_tools` is on.
 
 The ten branches map to handlers the product registers:
 
@@ -145,3 +147,17 @@ Recorded here so they are a decision, not a surprise:
 - **Token budget defaults differ by design.** api 120k (server models, large
   context), agent 60k (local models, small context). Keep configurable; do
   not force one number.
+
+## Rust migration gates
+
+The executable catalog (P0 marks, PyO3 import surface, sidecar RPC names,
+per-product `pythonRuntime`) lives in
+[coreloop-rust-test-catalog.md](coreloop-rust-test-catalog.md).
+`test_replay_crosslang` is not a CoreLoop behavior gate.
+
+The Rust crate is `packages/agent-runtime/rs`. `cargo test` there must keep
+parity with `py/tests/test_loop.py` (no-tool completion, tool round, images,
+reasoning echo, consecutive errors, maxRounds, token budget, exploding
+executor, stage_complete, before_completion cap). Python `CoreLoop` stays
+authoritative until `STEERABLE_RUST_CORELOOP=1` plus the PyO3 module
+`steerable_agent_runtime_native` is the sidecar/API entry.

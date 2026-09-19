@@ -1,0 +1,24 @@
+[package]
+name = "steerable-sidecar"
+version = "0.6.26"
+edition = "2021"
+description = "Rust steerable sidecar: newline JSON-RPC over stdio."
+license = "MIT"
+publish = false
+
+[lib]
+name = "steerable_sidecar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "steerable-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+serde_json = { version = "1", features = ["preserve_order"] }
+steerable-agent-runtime = { path = "../../agent-runtime/rs" }
+tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "sync", "time", "process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

@@ -83,6 +83,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - uses: ./.github/actions/setup-harbor
+        with:
+          rust-coreloop: ${{ matrix.agent == 'steerable' }}
       - run: docker info
       - name: Harbor cheap-12
         env:
@@ -174,6 +176,8 @@ jobs:
         if: steps.gate.outputs.skip != '1'
       - uses: ./.github/actions/setup-harbor
         if: steps.gate.outputs.skip != '1'
+        with:
+          rust-coreloop: ${{ matrix.agent == 'steerable' }}
       - run: docker info
         if: steps.gate.outputs.skip != '1'
       - name: Harbor cheap-12 probe
@@ -282,6 +286,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - uses: ./.github/actions/setup-harbor
+        with:
+          rust-coreloop: "true"
       - run: docker info
       - name: Harbor failed-prev shard
         env:
@@ -352,6 +358,8 @@ jobs:
         if: steps.gate.outputs.skip != '1'
       - uses: ./.github/actions/setup-harbor
         if: steps.gate.outputs.skip != '1'
+        with:
+          rust-coreloop: ${{ github.event.inputs.agent == 'steerable' }}
       - run: docker info
         if: steps.gate.outputs.skip != '1'
       - name: Harbor catalog shard
@@ -484,6 +492,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - uses: ./.github/actions/setup-harbor
+        with:
+          rust-coreloop: "true"
       - run: docker info
       - name: Arm B overrides
         if: ${{ matrix.arm == 'b' }}
@@ -565,6 +575,8 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - uses: ./.github/actions/setup-harbor
+        with:
+          rust-coreloop: "true"
       - run: docker info
       - name: Tunable overrides
         env:

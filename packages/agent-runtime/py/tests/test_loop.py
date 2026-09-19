@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -17,6 +18,7 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.hooks import CompletionAction, NoopHooks
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
+from steerable_agent_runtime.storage import InMemoryStorage
 
 
 def make_provider(script: list[dict[str, Any]]):
@@ -89,6 +91,9 @@ async def test_no_tool_calls_completes() -> None:
     # content streamed through
     deltas = [e.data["delta"] for e in events if e.kind == "content_delta"]
     assert "".join(deltas) == "The answer is 4."
+    if os.environ.get("STEERABLE_RUST_CORELOOP") == "1":
+        starts = [e for e in events if e.kind == "stage_start"]
+        assert starts and starts[0].data.get("engine") == "rust"
 
 
 @pytest.mark.asyncio
@@ -122,6 +127,56 @@ async def test_tool_round_then_completion() -> None:
     tool_msgs = [m for m in second_call_messages if m.role == "tool"]
     assert len(tool_msgs) == 1 and tool_msgs[0].name == "add"
     assert '"success": true' in tool_msgs[0].content_text
+
+
+@pytest.mark.asyncio
+async def test_tool_history_is_durable_before_next_model_request() -> None:
+    storage = InMemoryStorage()
+    router = ToolRouter()
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    router.register(add)
+
+    class _CheckpointProvider:
+        name = "checkpoint"
+        model = "checkpoint"
+
+        def __init__(self) -> None:
+            self.round = 0
+
+        def stream(self, messages, *, tools=None, **kw):
+            round_index = self.round
+            self.round += 1
+
+            async def generate():
+                if round_index == 0:
+                    yield LLMStreamChunk(
+                        tool_call_delta=tc("add", {"a": 1, "b": 2})
+                    )
+                    yield LLMStreamChunk(finish_reason="tool_calls")
+                    return
+                record = await storage.list_history("checkpoint-chat")
+                roles = [
+                    entry["message"]["role"]
+                    for entry in record
+                    if entry.get("entry") == "item"
+                ]
+                assert roles[-2:] == ["assistant", "tool"]
+                yield LLMStreamChunk(content_delta="done")
+                yield LLMStreamChunk(finish_reason="stop")
+
+            return generate()
+
+    loop = CoreLoop(
+        _CheckpointProvider(),
+        RouterToolExecutor(router),
+        history_store=storage,
+        record_id="checkpoint-chat",
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "add")]))
+    assert final_completion(events)["status"] == "completed"
 
 
 @pytest.mark.asyncio

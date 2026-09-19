@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -847,6 +848,12 @@ class CoreLoop:
         tools: list[dict[str, Any]] | None = None,
         chat_id: str | None = None,
     ) -> AsyncIterator[LoopEvent]:
+        if os.environ.get("STEERABLE_RUST_CORELOOP") == "1":
+            from .native_bridge import run_native
+
+            async for event in run_native(self, messages, tools=tools, chat_id=chat_id):
+                yield event
+            return
         ctx = LoopContext(chat_id=chat_id)
         self._run_context = ctx
         # The transcript is a projection of the append-only record; nothing

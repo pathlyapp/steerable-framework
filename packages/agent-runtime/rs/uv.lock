@@ -1,0 +1,8 @@
+version = 1
+revision = 3
+requires-python = ">=3.10"
+
+[[package]]
+name = "steerable-agent-runtime-native"
+version = "0.6.26"
+source = { editable = "." }

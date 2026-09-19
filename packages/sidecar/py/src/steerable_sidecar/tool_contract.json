@@ -295,6 +295,14 @@
     }
   },
   "version": 2,
+  "dualImplementations": {
+    "todo_write": ["python", "rust"],
+    "web_fetch": ["python", "rust"],
+    "web_search": ["python", "rust"],
+    "run_code": ["python", "rust"],
+    "run_js": ["python", "rust"],
+    "wait_js": ["python", "rust"]
+  },
   "versionAlgorithm": "sha256-utf8-hex",
   "versionToken": {
     "inputField": "expectedVersion",

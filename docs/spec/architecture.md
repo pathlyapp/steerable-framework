@@ -78,7 +78,8 @@ approval/sandbox executor decorators, subagent pool, and MCP client.
 Multi-agent planning, DAGs, and groupchat stay **above** the loop: the
 framework provides the loop and the primitives; product-level
 orchestration semantics remain your business logic. See the
-[CoreLoop spec](core-loop.md).
+[CoreLoop spec](core-loop.md) and the
+[Rust migration test catalog](coreloop-rust-test-catalog.md).
 
 ## Tier 3 — Sidecar (executable)
 

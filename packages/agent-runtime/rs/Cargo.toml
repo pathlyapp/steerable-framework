@@ -1,0 +1,33 @@
+[package]
+name = "steerable-agent-runtime"
+version = "0.6.26"
+edition = "2021"
+description = "Steerable CoreLoop in Rust: think → act → observe, yielding LoopEvents."
+license = "MIT"
+publish = false
+
+[lib]
+name = "steerable_agent_runtime"
+path = "src/lib.rs"
+
+[features]
+default = []
+python = ["dep:pyo3"]
+extension-module = ["python", "pyo3/extension-module"]
+
+[dependencies]
+async-trait = "0.1"
+futures-util = "0.3"
+pyo3 = { version = "0.25", optional = true, features = ["macros", "abi3-py310"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+async-trait = "0.1"
+pretty_assertions = "1.4"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util"] }

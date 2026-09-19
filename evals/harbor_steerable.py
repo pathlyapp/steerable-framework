@@ -60,6 +60,8 @@ _INSTRUCTION_REMOTE = "/tmp/steerable-instruction.md"
 # as JSON (a YAML subset the runtime loader parses with stdlib json).
 _HARNESS_REMOTE = "/tmp/steerable-harness.json"
 _REMOTE_VENV_TAR = "/tmp/steerable-venv.tgz"
+_NATIVE_WHEEL_REMOTE = "/tmp/steerable-agent-runtime-native.whl"
+_NATIVE_WHEEL_ENV = "STEERABLE_NATIVE_WHEEL"
 _CREDENTIAL_KEYS = (
     "STEERABLE_API_KEY",
     "STEERABLE_BASE_URL",
@@ -74,6 +76,7 @@ _CREDENTIAL_KEYS = (
 #: belong here: a catalog run costs hours, so arms have to differ by env
 #: rather than by commit to share one task set.
 _TUNING_KEYS = (
+    "STEERABLE_RUST_CORELOOP",
     "STEERABLE_IDLE_STREAM_TIMEOUT_MS",
     "STEERABLE_IDLE_STREAM_MAX_CHARS",
     "STEERABLE_REASONING_WITHOUT_PROGRESS_CHARS",
@@ -181,8 +184,9 @@ class SteerableHarborAgent(BaseInstalledAgent):
             await self._overlay_source(environment, proxy_env)
         else:
             await self._pip_install_packages(environment, proxy_env)
-            if py_tag:
-                await self._save_venv(environment, _venv_tarball(py_tag))
+        await self._install_native_coreloop(environment)
+        if not restored and py_tag:
+            await self._save_venv(environment, _venv_tarball(py_tag))
         await self._seed_uv(environment)
         environment._persistent_env["PATH"] = _merge_trial_path(
             environment._persistent_env.get("PATH", "")
@@ -465,6 +469,44 @@ class SteerableHarborAgent(BaseInstalledAgent):
             command=_pip_install_command(remote_pkgs, extra_args=extra_args),
             env=proxy_env or None,
             timeout_sec=600,
+        )
+
+    async def _install_native_coreloop(self, environment: BaseEnvironment) -> None:
+        """Install the caller-provided Linux abi3 wheel for Rust evals.
+
+        Harbor trials run in Linux containers, so a wheel built by a macOS
+        workstation is invalid even when its Python tag matches. CI builds an
+        abi3 Linux wheel before invoking Harbor and passes its path through the
+        host-only ``STEERABLE_NATIVE_WHEEL`` variable.
+        """
+        if os.environ.get("STEERABLE_RUST_CORELOOP") != "1":
+            return
+        raw = (os.environ.get(_NATIVE_WHEEL_ENV) or "").strip()
+        if not raw:
+            raise RuntimeError(
+                "STEERABLE_RUST_CORELOOP=1 requires STEERABLE_NATIVE_WHEEL "
+                "pointing to a Linux steerable-agent-runtime-native wheel"
+            )
+        wheel = Path(raw).expanduser().resolve()
+        if not wheel.is_file() or wheel.suffix != ".whl":
+            raise RuntimeError(
+                f"{_NATIVE_WHEEL_ENV} does not name a wheel file: {wheel}"
+            )
+        await environment.upload_file(wheel, _NATIVE_WHEEL_REMOTE)
+        await self.exec_as_root(
+            environment,
+            command=(
+                f"{shlex.quote(_VENV_PYTHON)} -m pip install --no-deps "
+                f"--force-reinstall {shlex.quote(_NATIVE_WHEEL_REMOTE)}"
+            ),
+            timeout_sec=600,
+        )
+        await self.exec_as_root(
+            environment,
+            command=(
+                f"{shlex.quote(_VENV_PYTHON)} -c "
+                f"{shlex.quote('import steerable_agent_runtime_native as n; assert n.run_turn')}"
+            ),
         )
 
     async def _save_venv(self, environment: BaseEnvironment, tarball: Path) -> None:
