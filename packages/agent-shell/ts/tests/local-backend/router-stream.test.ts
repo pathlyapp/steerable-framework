@@ -252,6 +252,31 @@ describe('流式回合 SSE 序列', () => {
     expect(cap.byType('reasoning')[0].data).toMatchObject({ content: '思考一下' });
   });
 
+  it('round_end notice 封住思考段并转发 completion:executing', async () => {
+    const chat = await seedChat();
+    installStream((opts) => {
+      opts.onReasoning('第一轮');
+      opts.onNotice('round_end', { kind: 'round_end', status: 'executing', round: 0 });
+      opts.onReasoning('第二轮');
+      opts.onText('结论');
+    });
+    const cap = makeEmitCapture();
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '想想' } },
+      cap.emit,
+    );
+    expect(cap.byType('completion')[0].data).toMatchObject({
+      type: 'completion',
+      status: 'executing',
+    });
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
+    const metadata = JSON.parse(assistant.messageMetadata!);
+    const reasoning = (metadata.timeline as Array<{ type: string; content: string }>)
+      .filter((b) => b.type === 'reasoning')
+      .map((b) => b.content);
+    expect(reasoning).toEqual(['第一轮', '第二轮']);
+  });
+
   it('budget_exhausted notice 与子代理事件分别转成 SSE', async () => {
     const chat = await seedChat();
     installStream((opts) => {

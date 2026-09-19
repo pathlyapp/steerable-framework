@@ -777,3 +777,32 @@ async def test_chat_cancel_terminates_in_flight_stream() -> None:
     assert "never" not in chunk_deltas
     if cancel_done is not None:
         assert cancel_done["streamId"] == stream_id
+
+
+@pytest.mark.asyncio
+async def test_executing_completion_forwards_round_end_notice() -> None:
+    from steerable_agent_runtime.loop import LoopEvent
+    from steerable_sidecar.sidecar import Sidecar as SidecarCls
+
+    class Capture:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, params: dict | None = None) -> None:
+            self.events.append((method, params or {}))
+
+    transport = Capture()
+    await SidecarCls._emit_loop_event(
+        transport,  # type: ignore[arg-type]
+        "s1",
+        LoopEvent("completion", {"status": "executing", "round": 1}),
+    )
+    assert transport.events == [
+        (
+            "stream.chunk",
+            {
+                "streamId": "s1",
+                "notice": {"kind": "round_end", "status": "executing", "round": 1},
+            },
+        )
+    ]

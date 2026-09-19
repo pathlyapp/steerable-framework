@@ -23,6 +23,7 @@ import {
 import { builtinSubagentParam } from './subagent-profiles.js';
 import {
   appendTimelineDelta,
+  sealLastTimelineBlock,
   syncTimelineTools,
   type PersistedTurnBlock,
 } from './turn-timeline.js';
@@ -213,6 +214,11 @@ function buildLocalApiUser() {
 const LOCAL_USER = LOCAL_USER_BASE;
 
 const LOCAL_AGENT_ID = 'local-agent';
+
+function isRoundBoundaryHook(notice: { kind?: string; action?: unknown } | undefined): boolean {
+  if (notice?.kind !== 'hook_action') return false;
+  return notice.action === 'retry' || notice.action === 'narrate';
+}
 
 function buildLocalAgent() {
   const now = new Date().toISOString();
@@ -3358,6 +3364,17 @@ export class LocalBackendRouter {
               budget: { kind: budgetKind },
               message: budgetKind ? `budget_exhausted: ${budgetKind}` : 'budget_exhausted',
             }));
+            return;
+          }
+          // 轮次边界：封住当前思考/文本段，避免下一轮 reasoning delta
+          // 拼进上一段，把中间的工具结果挤没。
+          if (kind === 'round_end' || isRoundBoundaryHook(notice)) {
+            sealLastTimelineBlock(timeline);
+            emit(this.sseData({
+              type: 'completion',
+              status: 'executing',
+              ...(typeof notice?.round === 'number' ? { round: notice.round } : {}),
+            }));
           }
         },
         onChildEvent: (event) => {
@@ -3411,6 +3428,8 @@ export class LocalBackendRouter {
             }
           },
           onContinuation: (pass, max) => {
+            sealLastTimelineBlock(timeline);
+            emit(this.sseData({ type: 'completion', status: 'executing' }));
             console.log('[local-backend] coreloop budget exhausted — auto-continuing', {
               chatId,
               pass,

@@ -7,14 +7,15 @@ import {
 } from '@/lib/show-thinking-content';
 import { Markdown } from './Markdown';
 import { ToolsFlow } from './ExecutedActionsCard';
-import { processStatusLabel } from './process-status';
-import { processHasReasoning, splitTurnProcess, type TurnBlock } from './turn-timeline';
+import { processStatusLabel, thinkingFoldLabel } from './process-status';
+import { splitTurnProcess, type TurnBlock } from './turn-timeline';
 
 /**
- * Codex / DeepSeek-style turn process: think + tool rows stay in one
- * disclosure. Settings 「显示思考内容」 has three modes: hidden / 5-line
- * peek / full. The status line still shows 思考中 / 工具名 / tok/s /
- * elapsed. The summary itself stays outside the fold.
+ * Codex / DeepSeek-style turn process. Each LLM round keeps three surfaces
+ * distinct: 思考 (muted CoT), 思考后的 response (reply bubble), 工具
+ * (cards). Trailing text becomes 最后一次结论 only after the stream ends —
+ * promoting it earlier would restyle it as thinking when the next round
+ * starts. Settings 「显示思考内容」: hidden / 5-line peek / full.
  */
 
 export const THINKING_PEEK_LINES = 5;
@@ -64,83 +65,206 @@ function useLiveNow(enabled: boolean): number {
   return now;
 }
 
-function ProcessBlocks({
+function ThinkingFold({
+  content,
+  label,
+  showCursor,
+  collapsible,
+  defaultOpen,
+}: {
+  content: string;
+  label: string;
+  showCursor?: boolean;
+  collapsible: boolean;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    setOpen(defaultOpen);
+  }, [defaultOpen]);
+
+  const body = (
+    <div className="border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground">
+      <ReasoningBody content={content} showCursor={showCursor} />
+    </div>
+  );
+
+  if (!collapsible) {
+    return (
+      <div className="space-y-1" data-testid="turn-thinking">
+        <div className="text-[11px] text-agent-muted-foreground/80">{label}</div>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1" data-testid="turn-thinking">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex min-w-0 items-center gap-1 py-0.5 text-left text-[11px] text-agent-muted-foreground/80 transition-colors hover:text-agent-foreground"
+        aria-expanded={open}
+        data-thinking-fold=""
+      >
+        {open ? (
+          <LuChevronDown className="h-3 w-3 shrink-0" />
+        ) : (
+          <LuChevronRight className="h-3 w-3 shrink-0" />
+        )}
+        <span className="truncate">{label}</span>
+      </button>
+      {open ? body : null}
+    </div>
+  );
+}
+
+function ProcessBlockItems({
   blocks,
   isStreaming,
   agents,
   chats,
   chatId,
+  foldThinking = false,
+  thinkingDefaultOpen = false,
+  thinkingElapsedByIndex,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
   agents: LocalChatAgent[];
   chats: LocalChat[];
   chatId?: string | null;
+  foldThinking?: boolean;
+  thinkingDefaultOpen?: boolean;
+  thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
   const lastIndex = blocks.length - 1;
   return (
-    <div className="space-y-1.5 border-l border-agent-border/70 pl-3">
+    <>
       {blocks.map((block, index) => {
         const isLast = index === lastIndex;
         if (block.type === 'reasoning') {
+          const isLive = isStreaming && isLast;
           return (
-            <div
+            <ThinkingFold
               key={`reasoning-${index}`}
-              className="text-xs leading-relaxed text-agent-muted-foreground"
-            >
-              <ReasoningBody content={block.content} showCursor={isStreaming && isLast} />
-            </div>
+              content={block.content}
+              label={thinkingFoldLabel({
+                content: block.content,
+                isLive,
+                elapsedMs: thinkingElapsedByIndex?.[index],
+              })}
+              showCursor={isLive}
+              collapsible={foldThinking}
+              defaultOpen={thinkingDefaultOpen || isLive}
+            />
           );
         }
         if (block.type === 'tools') {
-          return <ToolsFlow key={`tools-${index}`} actions={block.actions} compact />;
+          return (
+            <div key={`tools-${index}`} data-testid="turn-tools">
+              <ToolsFlow actions={block.actions} compact />
+            </div>
+          );
         }
         return (
-          <div
-            key={`text-${index}`}
-            className="markdown-content text-xs leading-relaxed text-agent-muted-foreground"
-          >
-            <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
+          <div key={`text-${index}`} data-testid="turn-response">
+            <div className="rounded-agent-lg border border-agent-border bg-agent-canvas p-2.5 shadow-sm">
+              <div className="markdown-content text-sm leading-relaxed text-agent-foreground">
+                <Markdown agents={agents} chats={chats} chatId={chatId}>{block.content}</Markdown>
+              </div>
+              {isStreaming && isLast ? (
+                <span className="ml-0.5 inline-block h-3.5 w-[3px] animate-agent-cursor-blink bg-agent-foreground/60 align-text-bottom" />
+              ) : null}
+            </div>
           </div>
         );
       })}
+    </>
+  );
+}
+
+function ProcessBlocks({
+  blocks,
+  isStreaming,
+  agents,
+  chats,
+  chatId,
+  thinkingDefaultOpen,
+  thinkingElapsedByIndex,
+}: {
+  blocks: TurnBlock[];
+  isStreaming: boolean;
+  agents: LocalChatAgent[];
+  chats: LocalChat[];
+  chatId?: string | null;
+  thinkingDefaultOpen: boolean;
+  thinkingElapsedByIndex?: Array<number | undefined>;
+}) {
+  return (
+    <div className="space-y-2">
+      <ProcessBlockItems
+        blocks={blocks}
+        isStreaming={isStreaming}
+        agents={agents}
+        chats={chats}
+        chatId={chatId}
+        foldThinking
+        thinkingDefaultOpen={thinkingDefaultOpen}
+        thinkingElapsedByIndex={thinkingElapsedByIndex}
+      />
     </div>
   );
+}
+
+function processPeekSignature(blocks: TurnBlock[]): string {
+  return blocks
+    .map((block) => {
+      if (block.type === 'tools') return `t${block.actions.length}`;
+      return `${block.type[0]}${block.content.length}`;
+    })
+    .join(',');
 }
 
 function ThinkingPeek({
   blocks,
   isStreaming,
+  agents,
+  chats,
+  chatId,
+  thinkingElapsedByIndex,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
+  agents: LocalChatAgent[];
+  chats: LocalChat[];
+  chatId?: string | null;
+  thinkingElapsedByIndex?: Array<number | undefined>;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const reasoning = blocks.filter(
-    (block): block is Extract<TurnBlock, { type: 'reasoning' }> =>
-      block.type === 'reasoning' && block.content.trim().length > 0,
-  );
-  const sig = reasoning.map((block) => block.content.length).join(',');
+  const sig = processPeekSignature(blocks);
   useLayoutEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [sig]);
-  const lastIndex = reasoning.length - 1;
   return (
     <div
       ref={scrollerRef}
-      className="overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden border-l border-agent-border/70 pl-3 text-xs leading-relaxed text-agent-muted-foreground"
+      className="space-y-2 overflow-y-auto overflow-anchor-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       style={{ height: THINKING_PEEK_HEIGHT }}
       data-thinking-peek=""
       data-testid="thinking-peek"
       data-peek-lines={THINKING_PEEK_LINES}
     >
-      {reasoning.map((block, index) => (
-        <div key={`peek-reasoning-${index}`}>
-          <ReasoningBody content={block.content} showCursor={isStreaming && index === lastIndex} />
-        </div>
-      ))}
+      <ProcessBlockItems
+        blocks={blocks}
+        isStreaming={isStreaming}
+        agents={agents}
+        chats={chats}
+        chatId={chatId}
+        thinkingElapsedByIndex={thinkingElapsedByIndex}
+      />
     </div>
   );
 }
@@ -188,10 +312,8 @@ export function TurnProcessGroup({
   );
   const showFullThinking = thinkingDisplay === 'full';
   const showThinkingPeekAllowed = thinkingDisplay === 'peek';
-  const { process, answer } = splitTurnProcess(blocks);
-  const [open, setOpen] = useState(
-    () => showFullThinking && (isStreaming || answer.length === 0),
-  );
+  const { process, answer } = splitTurnProcess(blocks, { finalize: !isStreaming });
+  const [open, setOpen] = useState(() => showFullThinking);
   const wasStreamingRef = useRef(isStreaming);
   const isStreamingRef = useRef(isStreaming);
   const answerLenRef = useRef(answer.length);
@@ -216,31 +338,45 @@ export function TurnProcessGroup({
     : durationMs ?? lastLiveElapsedRef.current;
 
   const lastProcess = process[process.length - 1];
+  const lastIsReasoning = lastProcess?.type === 'reasoning';
+  const reasoningDurationsRef = useRef<number[]>([]);
   const reasoningClockRef = useRef<{ index: number; startedAt: number } | null>(null);
-  if (isStreaming && lastProcess?.type === 'reasoning') {
+  if (isStreaming && lastIsReasoning) {
     const index = process.length - 1;
     if (reasoningClockRef.current?.index !== index) {
+      const prev = reasoningClockRef.current;
+      if (prev) {
+        reasoningDurationsRef.current[prev.index] = Math.max(0, now - prev.startedAt);
+      }
       reasoningClockRef.current = { index, startedAt: now };
     }
-  } else if (!isStreaming) {
+  } else if (reasoningClockRef.current) {
+    const prev = reasoningClockRef.current;
+    reasoningDurationsRef.current[prev.index] = Math.max(0, now - prev.startedAt);
     reasoningClockRef.current = null;
   }
-  const reasoningElapsedMs =
-    isStreaming && lastProcess?.type === 'reasoning' && reasoningClockRef.current
-      ? Math.max(0, now - reasoningClockRef.current.startedAt)
-      : undefined;
+  const thinkingElapsedByIndex = process.map((block, index) => {
+    if (block.type !== 'reasoning') return undefined;
+    if (
+      isStreaming &&
+      lastIsReasoning &&
+      index === process.length - 1 &&
+      reasoningClockRef.current
+    ) {
+      return Math.max(0, now - reasoningClockRef.current.startedAt);
+    }
+    return reasoningDurationsRef.current[index];
+  });
 
   useEffect(() => {
-    if (!showFullThinking) {
-      setOpen(false);
-      return;
-    }
-    if (isStreamingRef.current || answerLenRef.current === 0) setOpen(true);
+    setOpen(showFullThinking);
   }, [showFullThinking]);
 
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
-    if (wasStreaming && !isStreaming && answer.length > 0) {
+    // peek / hidden fold after the summary lands. full stays open so every
+    // round's thinking and tool result remains on screen (hint: 结束后可手动折叠).
+    if (wasStreaming && !isStreaming && answer.length > 0 && !showFullThinking) {
       setOpen(false);
     }
     if (!wasStreaming && isStreaming) {
@@ -257,8 +393,7 @@ export function TurnProcessGroup({
     showThinkingPeekAllowed &&
     isStreaming &&
     !open &&
-    showToggle &&
-    processHasReasoning(process);
+    showToggle;
   const showStreamingHint =
     Boolean(streamingHint) && isStreaming && answer.length === 0 && !showToggle;
 
@@ -271,6 +406,7 @@ export function TurnProcessGroup({
           className="flex w-full items-center gap-1 py-0.5 text-left text-xs text-agent-muted-foreground transition-colors hover:text-agent-foreground"
           aria-expanded={open}
           data-turn-process=""
+          data-testid="turn-process-toggle"
           data-open={open || undefined}
         >
           {open ? (
@@ -283,7 +419,6 @@ export function TurnProcessGroup({
               process,
               isStreaming,
               elapsedMs,
-              reasoningElapsedMs,
             })}
           </span>
         </button>
@@ -295,10 +430,19 @@ export function TurnProcessGroup({
           agents={agents}
           chats={chats}
           chatId={chatId}
+          thinkingDefaultOpen={showFullThinking}
+          thinkingElapsedByIndex={thinkingElapsedByIndex}
         />
       )}
       {showThinkingPeek && (
-        <ThinkingPeek blocks={process} isStreaming={answer.length === 0} />
+        <ThinkingPeek
+          blocks={process}
+          isStreaming={answer.length === 0}
+          agents={agents}
+          chats={chats}
+          chatId={chatId}
+          thinkingElapsedByIndex={thinkingElapsedByIndex}
+        />
       )}
       {showStreamingHint ? streamingHint : null}
       {answer.map((block, index) => (

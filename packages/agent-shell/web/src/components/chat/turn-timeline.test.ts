@@ -6,6 +6,7 @@ import {
   fallbackTimeline,
   parseTurnBlocks,
   processHasReasoning,
+  sealLastBlock,
   splitTurnProcess,
   syncTools,
 } from './turn-timeline';
@@ -52,6 +53,23 @@ describe('turn-timeline', () => {
     expect(appendDelta([], 'text', '')).toEqual([]);
   });
 
+  it('starts a new reasoning block after sealLastBlock so rounds stay separate', () => {
+    let blocks = appendDelta([], 'reasoning', '第一轮');
+    blocks = sealLastBlock(blocks);
+    blocks = appendDelta(blocks, 'reasoning', '第二轮');
+    expect(blocks).toEqual([
+      { type: 'reasoning', content: '第一轮', sealed: true },
+      { type: 'reasoning', content: '第二轮' },
+    ]);
+  });
+
+  it('is a no-op when the last block is already tools or sealed', () => {
+    const tools = sealLastBlock([{ type: 'tools', actions: [tool('read')] }]);
+    expect(tools).toEqual([{ type: 'tools', actions: [tool('read')] }]);
+    const once = sealLastBlock([{ type: 'reasoning', content: '想', sealed: true }]);
+    expect(once).toEqual([{ type: 'reasoning', content: '想', sealed: true }]);
+  });
+
   it('falls back to tools-then-text for history without a timeline', () => {
     expect(fallbackTimeline('答', [tool('read', { success: true })])).toEqual([
       { type: 'tools', actions: [tool('read', { success: true })] },
@@ -82,6 +100,18 @@ describe('turn-timeline', () => {
     });
     expect(countProcessTools(blocks.slice(0, 4))).toBe(2);
     expect(processHasReasoning(blocks.slice(0, 4))).toBe(true);
+  });
+
+  it('keeps every text block in the process until the turn is finalized', () => {
+    const blocks = [
+      { type: 'reasoning' as const, content: '想' },
+      { type: 'text' as const, content: '我先搜' },
+      { type: 'reasoning' as const, content: '再写' },
+    ];
+    expect(splitTurnProcess(blocks, { finalize: false })).toEqual({
+      process: blocks,
+      answer: [],
+    });
   });
 
   it('parses persisted timeline JSON and rejects unknown kinds', () => {

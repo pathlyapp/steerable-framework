@@ -1,13 +1,13 @@
 /**
- * Turn-process status line: live 「思考中 / 调用工具中」 plus finished
- * 「N 次工具调用 · 已思考 · 工作了 …」. Token speed is a coarse estimate
- * from reasoning text (same CJK/other weights as the desktop compactor).
+ * Work-row summary vs per-thinking-fold live stats.
+ * Token speed is a coarse estimate from reasoning text (same CJK/other
+ * weights as the desktop compactor).
  */
 
 import { formatElapsedCompact } from './elapsed';
 import {
+  countProcessReasoning,
   countProcessTools,
-  processHasReasoning,
   type TurnBlock,
 } from './turn-timeline';
 
@@ -35,22 +35,6 @@ export function formatTokenSpeed(tokens: number, elapsedMs: number): string | nu
   return `${shown} tok/s`;
 }
 
-export function estimateProcessReasoningTokens(process: TurnBlock[]): number {
-  let tokens = 0;
-  for (const block of process) {
-    if (block.type === 'reasoning') tokens += estimateTextTokens(block.content);
-  }
-  return tokens;
-}
-
-function speedElapsedMs(
-  reasoningElapsedMs: number | undefined,
-  elapsedMs: number | undefined,
-): number {
-  if (reasoningElapsedMs != null && reasoningElapsedMs >= 400) return reasoningElapsedMs;
-  return elapsedMs ?? reasoningElapsedMs ?? 0;
-}
-
 export function lastToolsAreRunning(process: TurnBlock[]): boolean {
   const last = process[process.length - 1];
   if (last?.type !== 'tools' || last.actions.length === 0) return false;
@@ -69,54 +53,47 @@ export function activeToolNames(process: TurnBlock[]): string[] {
 }
 
 function formatElapsedPart(
-  isStreaming: boolean,
+  isLive: boolean,
   elapsedMs: number | undefined,
 ): string | null {
   if (elapsedMs == null) return null;
-  if (!isStreaming && elapsedMs < 1000) return null;
+  if (!isLive && elapsedMs < 1000) return null;
   return formatElapsedCompact(elapsedMs);
 }
 
+/** Work disclosure: live is only 「工作中」; finished is a counts + duration summary. */
 export function processStatusLabel(input: {
   process: TurnBlock[];
   isStreaming: boolean;
   elapsedMs?: number;
-  reasoningElapsedMs?: number;
 }): string {
-  const { process, isStreaming, elapsedMs, reasoningElapsedMs } = input;
-  const elapsed = formatElapsedPart(isStreaming, elapsedMs);
-
-  if (isStreaming) {
-    const parts: string[] = [];
-    const last = process[process.length - 1];
-    if (lastToolsAreRunning(process)) {
-      parts.push('调用工具中');
-      const names = activeToolNames(process);
-      if (names.length > 0) parts.push(names.join('、'));
-    } else {
-      parts.push('思考中');
-      const tokens =
-        last?.type === 'reasoning'
-          ? estimateTextTokens(last.content)
-          : estimateProcessReasoningTokens(process);
-      const speed = formatTokenSpeed(
-        tokens,
-        speedElapsedMs(
-          last?.type === 'reasoning' ? reasoningElapsedMs : undefined,
-          elapsedMs,
-        ),
-      );
-      if (speed) parts.push(speed);
-    }
-    if (elapsed) parts.push(elapsed);
-    return parts.join(' · ');
-  }
+  const { process, isStreaming, elapsedMs } = input;
+  if (isStreaming) return '工作中';
 
   const parts: string[] = [];
+  const thinks = countProcessReasoning(process);
   const tools = countProcessTools(process);
-  if (tools > 0) parts.push(`${tools} 次工具调用`);
-  if (processHasReasoning(process)) parts.push('已思考');
+  if (thinks > 0) parts.push(`思考 ${thinks} 次`);
+  if (tools > 0) parts.push(`工具调用 ${tools} 次`);
+  const elapsed = formatElapsedPart(false, elapsedMs);
   if (elapsed) parts.push(`工作了 ${elapsed}`);
   if (parts.length === 0) return '执行过程';
   return parts.join(' · ');
+}
+
+/** Per-round 思考 fold: live speed + time, or frozen duration after that round ends. */
+export function thinkingFoldLabel(input: {
+  content: string;
+  isLive: boolean;
+  elapsedMs?: number;
+}): string {
+  const elapsed = formatElapsedPart(input.isLive, input.elapsedMs);
+  if (input.isLive) {
+    const parts = ['思考中'];
+    const speed = formatTokenSpeed(estimateTextTokens(input.content), input.elapsedMs ?? 0);
+    if (speed) parts.push(speed);
+    if (elapsed) parts.push(elapsed);
+    return parts.join(' · ');
+  }
+  return elapsed ? `思考 · ${elapsed}` : '思考';
 }

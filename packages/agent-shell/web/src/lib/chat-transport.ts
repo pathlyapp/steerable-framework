@@ -53,7 +53,7 @@ import {
 } from '@steerable/agent-ui/state';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { getElectronBridge } from './electron-bridge';
-import { appendDelta, syncTools, type TurnBlock } from '@/components/chat/turn-timeline';
+import { appendDelta, sealLastBlock, syncTools, type TurnBlock } from '@/components/chat/turn-timeline';
 import type { ExecutedAction } from '@/components/chat/ExecutedActionsCard';
 
 // ---------------------------------------------------------------------------
@@ -146,6 +146,13 @@ class LocalBackendSseAdapter {
       const actions = event.payload?.actions as ExecutedAction[] | undefined;
       if (!Array.isArray(actions)) return false;
       this.timeline = syncTools(this.timeline, actions);
+      return true;
+    }
+    if (event.event === 'round_end') {
+      if (event.payload?.status === 'cancelled') return false;
+      const next = sealLastBlock(this.timeline);
+      if (next === this.timeline) return false;
+      this.timeline = next;
       return true;
     }
     return false;

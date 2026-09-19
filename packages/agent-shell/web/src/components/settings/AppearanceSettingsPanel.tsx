@@ -20,7 +20,7 @@ export function AppearanceSettingsPanel() {
       <div>
         <p className="text-sm font-medium text-agent-foreground">显示思考内容</p>
         <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
-          {current?.hint} 状态行仍显示思考中、工具名、速度和用时。
+          {current?.hint} 工作行只显示「工作中」或结束后的思考次数、工具次数和用时；速度和思考时间在思考行上。
         </p>
       </div>
       <div

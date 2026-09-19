@@ -4,8 +4,8 @@
  */
 
 export type PersistedTurnBlock =
-  | { type: 'reasoning'; content: string }
-  | { type: 'text'; content: string }
+  | { type: 'reasoning'; content: string; sealed?: boolean }
+  | { type: 'text'; content: string; sealed?: boolean }
   | { type: 'tools'; actions: Array<Record<string, unknown>> };
 
 export function appendTimelineDelta(
@@ -15,11 +15,21 @@ export function appendTimelineDelta(
 ): void {
   if (!delta) return;
   const last = blocks[blocks.length - 1];
-  if (last && last.type === type) {
+  if (last && last.type === type && !last.sealed) {
     last.content += delta;
     return;
   }
   blocks.push({ type, content: delta });
+}
+
+/**
+ * Close the current reasoning/text segment so the next same-kind delta
+ * starts a new block. Mirrors apps/web `sealLastBlock`.
+ */
+export function sealLastTimelineBlock(blocks: PersistedTurnBlock[]): void {
+  const last = blocks[blocks.length - 1];
+  if (!last || last.type === 'tools' || last.sealed) return;
+  last.sealed = true;
 }
 
 export function syncTimelineTools(

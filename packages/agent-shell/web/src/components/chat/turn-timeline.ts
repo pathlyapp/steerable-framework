@@ -11,8 +11,8 @@
 import type { ExecutedAction } from './ExecutedActionsCard';
 
 export type TurnBlock =
-  | { type: 'reasoning'; content: string }
-  | { type: 'text'; content: string }
+  | { type: 'reasoning'; content: string; sealed?: boolean }
+  | { type: 'text'; content: string; sealed?: boolean }
   | { type: 'tools'; actions: ExecutedAction[] };
 
 export function appendDelta(
@@ -22,12 +22,27 @@ export function appendDelta(
 ): TurnBlock[] {
   if (!delta) return blocks;
   const last = blocks[blocks.length - 1];
-  if (last && last.type === type) {
+  if (last && last.type === type && !last.sealed) {
     const next = blocks.slice();
     next[next.length - 1] = { type, content: last.content + delta };
     return next;
   }
   return [...blocks, { type, content: delta }];
+}
+
+/**
+ * Close the current reasoning/text segment so the next same-kind delta
+ * starts a new block. Used at LLM-round boundaries (tool round finished,
+ * hook retry, auto-continue) — otherwise consecutive rounds concatenate
+ * into one wall of thought and hide the intermediate results between them.
+ */
+export function sealLastBlock(blocks: TurnBlock[]): TurnBlock[] {
+  if (blocks.length === 0) return blocks;
+  const last = blocks[blocks.length - 1];
+  if (last.type === 'tools' || last.sealed) return blocks;
+  const next = blocks.slice();
+  next[next.length - 1] = { ...last, sealed: true };
+  return next;
 }
 
 export function syncTools(
@@ -103,14 +118,21 @@ export function parseTurnBlocks(raw: unknown): TurnBlock[] | null {
 }
 
 /**
- * Trailing text is the final summary. Reasoning, tools, and any narration
- * that happened before that last answer stay in the foldable process group
- * (Codex / DeepSeek turn-process).
+ * Trailing text is the final conclusion — but only after the turn finishes.
+ * While streaming, every text block stays in the process as a post-think
+ * response so the next reasoning burst cannot restyle it as thinking.
  */
-export function splitTurnProcess(blocks: TurnBlock[]): {
+export function splitTurnProcess(
+  blocks: TurnBlock[],
+  options?: { finalize?: boolean },
+): {
   process: TurnBlock[];
   answer: Extract<TurnBlock, { type: 'text' }>[];
 } {
+  const finalize = options?.finalize ?? true;
+  if (!finalize) {
+    return { process: blocks, answer: [] };
+  }
   let split = blocks.length;
   while (split > 0 && blocks[split - 1].type === 'text') split -= 1;
   return {
@@ -123,6 +145,14 @@ export function countProcessTools(process: TurnBlock[]): number {
   let n = 0;
   for (const block of process) {
     if (block.type === 'tools') n += block.actions.length;
+  }
+  return n;
+}
+
+export function countProcessReasoning(process: TurnBlock[]): number {
+  let n = 0;
+  for (const block of process) {
+    if (block.type === 'reasoning' && block.content.trim().length > 0) n += 1;
   }
   return n;
 }

@@ -492,7 +492,7 @@ export interface SidecarStreamChunk {
     /** W4-2: `data._sandbox` marker lifted out of the result for the card. */
     sandbox?: { backend?: string; enforcement: string };
   };
-  /** CoreLoop notices: soft_timeout / budget_exhausted. */
+  /** CoreLoop notices: soft_timeout / budget_exhausted / round_end / hook_action. */
   notice?: { kind: string; [key: string]: unknown };
   finishReason?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };

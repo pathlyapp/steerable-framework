@@ -42,6 +42,8 @@ interface ExecutedActionsCardProps {
   actions: ExecutedAction[];
   /** Drop the outer card chrome when nested in a turn-process group. */
   compact?: boolean;
+  /** Show args/output instead of a one-line summary. Defaults to collapsed. */
+  defaultExpanded?: boolean;
 }
 
 function deriveStatus(action: ExecutedAction): ToolExecutionPayload['status'] {
@@ -145,7 +147,11 @@ function renderActionOutput(output: unknown): ReactNode {
 }
 
 /** Inline tool rows for a mixed think→act timeline (no summary banner). */
-export function ToolsFlow({ actions, compact = false }: ExecutedActionsCardProps) {
+export function ToolsFlow({
+  actions,
+  compact = false,
+  defaultExpanded = false,
+}: ExecutedActionsCardProps) {
   if (!actions || actions.length === 0) return null;
   const expanded = expandRunCodeActions(actions);
   return (
@@ -161,6 +167,7 @@ export function ToolsFlow({ actions, compact = false }: ExecutedActionsCardProps
           <ToolExecutionCard
             key={action.id ?? `${action.tool}-${i}`}
             payload={actionToTool(action, i)}
+            defaultExpanded={defaultExpanded}
             renderOutput={renderActionOutput}
             className="rounded-none border-0 border-t border-agent-border first:border-t-0"
           />

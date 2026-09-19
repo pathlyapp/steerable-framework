@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   SHOW_THINKING_CONTENT_STORAGE_KEY,
@@ -12,8 +12,16 @@ vi.mock('./Markdown', () => ({
 }));
 
 vi.mock('./ExecutedActionsCard', () => ({
-  ToolsFlow: ({ actions }: { actions: Array<{ tool: string }> }) => (
-    <div data-testid="tools-flow">{actions.map((action) => action.tool).join(',')}</div>
+  ToolsFlow: ({
+    actions,
+    defaultExpanded,
+  }: {
+    actions: Array<{ tool: string }>;
+    defaultExpanded?: boolean;
+  }) => (
+    <div data-testid="tools-flow" data-expanded={defaultExpanded ? 'true' : 'false'}>
+      {actions.map((action) => action.tool).join(',')}
+    </div>
   ),
 }));
 
@@ -37,6 +45,10 @@ const blocks: TurnBlock[] = [
   tool('web_fetch'),
   { type: 'text', content: '本地 CSV 配置' },
 ];
+
+function processToggle() {
+  return screen.getByTestId('turn-process-toggle');
+}
 
 function renderGroup(overrides: {
   blocks?: TurnBlock[];
@@ -66,9 +78,9 @@ describe('TurnProcessGroup', () => {
   it('collapses think+tool process after a finished summary, leaving the answer visible', () => {
     renderGroup({ isStreaming: false });
 
-    const toggle = screen.getByRole('button');
+    const toggle = processToggle();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.textContent).toContain('2 次工具调用 · 已思考');
+    expect(toggle.textContent).toContain('思考 2 次 · 工具调用 2 次');
     expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
@@ -81,9 +93,13 @@ describe('TurnProcessGroup', () => {
       showThinkingContent: false,
     });
 
-    expect(screen.getByRole('button').textContent).toContain('思考中');
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByTestId('tools-flow')).toBeNull();
+    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('thinking-peek')).toBeTruthy();
+    expect(screen.getAllByTestId('tools-flow').map((el) => el.textContent)).toEqual([
+      'csv_get_config',
+      'web_fetch',
+    ]);
     expect(screen.queryByTestId('answer')).toBeNull();
 
     view.rerender(
@@ -98,8 +114,8 @@ describe('TurnProcessGroup', () => {
       />,
     );
 
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-    expect(screen.getByRole('button').textContent).toContain('2 次工具调用 · 已思考');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
+    expect(processToggle().textContent).toContain('思考 2 次 · 工具调用 2 次');
     expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
@@ -112,15 +128,13 @@ describe('TurnProcessGroup', () => {
       thinkingDisplay: 'hidden',
     });
 
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.queryByText('再查天气')).toBeNull();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
   });
 
-  it('shows tok/s on the 思考中 line when thinking body is hidden', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-09-08T12:00:12.000Z'));
+  it('keeps the work line as 工作中 when thinking is hidden', () => {
     renderGroup({
       isStreaming: true,
       thinkingDisplay: 'hidden',
@@ -128,11 +142,26 @@ describe('TurnProcessGroup', () => {
       blocks: [{ type: 'reasoning', content: '先读配置先读配置先读配置先读配置' }],
     });
 
-    const label = screen.getByRole('button').textContent ?? '';
-    expect(label).toContain('思考中');
-    expect(label).toMatch(/\d+(\.\d+)? tok\/s/);
+    expect(processToggle().textContent).toBe('工作中');
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.queryByText('先读配置先读配置先读配置先读配置')).toBeNull();
+  });
+
+  it('shows tok/s on the 思考 fold while that round is live', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-08T12:00:00.000Z'));
+    renderGroup({
+      isStreaming: true,
+      thinkingDisplay: 'full',
+      blocks: [{ type: 'reasoning', content: '先读配置先读配置先读配置先读配置' }],
+    });
+    expect(processToggle().textContent).toBe('工作中');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    const fold = screen.getByTestId('turn-thinking').querySelector('button');
+    expect(fold?.textContent).toContain('思考中');
+    expect(fold?.textContent).toMatch(/\d+(\.\d+)? tok\/s/);
   });
 
   it('shows a fixed 5-line thinking peek while streaming, then folds it', () => {
@@ -146,7 +175,7 @@ describe('TurnProcessGroup', () => {
     expect(peek.getAttribute('data-peek-lines')).toBe('5');
     expect(peek.style.height).toBe(THINKING_PEEK_HEIGHT);
     expect(screen.getByText('再查天气')).toBeTruthy();
-    expect(screen.queryByTestId('tools-flow')).toBeNull();
+    expect(screen.getAllByTestId('tools-flow').length).toBeGreaterThan(0);
 
     view.rerender(
       <TurnProcessGroup
@@ -176,14 +205,14 @@ describe('TurnProcessGroup', () => {
     );
   });
 
-  it('expands while streaming when 完整显示 is on, then auto-collapses', () => {
+  it('keeps the process open after the summary when 完整显示 is on', () => {
     const view = renderGroup({
       isStreaming: true,
       blocks: blocks.slice(0, 4),
       thinkingDisplay: 'full',
     });
 
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('先读配置')).toBeTruthy();
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
 
@@ -199,8 +228,14 @@ describe('TurnProcessGroup', () => {
       />,
     );
 
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByText('先读配置')).toBeNull();
+    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('先读配置')).toBeTruthy();
+    expect(screen.getByText('再查天气')).toBeTruthy();
+    expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
+    expect(screen.queryByText('工具', { exact: true })).toBeNull();
+    expect(
+      screen.getAllByTestId('tools-flow').every((el) => el.getAttribute('data-expanded') === 'false'),
+    ).toBe(true);
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
   });
 
@@ -209,18 +244,82 @@ describe('TurnProcessGroup', () => {
       isStreaming: true,
       blocks: blocks.slice(0, 1),
     });
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
     persistThinkingDisplay('full');
     await waitFor(() =>
-      expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true'),
+      expect(processToggle().getAttribute('aria-expanded')).toBe('true'),
     );
     expect(screen.getByText('先读配置')).toBeTruthy();
   });
 
+  it('keeps a mid-turn response as 回应 when the next think starts', () => {
+    renderGroup({
+      isStreaming: true,
+      thinkingDisplay: 'full',
+      blocks: [
+        { type: 'reasoning', content: '先想一下' },
+        { type: 'text', content: '我先搜工具' },
+        { type: 'reasoning', content: '再写脚本' },
+      ],
+    });
+
+    const thinking = screen.getAllByTestId('turn-thinking');
+    expect(thinking).toHaveLength(2);
+    expect(thinking[0].textContent).toContain('思考');
+    expect(thinking[0].textContent).toContain('先想一下');
+    expect(thinking[1].textContent).toContain('再写脚本');
+    const response = screen.getByTestId('turn-response');
+    expect(response.textContent).not.toContain('回应');
+    expect(response.textContent).toContain('我先搜工具');
+    expect(screen.queryByTestId('answer')).toBeNull();
+  });
+
+  it('lets each 思考 block collapse without hiding 回应', () => {
+    renderGroup({
+      isStreaming: true,
+      thinkingDisplay: 'full',
+      blocks: [
+        { type: 'reasoning', content: '先想一下' },
+        { type: 'text', content: '我先搜工具' },
+        { type: 'reasoning', content: '再写脚本' },
+      ],
+    });
+
+    const folds = screen.getAllByTestId('turn-thinking');
+    const firstToggle = folds[0].querySelector('button');
+    expect(firstToggle?.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(firstToggle!);
+    expect(firstToggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(folds[0].textContent).not.toContain('先想一下');
+    expect(screen.getByTestId('turn-response').textContent).toContain('我先搜工具');
+    expect(folds[1].textContent).toContain('再写脚本');
+  });
+
+  it('promotes only the last text to 结论 after the stream ends', () => {
+    renderGroup({
+      isStreaming: false,
+      thinkingDisplay: 'full',
+      blocks: [
+        { type: 'reasoning', content: '先想一下' },
+        { type: 'text', content: '我先搜工具' },
+        { type: 'reasoning', content: '再写脚本' },
+        { type: 'text', content: 'PPT 已生成' },
+      ],
+    });
+
+    expect(screen.getByTestId('turn-response').textContent).toContain('我先搜工具');
+    expect(screen.getByTestId('answer').textContent).toBe('PPT 已生成');
+    expect(screen.queryByText('PPT 已生成')?.closest('[data-testid="turn-response"]')).toBeNull();
+  });
+
   it('expands the process again when the disclosure is clicked', () => {
     renderGroup({ isStreaming: false });
-    fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(processToggle());
+    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
+    const folds = screen.getAllByTestId('turn-thinking');
+    expect(folds).toHaveLength(2);
+    expect(screen.queryByText('再查天气')).toBeNull();
+    fireEvent.click(folds[1].querySelector('button')!);
     expect(screen.getByText('再查天气')).toBeTruthy();
     expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
   });
@@ -231,9 +330,9 @@ describe('TurnProcessGroup', () => {
       blocks: [tool('csv_get_config')],
       showThinkingContent: false,
     });
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByTestId('tools-flow')).toBeNull();
-    expect(screen.getByRole('button').textContent).toContain('1 次工具调用');
+    expect(processToggle().textContent).toContain('工具调用 1 次');
   });
 
   it('does not fold a tools-only turn when the setting is on', () => {
@@ -242,45 +341,49 @@ describe('TurnProcessGroup', () => {
       blocks: [tool('csv_get_config')],
       showThinkingContent: true,
     });
-    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true');
+    expect(processToggle().getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByTestId('tools-flow').textContent).toBe('csv_get_config');
   });
 
-  it('names a running tool on the status line', () => {
+  it('keeps the work line as 工作中 while a tool is running', () => {
     renderGroup({
       isStreaming: true,
       blocks: [{ type: 'reasoning', content: '先读配置' }, tool('local_run_snippet', true)],
       showThinkingContent: false,
     });
-    expect(screen.getByRole('button').textContent).toContain('调用工具中 · local_run_snippet');
+    expect(processToggle().textContent).toBe('工作中');
     expect(screen.getByTestId('thinking-peek')).toBeTruthy();
-    expect(screen.queryByTestId('tools-flow')).toBeNull();
+    expect(screen.getByTestId('tools-flow').textContent).toBe('local_run_snippet');
   });
 
-  it('shows elapsed while streaming', () => {
+  it('puts live thinking time on the 思考 fold, not the work line', () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-09-08T12:00:12.000Z'));
+    vi.setSystemTime(new Date('2026-09-08T12:00:00.000Z'));
     renderGroup({
       isStreaming: true,
       blocks: blocks.slice(0, 1),
       startedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
-      showThinkingContent: false,
+      thinkingDisplay: 'full',
     });
-    expect(screen.getByRole('button').textContent).toContain('思考中');
-    expect(screen.getByRole('button').textContent).toContain('12s');
+    expect(processToggle().textContent).toBe('工作中');
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(processToggle().textContent).toBe('工作中');
+    expect(screen.getByTestId('turn-thinking').querySelector('button')?.textContent).toContain('12s');
   });
 
   it('appends worked duration after the turn finishes', () => {
     renderGroup({ isStreaming: false, durationMs: 83_000 });
-    expect(screen.getByRole('button').textContent).toContain(
-      '2 次工具调用 · 已思考 · 工作了 1m 23s',
+    expect(processToggle().textContent).toContain(
+      '思考 2 次 · 工具调用 2 次 · 工作了 1m 23s',
     );
   });
 
   it('omits worked duration for sub-second finished turns', () => {
     renderGroup({ isStreaming: false, durationMs: 400 });
-    const label = screen.getByRole('button').textContent ?? '';
-    expect(label).toContain('2 次工具调用 · 已思考');
+    const label = processToggle().textContent ?? '';
+    expect(label).toContain('思考 2 次 · 工具调用 2 次');
     expect(label).not.toContain('工作了');
   });
 
@@ -305,8 +408,8 @@ describe('TurnProcessGroup', () => {
         renderAnswer={(block) => <div data-testid="answer">{block.content}</div>}
       />,
     );
-    expect(screen.getByRole('button').textContent).toContain(
-      '2 次工具调用 · 已思考 · 工作了 12s',
+    expect(processToggle().textContent).toContain(
+      '思考 2 次 · 工具调用 2 次 · 工作了 12s',
     );
   });
 });

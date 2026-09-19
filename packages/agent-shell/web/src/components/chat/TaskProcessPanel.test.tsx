@@ -65,7 +65,7 @@ describe('TaskProcessPanel', () => {
       />,
     );
     await waitFor(() => screen.getByText('问好完成。'));
-    expect(screen.getByText(/1 次工具调用/)).toBeTruthy();
+    expect(screen.getByText(/工具调用 1 次/)).toBeTruthy();
     expect(screen.getByText(/已结束/)).toBeTruthy();
   });
 

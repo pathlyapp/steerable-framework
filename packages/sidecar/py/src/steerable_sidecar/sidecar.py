@@ -2359,6 +2359,21 @@ class Sidecar:
                     **({"traceId": trace_id} if trace_id else {}),
                 },
             )
+        elif kind == "completion" and data.get("status") == "executing":
+            # Per-round bookkeeping (think → act → observe). Hosts seal the
+            # live thinking segment here so the next LLM burst starts a new
+            # block instead of concatenating every round into one wall.
+            await transport.emit_notification(
+                "stream.chunk",
+                {
+                    "streamId": stream_id,
+                    "notice": {
+                        "kind": "round_end",
+                        "status": "executing",
+                        "round": data.get("round"),
+                    },
+                },
+            )
         elif kind == "completion" and data.get("status") != "executing":
             # W6-9: forward the run's accumulated billable usage, plus a cost
             # estimate when the model is priced (None → key omitted, never a

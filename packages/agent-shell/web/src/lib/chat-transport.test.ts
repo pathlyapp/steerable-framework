@@ -111,6 +111,21 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
     expect(ofType(events, 'done')).toHaveLength(1);
   });
 
+  it('round_end 封住当前思考段，后续 reasoning 另起一块', () => {
+    const { events, onEvent } = collectEvents();
+    const adapter = new LocalBackendSseAdapter(onEvent);
+    adapter.feed('data: {"type":"reasoning","content":"第一轮"}\n\n');
+    adapter.feed('data: {"type":"completion","status":"executing"}\n\n');
+    adapter.feed('data: {"type":"reasoning","content":"第二轮"}\n\n');
+    const timelines = events.filter(
+      (e) => e.type === 'agent' && (e as { event?: string }).event === 'turn_timeline',
+    );
+    const last = timelines[timelines.length - 1] as unknown as {
+      payload: { blocks: Array<{ type: string; content: string }> };
+    };
+    expect(last.payload.blocks.map((b) => b.content)).toEqual(['第一轮', '第二轮']);
+  });
+
   it('executed_actions 帧透出并同步进时间线', () => {
     const { events, onEvent } = collectEvents();
     const adapter = new LocalBackendSseAdapter(onEvent);
