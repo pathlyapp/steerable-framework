@@ -274,8 +274,11 @@ def test_rust_coreloop_requires_and_installs_a_native_wheel() -> None:
     assert '"STEERABLE_RUST_CORELOOP"' in tuning
     assert 'os.environ.get("STEERABLE_RUST_CORELOOP") != "1"' in text
     assert "STEERABLE_NATIVE_WHEEL" in text
+    assert "STEERABLE_NATIVE_WHEEL_MUSL" in text
     assert "pip install --no-deps" in text
-    assert 'wheel_remote = f"/tmp/{wheel.name}"' in text
+    assert "ldd --version" in text
+    assert "/etc/alpine-release" in text
+    assert "musllinux_remote" in text
     assert "import steerable_agent_runtime_native as n; assert n.run_turn" in text
     assert text.index("await self._install_native_coreloop(environment)") < text.index(
         "await self._save_venv"

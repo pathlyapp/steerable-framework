@@ -47,22 +47,31 @@ python -m evals.run --agent codex --split cheap-12 --tasks fix-git
 
 `--split cheap-12` is the live weekly gate (12 ids). `--split failed-prev` reruns remaining catalog-89 zeros (31 ids, 24 shards) for harness iteration. `--split catalog` is all 89; GitHub Actions runs it via `Evals weekly` `workflow_dispatch` with split `catalog` (49 shards). `--split flaky` is the 27 coin-toss tasks for paired A/B (six-run rebuild). `--split loss-34` is those 27 plus the 7 stable reds — use it for Claude Code GLM reruns, not for GHA sharding.
 
-The Steerable Harbor jobs build a Linux `cp310-abi3` native wheel and set
-`STEERABLE_RUST_CORELOOP=1`. Local Linux runs must do the same explicitly:
+The Steerable Harbor jobs build both manylinux and musllinux `cp310-abi3`
+native wheels, select by trial libc, and set `STEERABLE_RUST_CORELOOP=1`.
+Local Harbor runs must provide both wheels explicitly:
 
 ```bash
-uvx maturin build --release --features python,extension-module \
+uvx maturin build --release --manylinux 2_17 \
+  --features python,extension-module \
+  --manifest-path packages/agent-runtime/rs/Cargo.toml
+uvx maturin build --release --target x86_64-unknown-linux-musl \
+  --manylinux musllinux_1_2 --features python,extension-module \
   --manifest-path packages/agent-runtime/rs/Cargo.toml
 export STEERABLE_NATIVE_WHEEL="$(
-  python -c 'from pathlib import Path; print(next(Path("packages/agent-runtime/rs/target/wheels").glob("*-cp310-abi3-linux_x86_64.whl")).resolve())'
+  python -c 'from pathlib import Path; print(next(Path("packages/agent-runtime/rs/target/wheels").glob("*manylinux*.whl")).resolve())'
+)"
+export STEERABLE_NATIVE_WHEEL_MUSL="$(
+  python -c 'from pathlib import Path; print(next(Path("packages/agent-runtime/rs/target/wheels").glob("*musllinux*.whl")).resolve())'
 )"
 export STEERABLE_RUST_CORELOOP=1
 python -m evals.run --agent steerable --split cheap-12
 ```
 
-The wheel must match the Harbor container platform; a macOS wheel cannot be
-installed into its Linux trial. The adapter fails before the paid model run if
-Rust is enabled without a valid wheel.
+The wheel must match the Harbor container platform; catalog includes Alpine
+QEMU tasks that require `STEERABLE_NATIVE_WHEEL_MUSL`. A macOS wheel cannot be
+installed into a Linux trial. The adapter fails before the paid model run if
+Rust is enabled without both catalog wheels.
 
 ## Claude Code on GLM (same-model comparison)
 
