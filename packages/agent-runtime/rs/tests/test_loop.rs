@@ -123,6 +123,33 @@ async fn test_tool_round_then_completion() {
 }
 
 #[tokio::test]
+async fn test_tool_result_preview_truncates_unicode_on_a_character_boundary() {
+    let output = "━".repeat(400);
+    let mut router = ToolRouter::new();
+    router.register("unicode", move |_| {
+        let output = output.clone();
+        async move { Ok(ToolResult::ok(json!({ "output": output }))) }
+    });
+    let mut agent = CoreLoop::new(
+        provider(vec![
+            tool_turn(vec![tc("unicode", json!({}))]),
+            text_turn("done"),
+        ]),
+        RouterToolExecutor::new(router),
+    );
+
+    let events = agent.run(vec![LLMMessage::text("user", "run")]).await;
+
+    let preview = events
+        .iter()
+        .find(|event| event.kind == "tool_call_result")
+        .and_then(|event| event.data["resultPreview"].as_str())
+        .unwrap();
+    assert_eq!(preview.chars().count(), 301);
+    assert!(preview.ends_with('…'));
+}
+
+#[tokio::test]
 async fn test_tool_result_image_reaches_the_next_request() {
     let mut router = ToolRouter::new();
     router.register("peek", |_| async {

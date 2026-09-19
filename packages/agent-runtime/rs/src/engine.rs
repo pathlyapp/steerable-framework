@@ -977,10 +977,9 @@ impl<P: LLMProvider, E: ToolExecutor, H: LoopHooks> CoreLoop<P, E, H> {
 
                 let preview = {
                     let body = result.result_content();
-                    if body.len() > 300 {
-                        format!("{}…", &body[..300])
-                    } else {
-                        body
+                    match body.char_indices().nth(300) {
+                        Some((end, _)) => format!("{}…", &body[..end]),
+                        None => body,
                     }
                 };
                 let mut data = json!({
