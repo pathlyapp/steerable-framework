@@ -5,7 +5,8 @@
  * 下一步（编号列表、脚本调用、推荐后续），条数跟真实下一步走，不凑 3 条。
  * 没有可执行下一步时，才用启发式兜底（PPT / 计划 / 代码 / 通用）。永不抛错。
  *
- * 调用方应该 fire-and-forget：先把兜底推上 UI，LLM 成功后再替换。
+ * 调用方应该 fire-and-forget，且只广播一次最终结果。
+ * 回复/技能里已经列出下一步时不要再调 LLM 改写，否则芯片会先出一版再换一版。
  * 不要挂在 SSE 主流程里阻塞 `[DONE]`。
  */
 
@@ -274,6 +275,17 @@ function collectNextSteps(
     ...extractListedNextSteps(assistantText),
     ...extractFromSkillContents(skillContents, `${userText}\n${assistantText}`),
   ]);
+}
+
+/**
+ * 技能或助手回复里已经写明的下一步。有内容时调用方应直接采用，不必再跑 LLM。
+ */
+export function listedSuggestedReplies(
+  userText: string,
+  assistantText: string,
+  opts: { skillContents?: string[] } = {},
+): string[] {
+  return collectNextSteps(userText, assistantText, opts.skillContents);
 }
 
 /**

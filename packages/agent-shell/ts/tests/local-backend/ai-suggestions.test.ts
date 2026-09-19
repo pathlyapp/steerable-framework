@@ -20,6 +20,7 @@ import {
   extractSkillNextSteps,
   fallbackSuggestedReplies,
   generateSuggestedReplies,
+  listedSuggestedReplies,
   parseSuggestedReplies,
   stripSkillInvocation,
 } from '../../src/local-backend/ai-suggestions.js';
@@ -152,6 +153,15 @@ describe('extractSkillNextSteps / extractListedNextSteps', () => {
     expect(
       extractSkillNextSteps('完成后可以继续：\n1. 导出分层表\n2. 绘制等值线'),
     ).toEqual(['导出分层表', '绘制等值线']);
+  });
+});
+
+describe('listedSuggestedReplies', () => {
+  it('只返回回复/技能里已列出的下一步，没有则空', () => {
+    expect(listedSuggestedReplies('继续分析这口井', WELL_ASSISTANT)).toEqual(
+      extractListedNextSteps(WELL_ASSISTANT),
+    );
+    expect(listedSuggestedReplies('制作自我介绍ppt', 'PPT 已生成 /tmp/自我介绍_PPT.pptx')).toEqual([]);
   });
 });
 

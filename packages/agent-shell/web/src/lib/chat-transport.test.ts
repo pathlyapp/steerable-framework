@@ -133,14 +133,14 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
     adapter.feed('data: {"content":"问好完成。"}\n\n');
     const speeds = events.filter(
       (e) => e.type === 'agent' && (e as { event?: string }).event === 'llm_speed',
-    ) as Array<{ payload: { tokens: number; live: boolean } }>;
+    ) as unknown as Array<{ payload: { tokens: number; live: boolean } }>;
     expect(speeds.length).toBeGreaterThanOrEqual(2);
     expect(speeds[speeds.length - 1].payload.tokens).toBe(13);
     expect(speeds[speeds.length - 1].payload.live).toBe(true);
     adapter.feed('data: {"type":"completion","status":"executing"}\n\n');
     const afterRound = events.filter(
       (e) => e.type === 'agent' && (e as { event?: string }).event === 'llm_speed',
-    ) as Array<{ payload: { live: boolean } }>;
+    ) as unknown as Array<{ payload: { live: boolean } }>;
     expect(afterRound[afterRound.length - 1].payload.live).toBe(false);
   });
 

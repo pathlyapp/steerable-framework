@@ -987,7 +987,35 @@ describe('后台标题生成', () => {
 // ---------------------------------------------------------------------------
 
 describe('后台追问建议', () => {
-  it('完成回合先广播启发式兜底，LLM 成功后再替换', async () => {
+  it('回复已列出下一步时直接广播，不再调 LLM', async () => {
+    const listed = [
+      '直接打开文件预览',
+      '把配色改成浅蓝加橙色',
+      '在第二页加上我的工作年限',
+    ];
+    h.listedSuggestedReplies.mockReturnValue(listed);
+    const chat = await seedChat();
+    installStream((opts) => opts.onText('PPT 已生成。\n下一步：\n1. 打开预览'));
+    const { broadcast, calls } = makeBroadcast();
+    await makeRouter({ broadcast }).handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '制作自我介绍ppt' } },
+      makeEmitCapture().emit,
+    );
+    const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
+    await vi.waitFor(() =>
+      expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1),
+    );
+    expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
+    expect(calls).toContainEqual({
+      event: 'suggested-replies',
+      payload: { chatId: chat.id, messageId: assistant.id, suggestions: listed },
+    });
+    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
+      suggestedReplies: listed,
+    });
+  });
+
+  it('没有列出的下一步时等 LLM，只广播一次最终建议', async () => {
     const chat = await seedChat();
     installStream((opts) => opts.onText('PPT 已生成'));
     let finishLlm: (value: {
@@ -1007,38 +1035,37 @@ describe('后台追问建议', () => {
     );
 
     const assistant = (await h.store.listMessages(chat.id, 10)).find((m) => m.role === 'assistant')!;
-    expect(h.fallbackSuggestedReplies).toHaveBeenCalledWith('制作自我介绍ppt', 'PPT 已生成');
     await vi.waitFor(() => expect(h.generateSuggestedReplies).toHaveBeenCalled());
+    expect(h.listedSuggestedReplies).toHaveBeenCalledWith(
+      '制作自我介绍ppt',
+      'PPT 已生成',
+      expect.objectContaining({ skillContents: [] }),
+    );
     expect(h.generateSuggestedReplies).toHaveBeenCalledWith(
       '制作自我介绍ppt',
       'PPT 已生成',
       expect.objectContaining({ skillContents: [] }),
     );
-    expect(calls).toContainEqual({
-      event: 'suggested-replies',
-      payload: {
-        chatId: chat.id,
-        messageId: assistant.id,
-        suggestions: ['兜底-1', '兜底-2', '兜底-3'],
-      },
-    });
-    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
-      suggestedReplies: ['兜底-1', '兜底-2', '兜底-3'],
-    });
+    expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(0);
+    const pendingMeta = assistant.messageMetadata
+      ? (JSON.parse(assistant.messageMetadata) as { suggestedReplies?: unknown })
+      : {};
+    expect(pendingMeta.suggestedReplies).toBeUndefined();
 
     finishLlm({
       suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
       usedFallback: false,
     });
     await vi.waitFor(() => {
-      expect(calls).toContainEqual({
-        event: 'suggested-replies',
-        payload: {
-          chatId: chat.id,
-          messageId: assistant.id,
-          suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
-        },
-      });
+      expect(calls.filter((c) => c.event === 'suggested-replies')).toHaveLength(1);
+    });
+    expect(calls).toContainEqual({
+      event: 'suggested-replies',
+      payload: {
+        chatId: chat.id,
+        messageId: assistant.id,
+        suggestions: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
+      },
     });
     expect(JSON.parse((await h.store.getMessage(chat.id, assistant.id))!.messageMetadata!)).toMatchObject({
       suggestedReplies: ['llm-追问-1', 'llm-追问-2', 'llm-追问-3'],
@@ -1071,7 +1098,7 @@ describe('后台追问建议', () => {
     );
   });
 
-  it('LLM 走兜底时不发第二次广播', async () => {
+  it('LLM 走兜底时只广播一次启发式', async () => {
     h.generateSuggestedReplies.mockResolvedValue({
       suggestions: ['兜底-1', '兜底-2', '兜底-3'],
       usedFallback: true,
@@ -1098,8 +1125,12 @@ describe('后台追问建议', () => {
       makeEmitCapture().emit,
     );
     expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
 
     h.fallbackSuggestedReplies.mockClear();
+    h.listedSuggestedReplies.mockClear();
+    h.generateSuggestedReplies.mockClear();
     const failed = await seedChat();
     installStream(() => {}, { status: 'failed', reason: 'HTTP 401' });
     await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
@@ -1107,8 +1138,12 @@ describe('后台追问建议', () => {
       makeEmitCapture().emit,
     );
     expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
 
     h.fallbackSuggestedReplies.mockClear();
+    h.listedSuggestedReplies.mockClear();
+    h.generateSuggestedReplies.mockClear();
     const empty = await seedChat();
     installStream(() => {});
     await makeRouter({ broadcast: makeBroadcast().broadcast }).handleStream(
@@ -1116,6 +1151,8 @@ describe('后台追问建议', () => {
       makeEmitCapture().emit,
     );
     expect(h.fallbackSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.listedSuggestedReplies).not.toHaveBeenCalled();
+    expect(h.generateSuggestedReplies).not.toHaveBeenCalled();
   });
 });
 

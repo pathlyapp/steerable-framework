@@ -64,6 +64,7 @@ import { generateChatTitle } from './ai-title.js';
 import {
   fallbackSuggestedReplies,
   generateSuggestedReplies,
+  listedSuggestedReplies,
 } from './ai-suggestions.js';
 import { detectDeferredExecution } from './deferred-detector.js';
 import {
@@ -3595,8 +3596,9 @@ export class LocalBackendRouter {
   }
 
   /**
-   * 回合结束后生成下一轮用户输入建议。先同步推启发式兜底（芯片立刻出现），
-   * 再读用户/工作区技能正文，fire-and-forget 跑 LLM，成功则替换。
+   * 回合结束后生成下一轮用户输入建议。只广播一次最终结果：
+   * 回复/技能里已有下一步就直接用，不再额外跑 LLM 改写；
+   * 否则等这一次 LLM（失败再用启发式）。
    * 走 broadcast 而不是 SSE：`[DONE]` 之后渲染端已经不再监听这条流。
    */
   private runSuggestedRepliesInBackground(args: {
@@ -3610,32 +3612,28 @@ export class LocalBackendRouter {
     if (completionStatus === 'cancelled' || completionStatus === 'failed') return;
     if (!assistantText.trim()) return;
 
-    const fallback = fallbackSuggestedReplies(userText, assistantText);
-    this.publishSuggestedReplies(chatId, messageId, fallback);
-
     void (async () => {
       try {
         const skillContents = await this.loadUserSkillSuggestionTexts();
-        const enriched = fallbackSuggestedReplies(userText, assistantText, { skillContents });
-        if (
-          enriched.length !== fallback.length ||
-          enriched.some((item, i) => item !== fallback[i])
-        ) {
-          this.publishSuggestedReplies(chatId, messageId, enriched);
+        const listed = listedSuggestedReplies(userText, assistantText, { skillContents });
+        if (listed.length > 0) {
+          this.publishSuggestedReplies(chatId, messageId, listed);
+          return;
         }
+        const fallback = fallbackSuggestedReplies(userText, assistantText, { skillContents });
         const result = await generateSuggestedReplies(userText, assistantText, {
           perAttemptTimeoutMs: 60_000,
           skillContents,
         });
-        if (result.usedFallback) return;
-        const baseline = enriched.length > 0 ? enriched : fallback;
-        const same =
-          result.suggestions.length === baseline.length &&
-          result.suggestions.every((item, i) => item === baseline[i]);
-        if (same) return;
-        this.publishSuggestedReplies(chatId, messageId, result.suggestions);
+        this.publishSuggestedReplies(
+          chatId,
+          messageId,
+          result.usedFallback ? fallback : result.suggestions,
+        );
       } catch (err) {
         console.warn('[local-backend] suggested-replies failed', { chatId, err });
+        const fallback = fallbackSuggestedReplies(userText, assistantText);
+        this.publishSuggestedReplies(chatId, messageId, fallback);
       }
     })();
   }

@@ -498,6 +498,7 @@ const harness = vi.hoisted(() => {
       usedFallback: false,
     })),
     fallbackSuggestedReplies: vi.fn(() => ['兜底-1', '兜底-2', '兜底-3']),
+    listedSuggestedReplies: vi.fn(() => [] as string[]),
     diagnoseLlmConnection: vi.fn(async () => ({ ok: true, steps: [] })),
     parseImageAttachments: vi.fn((value: unknown) => (Array.isArray(value) ? value : [])),
     processImageAttachments: vi.fn(() => ({ images: [], notes: [] as string[] })),
@@ -595,6 +596,7 @@ vi.mock('../../src/local-backend/ai-title.js', () => ({
 vi.mock('../../src/local-backend/ai-suggestions.js', () => ({
   generateSuggestedReplies: h.generateSuggestedReplies,
   fallbackSuggestedReplies: h.fallbackSuggestedReplies,
+  listedSuggestedReplies: h.listedSuggestedReplies,
 }));
 
 vi.mock('../../src/local-backend/llm-diagnose.js', () => ({
@@ -686,6 +688,8 @@ export function resetRouterTestkit(): void {
   });
   h.fallbackSuggestedReplies.mockReset();
   h.fallbackSuggestedReplies.mockReturnValue(['兜底-1', '兜底-2', '兜底-3']);
+  h.listedSuggestedReplies.mockReset();
+  h.listedSuggestedReplies.mockReturnValue([]);
   h.diagnoseLlmConnection.mockReset();
   h.diagnoseLlmConnection.mockResolvedValue({ ok: true, steps: [] });
   h.parseImageAttachments.mockReset();
