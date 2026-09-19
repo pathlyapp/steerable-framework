@@ -54,9 +54,9 @@ PY_PACKAGES: list[tuple[str, str]] = [
 def _read_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
     for name, rel in TS_PACKAGES:
-        versions[name] = json.loads((ROOT / rel).read_text())["version"]
+        versions[name] = json.loads((ROOT / rel).read_text(encoding="utf-8"))["version"]
     for name, rel in PY_PACKAGES:
-        versions[name] = tomllib.loads((ROOT / rel).read_text())["project"]["version"]
+        versions[name] = tomllib.loads((ROOT / rel).read_text(encoding="utf-8"))["project"]["version"]
     return versions
 
 

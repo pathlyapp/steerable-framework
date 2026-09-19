@@ -64,12 +64,12 @@ print(f"\nBumping all lockstep packages to {version}:\n")
 
 for d in ts_pkgs:
     p = Path(d) / "package.json"
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     old = data["version"]
     data["version"] = version
     # `json.dumps` with indent=2 + trailing newline matches what pnpm /
     # most npm tooling writes, so commits don't churn whitespace.
-    p.write_text(json.dumps(data, indent=2) + "\n")
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print(f"  {data['name']:<32}  {old:<10} -> {version}")
 
 # pyproject.toml: surgical regex on the `version = "..."` line under
@@ -83,13 +83,13 @@ project_name_re = re.compile(r'\[project\][\s\S]*?\nname\s*=\s*"([^"]+)"', re.MU
 
 for d in py_pkgs:
     p = Path(d) / "pyproject.toml"
-    text = p.read_text()
+    text = p.read_text(encoding="utf-8")
     m = project_version_re.search(text)
     if not m:
         raise SystemExit(f"ERROR: could not locate '[project] / version = ...' in {p}")
     old = m.group(2)
     text = text[:m.start(2)] + version + text[m.end(2):]
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     name = project_name_re.search(text).group(1)
     print(f"  {name:<32}  {old:<10} -> {version}")
 
@@ -99,10 +99,10 @@ for d in py_pkgs:
 # pre-v0.2.1) and gets a half-bump that the lockstep gate catches but
 # only after a CI round-trip.
 root = Path("package.json")
-root_data = json.loads(root.read_text())
+root_data = json.loads(root.read_text(encoding="utf-8"))
 old = root_data.get("version", "(none)")
 root_data["version"] = version
-root.write_text(json.dumps(root_data, indent=2) + "\n")
+root.write_text(json.dumps(root_data, indent=2) + "\n", encoding="utf-8")
 print(f"\n  {root_data['name']:<32}  {old:<10} -> {version}  (workspace root, not published)")
 PY
 
