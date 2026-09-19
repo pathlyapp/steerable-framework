@@ -55,11 +55,12 @@ py_pkgs = [
     "packages/agent-protocol/py",
     "packages/agent-harness/py",
     "packages/agent-runtime/py",
+    "packages/plugin-sdk/py",
     "packages/sidecar/py",
     "packages/egress-proxy/py",
 ]
 
-print(f"\nBumping all 9 publishable packages to {version}:\n")
+print(f"\nBumping all lockstep packages to {version}:\n")
 
 for d in ts_pkgs:
     p = Path(d) / "package.json"
