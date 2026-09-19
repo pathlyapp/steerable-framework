@@ -19,7 +19,7 @@ runs:
       run: |
         uv tool install "harbor==${{ inputs.version }}"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-    - name: Build Rust CoreLoop wheel
+    - name: Build Rust CoreLoop manylinux wheel
       if: inputs.rust-coreloop == 'true'
       uses: PyO3/maturin-action@v1
       with:
@@ -27,19 +27,35 @@ runs:
         manylinux: "2_17"
         working-directory: packages/agent-runtime/rs
         args: --release --locked --features python,extension-module
+    - name: Build Rust CoreLoop musllinux wheel
+      if: inputs.rust-coreloop == 'true'
+      uses: PyO3/maturin-action@v1
+      with:
+        command: build
+        target: x86_64-unknown-linux-musl
+        manylinux: musllinux_1_2
+        working-directory: packages/agent-runtime/rs
+        args: --release --locked --features python,extension-module
     - name: Expose Rust CoreLoop wheel
       if: inputs.rust-coreloop == 'true'
       shell: bash
       run: |
-        wheel=$(python - <<'PY'
+        readarray -t wheels < <(python - <<'PY'
         from pathlib import Path
         wheels = sorted(Path("packages/agent-runtime/rs/target/wheels").glob("*.whl"))
-        if len(wheels) != 1:
-            raise SystemExit(f"expected one Rust CoreLoop wheel, found {len(wheels)}")
-        print(wheels[0].resolve())
+        manylinux = [wheel for wheel in wheels if "manylinux" in wheel.name]
+        musllinux = [wheel for wheel in wheels if "musllinux" in wheel.name]
+        if len(manylinux) != 1 or len(musllinux) != 1:
+            raise SystemExit(
+                "expected one manylinux and one musllinux Rust CoreLoop wheel, "
+                f"found manylinux={manylinux}, musllinux={musllinux}"
+            )
+        print(manylinux[0].resolve())
+        print(musllinux[0].resolve())
         PY
         )
-        echo "STEERABLE_NATIVE_WHEEL=$wheel" >> "$GITHUB_ENV"
+        echo "STEERABLE_NATIVE_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
+        echo "STEERABLE_NATIVE_WHEEL_MUSL=${wheels[1]}" >> "$GITHUB_ENV"
         echo "STEERABLE_RUST_CORELOOP=1" >> "$GITHUB_ENV"
     - name: Prefetch musl uv for qemu trials
       shell: bash
